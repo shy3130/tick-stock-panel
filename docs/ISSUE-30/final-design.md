@@ -89,9 +89,10 @@ none 臂 ledger 是虚拟结局唯一来源；过滤臂按 `(symbol, signal_date
 
 ## 4. R4/R5 继承与响应契约
 
-plan-v2 §4 的 `arms.*.segments.is/oos` 继续有效，按 signal_date 归段，verdict 只读取 OOS。plan-v2 §5 的 candidate-sample 白名单继续有效，但必须使用本 v3 终态 ledger 的分母：`n_signals/n_retained/n_filtered/n_candidates_executed/n_trades/stop_hit/avg_mae/avg_mfe/net_pnl_pct_mean/blocked_counts/censored_counts`；不得恢复组合 turnover、cost_total 或 portfolio MaxDD。provenance 新增 `markets_generation`、`source_generations_markets`、`execution_ledger_version=2`。
+plan-v2 §4 的 `arms.*.segments.is/oos` 继续有效，按 signal_date 归段，verdict 只读取 OOS。plan-v2 §5 的 candidate-sample 白名单继续有效，但必须使用本 v3 终态 ledger 的分母：`n_signals/n_retained/n_filtered/n_candidates_executed/n_trades/stop_hit/avg_mae/avg_mfe/net_pnl_pct_mean/blocked_counts/censored_counts`；不得恢复组合 turnover、cost_total 或 portfolio MaxDD。provenance 新增 `markets_generation`、`source_generations_markets`、`execution_ledger_version=3`（原 v3 波记录为 2，现值见下方 PR #33 后二次修正）。
 
-PR #32 后补充（2026-08-28）：响应顶层追加只读 `tnt_open_anchor_contrast`（来源 `scripts/tnt/`、`read_scope=oos_only`、日频个股 5 日趋势桶代理，不复现盘中做T研究）：对 `single_side_down`/`range` 桶披露 none/original 的 `n_trades`、`stop_hit_rate`、`expectancy` 与 `improved|adverse|neutral|inconclusive` 状态（任一臂 `n_trades < MIN_OOS_TRADES` 即 inconclusive）；verdict 据此追加 `applicability`（rejected → `not_applicable_rejected`；inconclusive → `inconclusive_overall`；仅 validated 时任一桶 inconclusive → `inconclusive_by_trend`、双桶 adverse → `unsupported_in_preregistered_regimes`、单桶 adverse → `conditional_by_trend`、双桶均 improved/neutral → `all_regimes`）与 `warnings`，既有 `label` 规则不变；该诊断为纯只读投影，不得回灌过滤 mask。
+PR #32 后补充（2026-08-28）：响应顶层追加只读 `tnt_open_anchor_contrast`，对 `single_side_down`/`range` 桶披露 none/original 指标与比较状态；其来源、执行日形态桶口径及历史脚本边界以如下二次修正为准，诊断不得回灌过滤 mask。
+PR #33 后二次修正（2026-08-28）：`trend_bucket` 改为 planned execution day 完整日线的 `body_ratio=(close-open)/(high-low)`（`>=0.60` single_side_up，`<=-0.60` single_side_down，否则 range；无效为 unavailable_shape）。新增 `volatility_bucket`，执行日 TR% 为 `max(high-low,abs(high-prev_close),abs(low-prev_close))/prev_close`，基准为执行日前连续 20 个完整市场日同口径 TR% 的 `statistics.median`，比例 `>=1.50`/`<=0.75`/其余对应 high/low/normal，缺日、前收或非正基准为 insufficient_history。两层均为 post-entry、diagnostic-only，不参与 precheck、retention、engine；schema/ledger 版本升为 2/3。TNT 来源为实际存在的 Obsidian 笔记 `clipper/2026-08-15-bollinger-volatility-t-strategy-research.md`；该笔记列出的 `scrpits/tnt/*.py` 均为 `missing_not_in_repository`，不声称代码复现。
 
 ## 5. 增量测试矩阵
 

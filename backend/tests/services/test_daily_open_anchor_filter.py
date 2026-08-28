@@ -218,9 +218,16 @@ def test_f3_filtered_arm_gets_ledger_row_and_virtual_outcome(monkeypatch):
     payload = evaluate_daily_open_anchor(canonical, SIGNAL_DAY, SIGNAL_DAY, SIGNAL_DAY, [SYM])
     assert payload["status"] == "ok"
     original_rows = [row for row in payload["execution_ledger"] if row["arm"] == "original"]
+    assert svc.SCHEMA_VERSION == 2
+    assert svc.EXECUTION_LEDGER_VERSION == 3
+    assert payload["schema_version"] == 2
+    assert payload["provenance"]["execution_ledger_version"] == 3
+    assert "volatility_bucket" in original_rows[0]
     assert len(original_rows) == 1
     assert original_rows[0]["terminal_status"] == "not_retained"
     assert original_rows[0]["terminal_reason"] == "arm_filtered"
+    assert "volatility_bucket" in payload["events"][0]["layers"]
+    assert "volatility_bucket" in payload["arms"]["none"]["segments"]["oos"]["layers"]
     assert original_rows[0]["filter_retained"] is False
     stats = payload["arms"]["original"]["segments"]["oos"]["stats"]
     assert stats["n_filtered"] == 1
@@ -454,13 +461,50 @@ def _trend_series(closes: list[float]) -> SymbolSeries:
     return series
 
 
-def test_trend_bucket_boundaries_are_inclusive_and_frozen():
-    days = _days(7)
-    assert svc._bucket_trend(_trend_series([10.0] * 7), days, 6) == "range"
-    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 10.3]), days, 6) == "single_side_up"
-    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 9.7]), days, 6) == "single_side_down"
-    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 10.29]), days, 6) == "range"
-    assert svc._bucket_trend(_trend_series([10.0] * 4), days[:4], 3) == "insufficient_history"
+@pytest.mark.parametrize(
+    ("open_", "high", "low", "close", "expected"),
+    [
+        (9.8, 11.0, 9.0, 11.0, "single_side_up"),
+        (10.2, 11.0, 9.0, 9.0, "single_side_down"),
+        (9.9, 11.0, 9.0, 10.4, "range"),
+        (10.0, 10.0, 10.0, 10.0, "unavailable_shape"),
+        (10.0, 9.0, 11.0, 10.0, "unavailable_shape"),
+        (10.0, 11.0, 9.0, 11.2, "unavailable_shape"),
+        (10.0, 11.0, 9.0, 8.8, "unavailable_shape"),
+        (8.5, 11.0, 9.0, 10.0, "unavailable_shape"),
+        (0.0, 11.0, 9.0, 10.0, "unavailable_shape"),
+        (None, 11.0, 9.0, 10.0, "unavailable_shape"),
+    ],
+)
+def test_execution_day_shape_buckets(open_, high, low, close, expected):
+    assert svc.execution_day_shape_bucket(open_, high, low, close) == expected
+
+
+def test_execution_day_shape_boundary_is_inclusive():
+    assert svc.execution_day_shape_bucket(9.0, 11.0, 9.0, 11.0) == "single_side_up"
+    assert svc.execution_day_shape_bucket(11.0, 11.0, 9.0, 9.0) == "single_side_down"
+
+
+@pytest.mark.parametrize(
+    ("current", "expected"),
+    [(0.015, "high_volatility"), (0.01, "normal_volatility"), (0.0075, "low_volatility")],
+)
+def test_volatility_bucket_boundaries(current, expected):
+    assert svc.volatility_bucket_from_tr(current, [0.01] * 20) == expected
+
+
+    assert svc.true_range_pct(11.0, 9.0, 10.0, 10.0) == 0.2
+    assert svc.true_range_pct(11.0, 9.0, 12.0, 10.0) is None
+    assert svc.true_range_pct(11.0, 9.0, 8.8, 10.0) is None
+    assert svc.true_range_pct(9.0, 11.0, 10.0, 10.0) is None
+    assert svc.true_range_pct(-1.0, 9.0, 10.0, 10.0) is None
+def test_volatility_bucket_rejects_missing_history_and_bad_prev_close():
+    assert svc.volatility_bucket_from_tr(0.01, [0.01] * 19) == "insufficient_history"
+    assert svc.volatility_bucket_from_tr(0.01, [None] + [0.01] * 19) == "insufficient_history"
+    assert svc.volatility_bucket_from_tr(None, [0.01] * 20) == "insufficient_history"
+    assert svc.volatility_bucket_from_tr(0.01, [0.0] * 20) == "insufficient_history"
+    assert svc.true_range_pct(11.0, 9.0, 10.0, 0.0) is None
+    assert svc.true_range_pct(11.0, 9.0, 10.0, -1.0) is None
 
 
 def test_tnt_contrast_status_rules_are_frozen():
@@ -511,7 +555,7 @@ def test_tnt_contrast_down_adverse_range_improved_is_conditional_by_trend():
         (_trend_bucket(30, 0.20, 0.001), _trend_bucket(30, 0.10, 0.004)),
     )
     contrast = build_tnt_open_anchor_contrast(arms)
-    assert contrast["source"] == "scripts/tnt/"
+    assert contrast["source"] == svc.TREND_CONTRAST_SOURCE
     assert contrast["read_scope"] == "oos_only"
     down = contrast["regimes"]["single_side_down"]
     assert down["status"] == "adverse"
@@ -620,9 +664,12 @@ def test_evaluate_payload_appends_tnt_open_anchor_contrast(monkeypatch):
     payload = evaluate_daily_open_anchor(canonical, SIGNAL_DAY, SIGNAL_DAY, SIGNAL_DAY, [SYM])
     assert payload["status"] == "ok"
     contrast = payload["tnt_open_anchor_contrast"]
-    assert contrast["source"] == "scripts/tnt/"
+    assert contrast["source"] == svc.TREND_CONTRAST_SOURCE
     assert contrast["read_scope"] == "oos_only"
     assert contrast["preregistered_conclusion"] and contrast["proxy_note"]
+    assert all(item["status"] == "missing_not_in_repository" for item in contrast["historical_artifacts"])
+    assert "5日" not in contrast["proxy_note"]
+    assert "±3%" not in contrast["proxy_note"]
     for regime in ("single_side_down", "range"):
         bucket = contrast["regimes"][regime]
         assert set(bucket) == {"none", "original", "status"}

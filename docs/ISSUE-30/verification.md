@@ -56,6 +56,17 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 
 独立最终 review 结论：**Approve，无 blocker / major / minor**。tnt 趋势对照修正至此验证闭合，状态为「修正完成待 PR」。
 
+## PR #33 后续日型/波动率修正（2026-08-28，已验证，完成待 PR）
+
+| 项 | 结果 |
+|---|---|
+| shape/volatility 定向测试（含边界、invalid OHLC、planned 门控） | 主会话 focused **59 passed** |
+| Lint | Ruff（F/E9 规则组）**passed** |
+| 后端全量回归 | 主会话 **3522 passed / 3 skipped / 8 warnings / 119.24s** |
+| 独立最终 review | **Approve，无 blocker / major / minor** |
+
+本波至此验证闭合，状态为「完成待 PR」。
+
 ## 边界
 
 - 本文件只记录主会话证据与状态，不包含新的验证执行。

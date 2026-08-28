@@ -19,8 +19,14 @@ Contract highlights (docs/ISSUE-30/final-design.md):
 - ``sell_no_future`` is unreachable under the verified continuous horizon and is
   therefore not a terminal outcome (review-v3 P2).
 - tnt contrast (docs/TODO.md): ``tnt_open_anchor_contrast`` is an OOS-only,
-  read-only trend-bucket comparison against ``scripts/tnt/``; diagnosis only,
-  it never re-scans trades nor feeds back into the filter mask.
+  read-only trend-bucket comparison sourced from the Obsidian 做T research note
+  (``clipper/2026-08-15-bollinger-volatility-t-strategy-research.md``); scripts
+  listed under ``scrpits/tnt/`` are missing_not_in_repository and are NOT
+  reproduced here. Diagnosis only: it never re-scans trades nor feeds back into
+  the filter mask.
+- ``trend_bucket``/``volatility_bucket`` are execution-day post-entry
+  diagnostics from the planned execution day's complete daily bar; they never
+  feed precheck, retention, or engine inputs.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from statistics import median
 from typing import Any, Mapping, Sequence
 
 import polars as pl
@@ -38,7 +45,7 @@ import polars as pl
 from app.backtest.engine import BacktestEngine, MatcherConfig
 
 FACTOR_ID = "daily_open_anchor_filter_v1"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DISCLAIMER = "研究对照输出：仅统计性执行结果，不含交易指令、买卖方向或投资建议"
 
 MAX_SYMBOLS_PER_REQUEST = 200
@@ -48,7 +55,7 @@ ANCHOR_MAX_AGE_TRADING_DAYS = 20
 MAX_HOLD_DAYS = 15
 REQUIRED_HORIZON_DAYS = MAX_HOLD_DAYS + 1  # T+1 .. T+16 market days
 MIN_OOS_TRADES = 30
-EXECUTION_LEDGER_VERSION = 2
+EXECUTION_LEDGER_VERSION = 3
 
 STOP_LOSS_PCT = -0.06
 ENTRY_FILL = "open_t+1"
@@ -57,9 +64,10 @@ FEES_PCT = 0.0002
 SLIPPAGE_BPS = 5.0
 STAMP_TAX_PCT = 0.0005
 
-TREND_WINDOW = 5
-TREND_UP = 0.03
-TREND_DOWN = -0.03
+SINGLE_SIDE_BODY_RATIO = 0.60
+VOLATILITY_BASELINE_DAYS = 20
+VOLATILITY_HIGH_RATIO = 1.50
+VOLATILITY_LOW_RATIO = 0.75
 NEAR_ANCHOR_PCT = 0.02
 FAR_ANCHOR_PCT = 0.05
 
@@ -67,17 +75,29 @@ ARMS = ("none", "original", "inverted", "random")
 
 UPPER_MISMATCH_TOLERANCE = 0.005
 
-TREND_CONTRAST_SOURCE = "scripts/tnt/"
+TREND_CONTRAST_SOURCE = "obsidian-note/clipper/2026-08-15-bollinger-volatility-t-strategy-research.md"
 TREND_CONTRAST_READ_SCOPE = "oos_only"
 TREND_CONTRAST_PREREGISTERED = (
-    "scripts/tnt 盘中做T研究预注册结论：单边趋势日（尤其单边下跌）按开盘价锚定入场为接飞刀；"
-    "过滤器有效性必须按趋势状态分层核对，禁止用全样本平均掩盖趋势日亏损"
+    "Obsidian 做T研究笔记（布林带+波动率，2026-08-15）已定结论：锚定开盘价的均值回归做T"
+    "隐含均值回归假设，单边趋势日（尤其单边下跌）为接飞刀；过滤器有效性必须按趋势状态分层核对"
 )
 TREND_CONTRAST_PROXY_NOTE = (
-    "日频 v1 降档代理：对照使用信号日前可计算的个股 5 日趋势桶（TREND_WINDOW=5，±3% 阈值），"
-    "不是对 scripts/tnt 盘中做T研究的复现或等效替代"
+    "日频降档代理：对照只读 OOS 执行日单边形态桶（planned execution day 完整日线的 body_ratio "
+    "诊断，post-entry），不是对该笔记所述盘中做T研究的复现或等效替代"
+)
+TREND_CONTRAST_HISTORICAL_ARTIFACTS: tuple[dict[str, str], ...] = (
+    {"path": "scrpits/tnt/fetch_minutes.py", "status": "missing_not_in_repository"},
+    {"path": "scrpits/tnt/mean_revert_screen.py", "status": "missing_not_in_repository"},
+    {"path": "scrpits/tnt/t_backtest_v4.py", "status": "missing_not_in_repository"},
+    {"path": "scrpits/tnt/t_backtest_v6.py", "status": "missing_not_in_repository"},
+)
+TREND_CONTRAST_HISTORICAL_ARTIFACTS_NOTE = (
+    "以上为笔记「可复用资产」所列脚本原文（含 scrpits 拼写）；仓库中不存在，对照仅引用笔记结论，不是代码复现"
 )
 TREND_CONTRAST_REGIMES = ("single_side_down", "range")
+
+TREND_SHAPES = ("single_side_up", "single_side_down", "range", "unavailable_shape")
+VOLATILITY_BUCKETS = ("high_volatility", "normal_volatility", "low_volatility", "insufficient_history")
 
 REGIME_RATIOS: dict[str, Decimal] = {
     "main_10": Decimal("0.10"),
@@ -119,7 +139,6 @@ _FACT_KEYS = (
     "raw_low",
     "raw_close",
 )
-
 DEFINITION: dict[str, Any] = {
     "id": FACTOR_ID,
     "signal": "ma5_cross_above_ma20_close_t",
@@ -133,7 +152,14 @@ DEFINITION: dict[str, Any] = {
     "random_seed": "sha256(symbol|signal_date)[:8]",
     "markets_pin": "canonical_manifest.source_generations['markets']",
     "horizon_market_days": REQUIRED_HORIZON_DAYS,
+    "execution_day_diagnostics": {
+        "basis": "planned_execution_day_complete_daily_bar_only",
+        "scope": "post_entry_diagnosis_read_only_never_feeds_precheck_retention_or_engine",
+        "trend_bucket": "body_ratio=(close-open)/(high-low); >=0.60 single_side_up; <=-0.60 single_side_down; else range; invalid unavailable_shape",
+        "volatility_bucket": "true_range_pct=max(high-low,abs(high-prev_close),abs(low-prev_close))/prev_close; median of 20 prior complete market days; ratio >=1.50 high, <=0.75 low, else normal; missing history insufficient_history",
+    },
 }
+
 
 LIMITS: dict[str, int] = {
     "max_symbols": MAX_SYMBOLS_PER_REQUEST,
@@ -311,6 +337,7 @@ class Candidate:
     precheck: str = PRECHECK_OK
     planned_execution_date: date | None = None
     trend_bucket: str = "unknown"
+    volatility_bucket: str = "unknown"
     gap_bucket: str = "unknown"
     distance_bucket: str = "unknown"
     retained: dict[str, bool | None] = field(default_factory=dict)
@@ -337,6 +364,7 @@ class LedgerEntry:
     trend_bucket: str = "unknown"
     gap_bucket: str = "unknown"
     distance_bucket: str = "unknown"
+    volatility_bucket: str = "unknown"
 
 
 class _FactsView:
@@ -430,20 +458,93 @@ def _random_anchor_for_signal(
     return AnchorInfo(day=picked, value=series.adj_open[picked], age_trading_days=age)
 
 
-def _bucket_trend(series: SymbolSeries, market_days: Sequence[date], day_position: int) -> str:
-    anchor_position = day_position - TREND_WINDOW
-    if anchor_position < 0:
-        return "insufficient_history"
-    previous = market_days[anchor_position]
-    base = series.adj_close.get(previous)
-    if base is None or base <= 0:
-        return "insufficient_history"
-    change = series.adj_close[market_days[day_position]] / base - 1.0
-    if change >= TREND_UP:
+def execution_day_shape_bucket(open_: Any, high: Any, low: Any, close: Any) -> str:
+    values = (open_, high, low, close)
+    if any(value is None or isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+        return "unavailable_shape"
+    numbers = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in numbers) or any(value <= 0 for value in numbers):
+        return "unavailable_shape"
+    body_open, body_high, body_low, body_close = numbers
+    span = body_high - body_low
+    if span <= 0 or not (
+        body_low <= body_open <= body_high and body_low <= body_close <= body_high
+    ):
+        return "unavailable_shape"
+    body_ratio = (body_close - body_open) / span
+    if body_ratio > SINGLE_SIDE_BODY_RATIO or math.isclose(
+        body_ratio, SINGLE_SIDE_BODY_RATIO, rel_tol=0.0, abs_tol=1e-12
+    ):
         return "single_side_up"
-    if change <= TREND_DOWN:
+    if body_ratio < -SINGLE_SIDE_BODY_RATIO or math.isclose(
+        body_ratio, -SINGLE_SIDE_BODY_RATIO, rel_tol=0.0, abs_tol=1e-12
+    ):
         return "single_side_down"
     return "range"
+
+
+def true_range_pct(high: Any, low: Any, close: Any, prev_close: Any) -> float | None:
+    values = (high, low, close, prev_close)
+    if any(value is None or isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+        return None
+    numbers = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in numbers) or any(value <= 0 for value in numbers):
+        return None
+    bar_high, bar_low, bar_close = numbers[0], numbers[1], numbers[2]
+    if bar_high < bar_low or not (bar_low <= bar_close <= bar_high):
+        return None
+    prev = numbers[3]
+    return max(bar_high - bar_low, abs(bar_high - prev), abs(bar_low - prev)) / prev
+
+
+def volatility_bucket_from_tr(current: float | None, baseline: Sequence[float | None]) -> str:
+    if current is None or len(baseline) != VOLATILITY_BASELINE_DAYS:
+        return "insufficient_history"
+    values: list[float] = []
+    for value in baseline:
+        if value is None or not math.isfinite(value):
+            return "insufficient_history"
+        values.append(float(value))
+    median_tr = median(values)
+    if median_tr <= 0:
+        return "insufficient_history"
+    ratio = current / median_tr
+    if ratio >= VOLATILITY_HIGH_RATIO:
+        return "high_volatility"
+    if ratio <= VOLATILITY_LOW_RATIO:
+        return "low_volatility"
+    return "normal_volatility"
+
+
+def _bucket_execution_trend(series: SymbolSeries, market_days: Sequence[date], planned_position: int) -> str:
+    if planned_position < 0 or planned_position >= len(market_days):
+        return "unavailable_shape"
+    day = market_days[planned_position]
+    return execution_day_shape_bucket(series.adj_open.get(day), series.adj_high.get(day), series.adj_low.get(day), series.adj_close.get(day))
+
+
+def _bucket_execution_volatility(series: SymbolSeries, market_days: Sequence[date], planned_position: int) -> str:
+    position = planned_position
+    first_baseline = position - VOLATILITY_BASELINE_DAYS
+    if first_baseline < 1 or position >= len(market_days):
+        return "insufficient_history"
+    execution_day = market_days[position]
+    current = true_range_pct(
+        series.adj_high.get(execution_day),
+        series.adj_low.get(execution_day),
+        series.adj_close.get(execution_day),
+        series.adj_close.get(market_days[position - 1]),
+    )
+    baseline = [
+        true_range_pct(
+            series.adj_high.get(market_days[index]),
+            series.adj_low.get(market_days[index]),
+            series.adj_close.get(market_days[index]),
+            series.adj_close.get(market_days[index - 1]),
+        )
+        for index in range(first_baseline, position)
+    ]
+    return volatility_bucket_from_tr(current, baseline)
 
 
 def _bucket_gap(series: SymbolSeries, execution_day: date | None, signal_date: date) -> str:
@@ -581,6 +682,7 @@ def _terminal_from_result(
         terminal_status="blocked",
         engine_entry_index=engine_entry_index,
         trend_bucket=candidate.trend_bucket,
+        volatility_bucket=candidate.volatility_bucket,
         gap_bucket=candidate.gap_bucket,
         distance_bucket=candidate.distance_bucket,
     )
@@ -665,6 +767,7 @@ def _ledger_for_candidate(
                         terminal_status="censored",
                         terminal_reason="anchor_unavailable",
                         trend_bucket=candidate.trend_bucket,
+                        volatility_bucket=candidate.volatility_bucket,
                         gap_bucket=candidate.gap_bucket,
                         distance_bucket=candidate.distance_bucket,
                     )
@@ -683,6 +786,7 @@ def _ledger_for_candidate(
                         terminal_status="not_retained",
                         terminal_reason="arm_filtered",
                         trend_bucket=candidate.trend_bucket,
+                        volatility_bucket=candidate.volatility_bucket,
                         gap_bucket=candidate.gap_bucket,
                         distance_bucket=candidate.distance_bucket,
                     )
@@ -709,6 +813,7 @@ def _ledger_for_candidate(
                 terminal_status=status,
                 terminal_reason=reason,
                 trend_bucket=candidate.trend_bucket,
+                volatility_bucket=candidate.volatility_bucket,
                 gap_bucket=candidate.gap_bucket,
                 distance_bucket=candidate.distance_bucket,
             )
@@ -771,6 +876,7 @@ def _segment_layers(entries: Sequence[LedgerEntry]) -> dict[str, Any]:
     layers: dict[str, dict[str, dict[str, Any]]] = {}
     for name, getter in (
         ("trend_bucket", lambda entry: entry.trend_bucket),
+        ("volatility_bucket", lambda entry: entry.volatility_bucket),
         ("gap_bucket", lambda entry: entry.gap_bucket),
         ("anchor_distance_bucket", lambda entry: entry.distance_bucket),
     ):
@@ -853,7 +959,7 @@ def _contrast_bucket_status(
 
 
 def build_tnt_open_anchor_contrast(arms: dict[str, Any]) -> dict[str, Any]:
-    """Build the scripts/tnt trend contrast from existing OOS layers only.
+    """Build the Obsidian-sourced tnt trend contrast from existing OOS layers only.
 
     This is read-only diagnosis: it does not rescan trades or feed back into
     the filter mask.
@@ -872,6 +978,8 @@ def build_tnt_open_anchor_contrast(arms: dict[str, Any]) -> dict[str, Any]:
         "read_scope": TREND_CONTRAST_READ_SCOPE,
         "preregistered_conclusion": TREND_CONTRAST_PREREGISTERED,
         "proxy_note": TREND_CONTRAST_PROXY_NOTE,
+        "historical_artifacts": [dict(item) for item in TREND_CONTRAST_HISTORICAL_ARTIFACTS],
+        "historical_artifacts_note": TREND_CONTRAST_HISTORICAL_ARTIFACTS_NOTE,
         "decision_rule": {
             "min_oos_trades_per_arm": MIN_OOS_TRADES,
             "inconclusive": "任一臂 n_trades < min_oos_trades_per_arm 或指标缺失/非有限值",
@@ -912,14 +1020,14 @@ def _verdict(arms: dict[str, Any], contrast: dict[str, Any] | None = None) -> di
         applicability = "unsupported_in_preregistered_regimes"
         warnings.append(
             "单边下跌与震荡两个趋势桶均不利"
-            "（original 相对 none 止损触发率更高或期望更低），与 scripts/tnt 预注册的"
+            "（original 相对 none 止损触发率更高或期望更低），与 Obsidian 做T研究笔记预注册的"
             "单边趋势日接飞刀结论一致：validated 不适用于这两类趋势状态"
         )
     elif down_status == "adverse":
         applicability = "conditional_by_trend"
         warnings.append(
             "单边下跌趋势桶中 original 相对 none 止损触发率更高或期望更低"
-            "（scripts/tnt 接飞刀特征在 OOS 日频代理中复现）：validated 结论仅适用于非单边下跌行情"
+            "（Obsidian 做T研究笔记的接飞刀结论在 OOS 执行日日型分层中复现）：validated 结论仅适用于非单边下跌行情"
         )
     elif range_status == "adverse":
         applicability = "conditional_by_trend"
@@ -1210,7 +1318,13 @@ def evaluate_daily_open_anchor(
         status, planned, _ = _precheck_candidate(series, market_days, position, facts)
         candidate.precheck = status
         candidate.planned_execution_date = planned
-        candidate.trend_bucket = _bucket_trend(series, market_days, position)
+        execution_position = day_pos.get(planned) if planned is not None else None
+        if execution_position is not None:
+            candidate.trend_bucket = _bucket_execution_trend(series, market_days, execution_position)
+            candidate.volatility_bucket = _bucket_execution_volatility(series, market_days, execution_position)
+        else:
+            candidate.trend_bucket = "unavailable_shape"
+            candidate.volatility_bucket = "insufficient_history"
         candidate.gap_bucket = _bucket_gap(series, candidate.planned_execution_date, signal_day)
         candidate.distance_bucket = _bucket_distance(anchor, close_t)
         candidates.append(candidate)
@@ -1245,6 +1359,7 @@ def evaluate_daily_open_anchor(
                             terminal_status="censored",
                             terminal_reason="anchor_unavailable",
                             trend_bucket=candidate.trend_bucket,
+                            volatility_bucket=candidate.volatility_bucket,
                             gap_bucket=candidate.gap_bucket,
                             distance_bucket=candidate.distance_bucket,
                         )
@@ -1262,6 +1377,7 @@ def evaluate_daily_open_anchor(
                         terminal_status=status,
                         terminal_reason=reason,
                         trend_bucket=candidate.trend_bucket,
+                        volatility_bucket=candidate.volatility_bucket,
                         gap_bucket=candidate.gap_bucket,
                         distance_bucket=candidate.distance_bucket,
                     )
@@ -1334,6 +1450,7 @@ def evaluate_daily_open_anchor(
                 "precheck": candidate.precheck,
                 "layers": {
                     "trend_bucket": candidate.trend_bucket,
+                    "volatility_bucket": candidate.volatility_bucket,
                     "gap_bucket": candidate.gap_bucket,
                     "anchor_distance_bucket": candidate.distance_bucket,
                 },
@@ -1371,6 +1488,9 @@ def evaluate_daily_open_anchor(
             "calendar_basis": "pinned_market_days",
             "limit_band_basis": DEFINITION["limit_band_basis"],
             "execution_ledger_version": EXECUTION_LEDGER_VERSION,
+            "execution_day_diagnostics": DEFINITION["execution_day_diagnostics"],
+            "tnt_contrast_source": TREND_CONTRAST_SOURCE,
+            "tnt_contrast_historical_artifacts": [dict(item) for item in TREND_CONTRAST_HISTORICAL_ARTIFACTS],
             "limits": LIMITS,
         },
         "events": events,
@@ -1415,4 +1535,5 @@ def _ledger_dict(entry: LedgerEntry) -> dict[str, Any]:
         "mfe_pct": _round6(entry.mfe_pct),
         "blocked_exit_days": entry.blocked_exit_days,
         "engine_entry_index": entry.engine_entry_index,
+        "volatility_bucket": entry.volatility_bucket,
     }
