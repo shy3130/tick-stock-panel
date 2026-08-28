@@ -59,7 +59,23 @@ from app.services.weak_to_strong import (
     evaluate_weak_to_strong_v1,
 )
 
+from app.services.daily_open_anchor_filter import (
+    assess_daily_open_anchor_capability,
+    evaluate_daily_open_anchor,
+    resolve_daily_open_anchor_canonical,
+    unavailable_payload,
+)
+
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
+class DailyOpenAnchorEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    oos_start: date
+    symbols: list[str] = Field(min_length=1, max_length=200)
 
 
 class VolumeBreakoutEvaluateIn(BaseModel):
@@ -393,6 +409,35 @@ class SingleYangEvaluateIn(BaseModel):
     cost_bps: float = Field(default=10.0, ge=0)
 
 
+
+@router.get("/daily-open-anchor")
+def get_daily_open_anchor(request: Request):
+    repo = getattr(request.app.state, "repo", None)
+    canonical = resolve_daily_open_anchor_canonical(repo)
+    return assess_daily_open_anchor_capability(canonical)
+
+
+@router.post("/factors/daily-open-anchor/evaluate")
+def evaluate_daily_open_anchor_factor(body: DailyOpenAnchorEvaluateIn, request: Request):
+    repo = getattr(request.app.state, "repo", None)
+    canonical = resolve_daily_open_anchor_canonical(repo)
+    if canonical is None:
+        return unavailable_payload(["canonical_reader_missing"])
+    try:
+        return evaluate_daily_open_anchor(
+            canonical=canonical,
+            start=body.start,
+            end=body.end,
+            oos_start=body.oos_start,
+            symbols=body.symbols,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        from app.services.daily_open_anchor_filter import UnavailableError
+        if isinstance(exc, UnavailableError):
+            return unavailable_payload([exc.reason], exc.detail)
+        raise HTTPException(status_code=503, detail="daily_open_anchor_reader_unavailable") from exc
 class ZuoyiDefenseEvaluateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
