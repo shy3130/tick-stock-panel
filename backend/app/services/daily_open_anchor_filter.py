@@ -155,7 +155,7 @@ DEFINITION: dict[str, Any] = {
     "execution_day_diagnostics": {
         "basis": "planned_execution_day_complete_daily_bar_only",
         "scope": "post_entry_diagnosis_read_only_never_feeds_precheck_retention_or_engine",
-        "trend_bucket": "body_ratio=(close-open)/(high-low); >=0.60 single_side_up; <=-0.60 single_side_down; else range; invalid unavailable_shape",
+        "trend_bucket": "body_ratio=(close-open)/(high-low); nonpositive span or invalid OHLC unavailable_shape; >0.60 or isclose(0.60,abs_tol=1e-12) single_side_up; <-0.60 or isclose(-0.60,abs_tol=1e-12) single_side_down; else range",
         "volatility_bucket": "true_range_pct=max(high-low,abs(high-prev_close),abs(low-prev_close))/prev_close; median of 20 prior complete market days; ratio >=1.50 high, <=0.75 low, else normal; missing history insufficient_history",
     },
 }
