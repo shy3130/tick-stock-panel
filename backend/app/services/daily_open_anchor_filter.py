@@ -75,7 +75,11 @@ ARMS = ("none", "original", "inverted", "random")
 
 UPPER_MISMATCH_TOLERANCE = 0.005
 
-TREND_CONTRAST_SOURCE = "docs/ISSUE-30/final-design.md"
+TREND_CONTRAST_SOURCE = "docs/ISSUE-30/final-design.md#41-tnt-源证据摘录"
+TREND_CONTRAST_ORIGINAL_SOURCE = (
+    "obsidian-note/clipper/2026-08-15-bollinger-volatility-t-strategy-research.md"
+)
+TREND_CONTRAST_CONTRACT_SOURCE = "docs/ISSUE-30/final-design.md"
 TREND_CONTRAST_READ_SCOPE = "oos_only"
 TREND_CONTRAST_PREREGISTERED = (
     "Obsidian 做T研究笔记（布林带+波动率，2026-08-15）已定结论：锚定开盘价的均值回归做T"
@@ -600,6 +604,13 @@ def _precheck_candidate(
     t1 = market_days[day_position + 1]
     if t1 not in series.day_index:
         return "censored:t1_bar_missing", t1, []
+    if series.raw_low.get(t1) is None:
+        raise UnavailableError(
+            "limit_band_facts_incomplete",
+            symbol=series.symbol,
+            date=t1.isoformat(),
+            field="raw_low",
+        )
     horizon: list[date] = []
     for offset in range(1, REQUIRED_HORIZON_DAYS + 1):
         if day_position + offset >= len(market_days):
@@ -608,7 +619,7 @@ def _precheck_candidate(
         if day not in series.day_index:
             return "censored:horizon_data_gap", t1, horizon
         horizon.append(day)
-    if series.raw_open.get(t1) is None or series.raw_low.get(t1) is None:
+    if series.raw_open.get(t1) is None:
         return "censored:invalid_open", t1, []
     upper_t1, _ = facts.band(series.symbol, t1)
     raw_open = series.raw_open[t1]
@@ -997,6 +1008,8 @@ def build_tnt_open_anchor_contrast(arms: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "source": TREND_CONTRAST_SOURCE,
+        "original_source": TREND_CONTRAST_ORIGINAL_SOURCE,
+        "contract_source": TREND_CONTRAST_CONTRACT_SOURCE,
         "read_scope": TREND_CONTRAST_READ_SCOPE,
         "preregistered_conclusion": TREND_CONTRAST_PREREGISTERED,
         "proxy_note": TREND_CONTRAST_PROXY_NOTE,
@@ -1512,6 +1525,8 @@ def evaluate_daily_open_anchor(
             "execution_ledger_version": EXECUTION_LEDGER_VERSION,
             "execution_day_diagnostics": DEFINITION["execution_day_diagnostics"],
             "tnt_contrast_source": TREND_CONTRAST_SOURCE,
+            "tnt_contrast_original_source": TREND_CONTRAST_ORIGINAL_SOURCE,
+            "tnt_contrast_contract_source": TREND_CONTRAST_CONTRACT_SOURCE,
             "tnt_contrast_historical_artifacts": [dict(item) for item in TREND_CONTRAST_HISTORICAL_ARTIFACTS],
             "limits": LIMITS,
         },
