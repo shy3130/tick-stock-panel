@@ -138,6 +138,39 @@ def _snapshot_paths(
     return paths
 
 
+def snapshot_identity(logical: str, path: str | Path) -> dict[str, str] | None:
+    """Verify a published snapshot's sibling manifest and return its identity.
+
+    The manifest next to ``path`` must pin ``generation`` equal to the
+    directory name and carry an entry for ``logical`` pointing at the same
+    file.  On success the resolved ``manifest.json`` SHA-256 is returned so
+    canonical manifests can pin the exact published bytes.
+    """
+    try:
+        db = Path(path)
+        if db.is_symlink() or not db.is_file():
+            return None
+        manifest_path = db.parent / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return None
+        manifest = _read_json(manifest_path)
+        if manifest is None or manifest.get("generation") != db.parent.name:
+            return None
+        entries = manifest.get("entries")
+        entry = next(
+            (e for e in entries or [] if isinstance(e, dict) and e.get("logical") == logical),
+            None,
+        )
+        if not isinstance(entry, dict) or Path(str(entry.get("file", ""))).name != db.name:
+            return None
+        return {
+            "generation": db.parent.name,
+            "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        }
+    except OSError:
+        return None
+
+
 def _ensure_snapshot_paths_unchanged(expected: dict[str, str]) -> None:
     changed = [logical for logical, path in expected.items() if current_path(logical) != path]
     if changed:
@@ -412,9 +445,6 @@ class CanonicalHistoryManager:
                         record_progress(futures[future])
 
             _ensure_snapshot_paths_unchanged(dict(initial.get("snapshot_paths") or {}))
-            if not table_created or total_rows == 0:
-                raise RuntimeError("provider returned no canonical history rows")
-
             stats = connection.execute(
                 """
                 SELECT min(date), max(date), count(DISTINCT date),
@@ -447,12 +477,14 @@ class CanonicalHistoryManager:
                 "source": str(initial["provider"]),
                 "workers": int(initial.get("workers") or 1),
                 "source_generations": {
-                    logical: Path(path).parent.name
+                    logical: snapshot_identity(logical, path)
                     for logical, path in dict(initial.get("snapshot_paths") or {}).items()
                 },
                 "columns": list(ENRICHED_STORAGE_COLS),
                 "published_at": datetime.now(UTC).isoformat(),
             }
+            if any(value is None for value in manifest["source_generations"].values()):
+                raise RuntimeError("canonical snapshot identity could not be verified")
             generation_dir = self.root / "generations" / generation
             generation_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(output), str(generation_dir))
@@ -670,6 +702,14 @@ class CanonicalHistoryManager:
                     raise RuntimeError(
                         "canonical parent generation changed during incremental publish"
                     )
+                source_generations = dict(parent_manifest.get("source_generations") or {})
+                calendar_identities: dict[str, dict[str, str]] = {}
+                for logical in _CALENDAR_SNAPSHOT_LOGICALS:
+                    identity = snapshot_identity(logical, calendar_snapshot_paths.get(logical, ""))
+                    if identity is None:
+                        raise RuntimeError(f"calendar snapshot identity unavailable: {logical}")
+                    calendar_identities[logical] = identity
+                    source_generations[logical] = identity
                 manifest = {
                     "schema_version": 2,
                     "kind": "tickflow_canonical_enriched_history",
@@ -683,13 +723,8 @@ class CanonicalHistoryManager:
                     "symbols": int(stats[3]),
                     "trading_days": int(stats[2]),
                     "source": str(parent_manifest.get("source") or "fquant_local"),
-                    "source_generations": dict(
-                        parent_manifest.get("source_generations") or {}
-                    ),
-                    "calendar_source_generations": {
-                        logical: Path(path).parent.name
-                        for logical, path in calendar_snapshot_paths.items()
-                    },
+                    "source_generations": source_generations,
+                    "calendar_source_generations": calendar_identities,
                     "columns": list(ENRICHED_STORAGE_COLS),
                     "incremental_partitions": partition_meta,
                     "published_at": datetime.now(UTC).isoformat(),
