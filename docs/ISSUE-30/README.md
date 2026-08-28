@@ -1,6 +1,6 @@
 # ISSUE-30 日线开盘价锚定入场过滤研究（daily-open-anchor-filter）
 
-> 状态：**实现及依赖集成完成／待 PR（review-v3 approve；含 2026-08-28 tnt 趋势对照修正：主会话 focused 45 passed、全量 3508 passed / 3 skipped / 8 warnings、Ruff F/E9 通过、独立最终 review Approve）**。
+> 状态：**完成待 PR（含 2026-08-28 PR#33 后续日型/波动率修正：主会话 focused 59 passed、后端全量 3522 passed / 3 skipped / 8 warnings / 119.24s、Ruff F/E9 通过、独立最终 review Approve）**。
 > 日期：2026-08-28 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
 
 ## 这是什么
@@ -59,9 +59,18 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 - 对 `single_side_down` 与 `range` 分别披露 none/original 的 `n_trades`、`stop_hit_rate`、`expectancy` 与比较状态 `improved|adverse|neutral|inconclusive`；任一臂 `n_trades < MIN_OOS_TRADES(30)` 或指标缺失即 `inconclusive`。
 - 冻结判定：`adverse` = original 止损触发率更高或期望更低；`improved` = 止损触发率更低且期望不低于 none；其余 `neutral`。
 - verdict 追加 `applicability` 与 `warnings`：`label=rejected` → `not_applicable_rejected`；`label=inconclusive` → `inconclusive_overall`；仅整体 `validated` 进入趋势状态机：任一桶 `inconclusive` → `inconclusive_by_trend`，双桶 `adverse` → `unsupported_in_preregistered_regimes`，单边下跌或震荡单桶 `adverse` → `conditional_by_trend` 并写对应 warning；仅两桶均为 `improved|neutral` → `all_regimes`。既有 `label` 规则不变。
-- 日频代理声明：对照使用信号日前可计算的个股 5 日趋势桶（±3% 阈值），**不声称复现** `scripts/tnt/` 的盘中做T研究。
+- 【已废止，由下方 PR #33 后续日型/波动率修正替代】当时的日频代理声明（信号日前可计算的个股 5 日趋势桶，±3% 阈值）不再成立：现行 `trend_bucket` 为 execution-day body_ratio 口径，非信号日 5 日动量；本节其余对照结构（OOS-only、桶状态机、判定规则）继续有效。
 
 本节与对应代码、测试为 PR #32 之后的补充修正，已由主会话验证闭合：定向测试 **45 passed**、后端全量 **3508 passed / 3 skipped / 8 warnings / 131.21s**、Ruff（F/E9）通过、独立最终 review **Approve（无 blocker/major/minor）**，证据见 [verification.md](verification.md)。
+
+## PR #33 后续日型/波动率修正（2026-08-28，完成待 PR）
+
+PR #33 仅完成 TNT 对照首修；其后发现原 `trend_bucket` 的 5 日动量代理并非执行日形态，本波按共享 Contract 修正：
+
+- `trend_bucket` 仅诊断 planned execution day 的完整日线，`body_ratio=(close-open)/(high-low)`；`>=0.60` 为 `single_side_up`，`<=-0.60` 为 `single_side_down`，其余 `range`，高低无效或 `high<=low` 为 `unavailable_shape`。
+- 新增 `volatility_bucket`：执行日 `true_range_pct=max(high-low, abs(high-prev_close), abs(low-prev_close))/prev_close`，基准为执行日前连续 20 个完整市场日同口径 TR% 的 `statistics.median`；比例 `>=1.50`/`<=0.75`/其余分别为 high/low/normal，缺历史、前收或基准非正为 `insufficient_history`。
+- 两项都是 execution-day、post-entry、read-only diagnosis，不参与 precheck、retention 或 engine 输入；`volatility_bucket` 已进入 candidate、ledger、event、segment layers。`SCHEMA_VERSION=2`、`EXECUTION_LEDGER_VERSION=3`。
+- TNT 对照来源改为实际存在的 Obsidian 笔记 `clipper/2026-08-15-bollinger-volatility-t-strategy-research.md`；笔记列出的 `scrpits/tnt/*.py` 均标记 `missing_not_in_repository`，不进行代码复现。本波已由主会话验证闭合：focused **59 passed**、后端全量 **3522 passed / 3 skipped / 8 warnings / 119.24s**、Ruff（F/E9）通过、独立最终 review **Approve（无 blocker/major/minor）**，证据见 [verification.md](verification.md)。
 
 ## 红线
 
