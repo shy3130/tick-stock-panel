@@ -79,7 +79,21 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 | 后端全量回归 | **3530 passed / 3 skipped / 8 warnings / 145.43s** |
 | 独立复核 | **Approved；四条评论均在实际执行路径闭环** |
 
-本波状态为「Review 评论修复完成，待 PR」。
+本波已通过 PR #36 合并；PR #36 随后返回的两条新增评论由下节继续收口。
+
+## PR #36 Review Follow-up（2026-08-28，已验证）
+
+- T+1 `raw_low` 缺失、非有限或非正统一为整单 `limit_band_facts_incomplete`，且该门禁优先于 `invalid_open` 与 `horizon_data_gap` 等 candidate-level censor。
+- TNT provenance 拆分为仓库内 `source` 证据摘录、真实 Obsidian `original_source` 与实现 `contract_source`；仓库摘录明确不把原笔记结果冒充本项目复验事实。
+
+| 项 | 结果 |
+|---|---|
+| 定向测试（service/API，含门禁优先级组合） | **69 passed** |
+| Lint | Ruff（F/E9 规则组）**passed** |
+| 后端全量回归 | **3532 passed / 3 skipped / 8 warnings / 135.75s** |
+| 独立复核 | **Approved；P1 优先级修正后二次复核通过** |
+
+本波状态为「Follow-up 修复完成，待 PR」。
 
 ## 边界
 

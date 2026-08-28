@@ -425,17 +425,46 @@ def test_f8_invalid_raw_open_censors_candidate_keeps_signal_universe(monkeypatch
     assert calls == []
 
 
-def test_f8_invalid_raw_low_censors_candidate_before_limit_comparison(monkeypatch):
+def test_f8_invalid_raw_low_fails_whole_request_before_limit_comparison(monkeypatch):
     days = _days(40)
     canonical = _fake_canonical(days, _rows(days, raw_low_none_index=24))
     _patch_facts(monkeypatch, _facts_rows([day for day in days[24:]]))
     calls: list = []
     _patch_engine(monkeypatch, calls)
-    payload = evaluate_daily_open_anchor(canonical, days[23], days[23], days[23], [SYM])
-    assert payload["status"] == "ok"
-    assert payload["events"][0]["precheck"] == "censored:invalid_open"
-    none_rows = [row for row in payload["execution_ledger"] if row["arm"] == "none"]
-    assert none_rows[0]["terminal_reason"] == "invalid_open"
+    with pytest.raises(UnavailableError) as excinfo:
+        evaluate_daily_open_anchor(canonical, days[23], days[23], days[23], [SYM])
+    assert excinfo.value.reason == "limit_band_facts_incomplete"
+    assert excinfo.value.detail == {
+        "symbol": SYM,
+        "date": days[24].isoformat(),
+        "field": "raw_low",
+    }
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("raw_open_none_index", "drop_horizon_index"),
+    [(24, None), (None, 30)],
+)
+def test_f8_raw_low_gate_precedes_candidate_level_censors(
+    monkeypatch, raw_open_none_index, drop_horizon_index
+):
+    days = _days(40)
+    rows = _rows(
+        days,
+        raw_open_none_index=raw_open_none_index,
+        raw_low_none_index=24,
+    )
+    if drop_horizon_index is not None:
+        rows = [row for row in rows if row["date"] != days[drop_horizon_index]]
+    canonical = _fake_canonical(days, rows)
+    _patch_facts(monkeypatch, _facts_rows([day for day in days[24:]]))
+    calls: list = []
+    _patch_engine(monkeypatch, calls)
+    with pytest.raises(UnavailableError) as excinfo:
+        evaluate_daily_open_anchor(canonical, days[23], days[23], days[23], [SYM])
+    assert excinfo.value.reason == "limit_band_facts_incomplete"
+    assert excinfo.value.detail["field"] == "raw_low"
     assert calls == []
 
 
@@ -642,7 +671,11 @@ def test_tnt_contrast_down_adverse_range_improved_is_conditional_by_trend():
     )
     contrast = build_tnt_open_anchor_contrast(arms)
     assert contrast["source"] == svc.TREND_CONTRAST_SOURCE
-    assert contrast["source"] == "docs/ISSUE-30/final-design.md"
+    assert contrast["source"] == "docs/ISSUE-30/final-design.md#41-tnt-源证据摘录"
+    assert contrast["original_source"] == (
+        "obsidian-note/clipper/2026-08-15-bollinger-volatility-t-strategy-research.md"
+    )
+    assert contrast["contract_source"] == "docs/ISSUE-30/final-design.md"
     assert contrast["read_scope"] == "oos_only"
     down = contrast["regimes"]["single_side_down"]
     assert down["status"] == "adverse"
@@ -752,6 +785,17 @@ def test_evaluate_payload_appends_tnt_open_anchor_contrast(monkeypatch):
     assert payload["status"] == "ok"
     contrast = payload["tnt_open_anchor_contrast"]
     assert contrast["source"] == svc.TREND_CONTRAST_SOURCE
+    assert contrast["original_source"] == svc.TREND_CONTRAST_ORIGINAL_SOURCE
+    assert contrast["contract_source"] == svc.TREND_CONTRAST_CONTRACT_SOURCE
+    assert payload["provenance"]["tnt_contrast_source"] == svc.TREND_CONTRAST_SOURCE
+    assert (
+        payload["provenance"]["tnt_contrast_original_source"]
+        == svc.TREND_CONTRAST_ORIGINAL_SOURCE
+    )
+    assert (
+        payload["provenance"]["tnt_contrast_contract_source"]
+        == svc.TREND_CONTRAST_CONTRACT_SOURCE
+    )
     assert contrast["read_scope"] == "oos_only"
     assert contrast["preregistered_conclusion"] and contrast["proxy_note"]
     assert all(item["status"] == "missing_not_in_repository" for item in contrast["historical_artifacts"])

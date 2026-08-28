@@ -94,6 +94,19 @@ plan-v2 §4 的 `arms.*.segments.is/oos` 继续有效，按 signal_date 归段�
 PR #32 后补充（2026-08-28）：响应顶层追加只读 `tnt_open_anchor_contrast`，对 `single_side_down`/`range` 桶披露 none/original 指标与比较状态；其来源、执行日形态桶口径及历史脚本边界以如下二次修正为准，诊断不得回灌过滤 mask。
 PR #33 后二次修正（2026-08-28）：`trend_bucket` 改为 planned execution day 完整日线的 `body_ratio=(close-open)/(high-low)`（`>=0.60` single_side_up，`<=-0.60` single_side_down，否则 range；无效为 unavailable_shape）。新增 `volatility_bucket`，执行日 TR% 为 `max(high-low,abs(high-prev_close),abs(low-prev_close))/prev_close`，基准为执行日前连续 20 个完整市场日同口径 TR% 的 `statistics.median`，比例 `>=1.50`/`<=0.75`/其余对应 high/low/normal，缺日、前收或非正基准为 insufficient_history。两层均为 post-entry、diagnostic-only，不参与 precheck、retention、engine；schema/ledger 版本升为 2/3。TNT 来源为实际存在的 Obsidian 笔记 `clipper/2026-08-15-bollinger-volatility-t-strategy-research.md`；该笔记列出的 `scrpits/tnt/*.py` 均为 `missing_not_in_repository`，不声称代码复现。
 
+### 4.1 TNT 源证据摘录
+
+原始来源：Obsidian `clipper/2026-08-15-bollinger-volatility-t-strategy-research.md`，标题「布林带+波动率 做T策略研究 — 回测与均值回归筛选」，创建日期 2026-08-15，原始素材标注为「抖音@斌哥Bg + 自研回测」。
+
+为使 API provenance 可在仓库内审计，本文固化与 `tnt_open_anchor_contrast` 直接相关的源证据：
+
+- 源笔记使用 5 分钟 OHLC，并用日线计算布林带、ATR 与趋势；样本为拉卡拉（300773）和宁德时代（300750）各 522 个交易日（2024-07 至 2026-08）。
+- 源笔记声明锚定开盘价的日内均值回归隐含「价格会回到开盘价」的假设；对趋势/动量型标的，抄底可能成为「接飞刀」。
+- 源笔记将低吸后的单边套牢识别为亏损根因，并要求真正的均值回归型标的池规避单边下跌日补仓。
+- 源笔记列出的 `scrpits/tnt/*.py` 脚本当前均不在仓库；本实现不是源回测的代码复现，日线执行日形态桶也不是其 5 分钟研究的等效替代。
+
+以上是源笔记的研究声明与边界，不把其样本收益数字当作本项目已复验事实。响应字段分工冻结为：`source` 指向本节仓库内证据摘录，`original_source` 保留真实 Obsidian 来源，`contract_source` 指向本实现契约；三者不得互相替代。
+
 ## 5. 增量测试矩阵
 
 - raw/adjusted corporate-action fixture：raw bands 与 raw OHLC 正确，adjusted 直接比较被证明不采用。
