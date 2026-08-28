@@ -485,6 +485,12 @@ def test_execution_day_shape_boundary_is_inclusive():
     assert svc.execution_day_shape_bucket(11.0, 11.0, 9.0, 9.0) == "single_side_down"
 
 
+def test_definition_discloses_shape_tolerance_and_flat_bar_rule():
+    contract = svc.DEFINITION["execution_day_diagnostics"]["trend_bucket"]
+    assert "abs_tol=1e-12" in contract
+    assert "nonpositive span" in contract
+
+
 @pytest.mark.parametrize(
     ("current", "expected"),
     [(0.015, "high_volatility"), (0.01, "normal_volatility"), (0.0075, "low_volatility")],
