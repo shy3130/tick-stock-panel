@@ -59,6 +59,17 @@ from app.services.weak_to_strong import (
     evaluate_weak_to_strong_v1,
 )
 
+from app.services.hold_firm_patterns import (
+    CapabilityResult,
+    HoldFirmPatternsRequest,
+    HoldFirmResponse,
+    HoldFirmStatus,
+    ProductionReaderScopeUnavailable,
+    assess_capability as assess_hold_firm_capability,
+    evaluate_hold_firm_patterns as evaluate_hold_firm_patterns_v1,
+    production_reader_scope as hold_firm_reader_scope,
+)
+
 from app.services.daily_open_anchor_filter import (
     assess_daily_open_anchor_capability,
     evaluate_daily_open_anchor,
@@ -590,3 +601,35 @@ def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest, request: Request)
 
     with production_reader_scope(getattr(request.app.state, "repo", None), body.signal_date.year) as reader:
         return evaluate_weak_to_strong_v1(body, reader=reader)
+@router.get("/hold-firm-patterns", response_model=CapabilityResult)
+def get_hold_firm_patterns_capability(request: Request):
+    """Return pinned capability for the four hold-firm detectors."""
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with hold_firm_reader_scope(repo) as scope:
+            return assess_hold_firm_capability(
+                scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        detail = f"{exc.reason.value}: {exc.detail}" if exc.detail else exc.reason.value
+        return CapabilityResult(status=HoldFirmStatus.UNAVAILABLE, problems=(detail,))
+
+
+@router.post("/factors/hold-firm-patterns/evaluate", response_model=HoldFirmResponse)
+def evaluate_hold_firm_patterns_factor(
+    body: HoldFirmPatternsRequest, request: Request
+):
+    """Validate and delegate; research I/O remains in the evaluator service."""
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with hold_firm_reader_scope(repo) as scope:
+            return evaluate_hold_firm_patterns_v1(
+                body, scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        return HoldFirmResponse(
+            status=HoldFirmStatus.UNAVAILABLE,
+            unavailable_reason=exc.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
