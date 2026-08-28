@@ -19,6 +19,7 @@ from app.services.daily_open_anchor_filter import (
     _golden_dead_crosses,
     _segment_stats,
     _terminal_from_result,
+    build_tnt_open_anchor_contrast,
     assess_daily_open_anchor_capability,
     evaluate_daily_open_anchor,
     rebuild_limit_bands,
@@ -402,3 +403,231 @@ def test_f9_anchor_unavailable_keeps_none_arm_and_marks_three_arms(monkeypatch):
     assert payload["arms"]["original"]["segments"]["oos"]["stats"]["censored_counts"] == {
         "anchor_unavailable": 1
     }
+
+
+# --- Issue #30 TODO（TODO.md tnt 对照）：PR #32 后遗漏修正 ---
+
+
+def _trend_bucket(n_trades: int, stop_hit_rate: float | None, expectancy: float | None) -> dict:
+    return {
+        "n": n_trades,
+        "n_trades": n_trades,
+        "net_pnl_pct_mean": expectancy,
+        "expectancy": expectancy,
+        "stop_hit_rate": stop_hit_rate,
+        "blocked": 0,
+        "censored": 0,
+    }
+
+
+def _trend_arms(
+    down: tuple[dict, dict],
+    rng: tuple[dict, dict],
+    *,
+    none_stats: dict | None = None,
+    original_stats: dict | None = None,
+) -> dict:
+    none_stats = none_stats or {"n_trades": 40, "stop_hit_rate": 0.10, "expectancy": 0.002}
+    original_stats = original_stats or {"n_trades": 40, "stop_hit_rate": 0.08, "expectancy": 0.002}
+
+    def arm(buckets: dict, stats: dict) -> dict:
+        return {
+            "segments": {
+                "oos": {
+                    "stats": dict(stats),
+                    "layers": {"trend_bucket": buckets},
+                }
+            }
+        }
+
+    return {
+        "none": arm({"single_side_down": down[0], "range": rng[0]}, none_stats),
+        "original": arm({"single_side_down": down[1], "range": rng[1]}, original_stats),
+    }
+
+
+def _trend_series(closes: list[float]) -> SymbolSeries:
+    days = _days(len(closes))
+    series = SymbolSeries(symbol=SYM, dates=days)
+    for day, close in zip(days, closes):
+        series.adj_close[day] = close
+    return series
+
+
+def test_trend_bucket_boundaries_are_inclusive_and_frozen():
+    days = _days(7)
+    assert svc._bucket_trend(_trend_series([10.0] * 7), days, 6) == "range"
+    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 10.3]), days, 6) == "single_side_up"
+    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 9.7]), days, 6) == "single_side_down"
+    assert svc._bucket_trend(_trend_series([10.0] * 5 + [10.0, 10.29]), days, 6) == "range"
+    assert svc._bucket_trend(_trend_series([10.0] * 4), days[:4], 3) == "insufficient_history"
+
+
+def test_tnt_contrast_status_rules_are_frozen():
+    rng_pair = (_trend_bucket(30, 0.50, 0.0), _trend_bucket(30, 0.50, 0.0))
+
+    def down_status(none: dict, original: dict) -> str:
+        arms = _trend_arms((none, original), rng_pair)
+        return build_tnt_open_anchor_contrast(arms)["regimes"]["single_side_down"]["status"]
+
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.12, 0.004)) == "adverse"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.10, 0.003)) == "adverse"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.12, 0.010)) == "adverse"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.08, 0.004)) == "improved"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.08, 0.005)) == "improved"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.10, 0.004)) == "neutral"
+    assert down_status(_trend_bucket(29, 0.10, 0.004), _trend_bucket(30, 0.08, 0.004)) == "inconclusive"
+    assert down_status(_trend_bucket(30, 0.10, 0.004), _trend_bucket(31, 0.08, None)) == "inconclusive"
+
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    ("arm", "field"),
+    [
+        ("none", "n_trades"),
+        ("none", "stop_hit_rate"),
+        ("none", "expectancy"),
+        ("original", "n_trades"),
+        ("original", "stop_hit_rate"),
+        ("original", "expectancy"),
+    ],
+)
+def test_tnt_contrast_non_finite_metric_is_inconclusive(bad, arm, field):
+    good = _trend_bucket(30, 0.10, 0.004)
+    broken = _trend_bucket(30, 0.10, 0.004)
+    broken[field] = bad
+    down_none, down_original = (broken, good) if arm == "none" else (good, broken)
+    arms = _trend_arms((down_none, down_original), (good, good))
+    contrast = build_tnt_open_anchor_contrast(arms)
+    assert contrast["regimes"]["single_side_down"]["status"] == "inconclusive"
+    assert contrast["regimes"]["range"]["status"] == "neutral"
+    assert contrast["regimes"]["single_side_down"][arm][field] is bad
+
+
+def test_tnt_contrast_down_adverse_range_improved_is_conditional_by_trend():
+    arms = _trend_arms(
+        (_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.20, 0.001)),
+        (_trend_bucket(30, 0.20, 0.001), _trend_bucket(30, 0.10, 0.004)),
+    )
+    contrast = build_tnt_open_anchor_contrast(arms)
+    assert contrast["source"] == "scripts/tnt/"
+    assert contrast["read_scope"] == "oos_only"
+    down = contrast["regimes"]["single_side_down"]
+    assert down["status"] == "adverse"
+    assert down["none"] == {"n_trades": 30, "stop_hit_rate": 0.10, "expectancy": 0.004}
+    assert down["original"] == {"n_trades": 30, "stop_hit_rate": 0.20, "expectancy": 0.001}
+    assert contrast["regimes"]["range"]["status"] == "improved"
+    verdict = svc._verdict(arms, contrast)
+    assert verdict["label"] == "validated"
+    assert verdict["applicability"] == "conditional_by_trend"
+    assert verdict["warnings"] and "单边下跌" in verdict["warnings"][0]
+
+
+def test_tnt_contrast_reads_oos_only_and_ignores_is_layers():
+    arms = _trend_arms(
+        (_trend_bucket(30, 0.10, 0.004), _trend_bucket(30, 0.20, 0.001)),
+        (_trend_bucket(30, 0.20, 0.001), _trend_bucket(30, 0.10, 0.004)),
+    )
+    contrast = build_tnt_open_anchor_contrast(arms)
+    verdict_before = svc._verdict(arms, contrast)
+    for arm_stats in arms.values():
+        arm_stats["segments"]["is"] = {
+            "stats": {"n_trades": 99, "stop_hit_rate": 0.0, "expectancy": 0.05},
+            "layers": {
+                "trend_bucket": {
+                    "single_side_down": _trend_bucket(99, 0.0, 0.05),
+                    "range": _trend_bucket(99, 0.0, 0.05),
+                }
+            },
+        }
+    assert build_tnt_open_anchor_contrast(arms) == contrast
+    assert svc._verdict(arms, build_tnt_open_anchor_contrast(arms)) == verdict_before
+
+
+def test_tnt_contrast_insufficient_sample_is_inconclusive_by_trend():
+    arms = _trend_arms(
+        (_trend_bucket(29, 0.10, 0.004), _trend_bucket(30, 0.20, 0.001)),
+        (_trend_bucket(29, 0.20, 0.001), _trend_bucket(30, 0.10, 0.004)),
+    )
+    contrast = build_tnt_open_anchor_contrast(arms)
+    assert contrast["regimes"]["single_side_down"]["status"] == "inconclusive"
+    assert contrast["regimes"]["range"]["status"] == "inconclusive"
+    verdict = svc._verdict(arms, contrast)
+    assert verdict["label"] == "validated"
+    assert verdict["applicability"] == "inconclusive_by_trend"
+    # validated 下任一桶样本不足同样降级为 inconclusive_by_trend，而非 all_regimes
+    one_bucket_insufficient = _trend_arms(
+        (_trend_bucket(29, 0.10, 0.004), _trend_bucket(30, 0.20, 0.001)),
+        (_trend_bucket(30, 0.20, 0.001), _trend_bucket(30, 0.08, 0.004)),
+    )
+    assert svc._verdict(
+        one_bucket_insufficient,
+        build_tnt_open_anchor_contrast(one_bucket_insufficient),
+    )["applicability"] == "inconclusive_by_trend"
+
+
+def test_verdict_applicability_state_transitions():
+    good = _trend_bucket(30, 0.10, 0.004)
+
+    def applicability(arms: dict) -> str:
+        return svc._verdict(arms, build_tnt_open_anchor_contrast(arms))["applicability"]
+
+    # 两桶均 improved/neutral → all_regimes
+    all_regimes = _trend_arms((good, good), (_trend_bucket(30, 0.20, 0.001), _trend_bucket(30, 0.08, 0.004)))
+    verdict = svc._verdict(all_regimes, build_tnt_open_anchor_contrast(all_regimes))
+    assert verdict["applicability"] == "all_regimes"
+    assert verdict["warnings"] == []
+    # 单桶 adverse（另一桶非 adverse）→ conditional_by_trend + 对应 warning
+    down_adverse = _trend_arms((good, _trend_bucket(30, 0.20, 0.001)), (good, good))
+    down_verdict = svc._verdict(down_adverse, build_tnt_open_anchor_contrast(down_adverse))
+    assert down_verdict["applicability"] == "conditional_by_trend"
+    assert "单边下跌" in down_verdict["warnings"][0]
+    range_adverse = _trend_arms((good, good), (good, _trend_bucket(30, 0.30, 0.001)))
+    range_verdict = svc._verdict(range_adverse, build_tnt_open_anchor_contrast(range_adverse))
+    assert range_verdict["applicability"] == "conditional_by_trend"
+    assert "震荡" in range_verdict["warnings"][0]
+    # 双桶均 adverse → unsupported_in_preregistered_regimes + 明确两桶均不利
+    both_adverse = _trend_arms(
+        (good, _trend_bucket(30, 0.20, 0.001)),
+        (good, _trend_bucket(30, 0.30, 0.001)),
+    )
+    both_verdict = svc._verdict(both_adverse, build_tnt_open_anchor_contrast(both_adverse))
+    assert both_verdict["applicability"] == "unsupported_in_preregistered_regimes"
+    assert "均不利" in both_verdict["warnings"][0]
+    # 整体 rejected / inconclusive 不进入趋势转换
+    rejected = _trend_arms(
+        (good, good),
+        (good, good),
+        none_stats={"n_trades": 40, "stop_hit_rate": 0.10, "expectancy": 0.002},
+        original_stats={"n_trades": 40, "stop_hit_rate": 0.12, "expectancy": 0.002},
+    )
+    assert applicability(rejected) == "not_applicable_rejected"
+    overall_inconclusive = _trend_arms(
+        (good, good),
+        (good, good),
+        none_stats={"n_trades": 29, "stop_hit_rate": 0.10, "expectancy": 0.002},
+    )
+    assert applicability(overall_inconclusive) == "inconclusive_overall"
+
+
+def test_evaluate_payload_appends_tnt_open_anchor_contrast(monkeypatch):
+    days = _days(41)
+    canonical = _fake_canonical(days, _rows(days, bullish_index=22))
+    _patch_facts(monkeypatch, _facts_rows([day for day in days[23:]]))
+    calls: list = []
+    _patch_engine(monkeypatch, calls)
+    payload = evaluate_daily_open_anchor(canonical, SIGNAL_DAY, SIGNAL_DAY, SIGNAL_DAY, [SYM])
+    assert payload["status"] == "ok"
+    contrast = payload["tnt_open_anchor_contrast"]
+    assert contrast["source"] == "scripts/tnt/"
+    assert contrast["read_scope"] == "oos_only"
+    assert contrast["preregistered_conclusion"] and contrast["proxy_note"]
+    for regime in ("single_side_down", "range"):
+        bucket = contrast["regimes"][regime]
+        assert set(bucket) == {"none", "original", "status"}
+        assert bucket["status"] == "inconclusive"
+        for arm in ("none", "original"):
+            assert set(bucket[arm]) == {"n_trades", "stop_hit_rate", "expectancy"}
+            assert bucket[arm]["n_trades"] is None
+    assert payload["verdict"]["applicability"] == "inconclusive_overall"
