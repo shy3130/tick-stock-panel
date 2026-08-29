@@ -97,6 +97,19 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 
 ## 真实 OOS verdict（2026-08-29）
 
+### Evaluator revision provenance
+
+| 项 | 值 |
+|---|---|
+| evaluator 文件 | `backend/app/services/daily_open_anchor_filter.py` |
+| 最后修改 commit | `46c3dbc707983b7b7eff59991d5f5efd33062bd4`（fix(research): close anchor review follow-ups (#30)，2026-08-28T13:37:15+08:00）|
+| evaluator blob SHA-1 | `80e5ca89b4b62f112fa69536f010c8f3da510097` |
+| source tree HEAD（执行时） | `5e7121b44820df7720686fe8c326e5657b034950`（Issue #30 verdict 首次落档 commit）|
+| evaluator / repository dirty diff | 无 |
+| 执行模式 | Issue #30 verdict worktree 中启动 fresh Python process；不是复用常驻服务进程 |
+
+clean rerun 从上述 HEAD 重新导入 evaluator；结果与首次运行逐项一致：四臂统计、TNT 分层和 `inconclusive` verdict 均未变化。由 commit + evaluator blob + immutable data generations 可以复现本次 source/runtime 组合。
+
 ### Immutable provenance 与请求
 
 - canonical generation：`20260829T002957-4b1bfcad`
@@ -106,14 +119,16 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 - execution ledger：v3；日历口径 `pinned_market_days`
 - 请求：`2025-02-25` 至 `2026-08-28`，OOS 起点 `2025-11-26`；确定性排序 10 标的；窗口 370 天上限。
 
-### 整体 OOS
+### 整体 OOS（四臂）
 
 | 臂 | n_trades | stop_hit_rate | expectancy |
 |---|---:|---:|---:|
 | none | 55 | 0.345455 | -0.015449 |
 | original | 9 | 0.111111 | -0.014426 |
+| inverted | 46 | 0.391304 | -0.015649 |
+| random | 16 | 0.1875 | -0.016652 |
 
-原稿臂表面上止损率较低且 expectancy 略高，但仅 9 笔，未达到冻结的 `min_oos_trades=30`。因此 verdict 必须为 `inconclusive`，不得升级为 `validated`。
+原稿臂表面上止损率较低且 expectancy 略高，但仅 9 笔，未达到冻结的 `min_oos_trades=30`。inverted 臂保留 51/60 信号，止损率 0.391 高于 none（0.345），期望略低，符合「反向过滤=接飞刀」预期。random 臂保留 17/60，止损率 0.188 低于 none，但样本仅 16 笔且期望 -0.0167 仍为负。因此 verdict 必须为 `inconclusive`，不得升级为 `validated`。
 
 ### TNT 预注册分层
 

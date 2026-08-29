@@ -77,7 +77,8 @@ PR #33 仅完成 TNT 对照首修；其后发现原 `trend_bucket` 的 5 日动�
 
 - canonical generation `20260829T002957-4b1bfcad`，manifest SHA-256 `0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372`。
 - markets generation `20260829T000704`，manifest SHA-256 `a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`。
-- 确定性 10 标的、370 天上限运行 `status=ok`；整体 OOS 中 none 臂 55 笔，original 臂仅 9 笔，低于预注册最少 30 笔，verdict=`inconclusive`。
+- evaluator revision：commit `46c3dbc`（blob `80e5ca89`），clean rerun source tree HEAD `5e7121b`；以 fresh Python process 执行，evaluator 与 repository 文件均无 dirty diff，详见 [verification.md](verification.md)。
+- 确定性 10 标的、370 天上限运行 `status=ok`；整体 OOS 四臂：none 55 笔（stop 0.345, exp -0.0154），original 9 笔（stop 0.111, exp -0.0144），inverted 46 笔（stop 0.391, exp -0.0156），random 16 笔（stop 0.188, exp -0.0167）。original 臂低于预注册最少 30 笔，verdict=`inconclusive`。
 - TNT 分层同样不足：`single_side_down` original 为 0 笔，`range` original 为 7 笔，两桶均 `inconclusive`。
 - 结果不支持将过滤器升级为 validated，也不进入默认策略池、Agent 排序或真实交易。
 
