@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "issue": 29,
+  "status": "ok",
+  "request": {
+    "start": "2023-08-10",
+    "oos_start": "2025-02-25",
+    "end": "2026-08-28",
+    "cohort_day": "2025-02-24",
+    "cohort_rule": "cohort_day 上存在 canonical bar 的 symbol 升序前 25 只",
+    "symbols": [
+      "000001.SZ",
+      "000002.SZ",
+      "000006.SZ",
+      "000007.SZ",
+      "000008.SZ",
+      "000009.SZ",
+      "000011.SZ",
+      "000012.SZ",
+      "000014.SZ",
+      "000017.SZ",
+      "000019.SZ",
+      "000020.SZ",
+      "000021.SZ",
+      "000025.SZ",
+      "000026.SZ",
+      "000027.SZ",
+      "000028.SZ",
+      "000029.SZ",
+      "000030.SZ",
+      "000031.SZ",
+      "000032.SZ",
+      "000034.SZ",
+      "000035.SZ",
+      "000036.SZ",
+      "000037.SZ"
+    ],
+    "cost_bps": 10.0,
+    "market_days": 740
+  },
+  "provenance": {
+    "definition_version": "v3",
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "markets_pin_verification_mode": "manifest_sha256_match",
+    "evaluator_revision": {
+      "source_tree_head_at_execution": "c2d90e1e93ba70087ac048cebd70c01e15d3f804",
+      "evaluator_file": "backend/app/services/zuoyi_defense.py",
+      "evaluator_blob_sha1": "0c266dea7efeb7467963d7f79b82086f59421a8f",
+      "execution_mode": "fresh_python_process",
+      "evaluator_and_repository_dirty_at_execution": false
+    }
+  },
+  "verdict": {
+    "value": "rejected",
+    "oos_complete_segments": 75,
+    "minimum_required": 20,
+    "rule": "paired bootstrap seed=42 rounds=500 shows no stable increment vs strongest baseline buy_hold"
+  },
+  "oos_arm_mean_net_return": {
+    "buy_hold": 0.007831920870196126,
+    "atr_chandelier_k3": -0.004928728516357868,
+    "ma20_hold": -0.0034279804334485606,
+    "ma60_hold": -0.02382140242863739,
+    "zuoyi_defense": 0.0043661340926668055,
+    "zuoyi_atr_combo": 0.005705748065080712
+  },
+  "superseded_prior_run": {
+    "value": "accepted",
+    "comparison": "ma60_hold",
+    "reason": "旧 evaluator 以 max paired improvement 选择最容易基准，违反冻结的相对最佳基准门禁。"
+  },
+  "source_coverage_record": {
+    "initial_start": "2022-03-04",
+    "blocked_symbol": "000001.SZ",
+    "missing_exact_markets_days": [
+      "2022-07-19",
+      "2022-07-20",
+      "2022-07-21"
+    ],
+    "resolution": "最终窗口只依据 source coverage 调整，未读取臂收益或 verdict。"
+  },
+  "limitations": [
+    "本次为确定性排序的 25 标的小样本 OOS；结论只适用于冻结的日频 v3 定义与 source revisions。",
+    "rejected 表示未证明相对 OOS 最强基准 buy_hold 的稳定增量，不表示该离场规则在所有用途下必然无效。",
+    "结果不进入生产回测引擎、默认短线池、Agent 排序或真实交易。"
+  ]
+}

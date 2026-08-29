@@ -1,8 +1,7 @@
 # ISSUE-29 左一K线防守位移动止盈研究（zuoyi-defense）
 
-> 状态：**实现完成 / 待 PR**（final-design 已批准；独立 coding review 最终 approve，无 blocker/major）
-> 日期：2026-08-28 · 基线：`workbench/feature/fstore-engine-duckdb-source` @ `7bf2982`
-> GitHub Issue：[wf2311/fm-workbench#29 — Add auditable Zuoyi defense trailing-exit research](https://github.com/wf2311/fm-workbench/issues/29)
+> 状态：**严格最佳基准门禁已修复并重跑，最终 OOS verdict=`rejected`；待 PR #42 合并后关闭 Issue**。
+> 日期：2026-08-29 · evaluator source：`c2d90e1` · GitHub Issue：[wf2311/fm-workbench#29](https://github.com/wf2311/fm-workbench/issues/29)
 
 ## 这是什么
 
@@ -56,6 +55,7 @@
 | [review-v3.md](review-v3.md) | 最终门禁复审：R8 schema major 追加不变式，已修正并批准 |
 | [verification.md](verification.md) | 主会话最终验证证据、strict pin smoke 与上线前置条件 |
 | [coding-review.md](coding-review.md) | 独立 coding review 20 项 finding 闭环与最终 identity 证据 |
+| [oos-verdict.json](oos-verdict.json) | 真实 OOS 请求、immutable provenance、六臂均值、verdict 与限制的机器可读摘要 |
 
 ## 代码落点（实现波）
 
@@ -65,17 +65,26 @@
 | `backend/app/api/research.py` | capability GET 与 evaluate POST 接线 |
 | `backend/app/data_providers/fquant/daily_market_research.py` | immutable markets generation reader、PIT raw/band facts 与 identity 校验 |
 | `backend/app/services/canonical_history.py` | canonical full/incremental publisher 与 snapshot identity pin |
-实现波遵守 final-design；真实 OOS 未运行，不预填 `accepted`，不改 `data/`。
+
+## 真实 OOS 收口（2026-08-29）
+
+- canonical generation `20260829T002957-4b1bfcad`，canonical manifest SHA-256 `0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372`。
+- markets generation `20260829T000704`，markets manifest SHA-256 `a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`，校验模式 `manifest_sha256_match`。
+- fresh-process evaluator：source tree `c2d90e1e93ba70087ac048cebd70c01e15d3f804`，`zuoyi_defense.py` blob `0c266dea7efeb7467963d7f79b82086f59421a8f`，evaluator/repository 均无 dirty diff。
+- 确定性 25 标的 OOS 得到 75 个完整 segment；四个 baseline 均满足 paired 样本门槛，paired mean 最强基准为 `buy_hold`。
+- 最终 verdict=`rejected`：paired bootstrap `seed=42` / `rounds=500` 未证明相对 `buy_hold` 的稳定增量；`buy_hold` OOS 均值 `0.007832`，`zuoyi_defense` 为 `0.004366`。
+- 旧 `ma60_hold` 对照得到的 `accepted` 已明确作废；本结果不进入生产回测引擎、默认短线池、Agent 排序或真实交易。
+
+机器可读摘要见 [oos-verdict.json](oos-verdict.json)，执行与 source-coverage 阻断记录见 [verification.md](verification.md)。
 
 ## 红线
 
-- 只走 canonical sealed 数据链路；单一 generation 内计算，禁跨 generation 合并，
-  禁直连 `data/`。
+- 只走 canonical sealed 数据链路；单一 generation 内计算，禁跨 generation 合并。
+- canonical 与 markets identity 必须同时固定 generation + 完整 manifest SHA-256。
 - 严格 PIT：不引用 T 时刻未完成 bar；禁用非严格 PIT 的 `turnover_rate` 列。
 - fail-closed：reader/列缺失返回 `unavailable` + 原因，绝不降级猜测。
 - A 股 T+1：入场日不出场；停牌/一字跌停 pending 至首个可卖日。
 - 不写 `data/`；不进策略池/监控；无交易语义字段（不下单、无仓位）。
-- 不采信原稿收益主张；未跑出真实 OOS 结果前不写任何收益结论。
 
 ## 建议分支
 
