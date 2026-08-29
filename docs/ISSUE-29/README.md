@@ -1,6 +1,6 @@
 # ISSUE-29 左一K线防守位移动止盈研究（zuoyi-defense）
 
-> 状态：**严格最佳基准门禁已修复并重跑，最终 OOS verdict=`rejected`；待 PR #42 合并后关闭 Issue**。
+> 状态：**已收口**——严格最佳基准门禁已修复并重跑，最终 OOS verdict=`rejected`；PR #42 已合并（`5bfbcad`），Issue #29 已关闭。
 > 日期：2026-08-29 · evaluator source：`c2d90e1` · GitHub Issue：[wf2311/fm-workbench#29](https://github.com/wf2311/fm-workbench/issues/29)
 
 ## 这是什么

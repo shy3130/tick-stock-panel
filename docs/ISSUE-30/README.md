@@ -1,6 +1,6 @@
 # ISSUE-30 日线开盘价锚定入场过滤研究（daily-open-anchor-filter）
 
-> 状态：**真实 OOS 已完成，冻结门禁 verdict=`inconclusive`（原稿臂样本不足）；待本次 verdict 文档 PR 合并后关闭 Issue**。
+> 状态：**已收口**——真实 OOS 已完成，冻结门禁 verdict=`inconclusive`（原稿臂样本不足）；PR #43 已合并（`c7ef9bb`），Issue #30 已关闭。
 > 日期：2026-08-29 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
 
 ## 这是什么

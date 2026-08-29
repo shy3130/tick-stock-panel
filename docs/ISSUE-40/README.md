@@ -1,7 +1,7 @@
 # Issue #40 — PIT Universe presence history
 
 - GitHub: https://github.com/wf2311/fm-workbench/issues/40
-- 状态：实现、独立复核、production artifact 与 Issue #38 消费/OOS 均完成；待 PR #41 先于 PR #39 合并
+- 状态：已收口；实现、独立复核、production artifact 与 Issue #38 消费/OOS 均完成；PR #41（`52f4a07`）已先于 PR #39（`e73df44`）合并，Issue #40 已关闭
 - 分支：`issue-40-pit-universe-presence`
 - 依赖方：Issue #38
 
