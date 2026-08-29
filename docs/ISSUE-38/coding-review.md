@@ -26,3 +26,13 @@
 ## 额外父池修正
 
 F2 的放量条件属于 selection，不属于平台突破 parent。低于 1.50 倍、或 prior mean volume 为零的 facts-complete 平台突破均保留到 `not_selected`，避免 parent/qualified/not_selected 计数漏项。
+
+## PR #39 行级 review 收口
+
+GitHub Codex 对提交 `ca83ba3` 提出三条意见，逐条核实后均成立：
+
+1. **P1：Universe 预取范围过宽**：检测器 warmup 会早于 forward-only SCD 首个区间，按 `full_days` 预取会把与事件无关的 warmup 日变成整单 `unavailable`。现先完成检测，只对每个实际 parent 的 landmark（无 landmark 时为 anchor）预取 membership。
+2. **P2：删失 parent 先伪造在池**：现所有 parent（包括 selection/warmup censor）均先按适用事件日检查 PIT membership；不在池事件只进入 `pit_universe_ineligible` 审计，不再膨胀 censor 分母。
+3. **P2：首阴后删失 anchor 错位**：首阴已观察后的 MA5 warmup、量能、次日 landmark 缺失均以 `yin_day` 为 anchor；首阴尚不可观察时仍保留最后涨停日 parent anchor。
+
+独立复核确认三条修复完整，新增测试可使旧实现失败，未见 blocker/major。

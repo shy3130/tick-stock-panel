@@ -180,6 +180,27 @@ def _event_id(detection: ParentDetection) -> str:
         f"{detection.anchor_date.isoformat()}:{landmark.isoformat()}"
     )
 
+def _membership_date(detection: ParentDetection) -> date:
+    return (
+        detection.landmark.landmark_date
+        if detection.landmark is not None
+        else detection.anchor_date
+    )
+
+
+def _membership_days(
+    detections_by_factor: Sequence[Sequence[ParentDetection]],
+) -> tuple[date, ...]:
+    return tuple(
+        sorted(
+            {
+                _membership_date(detection)
+                for detections in detections_by_factor
+                for detection in detections
+            }
+        )
+    )
+
 
 def _overlaps_active_horizon(prepared: _PreparedEvent, blocked_through: Mapping[str, date]) -> bool:
     landmark = prepared.detection.landmark
@@ -206,6 +227,20 @@ def _materialize(
     censors: list[Censor] = []
     for detection in detections:
         event_id = _event_id(detection)
+        membership = universe.membership(detection.symbol, _membership_date(detection))
+        if membership is PitUniverseStatus.NOT_IN_POOL:
+            pit_ineligible.append(
+                ParentEvent(
+                    factor_id=factor_id,
+                    event_id=event_id,
+                    symbol=detection.symbol,
+                    anchor_date=detection.anchor_date,
+                    bucket=None,
+                    pit_status=membership,
+                    audit_code=DenominatorAuditCode.PIT_UNIVERSE_INELIGIBLE,
+                )
+            )
+            continue
         if detection.censor is not None:
             censors.append(
                 Censor(
@@ -223,27 +258,13 @@ def _materialize(
                     symbol=detection.symbol,
                     anchor_date=detection.anchor_date,
                     bucket=None,
-                    pit_status=PitUniverseStatus.IN_POOL,
+                    pit_status=membership,
                     censor=detection.censor,
                 )
             )
             continue
         if detection.landmark is None or detection.evidence is None:
             raise ValueError("facts-complete detection lacks landmark/evidence")
-        membership = universe.membership(detection.symbol, detection.landmark.landmark_date)
-        if membership is PitUniverseStatus.NOT_IN_POOL:
-            pit_ineligible.append(
-                ParentEvent(
-                    factor_id=factor_id,
-                    event_id=event_id,
-                    symbol=detection.symbol,
-                    anchor_date=detection.anchor_date,
-                    bucket=None,
-                    pit_status=membership,
-                    audit_code=DenominatorAuditCode.PIT_UNIVERSE_INELIGIBLE,
-                )
-            )
-            continue
         bucket = (
             SelectionBucket.QUALIFIED
             if detection.evidence.qualified
@@ -754,8 +775,27 @@ def evaluate_hold_firm_patterns(
     except (OSError, RuntimeError, TypeError, ValueError):
         return _unavailable(UnavailabilityReason.MARKET_FACTS_INCOMPLETE)
 
+    detections_by_factor = tuple(
+        tuple(
+            detection
+            for symbol in request.symbols
+            for detection in detector_type().detect(
+                symbol,
+                tuple(bars_by_symbol[symbol].values()),
+                facts,
+                full_days,
+            )
+            if request.start <= detection.anchor_date <= request.end
+        )
+        for detector_type in _DETECTORS
+    )
+
+
     try:
-        universe = PinnedUniverseReader(universe_reader, full_days)  # type: ignore[arg-type]
+        universe = PinnedUniverseReader(  # type: ignore[arg-type]
+            universe_reader,
+            _membership_days(detections_by_factor),
+        )
     except (
         OSError,
         RuntimeError,
@@ -796,19 +836,7 @@ def evaluate_hold_firm_patterns(
         return _unavailable(UnavailabilityReason.INVALID_PROVENANCE)
 
     results: list[FactorResult] = []
-    for detector_type, factor_id in zip(_DETECTORS, FACTOR_IDS):
-        detector = detector_type()
-        detections = [
-            detection
-            for symbol in request.symbols
-            for detection in detector.detect(
-                symbol,
-                tuple(bars_by_symbol[symbol].values()),
-                facts,
-                full_days,
-            )
-            if request.start <= detection.anchor_date <= request.end
-        ]
+    for factor_id, detections in zip(FACTOR_IDS, detections_by_factor):
         try:
             qualified, not_selected, pit, selection_censored, censors = _materialize(
                 factor_id, detections, universe

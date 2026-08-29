@@ -7,12 +7,16 @@ from app.services.hold_firm_patterns.adapters import request_windows
 from app.services.hold_firm_patterns.evaluation import (
     _PreparedEvent,
     _diagnostics,
+    _materialize,
+    _membership_days,
     _overlaps_active_horizon,
     _simulate,
     _split_statistics,
 )
 from app.services.hold_firm_patterns.models import (
     Bar,
+    CensorReason,
+    DenominatorAuditCode,
     DetectionEvidence,
     FactorResult,
     HoldFirmVerdict,
@@ -105,6 +109,72 @@ def _prepared(
         pit_status=PitUniverseStatus.IN_POOL,
     )
     return _PreparedEvent(event=event, detection=detection)
+
+class _Universe:
+    def __init__(self, status: PitUniverseStatus) -> None:
+        self.status = status
+        self.calls: list[tuple[str, date]] = []
+
+    def membership(self, symbol: str, day: date) -> PitUniverseStatus:
+        self.calls.append((symbol, day))
+        return self.status
+
+
+def test_censored_parent_uses_landmark_membership_before_denominator_bucket() -> None:
+    calendar = _days(3)
+    symbol = "000001.SZ"
+    detection = ParentDetection(
+        factor_id="breakout_pullback",
+        symbol=symbol,
+        anchor_date=calendar[0],
+        landmark=Landmark(
+            kind=LandmarkKind.BREAKOUT_DAY5_CLOSE,
+            anchor_date=calendar[0],
+            landmark_date=calendar[1],
+        ),
+        censor=CensorReason.SELECTION_WINDOW_INCOMPLETE,
+    )
+    assert _membership_days(((detection,),)) == (calendar[1],)
+
+    universe = _Universe(PitUniverseStatus.NOT_IN_POOL)
+    qualified, not_selected, pit, selection_censored, censors = _materialize(
+        "breakout_pullback",
+        (detection,),
+        universe,  # type: ignore[arg-type]
+    )
+    assert universe.calls == [(symbol, calendar[1])]
+    assert qualified == []
+    assert not_selected == []
+    assert selection_censored == []
+    assert censors == []
+    assert len(pit) == 1
+    assert pit[0].pit_status is PitUniverseStatus.NOT_IN_POOL
+    assert pit[0].audit_code is DenominatorAuditCode.PIT_UNIVERSE_INELIGIBLE
+
+
+def test_in_pool_censored_parent_preserves_censor_bucket() -> None:
+    calendar = _days(3)
+    detection = ParentDetection(
+        factor_id="first_yin_complement",
+        symbol="000001.SZ",
+        anchor_date=calendar[1],
+        landmark=None,
+        censor=CensorReason.WARMUP_INCOMPLETE,
+    )
+    universe = _Universe(PitUniverseStatus.IN_POOL)
+    qualified, not_selected, pit, selection_censored, censors = _materialize(
+        "first_yin_complement",
+        (detection,),
+        universe,  # type: ignore[arg-type]
+    )
+    assert universe.calls == [("000001.SZ", calendar[1])]
+    assert qualified == []
+    assert not_selected == []
+    assert pit == []
+    assert len(selection_censored) == 1
+    assert selection_censored[0].pit_status is PitUniverseStatus.IN_POOL
+    assert len(censors) == 1
+
 
 
 def test_dynamic_pending_stays_exposed_through_common_day20() -> None:

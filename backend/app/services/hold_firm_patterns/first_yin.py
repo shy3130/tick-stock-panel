@@ -149,15 +149,15 @@ class FirstYinDetector:
         facts: MarketFactsSource,
         days: tuple[date, ...],
     ) -> ParentDetection:
-        last_up_day, last_up_bar, last_up_row = streak[-1]
+        _, last_up_bar, _ = streak[-1]
         warmup_end = bisect_right(ordered, yin_day, key=lambda bar: bar.date)
         ma5_bars = ordered[max(0, warmup_end - MA5_WINDOW) : warmup_end]
         if len(ma5_bars) < MA5_WINDOW:
-            return _censored(symbol, last_up_day, CensorReason.WARMUP_INCOMPLETE)
+            return _censored(symbol, yin_day, CensorReason.WARMUP_INCOMPLETE)
         ma5 = sum(bar.research_close_adj for bar in ma5_bars) / MA5_WINDOW
 
         if last_up_bar.volume <= 0 or yin_bar.volume <= 0:
-            return _censored(symbol, last_up_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
+            return _censored(symbol, yin_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
         yin_ratio = yin_bar.volume / last_up_bar.volume
         if yin_ratio <= YIN_SHRINK_MAX_RATIO:
             volume_state = "shrink"
@@ -168,12 +168,12 @@ class FirstYinDetector:
 
         landmark_index = bisect_right(days, yin_day)
         if landmark_index >= len(days):
-            return _censored(symbol, last_up_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
+            return _censored(symbol, yin_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
         landmark_day = days[landmark_index]
         landmark_bar = bar_by_date.get(landmark_day)
         landmark_row = facts.row(symbol, landmark_day) if landmark_bar is not None else None
         if landmark_bar is None or landmark_row is None or landmark_bar.volume <= 0:
-            return _censored(symbol, last_up_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
+            return _censored(symbol, yin_day, CensorReason.SELECTION_WINDOW_INCOMPLETE)
         complement_ratio = landmark_bar.volume / yin_bar.volume
         if volume_state == "shrink":
             complement_pass = complement_ratio >= COMPLEMENT_EXPAND_MIN_RATIO

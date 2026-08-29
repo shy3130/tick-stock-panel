@@ -281,7 +281,16 @@ def test_missing_facts_bars_and_incomplete_landmark_are_censored():
         ("yin", {"volume": 500.0}),
     ]
     result, _ = detect(specs)
-    assert len(result) == 1 and result[0].censor is CensorReason.SELECTION_WINDOW_INCOMPLETE
+    assert len(result) == 1
+    assert result[0].censor is CensorReason.SELECTION_WINDOW_INCOMPLETE
+    assert result[0].anchor_date == day(8)
+    assert result[0].landmark is None
+
+    result, _ = detect(qualified_specs(), facts_missing={9})
+    assert len(result) == 1
+    assert result[0].censor is CensorReason.SELECTION_WINDOW_INCOMPLETE
+    assert result[0].anchor_date == day(8)
+    assert result[0].landmark is None
 
 
 def test_warmup_and_band_widths_st_and_tolerance():
@@ -293,7 +302,9 @@ def test_warmup_and_band_widths_st_and_tolerance():
         ("plain", {"volume": 1000.0}),
     ]
     result, _ = detect(specs)
-    assert len(result) == 1 and result[0].censor is CensorReason.WARMUP_INCOMPLETE
+    assert len(result) == 1
+    assert result[0].censor is CensorReason.WARMUP_INCOMPLETE
+    assert result[0].anchor_date == day(3)
 
     for ratio, st, upper in (
         (0.10, False, 11.0),
