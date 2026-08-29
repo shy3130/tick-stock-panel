@@ -24,6 +24,7 @@ from app.services.negative_exclusion import (
     detect_v2,
     detect_v4_series,
     detect_v5_series,
+    require_available_class,
 )
 from app.services.universe_presence_history import PresenceHistoryError
 
@@ -66,6 +67,17 @@ def evaluate_negative_exclusion_production(
     requested_symbols = tuple(sorted({str(symbol) for symbol in symbols if str(symbol)}))
     if not requested_symbols:
         raise ValueError("symbols must not be empty")
+    resolved_enabled = (
+        tuple(enabled_classes)
+        if enabled_classes is not None
+        else (
+            CLASS_V2,
+            CLASS_V4,
+            CLASS_V5,
+        )
+    )
+    for class_id in resolved_enabled:
+        require_available_class(class_id)
 
     try:
         canonical = PinnedCanonicalDailyReader(canonical_reader)
@@ -150,10 +162,43 @@ def evaluate_negative_exclusion_production(
                 )
             )
 
+    request_payload = {
+        "start": start,
+        "oos_start": oos_start,
+        "end": end,
+        "symbols": list(requested_symbols),
+        "enabled_classes": list(resolved_enabled),
+        "horizon_days": horizon_days,
+        "cost_bps": cost_bps,
+        "rebalance_rule": "non_overlapping_horizon_cohorts",
+    }
+    provenance = {
+        "canonical": canonical.identity().model_dump(mode="json"),
+        "market_facts": facts.identity().model_dump(mode="json"),
+        "universe": universe.identity().model_dump(mode="json"),
+        "definition": "docs/ISSUE-50/final-design.md",
+    }
+    coverage = {
+        "observations": len(observations),
+        "rebalance_days": len(rebalance_days),
+        "market_facts_incomplete_rows": facts.incomplete_rows,
+        "censored": censored,
+    }
+    if not observations:
+        return {
+            **_unavailable(
+                "unavailable_no_evaluable_observations",
+                "all pinned OOS rows were censored before aggregation",
+            ),
+            "request": request_payload,
+            "provenance": provenance,
+            "coverage": coverage,
+        }
+
     try:
         aggregate = aggregate_exclusion(
             observations,
-            enabled_classes=enabled_classes,
+            enabled_classes=resolved_enabled,
             periods_per_year=252.0 / horizon_days,
         )
     except ValueError as exc:
@@ -161,27 +206,9 @@ def evaluate_negative_exclusion_production(
     return {
         "schema": SCHEMA,
         "status": "ok",
-        "request": {
-            "start": start,
-            "oos_start": oos_start,
-            "end": end,
-            "symbols": list(requested_symbols),
-            "horizon_days": horizon_days,
-            "cost_bps": cost_bps,
-            "rebalance_rule": "non_overlapping_horizon_cohorts",
-        },
-        "provenance": {
-            "canonical": canonical.identity().model_dump(mode="json"),
-            "market_facts": facts.identity().model_dump(mode="json"),
-            "universe": universe.identity().model_dump(mode="json"),
-            "definition": "docs/ISSUE-50/final-design.md",
-        },
-        "coverage": {
-            "observations": len(observations),
-            "rebalance_days": len(rebalance_days),
-            "market_facts_incomplete_rows": facts.incomplete_rows,
-            "censored": censored,
-        },
+        "request": request_payload,
+        "provenance": provenance,
+        "coverage": coverage,
         "capabilities": capability_report(),
         "evaluation": asdict(aggregate),
         "promoted": False,

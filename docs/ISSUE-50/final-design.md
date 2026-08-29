@@ -11,4 +11,4 @@
 - V5：距 60 日收盘高回撤≥30%、close 跌破前 20 日最低 raw low、当日 volume≥前 20 日均量×2；三条件同时成立。
 
 所有检测器 prefix-closed。生产层只评估 PIT presence 可证明的 OOS symbol-day，并按 horizon 取互不重叠的再平衡 cohort，避免把重叠 forward label 复利成伪 NAV；信号日后下一市场日开盘进入 forward 观察，缺未来 bar 删失。V1/V3 不可在 `enabled_classes` 中启用。
-每类与 `all_available` 分别报告 coverage、删失、错过反弹、规避下跌、等权组合总收益/年化收益/Sharpe/MaxDD 及相对未过滤池增量。全部排除的日期按现金 0 收益。至少 30 个 active 样本且整体、前半、后半净收益均为正才 `accepted`；否则 `unavailable_insufficient_samples` 或 `rejected`。`promoted=false`。
+每类与 `all_available` 分别报告 coverage、删失、错过反弹、规避下跌、等权组合总收益/年化收益/Sharpe/MaxDD 及相对未过滤池增量。全部排除的日期按现金 0 收益；若所有 pinned OOS 行均被删失，生产入口返回带 request/provenance/coverage 的 `unavailable_no_evaluable_observations`，不得进入空聚合或返回 500。至少 30 个 active 样本且整体、前半、后半净收益均为正才 `accepted`；否则 `unavailable_insufficient_samples` 或 `rejected`。`promoted=false`。

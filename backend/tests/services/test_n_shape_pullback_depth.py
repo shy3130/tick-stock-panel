@@ -13,6 +13,7 @@ from app.services.n_shape_pullback_depth import (
     detect_causal_swings,
     evaluate_n_shape_pullback_depth,
 )
+from app.services.n_shape_pullback_depth import _research
 
 
 def _row(
@@ -86,6 +87,33 @@ def test_confirmed_breakout_emits_causal_bucket_and_t_plus_one_forward():
     assert event["bucket"] == BUCKET_A
     expected = rows[10]["raw_close"] / rows[6]["raw_open"] - 1 - 0.002
     assert event["forward"]["forward_5d_return"] == expected
+    assert event["forward"]["forward_5d_available_date"] == calendar[10]
+
+
+def test_research_censors_forward_outcome_crossing_calendar_split():
+    start = date(2024, 1, 1)
+    calendar = [start + timedelta(days=index) for index in range(10)]
+    forward = {}
+    for horizon in (5, 10, 20):
+        prefix = f"forward_{horizon}d"
+        forward[f"{prefix}_return"] = 0.10
+        forward[f"{prefix}_new_high"] = True
+        forward[f"{prefix}_structure_failure"] = False
+        forward[f"{prefix}_available_date"] = calendar[9]
+    event = {
+        "symbol": "000001.SZ",
+        "event_date": calendar[7],
+        "bucket": BUCKET_C,
+        "golden_phoenix": False,
+        "depth": 0.20,
+        "forward": forward,
+    }
+
+    research = _research([event], [], calendar, (calendar[0], calendar[-1]))
+
+    validation = research["populations"]["unstratified"]["splits"]["validation"]["10"]
+    assert validation["count"] == 0
+    assert validation["censored_cross_split"] == 1
 
 
 def test_unconfirmed_terminal_pullback_never_emits_event():

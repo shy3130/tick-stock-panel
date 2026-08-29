@@ -122,12 +122,14 @@ def _forward_outcomes(
         output[f"{prefix}_return"] = None
         output[f"{prefix}_new_high"] = None
         output[f"{prefix}_structure_failure"] = None
+        output[f"{prefix}_available_date"] = None
         exit_index = entry_index + horizon - 1
         if entry_index >= len(calendar) or exit_index >= len(calendar):
             continue
         days = calendar[entry_index : exit_index + 1]
         if any(day not in bars_by_date for day in days):
             continue
+        output[f"{prefix}_available_date"] = days[-1]
         entry = bars_by_date[days[0]]["raw_open"]
         exit_close = bars_by_date[days[-1]]["raw_close"]
         output[f"{prefix}_return"] = exit_close / entry - 1 - cost_bps / 10_000.0
@@ -302,17 +304,25 @@ def detect_causal_swings(
     return events, failures
 
 
-def _split_dates(events: list[dict[str, Any]]) -> dict[date, str]:
-    dates = sorted({event["event_date"] for event in events})
+def _split_dates(
+    calendar: list[date], event_window: tuple[date, date]
+) -> tuple[dict[date, str], dict[str, date]]:
+    dates = sorted(day for day in calendar if event_window[0] <= day <= event_window[1])
     if not dates:
-        return {}
+        return {}, {}
     validation_start = max(1, int(len(dates) * 0.60))
     test_start = max(validation_start + 1, int(len(dates) * 0.80))
     test_start = min(test_start, len(dates))
-    return {
+    split_by_date = {
         day: "train" if index < validation_start else "validation" if index < test_start else "test"
         for index, day in enumerate(dates)
     }
+    split_ends = {
+        split: max(day for day, assigned in split_by_date.items() if assigned == split)
+        for split in ("train", "validation", "test")
+        if split in split_by_date.values()
+    }
+    return split_by_date, split_ends
 
 
 def _cohort(events: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
@@ -325,15 +335,24 @@ def _cohort(events: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
     return [event for event in events if event["bucket"] == name]
 
 
-def _stats(events: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
-    key = f"forward_{horizon}d_return"
-    values = [
-        float(event["forward"][key]) for event in events if event["forward"].get(key) is not None
+def _stats(events: list[dict[str, Any]], horizon: int, split_end: date | None) -> dict[str, Any]:
+    prefix = f"forward_{horizon}d"
+    key = f"{prefix}_return"
+    available_key = f"{prefix}_available_date"
+    observed = [event for event in events if event["forward"].get(key) is not None]
+    eligible = [
+        event
+        for event in observed
+        if split_end is not None
+        and event["forward"].get(available_key) is not None
+        and event["forward"][available_key] <= split_end
     ]
-    symbols = {event["symbol"] for event in events if event["forward"].get(key) is not None}
+    values = [float(event["forward"][key]) for event in eligible]
+    symbols = {event["symbol"] for event in eligible}
     output: dict[str, Any] = {
         "count": len(values),
         "symbols": len(symbols),
+        "censored_cross_split": len(observed) - len(eligible),
         "mean": None,
         "median": None,
         "win_rate": None,
@@ -347,7 +366,6 @@ def _stats(events: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
     mean = statistics.fmean(values)
     std = statistics.stdev(values) if len(values) > 1 else 0.0
     half_width = 1.96 * std / math.sqrt(len(values))
-    eligible = [event for event in events if event["forward"].get(key) is not None]
     output.update(
         {
             "mean": mean,
@@ -355,13 +373,10 @@ def _stats(events: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
             "win_rate": sum(value > 0 for value in values) / len(values),
             "ci95_low": mean - half_width,
             "ci95_high": mean + half_width,
-            "new_high_rate": sum(
-                bool(event["forward"][f"forward_{horizon}d_new_high"]) for event in eligible
-            )
+            "new_high_rate": sum(bool(event["forward"][f"{prefix}_new_high"]) for event in eligible)
             / len(eligible),
             "structure_failure_rate": sum(
-                bool(event["forward"][f"forward_{horizon}d_structure_failure"])
-                for event in eligible
+                bool(event["forward"][f"{prefix}_structure_failure"]) for event in eligible
             )
             / len(eligible),
         }
@@ -380,11 +395,25 @@ def _incremental(candidate: dict[str, Any], baseline: dict[str, Any]) -> dict[st
 
 
 def _placebo(
-    events: list[dict[str, Any]], universe: list[dict[str, Any]], horizon: int
+    events: list[dict[str, Any]],
+    universe: list[dict[str, Any]],
+    horizon: int,
+    split_end: date | None,
 ) -> dict[str, Any]:
-    key = f"forward_{horizon}d_return"
-    observed = [event for event in events if event["forward"].get(key) is not None]
-    pool = [event for event in universe if event["forward"].get(key) is not None]
+    prefix = f"forward_{horizon}d"
+    key = f"{prefix}_return"
+    available_key = f"{prefix}_available_date"
+
+    def available(event: dict[str, Any]) -> bool:
+        return (
+            event["forward"].get(key) is not None
+            and split_end is not None
+            and event["forward"].get(available_key) is not None
+            and event["forward"][available_key] <= split_end
+        )
+
+    observed = [event for event in events if available(event)]
+    pool = [event for event in universe if available(event)]
     if not observed or len(pool) < len(observed):
         return {"iterations": 0, "observed_mean": None, "random_mean": None, "p_value": None}
     observed_mean = statistics.fmean(float(event["forward"][key]) for event in observed)
@@ -407,8 +436,13 @@ def _placebo(
     }
 
 
-def _research(events: list[dict[str, Any]], failures: list[dict[str, Any]]) -> dict[str, Any]:
-    split_by_date = _split_dates(events)
+def _research(
+    events: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    calendar: list[date],
+    event_window: tuple[date, date],
+) -> dict[str, Any]:
+    split_by_date, split_ends = _split_dates(calendar, event_window)
     names = (BUCKET_A, BUCKET_B, BUCKET_C, COHORT_UNSTRATIFIED, COHORT_C_GOLDEN_PHOENIX)
     populations: dict[str, Any] = {}
     for name in names:
@@ -417,7 +451,8 @@ def _research(events: list[dict[str, Any]], failures: list[dict[str, Any]]) -> d
         for split in ("train", "validation", "test"):
             subset = [event for event in members if split_by_date.get(event["event_date"]) == split]
             split_stats[split] = {
-                str(horizon): _stats(subset, horizon) for horizon in FORWARD_HORIZONS
+                str(horizon): _stats(subset, horizon, split_ends.get(split))
+                for horizon in FORWARD_HORIZONS
             }
         comparator_name = BUCKET_C if name == COHORT_C_GOLDEN_PHOENIX else COHORT_UNSTRATIFIED
         comparator = _cohort(events, comparator_name)
@@ -426,7 +461,10 @@ def _research(events: list[dict[str, Any]], failures: list[dict[str, Any]]) -> d
             subset = [
                 event for event in comparator if split_by_date.get(event["event_date"]) == split
             ]
-            increments[split] = _incremental(split_stats[split]["10"], _stats(subset, 10))
+            increments[split] = _incremental(
+                split_stats[split]["10"],
+                _stats(subset, 10, split_ends.get(split)),
+            )
         test = split_stats["test"]["10"]
         if test["count"] < MIN_OOS_SAMPLES or test["symbols"] < MIN_OOS_SYMBOLS:
             verdict = "unavailable_insufficient_samples"
@@ -454,6 +492,7 @@ def _research(events: list[dict[str, Any]], failures: list[dict[str, Any]]) -> d
                 [event for event in members if split_by_date.get(event["event_date"]) == "test"],
                 [event for event in events if split_by_date.get(event["event_date"]) == "test"],
                 10,
+                split_ends.get("test"),
             ),
             "verdict": verdict,
         }
@@ -477,7 +516,10 @@ def _research(events: list[dict[str, Any]], failures: list[dict[str, Any]]) -> d
             }
         )
     return {
-        "split_rule": "event-date chronological 60/20/20; tuning is validation-only and verdict is test-only",
+        "split_rule": (
+            "market-calendar 60/20/20; each forward outcome must be available within "
+            "its event split; tuning is validation-only and verdict is test-only"
+        ),
         "populations": populations,
         "bucket_sensitivity": bucket_sensitivity,
         "structure_failures": {"count": len(failures), "events": failures},
@@ -609,7 +651,7 @@ def evaluate_n_shape_pullback_depth(
             "censored": len(censored),
             "structure_failures": len(failures),
         },
-        "research": _research(events, failures),
+        "research": _research(events, failures, calendar, (start, end)),
         "sensitivity": {"zigzag_fixed_pct_event_counts": zigzag_sensitivity},
         "events": events,
         "censored": censored,

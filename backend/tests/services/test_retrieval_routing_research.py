@@ -18,13 +18,15 @@ from app.services.retrieval_routing_research import (
 from app.services.retrieval_routing_research.routing import _query_scores
 
 
-def _panel(symbols=30, dates=20):
+def _panel(symbols=30, dates=20, horizon=1):
     days = tuple(date(2020, 1, 1) + timedelta(days=i) for i in range(dates))
     syms = tuple(f"{i:06d}.SH" for i in range(symbols))
     x = np.arange(dates * symbols, dtype=float).reshape(dates, symbols)
-    returns = np.roll(x, -1, axis=0) / np.maximum(x, 1) - 1
-    returns[-1] = np.nan
-    return PinnedFactorPanel(("f1",), days, syms, {"f1": x}, returns, 1, 0, {"source": "test"})
+    returns = np.roll(x, -horizon, axis=0) / np.maximum(x, 1) - 1
+    returns[-horizon:] = np.nan
+    return PinnedFactorPanel(
+        ("f1",), days, syms, {"f1": x}, returns, horizon, 0, {"source": "test"}
+    )
 
 
 def test_selection_is_train_validation_only():
@@ -146,6 +148,23 @@ def test_cost_pool_helper_returns_cost_adjusted_increment():
     assert cost1 is not None and net1 < gross1
 
 
+def test_cost_pool_turnover_counts_liquidation_when_pool_shrinks():
+    from app.services.retrieval_routing_research.routing import _pool_metrics
+
+    panel = _panel()
+    scores = {
+        (12, 0): 0.0,
+        (12, 3): 0.0,
+        (12, 2): 2.0,
+        (12, 5): 2.0,
+        (13, 0): 0.0,
+        (13, 3): 0.0,
+        (13, 2): 2.0,
+    }
+    _, cost, _ = _pool_metrics(panel, scores, range(12, 14), 0.01)
+    assert cost == pytest.approx(0.015)
+
+
 def test_evaluator_placebo_output_is_deterministic():
     panel = _panel()
     request = RetrievalRoutingRequest(placebo_rounds=20)
@@ -165,6 +184,25 @@ def test_successful_evaluator_emits_only_fully_realized_neighbor_labels():
     for event in response.events:
         for neighbor in event.neighbors:
             assert neighbor.label_available_date < event.query_date
+
+
+def test_evaluator_purges_labels_that_cross_split_boundaries():
+    panel = _panel(dates=80, horizon=3)
+    response = evaluate_retrieval_routing(
+        panel,
+        RetrievalRoutingRequest(label_horizon=3, placebo_rounds=20),
+    )
+    assert response.status.value == "ok"
+
+    train_label_count = sum(response.coverage.train_label_counts.values())
+    assert train_label_count == 45 * len(panel.symbols)
+
+    test_start = panel.dates[64]
+    validation_events = [event for event in response.events if event.split is SplitName.VALIDATION]
+    assert validation_events
+    for event in validation_events:
+        event_index = panel.dates.index(event.query_date)
+        assert panel.dates[event_index + panel.label_horizon] < test_start
 
 
 def test_production_panel_builder_freezes_identity_and_forward_tail():

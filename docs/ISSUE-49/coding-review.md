@@ -4,4 +4,4 @@
 
 当前实现只读 pinned composite reader；复用 bar 完整性、manifest 与 source provenance 校验，不读取外部源、不写 `data/`。事件显式记录 origin/high/pullback 三个已确认锚点；未确认尾段不出事件，结构破坏和 horizon 缺失分别报告。日期通过 FastAPI JSON 编码验证。
 
-独立 review 未报告重写后实现的 P0/P1/P2 问题。
+PR #51 Codex review 发现事件日期切分会让 validation 边界的 5/10/20 日收益借用 test 价格。已改为按请求市场日历切 60/20/20，每个 forward outcome 记录 `available_date`，统计、增量和 placebo 统一排除跨 split 结果，并增加边界删失回归。

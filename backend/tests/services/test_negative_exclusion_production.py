@@ -132,6 +132,18 @@ class _Universe:
         }
 
 
+class _EmptyUniverse(_Universe):
+    def prefetch_presence_days(self, days):
+        return {
+            day: SimpleNamespace(
+                source_day_observed=True,
+                symbols=(),
+                content_hash="e" * 64,
+            )
+            for day in days
+        }
+
+
 def test_production_evaluator_reports_portfolio_metrics_and_capability_gaps():
     rows = _rows()
     response = evaluate_negative_exclusion_production(
@@ -152,6 +164,25 @@ def test_production_evaluator_reports_portfolio_metrics_and_capability_gaps():
     assert "sharpe_delta" in v4["portfolio"]
     assert "annualized_return_delta" in v4["portfolio"]
     assert jsonable_encoder(response)["request"]["oos_start"] == "2023-03-01"
+
+
+def test_all_censored_observations_return_auditable_unavailable_envelope():
+    rows = _rows()
+    response = evaluate_negative_exclusion_production(
+        symbols=[SYMBOL],
+        start=date(2023, 1, 1),
+        oos_start=date(2023, 3, 1),
+        end=date(2024, 5, 1),
+        canonical_reader=_Canonical(rows),
+        market_facts_reader=_Facts(rows),
+        universe_reader=_EmptyUniverse(),
+    )
+
+    assert response["status"] == "unavailable"
+    assert response["reason"] == "unavailable_no_evaluable_observations"
+    assert response["coverage"]["observations"] == 0
+    assert response["coverage"]["censored"]["universe_membership_unproven"] > 0
+    assert response["provenance"]["canonical"]["generation"] == "canonical-g1"
 
 
 def test_invalid_date_order_is_rejected():

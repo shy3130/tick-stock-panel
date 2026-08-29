@@ -8,4 +8,4 @@
 2. combined OR 在“无 active 且任一 component censored”时整体删失；已有 active 时可证明应排除。
 3. 单类与 combined 的 portfolio 指标只消费 evaluable rows，删失行不再被当作 inactive 持仓。
 
-另已核对 V4 MA20 warmup、V5 前窗不含当日、非重叠 horizon cohort、T+1 open、总收益/年化/Sharpe/MaxDD、对称 missed/avoided 统计与 `promoted=false`。V1/V3 只有 capability，不接受启用或伪信号。
+PR #51 Codex review 进一步指出 `observations=[]` 会在聚合器抛错并形成 API 500。生产入口现在先验证 enabled classes，再在所有 pinned OOS 行被删失时返回保留 request/provenance/coverage 的 unavailable envelope。另已核对 V4 MA20 warmup、V5 前窗不含当日、非重叠 horizon cohort、T+1 open、总收益/年化/Sharpe/MaxDD、对称 missed/avoided 统计与 `promoted=false`。

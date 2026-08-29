@@ -190,6 +190,18 @@ def _score_class(score: float) -> int:
     return 0 if score < 2.0 / 3.0 else (1 if score < 4.0 / 3.0 else 2)
 
 
+def _equal_weight_l1_turnover(previous: set[int], current: set[int]) -> float:
+    previous_weight = 1.0 / len(previous) if previous else 0.0
+    current_weight = 1.0 / len(current) if current else 0.0
+    return sum(
+        abs(
+            (current_weight if symbol in current else 0.0)
+            - (previous_weight if symbol in previous else 0.0)
+        )
+        for symbol in previous | current
+    )
+
+
 def _pool_metrics(panel, scores, date_range, cost_rate):
     """Long(class-2)/short(class-0) daily pools with turnover cost; None when no valid date."""
     prev = None
@@ -206,8 +218,8 @@ def _pool_metrics(panel, scores, date_range, cost_rate):
         if prev is None:
             turnover = 2.0
         else:
-            turnover = (1.0 - len(long_set & prev[0]) / len(long_set)) + (
-                1.0 - len(short_set & prev[1]) / len(short_set)
+            turnover = _equal_weight_l1_turnover(prev[0], long_set) + _equal_weight_l1_turnover(
+                prev[1], short_set
             )
         turnovers.append(turnover)
         prev = (long_set, short_set)
@@ -277,7 +289,9 @@ def evaluate_retrieval_routing(
             (d, s)
             for d in tr
             for s in range(len(panel.symbols))
-            if np.isfinite(panel.forward_returns[d, s]) and np.isfinite(raw[d, s]).all()
+            if d + panel.label_horizon < tr.stop
+            and np.isfinite(panel.forward_returns[d, s])
+            and np.isfinite(raw[d, s]).all()
         ]
     )
     if len(train_rows) < MAX_K:
@@ -303,7 +317,9 @@ def evaluate_retrieval_routing(
             (d, s)
             for d in tr
             for s in range(len(panel.symbols))
-            if np.isfinite(panel.forward_returns[d, s]) and np.isfinite(raw[d, s]).all()
+            if d + panel.label_horizon < tr.stop
+            and np.isfinite(panel.forward_returns[d, s])
+            and np.isfinite(raw[d, s]).all()
         ]
     )
     means, stds, _ = standardization_params(raw[train_rows[:, 0], train_rows[:, 1]])
@@ -311,7 +327,27 @@ def evaluate_retrieval_routing(
     edges = quantile_edges(panel.forward_returns[train_rows[:, 0], train_rows[:, 1]])
     labels = digitize_labels(panel.forward_returns, edges)
     eligible = np.isfinite(panel.forward_returns) & np.isfinite(raw).all(axis=2)
-    eval_dates = [d for d in list(va) + list(te) if int(eligible[d].sum()) > 0]
+    raw_query_sets = {
+        split: [(d, s) for d in date_range for s in range(len(panel.symbols)) if eligible[d, s]]
+        for split, date_range in (
+            (SplitName.TRAIN, tr),
+            (SplitName.VALIDATION, va),
+            (SplitName.TEST, te),
+        )
+    }
+    query_sets = {
+        split: [
+            (d, s) for d, s in raw_query_sets[split] if d + panel.label_horizon < date_range.stop
+        ]
+        for split, date_range in (
+            (SplitName.TRAIN, tr),
+            (SplitName.VALIDATION, va),
+            (SplitName.TEST, te),
+        )
+    }
+    eval_dates = sorted(
+        {d for split in (SplitName.VALIDATION, SplitName.TEST) for d, _ in query_sets[split]}
+    )
     below = [
         panel.dates[d]
         for d in eval_dates
@@ -327,13 +363,6 @@ def evaluate_retrieval_routing(
     lib_idx = train_rows.astype(int)
     lib_matrix = matrix[lib_idx[:, 0], lib_idx[:, 1]]
     lib_dates, lib_labels = lib_idx[:, 0], labels[lib_idx[:, 0], lib_idx[:, 1]]
-    query_sets = {
-        SplitName.TRAIN: [(d, s) for d in tr for s in range(len(panel.symbols)) if eligible[d, s]],
-        SplitName.VALIDATION: [
-            (d, s) for d in va for s in range(len(panel.symbols)) if eligible[d, s]
-        ],
-        SplitName.TEST: [(d, s) for d in te for s in range(len(panel.symbols)) if eligible[d, s]],
-    }
     config_scores, score_pairs = {}, {}
     for k in K_CANDIDATES:
         for metric in DISTANCE_METRICS:
@@ -411,7 +440,9 @@ def evaluate_retrieval_routing(
         SplitName.TEST,
     )
     assert_neighbor_boundaries(events)
-    selection_dates = list(range(va.stop))
+    selection_dates = sorted(
+        {d for split in (SplitName.TRAIN, SplitName.VALIDATION) for d, _ in query_sets[split]}
+    )
     best_name, best_ic = names[0], -np.inf
     for feature_index, name in enumerate(names):
         ic, _ = cross_sectional_rank_ic(
@@ -429,10 +460,11 @@ def evaluate_retrieval_routing(
         (SplitName.TEST, te),
     ):
         queries = query_sets[split]
+        metric_dates = sorted({d for d, _ in queries})
         ic, n_ic = _grid_metric(final_scores[split], panel.forward_returns, queries)
         baseline_grid = np.where(np.isfinite(baseline_values), baseline_values, np.nan)
         bic, _ = cross_sectional_rank_ic(
-            baseline_grid[list(date_range)], panel.forward_returns[list(date_range)]
+            baseline_grid[metric_dates], panel.forward_returns[metric_dates]
         )
         gross, cost, net = _pool_metrics(
             panel, final_scores[split], date_range, request.cost_bps / 1e4
@@ -450,7 +482,7 @@ def evaluate_retrieval_routing(
                 dates=len(date_range),
                 samples=int(sum(eligible[d].sum() for d in date_range)),
                 queries=len(queries),
-                censored_queries=len(queries) - len(final_scores[split]),
+                censored_queries=len(raw_query_sets[split]) - len(final_scores[split]),
                 rank_ic_dates=n_ic,
                 routing_rank_ic=ic,
                 baseline_feature=best_name,
@@ -468,13 +500,19 @@ def evaluate_retrieval_routing(
         for s in range(len(panel.symbols))
         if np.isfinite(raw[d, s]).all() and not np.isfinite(panel.forward_returns[d, s])
     ]
+    boundary_labels = [
+        pair
+        for split in (SplitName.TRAIN, SplitName.VALIDATION, SplitName.TEST)
+        for pair in set(raw_query_sets[split]) - set(query_sets[split])
+    ]
+    censored_labels = sorted(set(label_tail) | set(boundary_labels))
     censored = [
         CensorRecord(
             code=CENSOR_LABEL_WINDOW,
-            detail="forward return unknown within panel tail",
-            count=len(label_tail),
-            first_date=panel.dates[label_tail[0][0]] if label_tail else None,
-            last_date=panel.dates[label_tail[-1][0]] if label_tail else None,
+            detail="forward return unknown in panel tail or crosses a split boundary",
+            count=len(censored_labels),
+            first_date=panel.dates[censored_labels[0][0]] if censored_labels else None,
+            last_date=panel.dates[censored_labels[-1][0]] if censored_labels else None,
         ),
         CensorRecord(
             code=CENSOR_INSUFFICIENT_NEIGHBORS,
