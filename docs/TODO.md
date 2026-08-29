@@ -1,11 +1,17 @@
 # Tickflow TODO
 
 > 本文记录尚未进入当前开发排期、但已具备明确研究定义与准入边界的候选事项。
-> 状态约定：`[ ]` 待评估 / `[~]` 研究中 / `[x]` 已完成 / `[-]` 已拒绝。
+> 状态约定：`[ ]` 待评估 / `[~]` 研究中或能力阻塞 / `[x]` 研究协议已收口 / `[-]` 已拒绝。`[x]` 表示本条 TODO 的验收协议已有冻结样本与可审计结论；结论可以是 `validated`、`rejected`，也可以是跑满冻结边界后按精确分母给出的 `unavailable`。仅关闭工程 Issue、尚无真实 verdict 或必需能力仍缺失时，继续标记 `[~]`。
+>
+> 状态复核（2026-08-29，真实 sealed generation 扩大样本后）：共 15 项，`[x]` 9 项、`[~]` 6 项，无 `[ ]` / `[-]`。
+> 已收口：N 字金凤凰、15 分钟+5 分钟多周期状态、左一防守位、日线开盘价锚定、坚定持有四形态、独孤双均线口径、MERA 日线 proxy、大涨前四特征、N 字回调分档；每项结论与未晋级边界见条目内证据。
+> 保持 `[~]`：弱转强缺逐笔/盘口/PIT 流通股本，量价序列缺历史 PIT eligible universe，MACD 与单阳不破缺最终对照 evaluator，逃命信号缺冻结出场基线及分钟历史，五类负面清单缺 V1 定义与 V3 PIT 公告源。
 
 ## 短线候选池形态因子
 
-- [~] **引入“N 字金凤凰”首板缩量回调后二次启动形态因子**
+- [x] **引入“N 字金凤凰”首板缩量回调后二次启动形态因子**
+
+  > 收口证据：`docs/ISSUE-8/oos-verdict.json` 固化 canonical+markets 双 generation 的 200 标的扩大评估；272 个首板基线仅形成 11 个事件（OOS 5 个），所有 1/5/10/20 日 horizon 均低于每臂 30 样本门槛，最终 verdict=`rejected`，未进入短线池/Agent/默认策略。
 
   **定位**
 
@@ -58,6 +64,8 @@
   - 原视频：https://www.douyin.com/video/7670852494762855732
 
 - [x] **引入“15 分钟线段方向 + 5 分钟细节确认”多周期状态因子**
+  > 收口证据：`docs/ISSUE-10/README.md` 与 `docs/ISSUE-10/verification.md` 记录 dedicated ordered-trans generation 的真实 3 标的 × 30 完整交易日评估；冻结 48×5m→16×15m 口径最终 verdict=`rejected`，未进入短线池/Agent/默认策略。
+
 
   **定位**
 
@@ -106,6 +114,8 @@
   - 原视频：https://www.douyin.com/video/7678296403667441763
 
 - [~] **引入“前日放量涨停 → 次日高开快速封板”弱转强形态因子**
+
+  > 复核状态（2026-08-29）：真实 production capability probe 可固定 canonical 与 minutes/trans generation，但明确缺少 `sortable_tick_reader`、`historical_order_book_reader`、`pit_float_shares_records`；无法证明首次封板/炸板/回封、盘口可达性与 PIT 换手，故 fail-closed 保持 `[~]`。
 
   **定位**
 
@@ -156,6 +166,8 @@
 
 - [~] **引入“放量分歧 → 缩量整理 → 区间突破”量价序列因子**
 
+  > 复核状态（2026-08-29）：200 标的真实 evaluator 返回 `status=unavailable`、`unavailable_reasons=[\"pit_eligible_universe_unavailable\"]`；当前 universe SCD 仅从 2026-08-28 首代起有效，不能证明 2024-2026 历史 eligible universe，故保持 `[~]`。
+
   **定位**
 
   将“放量产生分歧、缩量横盘收敛、突破确认方向”的量价序列，实现为 AI 短线候选池与趋势研究的可审计形态因子。该因子只描述可观察的量价结构，不得把“主力洗盘、控盘、锁仓或出货”作为已确认事实。
@@ -204,6 +216,8 @@
   - 说明：用户提供的整理稿注明部分内容由豆包生成
 
 - [~] **验证并评估 `MACD(10,20,7) + 零轴回踩 + MA5/MA20` 多阶段趋势因子**
+
+  > 复核状态（2026-08-29）：在 canonical generation `20260829T002957-4b1bfcad` 上扩大到 200 标的，得到 IS 91,594 行、OOS 78,684 行与完整六状态分布；现有入口仅输出阶段序列，不实现 TODO 要求的 `(10,20,7)` vs `(12,26,9)`/MA 基线、成本后收益及最终 verdict，故保持 `[~]`。
 
   **定位**
 
@@ -254,6 +268,8 @@
   - 说明：“胜率提高 80%”缺少样本与统计口径，必须独立验证
 
 - [~] **独立复现“单阳不破（首板涨停后缩量回调）”形态因子**
+
+  > 复核状态（2026-08-29）：同一 pinned canonical generation 的 200 标的扩大评估得到 14,320 个完整事件（IS 8,158 / OOS 6,162，另有 71 个 censored）；入口仍未复现原稿长周期，也没有“全部首板”基线、成本后增量与最终 verdict，故保持 `[~]`。
 
   **定位**
 
@@ -308,6 +324,8 @@
   - 说明：原稿回测数字尚无代码与完整口径，必须独立复现
 
 - [x] **评估“左一K线防守位”移动止盈持仓因子**
+  > 收口证据：`docs/ISSUE-29/oos-verdict.json` 记录 25 个确定性标的、75 个完整 OOS segment；相对最佳基准 `buy_hold` 的 Zuoyi mean 为 `0.004366`，低于基准 `0.007832`，最终 verdict=`rejected`。
+
 
   **定位**
 
@@ -357,6 +375,8 @@
   - 说明：原稿仅展示成功案例，无回测数据与失败率统计，需独立验证
 
 - [x] **评估“日线开盘价锚定”入场位置过滤器（降低止损频率主张）**
+  > 收口证据：`docs/ISSUE-30/oos-verdict.json` 已固化 80 标的扩大 OOS；overall original 48 笔达到门槛，止损率 `0.229167 < 0.310588` 且 expectancy `0.022297 > 0.004067`，整体 verdict=`validated`。趋势分层中 range=`improved`，single-side-down 原稿臂仅 8 笔，明确保留 `inconclusive`，不作外推。
+
 
   **定位**
 
@@ -406,6 +426,8 @@
   - 说明：原稿仅一个成功案例；“降低止损频率”不等于提高期望收益，需与 tnt 做T结论对照验证
 
 - [x] **评估“坚定持有的4类票”形态因子组（首阴/突破回踩/缓坡控盘/平台突破）**
+  > 收口证据：`docs/ISSUE-38/oos-verdict.json` 已固化 200 标的冻结扩大样本；突破回踩（167 个完整 OOS 事件）与底部平台突破（37 个）均 `rejected`；首阴互补仅 7 个、缓坡控盘 0 个，按独立门槛最终记为 `unavailable`。四类均不晋级。
+
 
   **定位**
 
@@ -451,9 +473,9 @@
   - 原始主题：抖音 @秦川牛小纸条「坚定持有的4类票」视频拆解
   - 说明：faster-whisper base 转录（词级误听已校正）；无回测数据，纯经验形态
 
-- [~] **评估“独孤板总趋势选股公式”因子组（多头排列状态/回调接近/再启动事件）**
+- [x] **评估“独孤板总趋势选股公式”因子组（多头排列状态/回调接近/再启动事件）**
 
-  > 工程状态（2026-08-29，Issue #45）：已引入 pinned 日线 detector、T+1/OOS/成本/同父事件对照与研究 API；结果默认不晋级，需在真实冻结样本达到门槛后才给 accepted/rejected。
+  > 收口证据：`docs/ISSUE-45/oos-verdict.json` 固化 200 标的双口径 OOS；24/72/200 变体 7,585 个 OOS qualified event、相对同父未选中基线增量 `-0.015051`，20/70/200 变体 8,069 个、增量 `-0.014483`，两者均 verdict=`rejected` 且 `promoted=false`。
 
   **定位**
 
@@ -499,9 +521,9 @@
   - 原始主题：抖音 @独孤板总「趋势票选股精讲，选股公式如何设置」
   - 说明：faster-whisper base 转录（误听已校正）；公式为口述重构，需与原截图核对；作者自声明“不构成推荐”
 
-- [~] **MERA 复现评估（降维版）：检索相似历史状态 + 邻居标签路由**
+- [x] **MERA 复现评估（降维版）：检索相似历史状态 + 邻居标签路由**
 
-  > 工程状态（2026-08-29，Issue #46）：已引入 60/20/20、train-only 标准化与标签、`label_available_date < query_date`、K/距离选择、双 placebo 的日线 proxy；分钟预训练/MoE 仍明确不在本阶段冒充实现。
+  > 收口证据：`docs/ISSUE-46/oos-verdict.json` 固化 30 标的 × 740 日、严格 60/20/20 与 100 轮双 placebo 的真实 sealed evaluation；test RankIC 增量 `-0.017337`、成本后增量 `-0.004924`，均未区别于随机标签/随机邻居，按冻结契约最终 `unavailable` 且 `promoted=false`。仅收口日线 proxy，不宣称复现分钟预训练/MoE。
 
   **定位**
 
@@ -547,9 +569,9 @@
   - 论文：DOI 10.1145/3701716.3715513；代码 github.com/chenchen1104/MERA
   - 视频：抖音 @量化Quantgirl 7667933915046268203（解读有数字矛盾，已标注）
 
-- [~] **评估“大涨前四特征”因子组（涨停资格/有效缺口/相对连阳/持续堆量）**
+- [x] **评估“大涨前四特征”因子组（涨停资格/有效缺口/相对连阳/持续堆量）**
 
-  > 工程状态（2026-08-29，Issue #47）：已引入 F1-F4 与交集、必要性/充分性独立分母、PIT/T+1/OOS/成本门禁及研究 API；真实冻结样本不足时返回 unavailable。
+  > 收口证据：`docs/ISSUE-47/oos-verdict.json` 固化 200 标的、392,355 次 OOS 检测与 34,103 个 qualified event；F1/F2/F3 verdict=`accepted`，F4=`rejected`，四特征交集=`accepted`。`promoted=false`，研究通过不自动进入默认策略、Agent 排序或交易执行。
 
   **定位**
 
@@ -597,7 +619,7 @@
 
 - [~] **评估“10个盘中逃命信号”风险信号组（S1-S10 卖出侧事件因子）**
 
-  > 工程状态（2026-08-29，Issue #48）：已引入日线 S1/S8/S9 与对称卖飞/规避深度统计；S2-S7/S10 因不可证明的 immutable 分钟历史固定 unavailable，不用日线代理。
+  > 复核状态（2026-08-29）：200 标的 pinned daily 评估中，S1/S8/S9 的 1 日事件数分别为 1,938 / 18,599 / 1,031，但三者均因没有冻结 OOS 出场基线而 verdict=`unavailable_no_frozen_oos_baseline`；S2-S7/S10 仍为 `unavailable_insufficient_immutable_history`。日线与分钟两处能力缺口均未满足，故保持 `[~]`。
 
   **定位**
 
@@ -649,9 +671,9 @@
   - 原始主题：抖音 @秦川牛小纸条「10个盘中逃命信号」
   - 说明：faster-whisper base 转录（该条音轨误听率高，已逐条校正）；镜像条目=TODO 第12项（入场侧四特征）
 
-- [~] **评估“N字回调深度分档”波段因子（欢欢N字形态，与金凤凰合并设计）**
+- [x] **评估“N字回调深度分档”波段因子（欢欢N字形态，与金凤凰合并设计）**
 
-  > 工程状态（2026-08-29，Issue #49）：已引入 causal zigzag N0、确认突破事件、A/B/C、C×金凤凰、结构失败、T+1/OOS/placebo/敏感性与研究 API；末端未确认 swing 不出事件。
+  > 收口证据：`docs/ISSUE-49/oos-verdict.json` 固化 200 标的、1,734 事件与 2,296 个结构失败的真实 OOS/placebo 评估；A/B/不分档均 `rejected`，C 档与 C×金凤凰分别只有 64/6 个事件，按冻结门槛最终 `unavailable_insufficient_samples`，不晋级。
 
   **定位**
 
@@ -701,7 +723,7 @@
 
 - [~] **评估“五类坚决不碰”负面清单排除器（V1-V5 风险过滤因子组）**
 
-  > 工程状态（2026-08-29，Issue #50）：已引入 pinned OOS 候选池对照与 V2/V4/V5；V1 定义未核实、V3 缺 PIT 公告源，均固定 unavailable；输出收益/年化/Sharpe/MaxDD 与对称反弹/下跌成本。
+  > 复核状态（2026-08-29）：`docs/ISSUE-50/oos-verdict.json` 固化 200 标的、7,827 observations 的扩大 OOS；V2/V4 与可用类组合均 `rejected`，V5 仅 4 个 active days 而 `unavailable_insufficient_samples`；V1 定义未核实、V3 无 PIT 公告源，故整项继续按能力阻塞标 `[~]`。
 
   **定位**
 

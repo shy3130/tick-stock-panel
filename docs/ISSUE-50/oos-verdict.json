@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "issue": 50,
+  "status": "partial_unavailable",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 200 只",
+    "symbol_count": 200,
+    "start": "2023-01-01",
+    "oos_start": "2025-01-01",
+    "end": "2026-08-28",
+    "horizon_days": 10,
+    "cost_bps": 20.0,
+    "rebalance_rule": "non_overlapping_horizon_cohorts"
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372"
+  },
+  "coverage": {
+    "observations": 7827,
+    "rebalance_days": 41,
+    "forward_window_truncated": 200,
+    "forward_bars_missing": 173
+  },
+  "classes": {
+    "v1": {
+      "capability": "unavailable_definition_unverified",
+      "verdict": "unavailable_capability"
+    },
+    "v2": {
+      "capability": "available",
+      "active_days": 262,
+      "coverage": 0.033473872492653635,
+      "net_benefit": -3.6592283455584393,
+      "annualized_return_delta": -0.008249084498848758,
+      "sharpe_delta": -0.04593966091840973,
+      "verdict": "rejected"
+    },
+    "v3": {
+      "capability": "unavailable_no_pit_announcement_source",
+      "verdict": "unavailable_capability"
+    },
+    "v4": {
+      "capability": "available",
+      "active_days": 628,
+      "coverage": 0.08028637177192534,
+      "net_benefit": -2.7529339741386085,
+      "annualized_return_delta": -0.011438665429446493,
+      "sharpe_delta": -0.05798645930147328,
+      "verdict": "rejected"
+    },
+    "v5": {
+      "capability": "available",
+      "active_days": 4,
+      "coverage": 0.0005113781641523907,
+      "net_benefit": 0.18383517661247917,
+      "verdict": "unavailable_insufficient_samples"
+    }
+  },
+  "combined_available": {
+    "active_days": 870,
+    "net_benefit": -6.16202917295881,
+    "annualized_return_delta": -0.0209025988287157,
+    "sharpe_delta": -0.11085650273207681,
+    "verdict": "rejected"
+  },
+  "promoted": false,
+  "conclusion": "V2/V4 及可用类组合均 rejected；V5 仅 4 个 active days，样本不足；V1 定义未核实、V3 无 PIT 公告源。五类尚未全部具备必需能力，因此 TODO 保持能力阻塞。"
+}

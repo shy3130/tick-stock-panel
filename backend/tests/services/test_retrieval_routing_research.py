@@ -15,7 +15,7 @@ from app.services.retrieval_routing_research import (
     evaluate_retrieval_routing,
     select_routing_config,
 )
-from app.services.retrieval_routing_research.routing import _query_scores
+from app.services.retrieval_routing_research.routing import _placebo_round, _query_scores
 
 
 def _panel(symbols=30, dates=20, horizon=1):
@@ -135,6 +135,58 @@ def test_placebo_primitives_are_fixed_seed_and_serializable():
         random_neighbor_indices(np.random.default_rng(46051), 20, 5),
         random_neighbor_indices(np.random.default_rng(46051), 20, 5),
     )
+
+
+def test_random_label_placebo_reuses_exact_frozen_neighbors():
+    from app.services.retrieval_routing_research.models import (
+        PLACEBO_KIND_RANDOM_LABEL,
+    )
+
+    panel = _panel(symbols=30, dates=20)
+    matrix = panel.feature_matrix()
+    lib_idx = np.argwhere(np.isfinite(panel.forward_returns[:12]))
+    lib_matrix = matrix[lib_idx[:, 0], lib_idx[:, 1]]
+    lib_dates = lib_idx[:, 0]
+    lib_labels = (lib_idx[:, 1] % 3).astype(np.int8)
+    queries = [(16, symbol) for symbol in range(30)]
+    details = _query_scores(
+        matrix,
+        queries,
+        lib_matrix,
+        lib_dates,
+        lib_labels,
+        5,
+        "euclidean",
+        panel.label_horizon,
+    )[1]
+
+    uncached = _placebo_round(
+        panel,
+        matrix,
+        lib_matrix,
+        lib_dates,
+        lib_labels,
+        queries,
+        5,
+        "euclidean",
+        PLACEBO_KIND_RANDOM_LABEL,
+        np.random.default_rng(46052),
+    )
+    cached = _placebo_round(
+        panel,
+        matrix,
+        lib_matrix,
+        lib_dates,
+        lib_labels,
+        queries,
+        5,
+        "euclidean",
+        PLACEBO_KIND_RANDOM_LABEL,
+        np.random.default_rng(46052),
+        details,
+    )
+
+    assert cached == uncached
 
 
 def test_cost_pool_helper_returns_cost_adjusted_increment():

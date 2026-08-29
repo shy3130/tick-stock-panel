@@ -241,18 +241,26 @@ def _placebo_round(
     metric,
     kind,
     rng,
+    neighbor_details=None,
 ):
     if kind == PLACEBO_KIND_RANDOM_LABEL:
-        scores, _ = _query_scores(
-            matrix,
-            test_queries,
-            lib_matrix,
-            lib_dates,
-            permuted_labels(rng, lib_labels),
-            k,
-            metric,
-            panel.label_horizon,
-        )
+        shuffled_labels = permuted_labels(rng, lib_labels)
+        if neighbor_details is None:
+            scores, _ = _query_scores(
+                matrix,
+                test_queries,
+                lib_matrix,
+                lib_dates,
+                shuffled_labels,
+                k,
+                metric,
+                panel.label_horizon,
+            )
+        else:
+            scores = {
+                query: float(shuffled_labels[chosen].mean())
+                for query, (chosen, _) in neighbor_details.items()
+            }
     else:
         scores = {}
         for d, s in test_queries:
@@ -592,6 +600,7 @@ def evaluate_retrieval_routing(
                 selected.distance_metric,
                 kind,
                 rng,
+                test_details,
             )
             ics.append(
                 _grid_metric(p_scores, panel.forward_returns, query_sets[SplitName.TEST])[0]

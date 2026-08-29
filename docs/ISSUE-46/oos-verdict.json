@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "issue": 46,
+  "status": "ok",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 30 只",
+    "symbol_count": 30,
+    "start": "2023-08-10",
+    "end": "2026-08-28",
+    "label_horizon": 5,
+    "cost_bps": 10.0,
+    "placebo_rounds": 100
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "train": ["2023-08-10", "2025-06-13"],
+    "validation": ["2025-06-16", "2026-01-19"],
+    "test": ["2026-01-20", "2026-08-28"],
+    "selected_k": 10,
+    "selected_distance_metric": "euclidean"
+  },
+  "coverage": {
+    "dates": 740,
+    "eligible_samples": 21324,
+    "train_samples": 12895,
+    "validation_samples": 4292,
+    "test_samples": 4137,
+    "test_rank_ic_dates": 143
+  },
+  "test": {
+    "routing_rank_ic": -0.0053982832493068246,
+    "baseline_rank_ic": 0.011939192907114976,
+    "rank_ic_increment": -0.0173374761564218,
+    "long_short_net": -0.00921947048628855,
+    "cost_adjusted_increment": -0.004923675706737575
+  },
+  "verdicts": {
+    "test_rank_ic_increment": {
+      "verdict": "unavailable",
+      "detail": "placebo_gain_not_distinguishable:random_label,random_neighbor",
+      "real": -0.0173374761564218,
+      "random_label_q95": 0.014088763603962811,
+      "random_neighbor_q95": 0.013093094536389694
+    },
+    "test_cost_adjusted_increment": {
+      "verdict": "unavailable",
+      "detail": "placebo_gain_not_distinguishable:random_label,random_neighbor",
+      "real": -0.004923675706737575,
+      "random_label_q95": 0.009810029074194045,
+      "random_neighbor_q95": 0.011658584245468498
+    }
+  },
+  "promoted": false,
+  "conclusion": "真实 test 的 RankIC 与成本后增量均为负，且均未与 100 轮随机标签/随机邻居 placebo 区分；按冻结 evaluator 契约最终 unavailable，不晋级。日线 proxy 已收口，不代表论文分钟级预训练+MoE 全量复现。"
+}
