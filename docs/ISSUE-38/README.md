@@ -3,7 +3,7 @@
 - GitHub Issue：[wf2311/fm-workbench#38](https://github.com/wf2311/fm-workbench/issues/38)
 - 分支：`issue-38-four-pattern-hold`
 - 基线：`workbench/feature/fstore-engine-duckdb-source@4c94f68`
-- 状态：实现、presence_v1 依赖、代码复核与真实 OOS 均完成；四因子因独立样本门槛不足均为 `unavailable`，待依赖/收口 PR 合并后关闭
+- 状态：已收口；实现、presence_v1 依赖、代码复核与真实 OOS 均完成，四因子因独立样本门槛不足均为 `unavailable`；依赖 PR #41（`52f4a07`）与收口 PR #39（`e73df44`）已合并，Issue #38 已关闭
 
 ## 范围
 
