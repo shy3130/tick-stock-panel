@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "issue": 29,
+  "status": "ok",
+  "request": {
+    "start": "2023-08-10",
+    "oos_start": "2025-02-25",
+    "end": "2026-08-28",
+    "cohort_rule": "2025-02-24 前一市场日可用候选中的 canonical symbol 升序前 25 只",
+    "symbol_count": 25,
+    "symbols": [
+      "000001.SZ",
+      "000002.SZ",
+      "000006.SZ",
+      "000007.SZ",
+      "000008.SZ",
+      "000009.SZ",
+      "000011.SZ",
+      "000012.SZ",
+      "000014.SZ",
+      "000017.SZ",
+      "000019.SZ",
+      "000020.SZ",
+      "000021.SZ",
+      "000025.SZ",
+      "000026.SZ",
+      "000027.SZ",
+      "000028.SZ",
+      "000029.SZ",
+      "000030.SZ",
+      "000031.SZ",
+      "000032.SZ",
+      "000034.SZ",
+      "000035.SZ",
+      "000036.SZ",
+      "000037.SZ"
+    ],
+    "cost_bps": 10.0,
+    "market_days": 740
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "markets_pin_verification_mode": "manifest_sha256_match",
+    "definition_version": "v3"
+  },
+  "verdict": {
+    "value": "accepted",
+    "oos_complete_segments": 75,
+    "minimum_required": 20,
+    "rule": "paired bootstrap seed=42 rounds=500 vs ma60_hold"
+  },
+  "oos_arm_mean_net_return": {
+    "buy_hold": 0.00783192087019613,
+    "atr_chandelier_k3": -0.004928728516357868,
+    "ma20_hold": -0.0034279804334485615,
+    "ma60_hold": -0.023821402428637384,
+    "zuoyi_defense": 0.004366134092666805,
+    "zuoyi_atr_combo": 0.005705748065080712
+  },
+  "limitations": [
+    "accepted 只表示冻结门禁相对 ma60_hold 通过，不表示六臂全局最优",
+    "本次为确定性排序的 25 标的小样本 OOS；buy_hold 的 OOS 均值高于 zuoyi_defense",
+    "首次从 2022-03-04 起跑被 000001.SZ 在 2022-07-19 至 2022-07-21 的 pinned markets 行缺口按设计阻断；最终窗口调整只基于 source coverage，不读取收益结果"
+  ]
+}
