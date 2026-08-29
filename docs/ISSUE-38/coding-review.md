@@ -1,0 +1,52 @@
+# Issue #38 实现代码复核
+
+## 结论
+
+独立 reviewer 最终结论：**批准；未见 blocker/major**。
+
+复核范围包括四检测器、共同执行路径、PIT universe/markets pin、IS/OOS 与 cluster bootstrap、API 生命周期、契约测试和本目录冻结设计。reviewer 未代跑测试；测试证据见 [verification.md](verification.md)。
+
+## 首轮 findings 与处置
+
+1. **F2 day1..5 缺棒被跳过**：改为父事件已证明后的 `censor_selection_window_incomplete`。
+2. **同因子同标的事件重叠**：评估器按 symbol/landmark 排序；前一事件共同 horizon 内的新事件以 `censor_same_factor_symbol_overlap` 删失；允许在前事件 day20 收盘形成新 landmark、次日入场。
+3. **F4 低位参考价格取错**：改为平台首日 adjusted close。
+4. **F3 连续窗口未按市场日历验证**：先验证连续 20 日父缓坡，再处理 120 日低位回看。
+5. **F4 底部/平台窗口未按市场日历验证**：平台父事件不可证明时不伪造 parent；父事件已证明但底部回看缺失时 warmup censor。
+6. **F2 平台窗口未按市场日历验证**：平台父事件不可证明时不伪造 parent；day1..5 缺失仍显式 selection censor。
+7. **F3 零成交误作 selection censor**：保留 facts-complete parent，作为流动性诊断并归入 not_selected。
+8. **F1 缺连续跌停与无法卖出占比**：补充连续一字跌停日数、最大连续日数、unreachable/pending 事件数及明确分母比例。
+
+## 二次复核 findings 与处置
+
+- **重叠边界 off-by-one**：阻断上限由 `landmark+20` 改为 `landmark+19`，并锁定 day19 blocked/day20 allowed 契约测试。
+- **缺棒会制造普通日 parent/censor**：冻结设计精化为“先证明父事件，再允许 selection/warmup censor”；父事件本身不可判定时不得进入 parent 分母。修订已先补记到 [Issue #38 评论](https://github.com/wf2311/fm-workbench/issues/38#issuecomment-5455139057)。
+- **F2 零 prior mean volume 静默丢父事件**：保留平台+突破 parent，`volume_ratio=null`、`volume_expanded=false`，完整 day5 后归 not_selected，同时避免 breakout volume 为零时除零。
+
+## 额外父池修正
+
+F2 的放量条件属于 selection，不属于平台突破 parent。低于 1.50 倍、或 prior mean volume 为零的 facts-complete 平台突破均保留到 `not_selected`，避免 parent/qualified/not_selected 计数漏项。
+
+## PR #39 行级 review 收口
+
+GitHub Codex 对提交 `ca83ba3` 提出三条意见，逐条核实后均成立：
+
+1. **P1：Universe 预取范围过宽**：检测器 warmup 会早于 forward-only SCD 首个区间，按 `full_days` 预取会把与事件无关的 warmup 日变成整单 `unavailable`。现先完成检测，只对每个实际 parent 的 landmark（无 landmark 时为 anchor）预取 membership。
+2. **P2：删失 parent 先伪造在池**：现所有 parent（包括 selection/warmup censor）均先按适用事件日检查 PIT membership；不在池事件只进入 `pit_universe_ineligible` 审计，不再膨胀 censor 分母。
+3. **P2：首阴后删失 anchor 错位**：首阴已观察后的 MA5 warmup、量能、次日 landmark 缺失均以 `yin_day` 为 anchor；首阴尚不可观察时仍保留最后涨停日 parent anchor。
+
+独立复核确认三条修复完整，新增测试可使旧实现失败，未见 blocker/major。
+
+## Issue #40 dependency addendum
+
+复核范围中的 production PIT 依赖已由 forward-only `eligible_v1` 切换为独立
+`presence_v1`。absence 不再推断为 `NOT_IN_POOL`，因此 production
+`pit_universe_ineligible` 恒为空；`NOT_OBSERVED` 或任一 presence integrity/coverage
+问题必须整单 `unavailable_universe_presence`，并由 provenance 披露 published
+presence manifest 与 source generation pin。
+
+## Presence consumer 独立复核
+
+Reviewer 确认 production scope、PRESENT-only 门禁、实际 membership-day 预取和 capability/evaluate 共用 provenance validator 均符合 Issue #40 契约；发现 1 项 P2 文档歧义：最终设计一度把查询日写成笼统 event date，可能让 F1/F2 被误读为 anchor date。
+
+已修订为与 `_membership_date` 一致的规则：有 landmark 的 parent 使用 landmark date（F1 首阴后第 1 日、F2 突破后第 5 日），无 landmark 的删失 parent 才使用 anchor date。Reviewer 二次静态确认该 P2 已关闭，未见 blocker/P1/P2，可提交。

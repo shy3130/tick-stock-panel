@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "issue": 38,
+  "status": "ok",
+  "unavailable_reason": null,
+  "request": {
+    "symbols": [
+      "000001.SZ",
+      "000002.SZ",
+      "000003.SZ",
+      "000004.SZ",
+      "000005.SZ",
+      "000006.SZ",
+      "000007.SZ",
+      "000008.SZ",
+      "000009.SZ",
+      "000010.SZ"
+    ],
+    "start": "2024-08-07",
+    "oos_start": "2025-08-19",
+    "end": "2026-08-28",
+    "cost_bps": 10.0,
+    "horizon_days": 20,
+    "bootstrap_seed": 42,
+    "bootstrap_rounds": 5000,
+    "min_valid_bootstrap_replicates": 4750
+  },
+  "provenance": {
+    "definition_version": "v1",
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "universe_generation": "20260829T020332Z-6e648967c37e6739",
+    "universe_manifest_sha256": "2c407072371bc024de46fd2d5b1d282d964b478e94196da9fc575a0bac1781d4",
+    "universe_schema_version": 2,
+    "universe_rule_version": "presence_v1",
+    "universe_retrospective": true,
+    "universe_status_filter": "daily_market_row_present_exact_day",
+    "universe_source_generation": "20260829T000704",
+    "universe_source_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "universe_day_identity_count": 100
+  },
+  "factors": [
+    {
+      "factor_id": "first_yin_complement",
+      "parent_events": 3,
+      "qualified_events": 3,
+      "not_selected_events": 0,
+      "oos_qualified_complete_events": 0,
+      "oos_holding_paired_events": 0,
+      "verdict": "unavailable"
+    },
+    {
+      "factor_id": "breakout_pullback",
+      "parent_events": 48,
+      "qualified_events": 16,
+      "not_selected_events": 31,
+      "oos_qualified_complete_events": 6,
+      "oos_holding_paired_events": 6,
+      "verdict": "unavailable"
+    },
+    {
+      "factor_id": "low_gentle_slope",
+      "parent_events": 5,
+      "qualified_events": 0,
+      "not_selected_events": 5,
+      "oos_qualified_complete_events": 0,
+      "oos_holding_paired_events": 0,
+      "verdict": "unavailable"
+    },
+    {
+      "factor_id": "bottom_platform_breakout",
+      "parent_events": 66,
+      "qualified_events": 5,
+      "not_selected_events": 61,
+      "oos_qualified_complete_events": 4,
+      "oos_holding_paired_events": 4,
+      "verdict": "unavailable"
+    }
+  ],
+  "conclusion": "PIT universe dependency is resolved and the evaluation completed with status=ok. Each factor remains unavailable independently because the deterministic 10-symbol OOS sample does not meet its frozen evidence threshold; no factor is promoted."
+}
