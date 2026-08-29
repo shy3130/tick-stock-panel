@@ -12,9 +12,10 @@ from app.data_providers.fquant.daily_market_research import PinnedMarketFacts
 from app.services.hold_firm_patterns.adapters import (
     PinnedCanonicalDailyReader,
     PinnedMarketFactsSource,
-    PinnedUniverseReader,
+    PinnedPresenceUniverseReader,
     ProductionReaderScope,
     ProductionReaderScopeUnavailable,
+    presence_universe_identity,
     production_reader_scope,
     request_windows,
 )
@@ -52,8 +53,8 @@ from app.services.hold_firm_patterns.models import (
     PitUniverseStatus,
     Provenance,
     SelectionBucket,
-    UniverseIdentity,
     UnavailabilityReason,
+    UniverseIdentity,
     combine_verdicts,
     validate_count_invariants,
     validate_factor_coverage,
@@ -67,7 +68,7 @@ from app.services.hold_firm_patterns.statistics import (
     paired_cluster_bootstrap,
     selection_cluster_bootstrap,
 )
-from app.services.universe_scd import UniverseScdIntegrityError, UniverseScdNoCoverage
+from app.services.universe_presence_history import PresenceHistoryError
 
 _DETECTORS = (
     FirstYinDetector,
@@ -107,17 +108,7 @@ def _raw_identity(reader: object) -> MarketFactsIdentity:
 
 def _universe_identity(reader: object) -> UniverseIdentity:
     manifest = getattr(reader, "source_manifest")()
-    generation = manifest.get("generation")
-    content_hash = manifest.get("content_hash")
-    if not isinstance(generation, str) or not generation:
-        raise ValueError("universe manifest lacks generation")
-    if not isinstance(content_hash, str) or not content_hash:
-        raise ValueError("universe manifest lacks content hash")
-    return UniverseIdentity(
-        generation=generation,
-        manifest_sha256=content_hash,
-        interval_ids=(),
-    )
+    return presence_universe_identity(manifest)
 
 
 def assess_capability(
@@ -180,6 +171,7 @@ def _event_id(detection: ParentDetection) -> str:
         f"{detection.anchor_date.isoformat()}:{landmark.isoformat()}"
     )
 
+
 def _membership_date(detection: ParentDetection) -> date:
     return (
         detection.landmark.landmark_date
@@ -212,7 +204,7 @@ def _overlaps_active_horizon(prepared: _PreparedEvent, blocked_through: Mapping[
 def _materialize(
     factor_id: FactorId,
     detections: Sequence[ParentDetection],
-    universe: PinnedUniverseReader,
+    universe: PinnedPresenceUniverseReader,
 ) -> tuple[
     list[_PreparedEvent],
     list[_PreparedEvent],
@@ -790,21 +782,13 @@ def evaluate_hold_firm_patterns(
         for detector_type in _DETECTORS
     )
 
-
     try:
-        universe = PinnedUniverseReader(  # type: ignore[arg-type]
+        universe = PinnedPresenceUniverseReader(  # type: ignore[arg-type]
             universe_reader,
             _membership_days(detections_by_factor),
         )
-    except (
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-        UniverseScdIntegrityError,
-        UniverseScdNoCoverage,
-    ):
-        return _unavailable(UnavailabilityReason.UNIVERSE_SCD)
+    except (OSError, PresenceHistoryError, RuntimeError, TypeError, ValueError):
+        return _unavailable(UnavailabilityReason.UNIVERSE_PRESENCE)
 
     try:
         identities = DataIdentity(
@@ -841,9 +825,8 @@ def evaluate_hold_firm_patterns(
             qualified, not_selected, pit, selection_censored, censors = _materialize(
                 factor_id, detections, universe
             )
-        except (UniverseScdIntegrityError, UniverseScdNoCoverage, ValueError):
-            return _unavailable(UnavailabilityReason.UNIVERSE_SCD)
-
+        except (PresenceHistoryError, ValueError):
+            return _unavailable(UnavailabilityReason.UNIVERSE_PRESENCE)
         complete_qualified: list[tuple[_PreparedEvent, _Simulation]] = []
         complete_not_selected: list[tuple[_PreparedEvent, _Simulation]] = []
         all_segments: list[ExecutionSegment] = []

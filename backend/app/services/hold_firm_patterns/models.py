@@ -1,6 +1,7 @@
 """Frozen shared contract for Issue #38 hold-firm-pattern research."""
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -56,7 +57,7 @@ class HoldFirmVerdict(str, Enum):
 class UnavailabilityReason(str, Enum):
     CANONICAL_READER = "unavailable_canonical_reader"
     MARKET_FACTS_INCOMPLETE = "unavailable_market_facts_incomplete"
-    UNIVERSE_SCD = "unavailable_universe_scd"
+    UNIVERSE_PRESENCE = "unavailable_universe_presence"
     INVALID_PROVENANCE = "unavailable_invalid_provenance"
     BOOTSTRAP = "unavailable_bootstrap_min_valid_replicates"
 
@@ -208,10 +209,35 @@ class MarketFactsIdentity(_Strict):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class UniverseDayIdentity(_Strict):
+    """Exact-day presence content identity used for one membership day."""
+
+    day: date
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class UniverseIdentity(_Strict):
-    generation: str = Field(min_length=1)
+    generation: str = Field(pattern=r"^\d{8}T\d{6}Z-[0-9a-f]{16}$")
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    interval_ids: tuple[str, ...]
+    schema_version: Literal[2]
+    artifact: Literal["universe_presence"]
+    rule_version: Literal["presence_v1"]
+    retrospective: Literal[True]
+    status_filter: Literal["daily_market_row_present_exact_day"]
+    source_artifact: Literal["fstore_snapshot"]
+    source_generation: str = Field(pattern=r"^\d{8}T\d{6}$")
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    day_identities: tuple[UniverseDayIdentity, ...]
+
+    @field_validator("day_identities")
+    @classmethod
+    def unique_sorted_days(
+        cls, value: tuple[UniverseDayIdentity, ...]
+    ) -> tuple[UniverseDayIdentity, ...]:
+        days = [item.day for item in value]
+        if days != sorted(set(days)):
+            raise ValueError("day_identities must be unique and sorted by day")
+        return value
 
 
 class DataIdentity(_Strict):

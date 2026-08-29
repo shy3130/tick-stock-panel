@@ -1,7 +1,7 @@
 """Request-level pinned adapters for Issue #38 hold-firm-pattern research.
 
 Binds the shared published readers (canonical history, markets facts, PIT
-universe SCD) to the frozen ``models`` protocols for the lifetime of one
+presence history) to the frozen ``models`` protocols for the lifetime of one
 request.  Nothing here follows ``current`` after construction, nothing
 fabricates ``suspended``/``buyable``/``sellable`` state, and every identity
 failure fails closed into an order-level unavailability reason.
@@ -13,7 +13,7 @@ import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 import polars as pl
 
@@ -28,17 +28,18 @@ from app.services.hold_firm_patterns.models import (
     MarketFactsIdentity,
     MarketFactsRow,
     PitUniverseStatus,
-    UniverseIdentity,
     UnavailabilityReason,
+    UniverseDayIdentity,
+    UniverseIdentity,
 )
 from app.services.research_sealed_data import PublishedCanonicalDailyReader
-from app.services.universe_scd import (
-    PublishedUniverseScdReader,
-    UniverseScdIntegrityError,
-    UniverseScdNoCoverage,
-    UniverseScdNotPublished,
-    universe_scd_root,
+from app.services.universe_presence_history import (
+    PresenceHistoryError,
+    PresenceStatus,
+    PublishedPresenceUniverseReader,
+    universe_presence_root,
 )
+from app.services.universe_scd import canonical_json_bytes, sha256_hex
 
 # Market-day budgets around the request window.  The widest detector lookback
 # is the 120-day low-position window (F3/F4) on top of a 20-day platform/slope
@@ -67,7 +68,7 @@ class ProductionReaderScope:
 
     canonical: PublishedCanonicalDailyReader
     market_facts: PublishedDailyMarketFactsReader
-    universe_reader: PublishedUniverseScdReader
+    universe_reader: PublishedPresenceUniverseReader
 
     def close(self) -> None:
         close = getattr(self.market_facts, "close", None)
@@ -113,19 +114,14 @@ def production_reader_scope(repo: Any) -> Iterator[ProductionReaderScope]:
         ) from exc
     data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
     try:
-        universe_reader = PublishedUniverseScdReader(universe_scd_root(), data_dir=data_dir)
-    except (
-        OSError,
-        UniverseScdIntegrityError,
-        UniverseScdNoCoverage,
-        UniverseScdNotPublished,
-        RuntimeError,
-        ValueError,
-    ) as exc:
+        universe_reader = PublishedPresenceUniverseReader(
+            universe_presence_root(), data_dir=data_dir
+        )
+    except (OSError, PresenceHistoryError, RuntimeError, ValueError) as exc:
         facts_reader.close()
         raise ProductionReaderScopeUnavailable(
-            UnavailabilityReason.UNIVERSE_SCD,
-            f"universe SCD unavailable: {exc}",
+            UnavailabilityReason.UNIVERSE_PRESENCE,
+            f"universe presence unavailable: {exc}",
         ) from exc
     scope = ProductionReaderScope(
         canonical=canonical_reader,
@@ -344,42 +340,79 @@ def _convert_fact(symbol: str, day: date, fact: Any) -> MarketFactsRow | None:
     )
 
 
-class PinnedUniverseReader:
-    """models.UniverseReader backed by prefetched PIT snapshots.
+def presence_universe_identity(
+    manifest: Mapping[str, Any],
+    day_identities: Sequence[UniverseDayIdentity] = (),
+) -> UniverseIdentity:
+    """Validate and freeze retrospective presence provenance."""
+    schema_version = manifest.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != 2
+    ):
+        raise ValueError("presence manifest schema_version must be integer 2")
+    if manifest.get("artifact") != "universe_presence":
+        raise ValueError("presence manifest artifact mismatch")
+    if manifest.get("rule_version") != "presence_v1":
+        raise ValueError("presence manifest rule_version must be presence_v1")
+    if manifest.get("retrospective") is not True:
+        raise ValueError("presence manifest must be retrospective")
+    status_filter = manifest.get("status_filter")
+    if status_filter != "daily_market_row_present_exact_day":
+        raise ValueError("presence manifest status_filter mismatch")
+    source = manifest.get("source")
+    if not isinstance(source, Mapping) or source.get("artifact") != "fstore_snapshot":
+        raise ValueError("presence manifest lacks fstore source identity")
+    generation = manifest.get("generation")
+    source_generation = source.get("generation")
+    source_manifest_sha256 = source.get("manifest_sha256")
+    if not isinstance(generation, str) or not generation:
+        raise ValueError("presence manifest lacks generation")
+    if not isinstance(source_generation, str) or not source_generation:
+        raise ValueError("presence source lacks generation")
+    if not isinstance(source_manifest_sha256, str) or not source_manifest_sha256:
+        raise ValueError("presence source lacks manifest_sha256")
+    return UniverseIdentity(
+        generation=generation,
+        manifest_sha256=sha256_hex(canonical_json_bytes(manifest)),
+        schema_version=2,
+        artifact="universe_presence",
+        rule_version="presence_v1",
+        retrospective=True,
+        status_filter=status_filter,
+        source_generation=source_generation,
+        source_artifact="fstore_snapshot",
+        source_manifest_sha256=source_manifest_sha256,
+        day_identities=tuple(day_identities),
+    )
 
-    Interval coverage is resolved eagerly for every requested day: any
-    ``UniverseScdNoCoverage``/integrity fault propagates so the whole run is
-    marked ``unavailable_universe_scd`` instead of degrading per event.
-    """
 
-    def __init__(self, reader: PublishedUniverseScdReader, request_days: tuple[date, ...]) -> None:
-        prefetched = reader.prefetch_event_days(sorted(set(request_days)))
-        self._pools: dict[date, frozenset[str]] = {
-            day: frozenset(symbols) for day, (_identity, symbols) in prefetched.items()
-        }
-        manifest = reader.source_manifest()
-        content_hash = manifest.get("content_hash")
-        if not isinstance(content_hash, str) or not content_hash:
-            raise ValueError("universe manifest lacks content_hash")
-        interval_ids: list[str] = []
-        seen: set[str] = set()
-        for day in sorted(prefetched):
-            identity = prefetched[day][0]
-            interval_id = (
-                f"{identity['effective_from'].isoformat()}.."
-                f"{identity['effective_to'].isoformat() if identity['effective_to'] else 'open'}"
-                f"#{identity['content_hash']}"
+class PinnedPresenceUniverseReader:
+    """Presence reader pinned to exact requested days; never infers absence."""
+
+    def __init__(
+        self, reader: PublishedPresenceUniverseReader, request_days: tuple[date, ...]
+    ) -> None:
+        days = tuple(sorted(set(request_days)))
+        prefetched = reader.prefetch_presence_days(days)
+        pools: dict[date, frozenset[str]] = {}
+        identities: list[UniverseDayIdentity] = []
+        for day in days:
+            snapshot = prefetched.get(day)
+            if snapshot is None:
+                raise PresenceHistoryError(f"presence snapshot missing for {day.isoformat()}")
+            status = (
+                PresenceStatus.PRESENT
+                if snapshot.source_day_observed
+                else PresenceStatus.NOT_OBSERVED
             )
-            if interval_id not in seen:
-                seen.add(interval_id)
-                interval_ids.append(interval_id)
-        self._identity = UniverseIdentity(
-            generation=str(manifest.get("generation") or ""),
-            manifest_sha256=content_hash,
-            interval_ids=tuple(interval_ids),
-        )
-        if not self._identity.generation:
-            raise ValueError("universe manifest lacks generation")
+            if status is PresenceStatus.NOT_OBSERVED:
+                raise PresenceHistoryError(f"presence day {day.isoformat()} is not observed")
+            pools[day] = frozenset(snapshot.symbols)
+            identities.append(UniverseDayIdentity(day=day, content_hash=snapshot.content_hash))
+        self._pools = pools
+        self._identity = presence_universe_identity(reader.source_manifest(), identities)
 
     def identity(self) -> UniverseIdentity:
         return self._identity
@@ -387,14 +420,18 @@ class PinnedUniverseReader:
     def membership(self, symbol: str, day: date) -> PitUniverseStatus:
         pool = self._pools.get(day)
         if pool is None:
-            raise UniverseScdNoCoverage(f"universe snapshot missing for {day.isoformat()}")
-        return PitUniverseStatus.IN_POOL if symbol in pool else PitUniverseStatus.NOT_IN_POOL
+            raise PresenceHistoryError(f"presence snapshot missing for {day.isoformat()}")
+        if symbol not in pool:
+            raise PresenceHistoryError(
+                f"presence cannot prove pool membership for {symbol} on {day.isoformat()}"
+            )
+        return PitUniverseStatus.IN_POOL
 
 
 def request_windows(
     reader: PublishedCanonicalDailyReader, start: date, end: date
 ) -> tuple[tuple[date, ...], tuple[date, ...], date, date]:
-    """Split the pinned calendar into the full and event windows.
+    """Split the pinned calendar into full and event windows.
 
     Returns ``(full_days, event_days, bar_start, bar_end)`` where
     ``full_days`` covers the detector warmup before ``start`` and the

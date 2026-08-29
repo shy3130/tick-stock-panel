@@ -36,3 +36,17 @@ GitHub Codex 对提交 `ca83ba3` 提出三条意见，逐条核实后均成立�
 3. **P2：首阴后删失 anchor 错位**：首阴已观察后的 MA5 warmup、量能、次日 landmark 缺失均以 `yin_day` 为 anchor；首阴尚不可观察时仍保留最后涨停日 parent anchor。
 
 独立复核确认三条修复完整，新增测试可使旧实现失败，未见 blocker/major。
+
+## Issue #40 dependency addendum
+
+复核范围中的 production PIT 依赖已由 forward-only `eligible_v1` 切换为独立
+`presence_v1`。absence 不再推断为 `NOT_IN_POOL`，因此 production
+`pit_universe_ineligible` 恒为空；`NOT_OBSERVED` 或任一 presence integrity/coverage
+问题必须整单 `unavailable_universe_presence`，并由 provenance 披露 published
+presence manifest 与 source generation pin。
+
+## Presence consumer 独立复核
+
+Reviewer 确认 production scope、PRESENT-only 门禁、实际 membership-day 预取和 capability/evaluate 共用 provenance validator 均符合 Issue #40 契约；发现 1 项 P2 文档歧义：最终设计一度把查询日写成笼统 event date，可能让 F1/F2 被误读为 anchor date。
+
+已修订为与 `_membership_date` 一致的规则：有 landmark 的 parent 使用 landmark date（F1 首阴后第 1 日、F2 突破后第 5 日），无 landmark 的删失 parent 才使用 anchor date。Reviewer 二次静态确认该 P2 已关闭，未见 blocker/P1/P2，可提交。

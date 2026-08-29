@@ -42,7 +42,7 @@ Pydantic extra: forbid
 
 1. `PublishedCanonicalDailyReader` 的 canonical generation、manifest sha256、source generations/hashes、calendar；
 2. canonical manifest 指向的 `PublishedDailyMarketFactsReader` markets generation/manifest hash；
-3. `PublishedUniverseScdReader` generation、manifest、interval identities。
+3. `PublishedPresenceUniverseReader` 的 schema/rule、published manifest SHA-256、retrospective source generation/manifest SHA-256，以及实际 membership day/content-hash identities。
 
 required canonical columns：`symbol/date/open/high/low/close/raw_open/raw_high/raw_low/raw_close/volume/amount`。结构、均线、归一化收益用同 generation adjusted OHLC；raw OHLC 仅用于涨跌停与执行证据，字段分别命名 `research_*_adj` / `quote_*_raw`。
 
@@ -55,7 +55,7 @@ markets 参与日期的 row 必须完整提供 `raw OHLC/pre_close/published_lim
 - raw OHLC 全相等但不在 band 是合法一价日；
 - 所有制度价按两位小数与 `abs_tol=0.005` 比较。
 
-PIT universe 三态：reader/ledger/hash 或需要日期 interval coverage 缺失＝整单 `unavailable_universe_scd`；快照完整且 symbol 明确不在池＝事件 `pit_universe_ineligible` denominator audit；禁止用 markets 聚合 universe、当前 instruments 或请求 symbols 回填。缺棒分两类：父事件本身所需的平台/缓坡窗口不完整时，父事件不可被证明，禁止伪造 parent/censor 分母；父事件已经由可见输入证明后，F2 day1..5、F3 低位回看、F4 底部回看或执行 horizon 缺失才进入对应 event censor。
+PIT presence 仅有“可证明存在”与“不可证明”两种研究语义：published reader/manifest/artifact/hash/calendar/coverage 缺陷、非市场日、空源日，或 symbol 在 parent membership date 为 `NOT_OBSERVED`，均整单 `unavailable_universe_presence`；membership date 对有 landmark 的 parent 取 landmark date（F1 为首阴后第 1 日、F2 为突破后第 5 日），无 landmark 的删失 parent 才取 anchor date。只有 `PRESENT` 可进入 parent/censor/收益分母。presence 不证明 absence 是不在池或退市，因此 production `pit_universe_ineligible` 恒为空；禁止用 markets 聚合 universe、当前 instruments、请求 symbols 或 forward-only `eligible_v1` 回填。缺棒分两类：父事件本身所需的平台/缓坡窗口不完整时，父事件不可被证明，禁止伪造 parent/censor 分母；父事件已经由可见输入证明后，F2 day1..5、F3 低位回看、F4 底部回看或执行 horizon 缺失才进入对应 event censor。
 
 ## 4. Selection landmark 与共同执行时钟
 
@@ -71,7 +71,7 @@ PIT universe 三态：reader/ledger/hash 或需要日期 interval coverage 缺�
 
 ```text
 facts_complete_parent = qualified + not_selected
-parent = facts_complete_parent + pit_universe_ineligible + selection_window_censored
+parent = facts_complete_parent + selection_window_censored
 qualified ∩ not_selected = ∅
 ```
 
@@ -143,4 +143,16 @@ provenance 必含 canonical/markets/universe identities、manifest hashes、requ
 
 ## 9. 验证门
 
-覆盖四检测器阈值/截断、10/20/30cm 与 ST、PIT universe 三态、canonical/markets pin 漂移、除权、T+1、一字涨跌停、pending 到 day20、跳空、费用、F1 两日互补、F2 day5 landmark/假突破、F3 OLS/低位/流动性、F4 强弱分母、互斥计数、共同时钟、cluster bootstrap 退化/空 replicate、IS/OOS 隔离、schema discriminator 与 reader lifecycle。focused/full backend tests、Ruff F/E9 和独立 coding review 无 blocker/major 后方可交付。
+覆盖四检测器阈值/截断、10/20/30cm 与 ST、PIT presence PRESENT/NOT_OBSERVED/fail-closed、canonical/markets/presence pin 漂移、除权、T+1、一字涨跌停、pending 到 day20、跳空、费用、F1 两日互补、F2 day5 landmark/假突破、F3 OLS/低位/流动性、F4 强弱分母、互斥计数、共同时钟、cluster bootstrap 退化/空 replicate、IS/OOS 隔离、schema discriminator 与 reader lifecycle。focused/full backend tests、Ruff F/E9 和独立 coding review 无 blocker/major 后方可交付。
+
+## 10. Issue #40 dependency addendum: presence_v1
+
+生产 universe reader 改为 Issue #40 独立 `presence_v1` retrospective exact-day
+published presence；不再依赖 forward-only `eligible_v1` SCD。presence 只能证明
+`PRESENT`，不能证明 absence 是不在池或退市，因此 production
+`pit_universe_ineligible` 恒为空；symbol 缺席、`NOT_OBSERVED`、缺 snapshot、
+coverage、非市场日或完整性错误均使整单 `unavailable_universe_presence`。
+
+`UniverseIdentity` 披露 rule/schema、`retrospective=true`、status filter、published
+manifest canonical-JSON SHA-256、source generation/source manifest SHA-256，以及
+实际请求 membership day/content-hash identities。
