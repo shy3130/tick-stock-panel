@@ -31,8 +31,12 @@ import logging
 import re
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from app.data_providers.fquant.presence_source import PresencePinnedSourceData
 
 from app.data_providers.base import AssetType, ProviderCapabilities
 from app.data_providers.fquant.adj_factor import (
@@ -959,6 +963,26 @@ class FQuantProvider:
         return df.with_columns(
             (pl.col("code").cast(pl.Utf8) + pl.lit(".HK")).alias("symbol")
         )
+
+    def read_presence_pinned_source(
+        self, *, markets_path: str, fstore_path: str
+    ) -> PresencePinnedSourceData:
+        """Read pinned DuckDB inputs required by presence-history collection.
+
+        This provider-specific extension deliberately stays outside the public
+        ``MarketDataProvider`` capability contract.  The service supplies paths
+        pinned from one immutable fstore manifest; the narrow helper owns
+        read-only connections and their lifecycle.
+        """
+        from app.data_providers.fquant.presence_source import (
+            read_presence_pinned_source,
+        )
+
+        result: PresencePinnedSourceData = read_presence_pinned_source(
+            markets_path=markets_path,
+            fstore_path=fstore_path,
+        )
+        return result
 
     def get_stock_reference_flags(self) -> pl.DataFrame:
         """A 股标的参考标记 — AH 股 / AH 溢价率 / 沪深股通标的 / 上市日期。

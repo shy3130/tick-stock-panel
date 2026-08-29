@@ -423,6 +423,22 @@ class KlineRepository:
             logger.info("PIT eligible universe unavailable: %s", exc)
             return None
 
+    @property
+    def pit_presence_universe(self):
+        """Expose a fully validated retrospective presence_v1 generation (fail-soft)."""
+        try:
+            from app.services.universe_presence_history import (
+                PublishedPresenceUniverseReader,
+                universe_presence_root,
+            )
+
+            return PublishedPresenceUniverseReader(
+                universe_presence_root(), data_dir=self.store.data_dir
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("PIT presence universe unavailable: %s", exc)
+            return None
+
     def execute_all(self, sql: str, params: list | None = None) -> list[tuple]:
         """线程安全的 SELECT → fetchall。DuckDB 单 connection 非线程安全，所有读路径须走此方法。"""
         with self._lock:
