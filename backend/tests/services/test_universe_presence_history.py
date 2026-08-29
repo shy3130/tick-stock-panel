@@ -1,10 +1,12 @@
 import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
+from typing import ClassVar
 
 import duckdb
 import pytest
 
+from app.data_providers.fquant_provider import FQuantProvider
 from app.services.universe_presence_history import (
     PresenceHistoryIntegrityError,
     PresenceHistoryNoCoverageError,
@@ -12,6 +14,7 @@ from app.services.universe_presence_history import (
     PresenceStatus,
     PublishedPresenceUniverseReader,
     collect_presence_history,
+    pin_presence_source,
     publish_presence_history,
 )
 from app.services.universe_scd import canonical_json_bytes, sha256_hex
@@ -91,6 +94,60 @@ def test_source_pin_accepts_pretty_manifest_and_hashes_raw_bytes(tmp_path):
 
     assert draft.source["manifest_sha256"] == sha256_hex(pretty_bytes)
 
+
+def test_collect_routes_pinned_queries_through_fquant_provider(tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    pin = pin_presence_source(source)
+    import app.data_providers.registry as registry
+
+    class Imposter:
+        def read_presence_pinned_source(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(registry, "get_active_provider_name", lambda capability=None: "imposter")
+    monkeypatch.setattr(registry, "get_provider", lambda name: Imposter())
+    with pytest.raises(PresenceHistoryIntegrityError, match="active provider"):
+        collect_presence_history(source_root=source)
+
+    class SpyProvider(FQuantProvider):
+        calls: ClassVar[list[tuple[str, str]]] = []
+        closed = False
+
+        def close(self):
+            type(self).closed = True
+            super().close()
+
+        def read_presence_pinned_source(self, *, markets_path, fstore_path):
+            type(self).calls.append((markets_path, fstore_path))
+            return super().read_presence_pinned_source(
+                markets_path=markets_path, fstore_path=fstore_path
+            )
+
+    provider = SpyProvider(name="fquant_local")
+    monkeypatch.setattr(registry, "get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(registry, "get_provider", lambda name: provider)
+    draft = collect_presence_history(source_root=source)
+    assert SpyProvider.calls == [(pin.markets_path, pin.fstore_path)]
+    assert SpyProvider.closed is True
+    assert draft.source["generation"] == pin.generation
+
+
+def test_reader_rejects_self_consistent_suffixed_market_day(tmp_path):
+    _, root, result = _publish(tmp_path)
+    generation_dir = root / result.generation
+    market_days_path = generation_dir / "market_days.json"
+    market_days = json.loads(market_days_path.read_bytes())
+    market_days[0] = market_days[0] + "T00:00:00"
+    market_days_path.write_bytes(canonical_json_bytes(market_days))
+    _rewrite_manifest(
+        root,
+        result.generation,
+        lambda manifest: manifest["market_days"].__setitem__(
+            "sha256", sha256_hex(market_days_path.read_bytes())
+        ),
+    )
+    with pytest.raises(PresenceHistoryIntegrityError, match="market day invalid"):
+        PublishedPresenceUniverseReader(root)
 
 def test_exact_day_presence_and_gapless_empty_day(tmp_path):
     _, root, result = _publish(

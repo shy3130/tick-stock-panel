@@ -41,7 +41,7 @@ MARKETS_LOGICAL = "markets"
 _MARKETS_GENERATION_RE = re.compile(r"^\d{8}T\d{6}$")
 _PRESENCE_GENERATION_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{16}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
-_CODE_RE = re.compile(r"^\d{6}$")
+_ISO_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SYMBOL_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
 
 
@@ -125,17 +125,6 @@ class PresenceCollectionDraft:
     day_observed: tuple[bool, ...]
 
 
-def _coerce_date(v: Any) -> date | None:
-    if isinstance(v, datetime):
-        return v.date()
-    if isinstance(v, date):
-        return v
-    if isinstance(v, str):
-        try:
-            return date.fromisoformat(v[:10])
-        except ValueError:
-            return None
-    return None
 
 
 def _read_fd(fd: int, size: int) -> bytes:
@@ -270,45 +259,32 @@ def pin_presence_source(source_root: str | os.PathLike[str] | None = None) -> Pr
     return PresenceSourcePin(root, gen, sha256_hex(mb), ca, mp, ms, fp, fs)
 
 
-def _pinned_market_days(conn: Any) -> tuple[date, ...]:
-    rows = conn.execute(
-        "SELECT tdate FROM trade_date WHERE isopen = 3 AND mkt = 'A股' ORDER BY tdate"
-    ).fetchall()
-    out = []
-    for r in rows:
-        d = _coerce_date(r[0])
-        if d is None or (out and d <= out[-1]):
-            raise PresenceHistoryIntegrityError("invalid market calendar")
-        out.append(d)
-    if not out:
-        raise PresenceHistoryIntegrityError("empty market calendar")
-    return tuple(out)
 
 
-def _markets_rows_by_day(conn: Any) -> tuple[date, date, dict[date, set[str]]]:
-    from app.data_providers.fquant.symbols import code_to_symbol
+def _read_pinned_presence_source(pin: PresenceSourcePin) -> Any:
+    from app.data_providers.fquant_provider import FQuantProvider
+    from app.data_providers.registry import get_active_provider_name, get_provider
 
-    rows = conn.execute(
-        "SELECT code, trade_date FROM daily_markets WHERE asset_type = 1"
-    ).fetchall()
-    if not rows:
-        raise PresenceHistoryIntegrityError("empty coverage")
-    seen = set()
-    out = {}
-    for code0, day0 in rows:
-        day = _coerce_date(day0)
-        code = "" if code0 is None else str(code0)
-        if day is None or not _CODE_RE.fullmatch(code):
-            raise PresenceHistoryIntegrityError("invalid code/date")
-        key = (code, day)
-        if key in seen:
-            raise PresenceHistoryIntegrityError("duplicate key")
-        seen.add(key)
-        sym = code_to_symbol(code, 1)
-        if not _SYMBOL_RE.fullmatch(sym):
-            raise PresenceHistoryIntegrityError("invalid mapped symbol")
-        out.setdefault(day, set()).add(sym)
-    return min(out), max(out), out
+    provider = get_provider(get_active_provider_name("daily"))
+    try:
+        reader = getattr(provider, "read_presence_pinned_source", None)
+        if not isinstance(provider, FQuantProvider) or not callable(reader):
+            raise PresenceHistoryIntegrityError(
+                "active provider cannot serve pinned presence source"
+            )
+        try:
+            return reader(
+                markets_path=pin.markets_path,
+                fstore_path=pin.fstore_path,
+            )
+        except Exception as e:
+            raise PresenceHistoryIntegrityError(
+                "pinned presence source query failed"
+            ) from e
+    finally:
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
 
 
 def collect_presence_history(
@@ -316,18 +292,11 @@ def collect_presence_history(
 ) -> PresenceCollectionDraft:
     now = now or datetime.now(UTC)
     pin = pin_presence_source(source_root)
-    from app.storage.duckdb_runtime import connect_duckdb
-
-    mc = connect_duckdb(pin.markets_path, read_only=True)
-    try:
-        fc = connect_duckdb(pin.fstore_path, read_only=True)
-        try:
-            calendar = _pinned_market_days(fc)
-            start, end, grouped = _markets_rows_by_day(mc)
-        finally:
-            fc.close()
-    finally:
-        mc.close()
+    data = _read_pinned_presence_source(pin)
+    calendar = data.market_days
+    start = data.coverage_start
+    end = data.coverage_end
+    grouped = data.symbols_by_day
     days = tuple(d for d in calendar if start <= d <= end)
     if not days or days[0] != start or days[-1] != end:
         raise PresenceHistoryIntegrityError("coverage boundaries not market days")
@@ -554,10 +523,12 @@ def publish_presence_history(
 
 
 def _parse_day(v: Any, what: str) -> date:
-    d = _coerce_date(v)
-    if d is None:
+    if not isinstance(v, str) or not _ISO_DAY_RE.fullmatch(v):
         raise PresenceHistoryIntegrityError(f"{what} invalid")
-    return d
+    try:
+        return date.fromisoformat(v)
+    except ValueError:
+        raise PresenceHistoryIntegrityError(f"{what} invalid") from None
 
 
 class PublishedPresenceUniverseReader:
