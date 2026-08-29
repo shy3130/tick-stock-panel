@@ -94,7 +94,7 @@ retrospective presence manifest 与 source pin 的完整 provenance。
 - source generation/hash：`20260829T000704` / `a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`
 - capability 冒烟：`status=ok`；生产 reader 与 capability/evaluate 使用同一 identity，未回退当前 instruments 或 eligible 历史猜测。
 
-presence consumer 的最终自有 focused 契约测试 **71 passed in 2.08s**，Ruff F/E9 **All checks passed**；独立复核在“事件实际 membership 日期”口径修正后未见 blocker/P1/P2。Issue #40 publisher strict identity 测试另有 **4 passed** 的先行证据；最终依赖集成后的全量回归见后续收口记录。
+presence consumer 自有 focused 契约测试 **71 passed in 2.08s**，Ruff F/E9 **All checks passed**；独立复核在“事件实际 membership 日期”口径修正后未见 blocker/P1/P2。
 
 ## 真实 OOS（2026-08-29）
 
@@ -110,3 +110,15 @@ presence consumer 的最终自有 focused 契约测试 **71 passed in 2.08s**，
 | `bottom_platform_breakout` | 66 | 5 | 61 | 4 | 4 | `unavailable` |
 
 所有 factor 的 `denominator_audit` 均为 0；`unavailable` 来自各自有效 OOS 样本不足，未聚合成单一胜率。完整机器摘要见 [oos-verdict.json](oos-verdict.json)。
+
+## 最终依赖集成回归
+
+在临时验证 worktree 精确合并 PR #39 head `efe0199` 与 PR #41 review-fix head `604ca88`，不修改生产数据：
+
+```text
+hold-firm + presence focused: 87 passed in 11.11s
+Ruff：presence helper/tests 全规则通过；provider/service/consumer F/E9 通过
+backend full: 3619 passed, 3 skipped, 8 warnings in 210.52s
+```
+
+warning 仍来自既有 Polars sortedness/deprecation/performance 路径。该集成证明 PR #41 先合并后，PR #39 的 provider import、repository seam、strict presence identity、consumer 与全量后端契约同时成立。
