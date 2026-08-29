@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "issue": 30,
+  "status": "ok",
+  "request": {
+    "start": "2025-02-25",
+    "oos_start": "2025-11-26",
+    "end": "2026-08-28",
+    "cohort_rule": "确定性 canonical symbol 升序前 10 只",
+    "symbol_count": 10,
+    "cohort_day": "2025-11-25",
+    "symbols": [
+      "000001.SZ",
+      "000002.SZ",
+      "000006.SZ",
+      "000007.SZ",
+      "000008.SZ",
+      "000009.SZ",
+      "000011.SZ",
+      "000012.SZ",
+      "000014.SZ",
+      "000017.SZ"
+    ],
+    "maximum_window_days": 370
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "execution_ledger_version": 3,
+    "calendar_basis": "pinned_market_days",
+    "evaluator_revision": {
+      "commit": "46c3dbc707983b7b7eff59991d5f5efd33062bd4",
+      "commit_subject": "fix(research): close anchor review follow-ups (#30)",
+      "commit_date": "2026-08-28T13:37:15+08:00",
+      "evaluator_blob_sha1": "80e5ca89b4b62f112fa69536f010c8f3da510097",
+      "source_tree_head_at_execution": "5e7121b44820df7720686fe8c326e5657b034950",
+      "evaluator_file": "backend/app/services/daily_open_anchor_filter.py",
+      "evaluator_dirty_at_execution": false,
+      "execution_mode": "fresh_python_process",
+      "note": "clean rerun from the Issue #30 verdict worktree; evaluator and repository files matched HEAD at execution"
+    }
+  },
+  "verdict": {
+    "label": "inconclusive",
+    "basis": "oos",
+    "applicability": "inconclusive_overall",
+    "rules": [
+      "min_oos_trades=30",
+      "stop_hit_rate(original) < stop_hit_rate(none)",
+      "expectancy(original) >= expectancy(none)"
+    ]
+  },
+  "overall_oos": {
+    "none": {
+      "n_trades": 55,
+      "stop_hit_rate": 0.345455,
+      "expectancy": -0.015449
+    },
+    "original": {
+      "n_trades": 9,
+      "stop_hit_rate": 0.111111,
+      "expectancy": -0.014426
+    },
+    "inverted": {
+      "n_trades": 46,
+      "stop_hit_rate": 0.391304,
+      "expectancy": -0.015649
+    },
+    "random": {
+      "n_trades": 16,
+      "stop_hit_rate": 0.1875,
+      "expectancy": -0.016652
+    }
+  },
+  "tnt_open_anchor_contrast": {
+    "single_side_down": {
+      "none": {
+        "n_trades": 12,
+        "stop_hit_rate": 0.5,
+        "expectancy": -0.047312
+      },
+      "original": {
+        "n_trades": 0,
+        "stop_hit_rate": null,
+        "expectancy": null
+      },
+      "status": "inconclusive"
+    },
+    "range": {
+      "none": {
+        "n_trades": 33,
+        "stop_hit_rate": 0.393939,
+        "expectancy": -0.016162
+      },
+      "original": {
+        "n_trades": 7,
+        "stop_hit_rate": 0.142857,
+        "expectancy": -0.016067
+      },
+      "status": "inconclusive"
+    }
+  },
+  "limitations": [
+    "original OOS 仅 9 笔，低于冻结的 30 笔门槛，因此止损率和期望差异不能升级为 validated",
+    "single_side_down 原稿臂为 0 笔、range 原稿臂为 7 笔，两个预注册 regime 均为 inconclusive",
+    "本结果不进入默认策略池、Agent 排序或真实交易"
+  ]
+}
