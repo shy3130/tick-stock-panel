@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from app.services.zuoyi_defense import ARMS, evaluate_zuoyi_defense
+from app.services.zuoyi_defense import ARMS, MIN_OOS_SEGMENTS, _bootstrap_low, _paired_verdict, evaluate_zuoyi_defense
 
 
 class FakeReader:
@@ -77,3 +77,27 @@ def test_missing_pinned_markets_is_whole_order_unavailable():
     )
     assert result["status"] == "unavailable"
     assert result["code"] == "UNAVAILABLE_MARKETS_PIN"
+
+
+def test_verdict_requires_strongest_baseline_not_easiest():
+    paired = {
+        "buy_hold": (-0.01, _bootstrap_low([-0.01] * MIN_OOS_SEGMENTS)),
+        "atr_chandelier_k3": (0.02, _bootstrap_low([0.02] * MIN_OOS_SEGMENTS)),
+        "ma20_hold": (0.03, _bootstrap_low([0.03] * MIN_OOS_SEGMENTS)),
+        "ma60_hold": (0.05, _bootstrap_low([0.05] * MIN_OOS_SEGMENTS)),
+    }
+    verdict = _paired_verdict(paired, MIN_OOS_SEGMENTS)
+    assert verdict["value"] == "rejected"
+    assert "strongest baseline buy_hold" in verdict["rule"]
+
+
+def test_verdict_accepts_when_strongest_baseline_passes():
+    paired = {
+        "buy_hold": (0.01, _bootstrap_low([0.01] * MIN_OOS_SEGMENTS)),
+        "atr_chandelier_k3": (0.02, -0.01),
+        "ma20_hold": (0.03, -0.02),
+        "ma60_hold": (0.05, -0.03),
+    }
+    verdict = _paired_verdict(paired, MIN_OOS_SEGMENTS)
+    assert verdict["value"] == "accepted"
+    assert "strongest baseline buy_hold" in verdict["rule"]

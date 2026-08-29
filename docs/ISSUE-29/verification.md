@@ -14,7 +14,7 @@
 | 真实 current 冒烟 | `PublishedDailyMarketFactsReader.from_canonical_manifest` 抛 `FileNotFoundError`（pinned markets generation unavailable） | **strict pin 预期 fail-closed**：已发布 legacy canonical 无 expected markets hash/generation 组合即拒绝；下一次 verified canonical incremental/full publish 后自动可用 |
 | 独立 coding review | 最终 **approve，无 blocker/major** | 20 项 finding 全部闭环，见 [coding-review.md](coding-review.md) |
 | canonical schema v2 全历史发布 | **succeeded** | generation `20260829T002957-4b1bfcad`，17,230,945 行、5,680 标的；完整 canonical manifest SHA-256 见下节 |
-| 真实 OOS | **status=`ok`，verdict=`accepted`** | 确定性 25 标的、75 个完整 OOS segment（门槛 20）；机器摘要见 [oos-verdict.json](oos-verdict.json) |
+| 真实 OOS | **status=`ok`，旧 verdict=`accepted`（已作废，待严格最佳基准门禁重跑）** | 确定性 25 标的、75 个完整 OOS segment（门槛 20）；机器摘要见 [oos-verdict.json](oos-verdict.json) |
 
 ## 真实 OOS 执行与 verdict
 
@@ -35,10 +35,10 @@
 ### OOS 结果
 
 - 完整 OOS segment：`75`，冻结门槛 `20`。
-- verdict：`accepted`；规则为 paired bootstrap `seed=42`、`rounds=500`，仅相对冻结基准 `ma60_hold` 判定。
-- OOS 平均净收益：`buy_hold=0.007832`、`atr_chandelier_k3=-0.004929`、`ma20_hold=-0.003428`、`ma60_hold=-0.023821`、`zuoyi_defense=0.004366`、`zuoyi_atr_combo=0.005706`。
-- 解释边界：`accepted` 不表示六臂全局最优；本样本内 `buy_hold` 均值高于 `zuoyi_defense`。结论只完成 Issue #29 的冻结研究门禁，不自动进入生产引擎、策略池或 Agent 排序。
+- 旧 verdict：`accepted`（已作废）；旧实现用 max paired improvement 选择 `ma60_hold`，只击败最弱基准，违反 plan-v1/v2“相对最佳基准”。
+- 修复门禁：四个预注册 baseline 必须各自达到最低 paired OOS 样本，随后以 paired mean 最小者识别 strongest baseline，只检验该 strongest baseline 的 bootstrap lower bound；不得混写为“所有 baseline CI 均须通过”。
+- 历史 OOS 平均净收益：`buy_hold=0.007832`、`atr_chandelier_k3=-0.004929`、`ma20_hold=-0.003428`、`ma60_hold=-0.023821`、`zuoyi_defense=0.004366`、`zuoyi_atr_combo=0.005706`。该旧运行只能作为 bug 证据，修复后必须重跑，不能直接据此登记新 verdict。
 
 ## 结论
 
-实现、identity pin、fail-closed 语义、工程回归与真实 OOS 均已完成。Issue #29 可在本 verdict 文档 PR 合并并把最终证据回写 Issue 后关闭。
+实现与历史 OOS 证据已核验；旧 verdict 因门禁 bug 作废。完成修复后，主会话须运行定向测试并在 immutable generations 上重跑 OOS，确认新的 verdict 后再关闭 Issue #29。

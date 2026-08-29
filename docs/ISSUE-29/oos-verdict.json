@@ -64,5 +64,8 @@
     "accepted 只表示冻结门禁相对 ma60_hold 通过，不表示六臂全局最优",
     "本次为确定性排序的 25 标的小样本 OOS；buy_hold 的 OOS 均值高于 zuoyi_defense",
     "首次从 2022-03-04 起跑被 000001.SZ 在 2022-07-19 至 2022-07-21 的 pinned markets 行缺口按设计阻断；最终窗口调整只基于 source coverage，不读取收益结果"
-  ]
+  ],
+  "superseded": true,
+  "pending_rerun": true,
+  "superseded_reason": "旧 evaluator 以 max paired improvement 选择最容易基准 ma60_hold，违反冻结的相对最佳基准门禁；修复后先要求四个预注册 baseline 均满足最低 paired 样本，再以 paired mean 最小者作为 strongest baseline 并检验其 bootstrap lower bound。"
 }

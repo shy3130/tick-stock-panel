@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 ARMS = ("buy_hold", "atr_chandelier_k3", "ma20_hold", "ma60_hold", "zuoyi_defense", "zuoyi_atr_combo")
+BASELINES = ("buy_hold", "atr_chandelier_k3", "ma20_hold", "ma60_hold")
 CENSOR_CODES = (
     "CENSOR_WARMUP_INSUFFICIENT", "CENSOR_MISSING_BAR", "CENSOR_INVALID_OPEN",
     "CENSOR_SUSPENDED", "CENSOR_BUY_LIMIT_UP", "CENSOR_HORIZON_INCOMPLETE",
@@ -185,6 +186,20 @@ def _exit_for_line(
     return "horizon_close", float(last["close"]), len(horizon_idx), None, {}
 
 
+def _paired_verdict(paired: dict[str, tuple[float, float | None]], complete_count: int) -> dict[str, Any]:
+    """Apply the frozen strongest-baseline gate without post-hoc arm selection."""
+    binding_arm, (binding_mean, binding_low) = min(
+        paired.items(), key=lambda item: item[1][0]
+    )
+    if binding_mean > 0 and binding_low is not None and binding_low > 0:
+        value = "accepted"
+        rule = f"paired bootstrap seed=42 rounds={BOOTSTRAP_ROUNDS} vs strongest baseline {binding_arm} (all preregistered baselines sampled)"
+    else:
+        value = "rejected"
+        rule = f"paired bootstrap seed=42 rounds={BOOTSTRAP_ROUNDS} shows no stable increment vs strongest baseline {binding_arm}"
+    return {"value": value, "oos_complete_segments": complete_count, "minimum_required": MIN_OOS_SEGMENTS, "rule": rule}
+
+
 def evaluate_zuoyi_defense(
     reader: Any, *, start: date, end: date, symbols: list[str], oos_start: date,
     cost_bps: float = 10.0, market_facts_reader: Any = None,
@@ -350,19 +365,18 @@ def evaluate_zuoyi_defense(
     }
     zuoyi_map = {s["entry_id"]: s["net_return"] for s in segments_by_arm["zuoyi_defense"] if s["status"] == "complete" and _signal_date(s) >= oos_start}
     paired: dict[str, tuple[float, float | None]] = {}
-    for arm in ("buy_hold", "atr_chandelier_k3", "ma20_hold", "ma60_hold"):
+    for arm in BASELINES:
         base_map = {s["entry_id"]: s["net_return"] for s in segments_by_arm[arm] if s["status"] == "complete" and _signal_date(s) >= oos_start}
         pairs = [zuoyi_map[eid] - base_map[eid] for eid in zuoyi_map.keys() & base_map.keys()]
         if len(pairs) >= MIN_OOS_SEGMENTS:
             paired[arm] = (sum(pairs) / len(pairs), _bootstrap_low(pairs))
-    if len(zuoyi_map) < MIN_OOS_SEGMENTS or not paired:
-        return _unavailable("UNAVAILABLE_INVALID_PROVENANCE", f"insufficient paired OOS complete segments: {len(zuoyi_map)} < {MIN_OOS_SEGMENTS}", request, prov)
-    best_arm, (best_mean, best_low) = max(paired.items(), key=lambda item: item[1][0])
-    verdict = (
-        {"value": "accepted", "oos_complete_segments": len(zuoyi_map), "minimum_required": MIN_OOS_SEGMENTS, "rule": f"paired bootstrap seed=42 rounds={BOOTSTRAP_ROUNDS} vs {best_arm}"}
-        if best_mean > 0 and best_low is not None and best_low > 0
-        else {"value": "rejected", "oos_complete_segments": len(zuoyi_map), "minimum_required": MIN_OOS_SEGMENTS, "rule": "paired OOS comparison shows no stable increment"}
-    )
+    if len(zuoyi_map) < MIN_OOS_SEGMENTS or len(paired) < len(BASELINES):
+        return _unavailable(
+            "UNAVAILABLE_INVALID_PROVENANCE",
+            f"insufficient paired OOS complete segments: zuoyi {len(zuoyi_map)} < {MIN_OOS_SEGMENTS} or baselines paired {sorted(paired)} != {sorted(BASELINES)}",
+            request, prov,
+        )
+    verdict = _paired_verdict(paired, len(zuoyi_map))
     return {
         "status": "ok", "definition_version": "v3", "request": request,
         "parameters": {"window": 3, "tie_break": "latest", "inclusion": "strict", "recovery": "no_cancel", "atr_k": 3},

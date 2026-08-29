@@ -1,6 +1,6 @@
 # ISSUE-29 左一K线防守位移动止盈研究（zuoyi-defense）
 
-> 状态：**真实 OOS 已完成，冻结门禁 verdict=`accepted`；待本次 verdict 文档 PR 合并后关闭 Issue**。
+> 状态：**历史 OOS 已作废，严格最佳基准门禁修复后待重跑；重跑确认前不关闭 Issue**。
 > 日期：2026-08-29 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#29](https://github.com/wf2311/fm-workbench/issues/29)
 
 ## 这是什么
@@ -70,8 +70,8 @@
 
 - canonical generation `20260829T002957-4b1bfcad`，canonical manifest SHA-256 `0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372`。
 - markets generation `20260829T000704`，markets manifest SHA-256 `a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`，校验模式 `manifest_sha256_match`。
-- 确定性 25 标的 OOS 得到 75 个完整 segment（门槛 20）；冻结规则相对 `ma60_hold` 得到 `accepted`。
-- 该 verdict 不表示六臂全局最优：`buy_hold` OOS 均值 `0.007832`，高于 `zuoyi_defense` 的 `0.004366`；结果不触发生产策略、默认短线池或 Agent 排序变更。
+- 历史确定性 25 标的 OOS 得到 75 个完整 segment；旧实现因仅相对 `ma60_hold` 判定而作废。修复后先要求四个预注册 baseline 均有最低 paired 样本，再以 paired mean 最小者识别 strongest baseline 并检验其 bootstrap lower bound。
+- 历史结果中 `buy_hold` OOS 均值 `0.007832`，高于 `zuoyi_defense` 的 `0.004366`；这只证明旧 `accepted` 不成立，不替代修复后的重跑 verdict，也不触发任何生产变更。
 
 机器可读摘要见 [oos-verdict.json](oos-verdict.json)，执行与首个 source-coverage 阻断记录见 [verification.md](verification.md)。
 
