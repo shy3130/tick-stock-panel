@@ -5,7 +5,19 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+from app.data_providers.fquant.daily_market_research import (
+    PublishedDailyMarketFactsReader,
+)
 
 from app.services.macd_stages import (
     MacdStagesRequest,
@@ -76,8 +88,122 @@ from app.services.daily_open_anchor_filter import (
     resolve_daily_open_anchor_canonical,
     unavailable_payload,
 )
+from app.services.daily_event_research import (
+    DailyEventRequest,
+    DailyEventResponse,
+    UnavailabilityReason as DailyEventUnavailabilityReason,
+    evaluate_daily_events,
+)
+from app.services.daily_event_research.escape_risk import SIGNAL_CAPABILITIES
+from app.services.daily_event_research.models import (
+    unavailable_response as unavailable_daily_event_response,
+)
+from app.services.daily_event_research.production import (
+    evaluate_escape_risk_production,
+    evaluate_pre_surge_production,
+)
+from app.services.research_sealed_data import PublishedCanonicalDailyReader
+from app.services.retrieval_routing_research import (
+    MAX_PLACEBO_ROUNDS,
+    DEFAULT_FEATURE_IDS,
+    MIN_PANEL_SYMBOLS,
+    MIN_PLACEBO_ROUNDS,
+    RetrievalRoutingRequest,
+    RetrievalRoutingResponse,
+    RoutingUnavailableReason,
+    build_pinned_factor_panel,
+    evaluate_retrieval_routing,
+    unavailable_routing_response,
+)
+from app.services.negative_exclusion import (
+    capability_report as negative_exclusion_capability_report,
+)
+from app.services.negative_exclusion_production import (
+    evaluate_negative_exclusion_production,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
+def _normalize_research_symbols(symbols: list[str]) -> list[str]:
+    normalized = [symbol.strip().upper() for symbol in symbols]
+    if any(re.fullmatch(r"^\d{6}\.(SH|SZ|BJ)$", symbol) is None for symbol in normalized):
+        raise ValueError("symbols must be canonical A-share identifiers")
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("symbols must be unique")
+    return normalized
+
+
+class PreSurgeEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(min_length=1, max_length=200)
+    start: date
+    oos_start: date
+    end: date
+    benchmark_symbol: str = Field(
+        default="000300.SH",
+        pattern=r"^\d{6}\.(SH|SZ|BJ)$",
+    )
+    cost_bps: float = Field(default=10.0, ge=0.0, le=1000.0)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, symbols: list[str]) -> list[str]:
+        return _normalize_research_symbols(symbols)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if not self.start < self.oos_start <= self.end:
+            raise ValueError("start < oos_start <= end required")
+        return self
+
+
+class EscapeRiskEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(min_length=1, max_length=200)
+    start: date
+    end: date
+    cost_bps: float = Field(default=10.0, ge=0.0, le=1000.0)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, symbols: list[str]) -> list[str]:
+        return _normalize_research_symbols(symbols)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.start > self.end:
+            raise ValueError("start must be <= end")
+        return self
+
+
+class RetrievalRoutingEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(min_length=MIN_PANEL_SYMBOLS, max_length=200)
+    start: date
+    end: date
+    label_horizon: int = Field(default=1, ge=1, le=20)
+    cost_bps: float = Field(default=10.0, ge=0.0, le=1000.0)
+    placebo_rounds: int = Field(
+        default=200,
+        ge=MIN_PLACEBO_ROUNDS,
+        le=MAX_PLACEBO_ROUNDS,
+    )
+    feature_names: list[str] | None = None
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, symbols: list[str]) -> list[str]:
+        return _normalize_research_symbols(symbols)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.start >= self.end:
+            raise ValueError("start must be < end")
+        return self
 
 
 class DailyOpenAnchorEvaluateIn(BaseModel):
@@ -142,6 +268,7 @@ def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
     try:
         try:
             from app.data_providers.registry import get_active_provider_name, get_provider
+
             provider = get_provider(get_active_provider_name(capability="ordered_trans_research"))
         except Exception:
             return evaluate_mtf_direction(body, reader=None)
@@ -193,6 +320,134 @@ def evaluate_n_shape_factor(body: NShapeEvaluateIn, request: Request):
         close = getattr(reader, "close", None)
         if callable(close):
             close()
+
+
+class NShapePullbackDepthEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] | None = Field(default=None, max_length=1000)
+    reversal_mode: Literal["fixed_pct", "atr_multiple"] = "fixed_pct"
+    reversal_value: float = Field(default=0.08, gt=0.0, le=10.0)
+    cost_bps: float = Field(default=20.0, ge=0.0, le=1000.0)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, symbols: list[str] | None) -> list[str] | None:
+        return None if symbols is None else _normalize_research_symbols(symbols)
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if self.start > self.end:
+            raise ValueError("start must be <= end")
+        if self.reversal_mode == "fixed_pct" and self.reversal_value >= 1:
+            raise ValueError("fixed_pct reversal_value must be < 1")
+        return self
+
+
+class NegativeExclusionEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(min_length=1, max_length=200)
+    start: date
+    oos_start: date
+    end: date
+    enabled_classes: list[Literal["v2", "v4", "v5"]] | None = None
+    horizon_days: int = Field(default=10, ge=1, le=60)
+    cost_bps: float = Field(default=20.0, ge=0.0, le=1000.0)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, symbols: list[str]) -> list[str]:
+        return _normalize_research_symbols(symbols)
+
+    @field_validator("enabled_classes")
+    @classmethod
+    def unique_classes(
+        cls, classes: list[Literal["v2", "v4", "v5"]] | None
+    ) -> list[Literal["v2", "v4", "v5"]] | None:
+        if classes is not None and len(classes) != len(set(classes)):
+            raise ValueError("enabled_classes must be unique")
+        return classes
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if not self.start < self.oos_start <= self.end:
+            raise ValueError("start < oos_start <= end required")
+        return self
+
+
+@router.post("/factors/n-shape-pullback-depth/evaluate")
+def evaluate_n_shape_pullback_depth_factor(
+    body: NShapePullbackDepthEvaluateIn,
+    request: Request,
+):
+    """Evaluate causal zigzag pullback buckets without terminal-pivot leakage."""
+    from app.services.n_shape_pullback_depth import (
+        evaluate_n_shape_pullback_depth,
+        resolve_n_shape_reader,
+    )
+
+    reader = resolve_n_shape_reader(getattr(request.app.state, "repo", None))
+    try:
+        return evaluate_n_shape_pullback_depth(
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            reader=reader,
+            reversal_mode=body.reversal_mode,
+            reversal_value=body.reversal_value,
+            cost_bps=body.cost_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
+
+
+@router.get("/negative-exclusion")
+def get_negative_exclusion_capability():
+    """Expose V1/V3 gaps and the available V2/V4/V5 research classes."""
+    return {
+        "status": "partially_available",
+        "classes": negative_exclusion_capability_report(),
+        "promoted": False,
+    }
+
+
+@router.post("/factors/negative-exclusion/evaluate")
+def evaluate_negative_exclusion_factor(
+    body: NegativeExclusionEvaluateIn,
+    request: Request,
+):
+    """Compare the pinned OOS pool before/after each available exclusion."""
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with hold_firm_reader_scope(repo) as scope:
+            return evaluate_negative_exclusion_production(
+                symbols=body.symbols,
+                start=body.start,
+                oos_start=body.oos_start,
+                end=body.end,
+                canonical_reader=scope.canonical,
+                market_facts_reader=scope.market_facts,
+                universe_reader=scope.universe_reader,
+                enabled_classes=body.enabled_classes,
+                horizon_days=body.horizon_days,
+                cost_bps=body.cost_bps,
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        return {
+            "schema": "negative_exclusion_research/production/v1",
+            "status": "unavailable",
+            "reason": exc.reason.value,
+            "detail": exc.detail,
+            "capabilities": negative_exclusion_capability_report(),
+            "promoted": False,
+        }
 
 
 class HypothesisIn(BaseModel):
@@ -420,7 +675,6 @@ class SingleYangEvaluateIn(BaseModel):
     cost_bps: float = Field(default=10.0, ge=0)
 
 
-
 @router.get("/daily-open-anchor")
 def get_daily_open_anchor(request: Request):
     repo = getattr(request.app.state, "repo", None)
@@ -446,9 +700,12 @@ def evaluate_daily_open_anchor_factor(body: DailyOpenAnchorEvaluateIn, request: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         from app.services.daily_open_anchor_filter import UnavailableError
+
         if isinstance(exc, UnavailableError):
             return unavailable_payload([exc.reason], exc.detail)
         raise HTTPException(status_code=503, detail="daily_open_anchor_reader_unavailable") from exc
+
+
 class ZuoyiDefenseEvaluateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -475,7 +732,11 @@ class ZuoyiDefenseOkResponse(BaseModel):
     def validate_closed_contract(self):
         arms = self.model_extra.get("arms") if self.model_extra else None
         verdict = self.model_extra.get("verdict") if self.model_extra else None
-        names = [item.get("arm") for item in arms] if isinstance(arms, list) and all(isinstance(item, dict) for item in arms) else []
+        names = (
+            [item.get("arm") for item in arms]
+            if isinstance(arms, list) and all(isinstance(item, dict) for item in arms)
+            else []
+        )
         if names != list(ARMS):
             raise ValueError("response arms must contain the six approved arms in order")
         if not isinstance(verdict, dict) or verdict.get("value") not in {"accepted", "rejected"}:
@@ -493,6 +754,8 @@ class ZuoyiDefenseUnavailableResponse(BaseModel):
         if code not in UNAVAILABLE_CODES:
             raise ValueError("unapproved unavailable code")
         return self
+
+
 ZuoyiDefenseResponse = ZuoyiDefenseOkResponse | ZuoyiDefenseUnavailableResponse
 
 
@@ -504,7 +767,13 @@ def get_zuoyi_defense(request: Request):
     try:
         capability = assess_zuoyi_capability(reader)
         generation = getattr(markets, "generation", lambda: "")() if markets else ""
-        digest = getattr(markets, "pin_manifest_sha256", getattr(markets, "manifest_sha256", lambda: ""))() if markets else ""
+        digest = (
+            getattr(
+                markets, "pin_manifest_sha256", getattr(markets, "manifest_sha256", lambda: "")
+            )()
+            if markets
+            else ""
+        )
         identity_fn = getattr(markets, "pin_identity_verified", None) if markets else None
         verified = identity_fn() if identity_fn is not None else bool(generation and digest)
         market_available = bool(generation and digest and verified)
@@ -512,7 +781,14 @@ def get_zuoyi_defense(request: Request):
             capability["available"] = False
             capability["status"] = "unavailable"
             capability.setdefault("reasons", []).append("markets_pin_identity_unverified")
-        capability["markets"] = {"available": market_available, "generation": generation, "manifest_sha256": digest, "pin_verification_mode": getattr(markets, "pin_verification_mode", lambda: "legacy")() if markets else "missing"}
+        capability["markets"] = {
+            "available": market_available,
+            "generation": generation,
+            "manifest_sha256": digest,
+            "pin_verification_mode": getattr(markets, "pin_verification_mode", lambda: "legacy")()
+            if markets
+            else "missing",
+        }
         return {**capability, "definition": ZUOYI_DEFINITION}
     finally:
         close = getattr(markets, "close", None)
@@ -531,8 +807,13 @@ async def evaluate_zuoyi_defense_factor(request: Request):
     markets = getattr(repo, "generation_pinned_market_facts_reader", None)
     try:
         return evaluate_zuoyi_defense(
-            reader, start=body.start, end=body.end, symbols=body.symbols,
-            oos_start=body.oos_start, cost_bps=body.cost_bps, market_facts_reader=markets,
+            reader,
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+            cost_bps=body.cost_bps,
+            market_facts_reader=markets,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -540,6 +821,7 @@ async def evaluate_zuoyi_defense_factor(request: Request):
         close = getattr(markets, "close", None)
         if close is not None:
             close()
+
 
 @router.get("/single-yang-no-break")
 def get_single_yang_no_break(request: Request):
@@ -599,8 +881,12 @@ def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest, request: Request)
     """弱转强研究因子评估；production reader 由请求拥有并在 finally 关闭。"""
     from app.services.weak_to_strong_research_data import production_reader_scope
 
-    with production_reader_scope(getattr(request.app.state, "repo", None), body.signal_date.year) as reader:
+    with production_reader_scope(
+        getattr(request.app.state, "repo", None), body.signal_date.year
+    ) as reader:
         return evaluate_weak_to_strong_v1(body, reader=reader)
+
+
 @router.get("/hold-firm-patterns", response_model=CapabilityResult)
 def get_hold_firm_patterns_capability(request: Request):
     """Return pinned capability for the four hold-firm detectors."""
@@ -616,9 +902,7 @@ def get_hold_firm_patterns_capability(request: Request):
 
 
 @router.post("/factors/hold-firm-patterns/evaluate", response_model=HoldFirmResponse)
-def evaluate_hold_firm_patterns_factor(
-    body: HoldFirmPatternsRequest, request: Request
-):
+def evaluate_hold_firm_patterns_factor(body: HoldFirmPatternsRequest, request: Request):
     """Validate and delegate; research I/O remains in the evaluator service."""
     repo = getattr(request.app.state, "repo", None)
     try:
@@ -633,3 +917,129 @@ def evaluate_hold_firm_patterns_factor(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/factors/dugu-trend/evaluate",
+    response_model=DailyEventResponse,
+)
+def evaluate_dugu_trend_factor(body: DailyEventRequest, request: Request):
+    """Evaluate the frozen multi-stage trend detector on pinned daily inputs."""
+    repo = getattr(request.app.state, "repo", None)
+    canonical = PublishedCanonicalDailyReader.from_repository(repo)
+    if canonical is None:
+        return unavailable_daily_event_response(
+            body,
+            DailyEventUnavailabilityReason.CANONICAL_READER,
+        )
+    try:
+        facts = PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return unavailable_daily_event_response(
+            body,
+            DailyEventUnavailabilityReason.MARKET_FACTS,
+        )
+    try:
+        return evaluate_daily_events(body, canonical, facts)
+    finally:
+        facts.close()
+
+
+@router.post("/factors/pre-surge-features/evaluate")
+def evaluate_pre_surge_features_factor(body: PreSurgeEvaluateIn, request: Request):
+    """Evaluate F1-F4 and their intersection with independent OOS verdicts."""
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with hold_firm_reader_scope(repo) as scope:
+            return evaluate_pre_surge_production(
+                symbols=body.symbols,
+                start=body.start,
+                oos_start=body.oos_start,
+                end=body.end,
+                canonical_reader=scope.canonical,
+                market_facts_reader=scope.market_facts,
+                universe_reader=scope.universe_reader,
+                benchmark_symbol=body.benchmark_symbol,
+                cost_bps=body.cost_bps,
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        return {
+            "schema": "daily_event_research/pre_surge/v1",
+            "status": "unavailable",
+            "reason": exc.reason.value,
+            "detail": exc.detail,
+            "promoted": False,
+        }
+
+
+@router.get("/escape-risk")
+def get_escape_risk_capability():
+    """Expose the daily/minute capability boundary without approximations."""
+    return {
+        "status": "available",
+        "signals": dict(SIGNAL_CAPABILITIES),
+        "promoted": False,
+    }
+
+
+@router.post("/factors/escape-risk/evaluate")
+def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
+    """Evaluate daily S1/S8/S9; minute-only signals remain unavailable."""
+    repo = getattr(request.app.state, "repo", None)
+    canonical = PublishedCanonicalDailyReader.from_repository(repo)
+    if canonical is None:
+        return {
+            "schema": "daily_event_research/escape_risk/v1",
+            "status": "unavailable",
+            "reason": "unavailable_canonical_reader",
+            "capabilities": dict(SIGNAL_CAPABILITIES),
+            "promoted": False,
+        }
+    return evaluate_escape_risk_production(
+        symbols=body.symbols,
+        start=body.start,
+        end=body.end,
+        canonical_reader=canonical,
+        cost_bps=body.cost_bps,
+    )
+
+
+@router.post(
+    "/factors/mera-routing/evaluate",
+    response_model=RetrievalRoutingResponse,
+)
+def evaluate_mera_routing_factor(
+    body: RetrievalRoutingEvaluateIn,
+    request: Request,
+):
+    """Evaluate the leak-safe daily retrieval-routing proxy, not minute MERA."""
+    routing_request = RetrievalRoutingRequest(
+        label_horizon=body.label_horizon,
+        cost_bps=body.cost_bps,
+        placebo_rounds=body.placebo_rounds,
+        feature_names=body.feature_names,
+    )
+    repo = getattr(request.app.state, "repo", None)
+    canonical = PublishedCanonicalDailyReader.from_repository(repo)
+    if canonical is None:
+        return unavailable_routing_response(
+            routing_request,
+            RoutingUnavailableReason.PANEL_COVERAGE,
+            "canonical history is not published",
+        )
+    try:
+        panel = build_pinned_factor_panel(
+            canonical,
+            body.symbols,
+            body.start,
+            body.end,
+            feature_ids=body.feature_names or DEFAULT_FEATURE_IDS,
+            label_horizon=body.label_horizon,
+        )
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        return unavailable_routing_response(
+            routing_request,
+            RoutingUnavailableReason.PANEL_COVERAGE,
+            str(exc),
+        )
+    return evaluate_retrieval_routing(panel, routing_request)

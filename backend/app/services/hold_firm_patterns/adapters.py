@@ -296,6 +296,30 @@ class PinnedMarketFactsSource:
         return (symbol, day) in self._rows
 
 
+def pinned_market_facts_source(
+    market_facts: object,
+    symbols: Sequence[str],
+    days: Sequence[date],
+) -> PinnedMarketFactsSource:
+    """Freeze and normalize exact-day PIT market facts for one request."""
+    if isinstance(market_facts, PinnedMarketFacts):
+        bundle = market_facts
+    else:
+        rows: dict[tuple[str, date], object] = {}
+        if days:
+            start, end = min(days), max(days)
+            load = getattr(market_facts, "limit_band_facts")
+            for symbol in symbols:
+                for day, fact in load(symbol, start, end).items():
+                    rows[(symbol, day)] = fact
+        bundle = PinnedMarketFacts(
+            generation=str(getattr(market_facts, "generation")()),
+            manifest_sha256=str(getattr(market_facts, "manifest_sha256")()),
+            rows=rows,
+        )
+    return PinnedMarketFactsSource.from_bundle(bundle)
+
+
 def _convert_fact(symbol: str, day: date, fact: Any) -> MarketFactsRow | None:
     raw = tuple(
         _finite(getattr(fact, name, None))
