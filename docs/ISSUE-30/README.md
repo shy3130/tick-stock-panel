@@ -1,7 +1,7 @@
 # ISSUE-30 日线开盘价锚定入场过滤研究（daily-open-anchor-filter）
 
-> 状态：**完成待 PR（含 2026-08-28 PR#33 后续日型/波动率修正：主会话 focused 59 passed、后端全量 3522 passed / 3 skipped / 8 warnings / 119.24s、Ruff F/E9 通过、独立最终 review Approve）**。
-> 日期：2026-08-28 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
+> 状态：**真实 OOS 已完成，冻结门禁 verdict=`inconclusive`（原稿臂样本不足）；待本次 verdict 文档 PR 合并后关闭 Issue**。
+> 日期：2026-08-29 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
 
 ## 这是什么
 
@@ -29,6 +29,7 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 | [final-design.md](final-design.md) | plan-v3 权威副本（已批准） |
 | [coding-review.md](coding-review.md) | 独立 coding review 九项修复与 strict reader/依赖处置记录 |
 | [verification.md](verification.md) | 主会话首验与集成后证据、最终 review 结论 |
+| [oos-verdict.json](oos-verdict.json) | 真实 OOS 请求、immutable provenance、四臂/TNT 对照与 verdict 的机器可读摘要 |
 
 ## 代码落点（已实现，主会话验证已通过）
 
@@ -49,7 +50,7 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 - [x] 覆盖阳/阴线锚、高低平开、单边下跌、跳空穿越、新锚切换、无信号、停复牌、缺数据、随机确定性和涨跌停夹具。
 - [x] 定向测试、后端全量回归与 Ruff F/E9 通过；独立 coding review 无 blocker/major。
 
-实现及依赖集成已完成；最终 review Approve（无 blocker/major/minor），证据见 [verification.md](verification.md)。
+实现、依赖集成、工程验证和真实 OOS 均已完成；最终工程 review 无 blocker/major。OOS 因原稿臂仅 9 笔而按冻结的 30 笔门槛得到 `inconclusive`，不是失败或通过。
 
 ## scripts/tnt 单边趋势日对照（PR #32 后遗漏修正，已完成待 PR）
 
@@ -71,6 +72,16 @@ PR #33 仅完成 TNT 对照首修；其后发现原 `trend_bucket` 的 5 日动�
 - 新增 `volatility_bucket`：执行日 `true_range_pct=max(high-low, abs(high-prev_close), abs(low-prev_close))/prev_close`，基准为执行日前连续 20 个完整市场日同口径 TR% 的 `statistics.median`；比例 `>=1.50`/`<=0.75`/其余分别为 high/low/normal，缺历史、前收或基准非正为 `insufficient_history`。
 - 两项都是 execution-day、post-entry、read-only diagnosis，不参与 precheck、retention 或 engine 输入；`volatility_bucket` 已进入 candidate、ledger、event、segment layers。`SCHEMA_VERSION=2`、`EXECUTION_LEDGER_VERSION=3`。
 - TNT 对照来源改为实际存在的 Obsidian 笔记 `clipper/2026-08-15-bollinger-volatility-t-strategy-research.md`；笔记列出的 `scrpits/tnt/*.py` 均标记 `missing_not_in_repository`，不进行代码复现。本波已由主会话验证闭合：focused **59 passed**、后端全量 **3522 passed / 3 skipped / 8 warnings / 119.24s**、Ruff（F/E9）通过、独立最终 review **Approve（无 blocker/major/minor）**，证据见 [verification.md](verification.md)。
+
+## 真实 OOS 收口（2026-08-29）
+
+- canonical generation `20260829T002957-4b1bfcad`，manifest SHA-256 `0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372`。
+- markets generation `20260829T000704`，manifest SHA-256 `a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`。
+- 确定性 10 标的、370 天上限运行 `status=ok`；整体 OOS 中 none 臂 55 笔，original 臂仅 9 笔，低于预注册最少 30 笔，verdict=`inconclusive`。
+- TNT 分层同样不足：`single_side_down` original 为 0 笔，`range` original 为 7 笔，两桶均 `inconclusive`。
+- 结果不支持将过滤器升级为 validated，也不进入默认策略池、Agent 排序或真实交易。
+
+机器可读摘要见 [oos-verdict.json](oos-verdict.json)，完整执行解释见 [verification.md](verification.md)。
 
 ## 红线
 

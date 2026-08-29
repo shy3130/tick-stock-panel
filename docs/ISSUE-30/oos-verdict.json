@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "issue": 30,
+  "status": "ok",
+  "request": {
+    "start": "2025-02-25",
+    "oos_start": "2025-11-26",
+    "end": "2026-08-28",
+    "cohort_rule": "确定性 canonical symbol 升序前 10 只",
+    "symbol_count": 10,
+    "maximum_window_days": 370
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "execution_ledger_version": 3,
+    "calendar_basis": "pinned_market_days"
+  },
+  "verdict": {
+    "label": "inconclusive",
+    "basis": "oos",
+    "applicability": "inconclusive_overall",
+    "rules": [
+      "min_oos_trades=30",
+      "stop_hit_rate(original) < stop_hit_rate(none)",
+      "expectancy(original) >= expectancy(none)"
+    ]
+  },
+  "overall_oos": {
+    "none": {
+      "n_trades": 55,
+      "stop_hit_rate": 0.345455,
+      "expectancy": -0.015449
+    },
+    "original": {
+      "n_trades": 9,
+      "stop_hit_rate": 0.111111,
+      "expectancy": -0.014426
+    }
+  },
+  "tnt_open_anchor_contrast": {
+    "single_side_down": {
+      "none": {
+        "n_trades": 12,
+        "stop_hit_rate": 0.5,
+        "expectancy": -0.047312
+      },
+      "original": {
+        "n_trades": 0,
+        "stop_hit_rate": null,
+        "expectancy": null
+      },
+      "status": "inconclusive"
+    },
+    "range": {
+      "none": {
+        "n_trades": 33,
+        "stop_hit_rate": 0.393939,
+        "expectancy": -0.016162
+      },
+      "original": {
+        "n_trades": 7,
+        "stop_hit_rate": 0.142857,
+        "expectancy": -0.016067
+      },
+      "status": "inconclusive"
+    }
+  },
+  "limitations": [
+    "original OOS 仅 9 笔，低于冻结的 30 笔门槛，因此止损率和期望差异不能升级为 validated",
+    "single_side_down 原稿臂为 0 笔、range 原稿臂为 7 笔，两个预注册 regime 均为 inconclusive",
+    "本结果不进入默认策略池、Agent 排序或真实交易"
+  ]
+}

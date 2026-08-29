@@ -1,7 +1,7 @@
 # ISSUE-30 验证记录（verification）
 
 关联：[Issue #30](https://github.com/wf2311/fm-workbench/issues/30) · [README](README.md) · [coding-review.md](coding-review.md) · [final-design.md](final-design.md)  
-本文件记录主会话执行的实际验证证据；#30 worktree 自身按主会话指令不运行测试/构建。日期：2026-08-28 · 基线：`7bf2982`。
+本文件记录主会话执行并核对的工程验证与真实 OOS 证据。最新日期：2026-08-29 · 初始基线：`7bf2982`。
 
 ## 主会话验证证据
 
@@ -19,11 +19,11 @@
 - 最后 2 项由两件事收口：
   1. **strict reader**：#29 严格 hash pin 版 `daily_market_research.py`（legacy string pin → `pin_identity_verified()` false；mapping pin 必须含 `generation` + `manifest_sha256`），#30 已逐字同步并强制 identity gate；
   2. **Issue #29 canonical publisher 依赖**：#30 不复制 `canonical_history` publisher，PR 明确依赖先合并 #29。
-- **终审已完成**：独立最终 review 结论 **Approve，无 blocker / major / minor**（集成证据见下节）。#29/PR31 已合并，#29 base 已集成进 #30，仅剩创建 PR。
+- **终审已完成**：独立最终 review 结论 **Approve，无 blocker / major / minor**（集成证据见下节）。#29/PR31 已合并并集成；当时仅剩创建 #30 PR，后续也已完成。
 
-## 剩余工作
+## 当时剩余工作（已完成）
 
-1. 创建 PR（#30 → 集成分支）。
+1. 创建并合并实现 PR：已完成；本节保留为历史时序。
 
 ## 依赖集成后证据（合并 PR31/#29 base 进 #30）
 
@@ -94,6 +94,35 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 | 独立复核 | **Approved；P1 优先级修正后二次复核通过** |
 
 本波状态为「Follow-up 修复完成，待 PR」。
+
+## 真实 OOS verdict（2026-08-29）
+
+### Immutable provenance 与请求
+
+- canonical generation：`20260829T002957-4b1bfcad`
+- canonical manifest SHA-256：`0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372`
+- markets generation：`20260829T000704`
+- markets manifest SHA-256：`a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8`
+- execution ledger：v3；日历口径 `pinned_market_days`
+- 请求：`2025-02-25` 至 `2026-08-28`，OOS 起点 `2025-11-26`；确定性排序 10 标的；窗口 370 天上限。
+
+### 整体 OOS
+
+| 臂 | n_trades | stop_hit_rate | expectancy |
+|---|---:|---:|---:|
+| none | 55 | 0.345455 | -0.015449 |
+| original | 9 | 0.111111 | -0.014426 |
+
+原稿臂表面上止损率较低且 expectancy 略高，但仅 9 笔，未达到冻结的 `min_oos_trades=30`。因此 verdict 必须为 `inconclusive`，不得升级为 `validated`。
+
+### TNT 预注册分层
+
+| regime | none | original | status |
+|---|---|---|---|
+| `single_side_down` | 12 笔；stop 0.500000；expectancy -0.047312 | 0 笔 | `inconclusive` |
+| `range` | 33 笔；stop 0.393939；expectancy -0.016162 | 7 笔；stop 0.142857；expectancy -0.016067 | `inconclusive` |
+
+最终 `applicability=inconclusive_overall`；结果不进入默认策略池、Agent 排序或真实交易。机器可读摘要见 [oos-verdict.json](oos-verdict.json)。
 
 ## 边界
 
