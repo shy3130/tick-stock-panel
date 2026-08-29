@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Mapping, Sequence
 
-from app.data_providers.fquant.daily_market_research import PinnedMarketFacts
 from app.services.hold_firm_patterns.adapters import (
     PinnedCanonicalDailyReader,
     PinnedMarketFactsSource,
@@ -16,6 +15,7 @@ from app.services.hold_firm_patterns.adapters import (
     ProductionReaderScope,
     ProductionReaderScopeUnavailable,
     presence_universe_identity,
+    pinned_market_facts_source,
     production_reader_scope,
     request_windows,
 )
@@ -130,26 +130,6 @@ def assess_capability(
             problems=(str(exc),),
         )
     return CapabilityResult(status=HoldFirmStatus.OK, identities=identities)
-
-
-def _market_bundle(
-    market_facts: object,
-    symbols: Sequence[str],
-    days: Sequence[date],
-) -> PinnedMarketFacts:
-    if isinstance(market_facts, PinnedMarketFacts):
-        return market_facts
-    rows: dict[tuple[str, date], object] = {}
-    if days:
-        start, end = min(days), max(days)
-        for symbol in symbols:
-            for day, fact in getattr(market_facts, "limit_band_facts")(symbol, start, end).items():
-                rows[(symbol, day)] = fact
-    return PinnedMarketFacts(
-        generation=str(getattr(market_facts, "generation")()),
-        manifest_sha256=str(getattr(market_facts, "manifest_sha256")()),
-        rows=rows,
-    )
 
 
 def _one_price_at(value: float, bar: Bar, tolerance: float = PRICE_ABS_TOL) -> bool:
@@ -753,8 +733,7 @@ def evaluate_hold_firm_patterns(
         return _unavailable(UnavailabilityReason.CANONICAL_READER)
 
     try:
-        bundle = _market_bundle(market_facts, request.symbols, full_days)
-        facts = PinnedMarketFactsSource.from_bundle(bundle)
+        facts = pinned_market_facts_source(market_facts, request.symbols, full_days)
         bars_by_symbol = {
             symbol: {bar.date: bar for bar in canonical.load_bars(symbol, bar_start, bar_end)}
             for symbol in request.symbols
