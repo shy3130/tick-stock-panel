@@ -21,6 +21,7 @@ from app.config import settings
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 OPENAI_PROVIDER = "openai"
+ORCAROUTER_PROVIDER = "orcarouter"
 CODEX_CLI_PROVIDER = "codex_cli"
 CODEX_DEFAULT_COMMAND = "codex"
 CODEX_SUPPORTED_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}

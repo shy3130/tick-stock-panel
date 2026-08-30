@@ -38,7 +38,7 @@ TickFlow 是内置默认数据源;同时支持插件化接入第三方数据源(
 用于自然语言生成策略。**所有配置留空即跳过**,不影响核心功能。支持任意 OpenAI 兼容接口。
 
 ```ini
-AI_PROVIDER=openai_compat              # openai_compat | ollama
+AI_PROVIDER=openai_compat              # openai_compat | ollama | orcarouter
 AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=                            # 留空 = 关闭 AI
 AI_MODEL=deepseek-chat
@@ -47,10 +47,10 @@ AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 
 | 配置项 | 说明 |
 | :--- | :--- |
-| `AI_PROVIDER` | `openai_compat`(OpenAI 兼容,支持 DeepSeek / 通义 / OpenAI 等)或 `ollama`(本地模型) |
-| `AI_BASE_URL` | 接口地址,如 DeepSeek `https://api.deepseek.com/v1` |
+| `AI_PROVIDER` | `openai_compat`(OpenAI 兼容,支持 DeepSeek / 通义 / OpenAI 等)、`ollama`(本地模型)或 `orcarouter`(AI 网关,统一路由 100+ 模型,自适应路由/故障转移/零加成计费/护栏) |
+| `AI_BASE_URL` | 接口地址,如 DeepSeek `https://api.deepseek.com/v1`;OrcaRouter 用 `https://api.orcarouter.ai/v1` |
 | `AI_API_KEY` | 留空则关闭 AI 功能 |
-| `AI_MODEL` | 模型名,如 `deepseek-chat` |
+| `AI_MODEL` | 模型名,如 `deepseek-chat`;OrcaRouter 用命名空间模型名,如 `orcarouter/auto`(自动路由)或 `openai/gpt-5` |
 | `AI_DAILY_TOKEN_BUDGET` | 每日 token 预算,超限后当日不再调用 |
 
 接入示例见 [strategy.md](./strategy.md) 的「AI 生成策略」章节。

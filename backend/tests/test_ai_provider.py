@@ -208,6 +208,27 @@ def test_openai_kwargs_none_max_tokens_omits_limit():
     assert ai_provider._openai_kwargs(temperature=None, max_tokens=8) == {"max_tokens": 8}
 
 
+def test_orcarouter_provider_uses_openai_compat_path(monkeypatch):
+    """OrcaRouter is an OpenAI-compatible gateway (namespaced models); it goes through the
+    generic channel and must not attach OpenAI-specific reasoning params."""
+    assert ai_provider.ORCAROUTER_PROVIDER == "orcarouter"
+    stored = {
+        "ai_provider": "orcarouter",
+        "ai_reasoning_effort": "high",  # leftover, must not be sent
+        "ai_base_url": "https://api.orcarouter.ai/v1",
+        "ai_model": "orcarouter/auto",
+    }
+    monkeypatch.setattr(secrets_store, "load", lambda: stored)
+    monkeypatch.setattr(secrets_store, "get_ai_config", lambda key, default=None: stored.get(key, default))
+
+    kwargs = ai_provider._openai_kwargs(temperature=0.3, max_tokens=1000)
+    assert kwargs == {"max_tokens": 1000, "temperature": 0.3}
+    assert "reasoning_effort" not in kwargs
+
+    # like openai_compat, orcarouter is configured by an API key (not a Codex CLI login)
+    assert ai_provider.is_codex_cli_provider("orcarouter") is False
+
+
 def test_codex_prompt_none_max_tokens_skips_length_hint():
     prompt = ai_provider._codex_prompt([{"role": "user", "content": "hi"}], max_tokens=None)
     assert "Keep the final answer" not in prompt

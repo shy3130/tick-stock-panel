@@ -21,6 +21,7 @@ const toPositiveInt = (v: string) => {
 
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai'
+const ORCAROUTER_PROVIDER = 'orcarouter'
 const OPENAI_COMPAT_PROVIDER = 'openai_compat'
 const CODEX_COMMAND = 'codex'
 const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
@@ -62,6 +63,7 @@ const PRESETS: AiPreset[] = [
   { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。' },
   { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
   { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。' },
+  { label: 'OrcaRouter', provider: ORCAROUTER_PROVIDER, url: 'https://api.orcarouter.ai/v1', model: 'orcarouter/auto', website: 'https://www.orcarouter.ai', websiteLabel: 'orcarouter.ai', description: 'AI 网关，统一路由 100+ 模型，支持自适应路由、故障转移、零加成计费、可观测、护栏与智能体工具治理。' },
 ]
 
 const findPreset = (provider: string, baseUrl: string, codexCommand: string) => PRESETS.find(p => {
