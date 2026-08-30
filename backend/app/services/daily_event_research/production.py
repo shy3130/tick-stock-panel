@@ -23,6 +23,7 @@ from .escape_risk import (
     EscapeS9Detector,
     aggregate_escape_signals,
 )
+from .escape_risk_intraday import detect_intraday_escape_signals
 from .pre_surge import (
     ALL_VARIANTS,
     PreSurgeDetector,
@@ -255,8 +256,9 @@ def evaluate_escape_risk_production(
     end: date,
     canonical_reader: Any,
     cost_bps: float = 10.0,
+    intraday_reader: Any | None = None,
 ) -> dict[str, object]:
-    """Run the daily escape-risk detectors; minute signals stay unavailable."""
+    """Run all Issue #48 signals; missing intraday inputs censor only S2-S7/S10."""
     try:
         canonical = PinnedCanonicalDailyReader(canonical_reader)
         calendar = _calendar_window(
@@ -289,10 +291,50 @@ def evaluate_escape_risk_production(
                 for detection in detector.detect(symbol, bars, calendar)
                 if start <= detection.signal_date <= end
             )
+
+    external_censors: dict[str, tuple[str, ...]] = {}
+    intraday_identity: dict[str, object] | None = None
+    intraday_coverage: dict[str, int] = {
+        "requested_pairs": 0,
+        "available_pairs": 0,
+        "unavailable_pairs": 0,
+    }
+    intraday_status = "unavailable_reader"
+    if intraday_reader is not None:
+        start_position = next(
+            (index for index, day in enumerate(calendar) if day >= start), len(calendar)
+        )
+        end_position = max(
+            (index for index, day in enumerate(calendar) if day <= end),
+            default=-1,
+        )
+        intraday_calendar = calendar[max(0, start_position - 5) : end_position + 1]
+        try:
+            bundle = intraday_reader.load(symbols)
+            intraday_result = detect_intraday_escape_signals(
+                bundle,
+                symbols=symbols,
+                calendar=intraday_calendar,
+                start=start,
+                end=end,
+            )
+            detections.extend(intraday_result.detections)
+            external_censors = dict(intraday_result.censor_codes)
+            intraday_coverage = dict(intraday_result.coverage)
+            intraday_identity = intraday_reader.run_manifest()
+            intraday_status = "available"
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            intraday_status = f"unavailable_reader:{exc}"
+    if intraday_status != "available":
+        external_censors = {
+            signal_id: ("censor_intraday_data_missing",)
+            for signal_id in MINUTE_SIGNAL_IDS
+        }
     report = aggregate_escape_signals(
         detections,
         bars_by_symbol,
         cost_bps=cost_bps,
+        external_censor_codes=external_censors,
     )
     return {
         "schema": ESCAPE_SCHEMA,
@@ -306,10 +348,15 @@ def evaluate_escape_risk_production(
         },
         "identity": {
             "canonical": canonical.identity().model_dump(mode="json"),
+            "intraday": intraday_identity,
         },
         "capabilities": {
             "daily": {key: SIGNAL_CAPABILITIES[key] for key in DAILY_SIGNAL_IDS},
-            "minute": {key: SIGNAL_CAPABILITIES[key] for key in MINUTE_SIGNAL_IDS},
+            "intraday": {
+                "signals": {key: SIGNAL_CAPABILITIES[key] for key in MINUTE_SIGNAL_IDS},
+                "runtime_status": intraday_status,
+                "coverage": intraday_coverage,
+            },
         },
         "report": asdict(report),
         "promoted": False,

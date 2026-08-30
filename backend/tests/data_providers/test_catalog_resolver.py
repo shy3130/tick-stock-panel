@@ -185,6 +185,59 @@ def test_resolve_route_pinned_immutable_ignores_newer_current(
     assert cr.resolve_route("tdx_trans", "a", date(2015, 6, 1)) == str(expected)
 
 
+def test_historical_immutable_wins_over_later_unbounded_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "trans-archive"
+    preliminary = tmp_path / "engine-a-preliminary"
+    expected = _write_generation(
+        archive, "20260715T074351", "tdx_trans_2025", "tdx-trans-2025.duckdb"
+    )
+    _write_generation(
+        preliminary,
+        "20260828T082557",
+        "tdx_trans_preliminary",
+        "tdx-trans-2026-08.duckdb",
+    )
+    (preliminary / "current.json").write_text(
+        json.dumps({"generation": "20260828T082557"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                start_date="2025-01-01",
+                end_date="2025-12-31",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive",
+                generation="20260715T074351",
+                logical="tdx_trans_2025",
+                file="tdx-trans-2025.duckdb",
+                freshness_mode="pinned_immutable",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                start_date=None,
+                end_date=None,
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                generation="20260828T082557",
+                logical="tdx_trans_preliminary",
+                file="tdx-trans-2026-08.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-28",
+                reconciled=False,
+                quality="preliminary",
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE", str(archive))
+    monkeypatch.setenv(
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary)
+    )
+
+    assert cr.resolve_route("tdx_trans", "a", date(2025, 8, 28)) == str(expected)
+
+
 def test_same_catalog_routes_different_years_to_different_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

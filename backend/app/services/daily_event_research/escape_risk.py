@@ -1,13 +1,12 @@
-"""Pure daily-bar escape-risk detectors and per-signal research (Issue #48).
+"""Pure escape-risk detectors and per-signal research (Issue #48).
 
-S1/S8/S9 只读显式传入的内存日线 ``Bar`` 序列, 逐日只用截至当日的收盘前缀,
-无网络、无文件写入、无未来函数。分钟信号 S2-S7/S10 缺少不可变分钟历史,
-统一声明 ``unavailable_insufficient_immutable_history``, 模块不提供任何
-用日线 high/low 近似分钟路径的入口(fail-closed)。
-
-研究聚合对每个信号独立出具 verdict; 卖飞率与规避深度按对称口径呈现,
-多信号只按同日触发计数分组, 不产生任何合并方向指令或订单/执行语义。
+S1/S8/S9 consume sealed daily bars. S2-S7/S10 consume only an explicitly
+injected catalog-pinned intraday bundle; no detector performs I/O and no daily
+high/low approximation is accepted. Every signal reports auditable evidence,
+point-in-time censor reasons and an independent unavailable/accepted/rejected
+research verdict; none emits orders or trading instructions.
 """
+
 
 from __future__ import annotations
 
@@ -24,13 +23,28 @@ from .models import CensorReason, Detection, DetectionEvidence
 DETECTOR_ID_S1: Final = "escape_s1"
 DETECTOR_ID_S8: Final = "escape_s8"
 DETECTOR_ID_S9: Final = "escape_s9"
+DETECTOR_ID_S2: Final = "escape_s2"
+DETECTOR_ID_S3: Final = "escape_s3"
+DETECTOR_ID_S4: Final = "escape_s4"
+DETECTOR_ID_S5: Final = "escape_s5"
+DETECTOR_ID_S6: Final = "escape_s6"
+DETECTOR_ID_S7: Final = "escape_s7"
+DETECTOR_ID_S10: Final = "escape_s10"
+INTRADAY_SIGNAL_VARIANT: Final = "intraday_v1"
 SIGNAL_VARIANT: Final = "daily_v1"
 HYPOTHESIS_LABEL: Final = "issue48_escape_risk_daily_v1"
 
 SIGNAL_ID_BY_DETECTOR: Final[dict[str, str]] = {
     DETECTOR_ID_S1: "s1",
+    DETECTOR_ID_S2: "s2",
+    DETECTOR_ID_S3: "s3",
+    DETECTOR_ID_S4: "s4",
+    DETECTOR_ID_S5: "s5",
+    DETECTOR_ID_S6: "s6",
+    DETECTOR_ID_S7: "s7",
     DETECTOR_ID_S8: "s8",
     DETECTOR_ID_S9: "s9",
+    DETECTOR_ID_S10: "s10",
 }
 DETECTOR_ID_BY_SIGNAL: Final[dict[str, str]] = {
     signal_id: detector_id for detector_id, signal_id in SIGNAL_ID_BY_DETECTOR.items()
@@ -38,13 +52,11 @@ DETECTOR_ID_BY_SIGNAL: Final[dict[str, str]] = {
 
 DAILY_SIGNAL_IDS: Final[tuple[str, ...]] = ("s1", "s8", "s9")
 MINUTE_SIGNAL_IDS: Final[tuple[str, ...]] = ("s2", "s3", "s4", "s5", "s6", "s7", "s10")
+ALL_SIGNAL_IDS: Final[tuple[str, ...]] = DAILY_SIGNAL_IDS + MINUTE_SIGNAL_IDS
 
 SIGNAL_CAPABILITY_AVAILABLE: Final = "available"
-SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE: Final = "unavailable_insufficient_immutable_history"
-
 SIGNAL_CAPABILITIES: Final[dict[str, str]] = {
-    **{signal_id: SIGNAL_CAPABILITY_AVAILABLE for signal_id in DAILY_SIGNAL_IDS},
-    **{signal_id: SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE for signal_id in MINUTE_SIGNAL_IDS},
+    signal_id: SIGNAL_CAPABILITY_AVAILABLE for signal_id in ALL_SIGNAL_IDS
 }
 
 
@@ -53,6 +65,9 @@ class EscapeCensorReason(str, Enum):
 
     BENCHMARK_MISSING = "censor_benchmark_missing"
     PIT_FACT_MISSING = "censor_pit_fact_missing"
+    INTRADAY_DATA_MISSING = "censor_intraday_data_missing"
+    INTRADAY_INTEGRITY = "censor_intraday_integrity"
+    HISTORY_INCOMPLETE = "censor_intraday_history_incomplete"
 
 
 NEW_HIGH_WINDOW_DAYS: Final = 60
@@ -88,11 +103,11 @@ def capability_for(signal_id: str) -> str:
 
 
 def require_daily_signal(signal_id: str) -> None:
-    """fail-closed: 分钟信号与未知信号一律拒绝, 不接受日线近似路径。"""
-    capability = capability_for(signal_id)
-    if capability != SIGNAL_CAPABILITY_AVAILABLE:
+    """Reject minute identifiers on the daily-only detector path."""
+    capability_for(signal_id)
+    if signal_id not in DAILY_SIGNAL_IDS:
         raise ValueError(
-            f"{signal_id}: {capability} "
+            f"{signal_id}: catalog-pinned intraday reader required "
             "(daily high/low approximation of minute signals is not accepted)"
         )
 
@@ -511,19 +526,19 @@ def aggregate_escape_signals(
     benchmark: Mapping[str, Sequence[Bar]] | None = None,
     require_benchmark: bool = False,
     minute_approximation: bool = False,
+    external_censor_codes: Mapping[str, Sequence[str]] | None = None,
 ) -> EscapeRiskReport:
-    """对 S1/S8/S9 的 evidence 检测做逐信号独立研究聚合。
+    """Aggregate every Issue #48 signal with independent, symmetric outcomes.
 
-    - S1/S8 收盘确认后以下一交易日开盘为执行锚；S9 开盘确认且仅面向既有
-      持仓，以信号日开盘为执行锚。N=1 表示执行日收盘。
-    - 卖飞率 = 执行后 N 日收益为正的比例；规避深度 = 下跌事件的最大回撤
-      均值。两方向对称呈现，不合并成方向指令。
-    - 基线只接受显式 ``baselines``；缺失一律显式 unavailable。
-    - ``minute_approximation=True`` 一律 ValueError：分钟信号不可用日线近似。
+    Daily close-confirmed S1/S8 and intraday close-only S2/S4 execute at the
+    next trading-day open. S9 executes at the signal-day open. Other intraday
+    signals use their evidence ``execution_price`` and H=1 ends at the
+    signal-day close. Missing structured baselines remains explicitly
+    unavailable; an event mean never promotes a signal.
     """
     if minute_approximation:
         raise ValueError(
-            "minute signals are unavailable_insufficient_immutable_history; "
+            "minute signals require catalog-pinned engine minute/trans facts; "
             "daily high/low approximation is not accepted"
         )
     horizon_tuple = tuple(sorted({int(horizon) for horizon in horizons}))
@@ -545,7 +560,11 @@ def aggregate_escape_signals(
         benchmark_bars[symbol] = {bar.date: bar for bar in bench_rows}
 
     grouped: dict[str, list[Detection]] = {}
-    censor_codes: dict[str, set[str]] = {signal_id: set() for signal_id in DAILY_SIGNAL_IDS}
+    censor_codes: dict[str, set[str]] = {signal_id: set() for signal_id in ALL_SIGNAL_IDS}
+    for signal_id, codes in (external_censor_codes or {}).items():
+        if signal_id not in censor_codes:
+            raise ValueError(f"unknown escape signal id: {signal_id}")
+        censor_codes[signal_id].update(str(code) for code in codes)
     for detection in detections:
         signal_id = SIGNAL_ID_BY_DETECTOR.get(detection.detector_id)
         if signal_id is None:
@@ -574,14 +593,47 @@ def aggregate_escape_signals(
             if closes is None or bars is None or signal_index is None:
                 unevaluated_events += 1
                 continue
+            execution_session = str(
+                detection.evidence.values.get("execution_session", "")
+            )
             if signal_id == "s9":
                 execution_index = signal_index
+                entry = bars[execution_index].research_open_adj
+            elif execution_session == "same_day":
+                execution_index = signal_index
+                raw_entry = detection.evidence.values.get("execution_price")
+                try:
+                    raw_entry_price = float(raw_entry)
+                except (TypeError, ValueError):
+                    unevaluated_events += 1
+                    continue
+                signal_bar = bars[signal_index]
+                raw_close = signal_bar.quote_close_raw
+                adjusted_close = signal_bar.research_close_adj
+                if (
+                    not math.isfinite(raw_entry_price)
+                    or not math.isfinite(raw_close)
+                    or raw_close <= 0
+                    or not math.isfinite(adjusted_close)
+                    or adjusted_close <= 0
+                ):
+                    unevaluated_events += 1
+                    continue
+                # Intraday trans prices are raw while all forward closes are
+                # adjusted; normalize the same-day entry into that price space.
+                entry = raw_entry_price * adjusted_close / raw_close
+                if detection.evidence.values.get("execution_reachable") is False:
+                    unevaluated_events += 1
+                    continue
             else:
                 execution_index = signal_index + 1
+                if execution_index >= len(bars):
+                    unevaluated_events += 1
+                    continue
+                entry = bars[execution_index].research_open_adj
             if execution_index >= len(bars):
                 unevaluated_events += 1
                 continue
-            entry = bars[execution_index].research_open_adj
             if not math.isfinite(entry) or entry <= 0:
                 unevaluated_events += 1
                 continue
@@ -627,9 +679,9 @@ def aggregate_escape_signals(
                     )
             outcomes.append(outcome)
         outcomes_by_signal[signal_id] = outcomes
-
     signals: list[SignalResearch] = []
-    for signal_id in DAILY_SIGNAL_IDS:
+
+    for signal_id in ALL_SIGNAL_IDS:
         detector_id = DETECTOR_ID_BY_SIGNAL[signal_id]
         outcomes = outcomes_by_signal.get(signal_id, [])
         horizon_stats: list[HorizonOutcomeStats] = []
@@ -797,6 +849,7 @@ def _baseline_comparisons(
 
 
 __all__ = [
+    "ALL_SIGNAL_IDS",
     "BASELINE_KINDS",
     "BaselineComparison",
     "BaselineSeries",
@@ -804,6 +857,13 @@ __all__ = [
     "DEFAULT_HORIZONS",
     "DETECTOR_ID_S1",
     "DETECTOR_ID_S8",
+    "DETECTOR_ID_S2",
+    "DETECTOR_ID_S3",
+    "DETECTOR_ID_S4",
+    "DETECTOR_ID_S5",
+    "DETECTOR_ID_S6",
+    "DETECTOR_ID_S7",
+    "DETECTOR_ID_S10",
     "DETECTOR_ID_S9",
     "EscapeCensorReason",
     "EscapeRiskReport",
@@ -814,11 +874,11 @@ __all__ = [
     "LOW_OPEN_MIN_PCT",
     "MACD_HIST_SCALE",
     "MACD_MIN_VALID_INDEX",
+    "INTRADAY_SIGNAL_VARIANT",
     "MINUTE_SIGNAL_IDS",
     "NEW_HIGH_WINDOW_DAYS",
     "SIGNAL_CAPABILITIES",
     "SIGNAL_CAPABILITY_AVAILABLE",
-    "SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE",
     "SIGNAL_VARIANT",
     "SignalCountBucket",
     "SignalResearch",

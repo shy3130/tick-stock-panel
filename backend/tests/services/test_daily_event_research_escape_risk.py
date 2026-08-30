@@ -6,7 +6,6 @@ from app.services.daily_event_research.escape_risk import (
     DAILY_SIGNAL_IDS,
     MINUTE_SIGNAL_IDS,
     SIGNAL_CAPABILITIES,
-    SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE,
     EscapeCensorReason,
     EscapeS1Detector,
     EscapeS8Detector,
@@ -151,11 +150,8 @@ def test_per_signal_verdicts_and_count_only_grouping():
 def test_capability_fail_closed_for_minute_signals_and_approximation():
     assert set(DAILY_SIGNAL_IDS) == {"s1", "s8", "s9"}
     assert set(MINUTE_SIGNAL_IDS) == {"s2", "s3", "s4", "s5", "s6", "s7", "s10"}
-    assert all(
-        SIGNAL_CAPABILITIES[item] == SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE
-        for item in MINUTE_SIGNAL_IDS
-    )
-    with pytest.raises(ValueError, match="unavailable_insufficient_immutable_history"):
+    assert all(SIGNAL_CAPABILITIES[item] == "available" for item in MINUTE_SIGNAL_IDS)
+    with pytest.raises(ValueError, match="intraday reader required"):
         require_daily_signal("s3")
     with pytest.raises(ValueError, match="approximation"):
         aggregate_escape_signals([], {}, minute_approximation=True)

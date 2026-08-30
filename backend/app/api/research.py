@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import re
 from typing import Literal
 
@@ -974,17 +974,21 @@ def evaluate_pre_surge_features_factor(body: PreSurgeEvaluateIn, request: Reques
 
 @router.get("/escape-risk")
 def get_escape_risk_capability():
-    """Expose the daily/minute capability boundary without approximations."""
+    """Expose implemented detectors separately from request-time data gates."""
     return {
         "status": "available",
         "signals": dict(SIGNAL_CAPABILITIES),
+        "runtime_requirements": {
+            "s2_s7": "catalog_pinned_minutes_trans",
+            "s10": "catalog_pinned_minutes_trans_and_pit_float_shares",
+        },
         "promoted": False,
     }
 
 
 @router.post("/factors/escape-risk/evaluate")
 def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
-    """Evaluate daily S1/S8/S9; minute-only signals remain unavailable."""
+    """Evaluate S1-S10; request-time route/PIT gaps remain explicit censors."""
     repo = getattr(request.app.state, "repo", None)
     canonical = PublishedCanonicalDailyReader.from_repository(repo)
     if canonical is None:
@@ -995,13 +999,32 @@ def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
             "capabilities": dict(SIGNAL_CAPABILITIES),
             "promoted": False,
         }
-    return evaluate_escape_risk_production(
-        symbols=body.symbols,
-        start=body.start,
-        end=body.end,
-        canonical_reader=canonical,
-        cost_bps=body.cost_bps,
-    )
+    intraday_reader = None
+    try:
+        try:
+            from app.data_providers.registry import get_active_provider_name, get_provider
+
+            provider = get_provider(get_active_provider_name(capability="minute"))
+            opener = getattr(provider, "open_escape_risk_intraday_reader", None)
+            if callable(opener):
+                market_days = canonical.market_days(
+                    body.start - timedelta(days=30), body.end
+                )
+                intraday_reader = opener(canonical.manifest(), tuple(market_days))
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            intraday_reader = None
+        return evaluate_escape_risk_production(
+            symbols=body.symbols,
+            start=body.start,
+            end=body.end,
+            canonical_reader=canonical,
+            intraday_reader=intraday_reader,
+            cost_bps=body.cost_bps,
+        )
+    finally:
+        close = getattr(intraday_reader, "close", None)
+        if callable(close):
+            close()
 
 
 @router.post(

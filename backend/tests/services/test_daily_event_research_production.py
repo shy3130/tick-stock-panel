@@ -156,7 +156,7 @@ def test_pre_surge_production_binds_canonical_markets_and_universe():
     assert response["promoted"] is False
 
 
-def test_escape_production_keeps_minute_capability_fail_closed():
+def test_escape_production_censors_intraday_when_reader_is_missing():
     rows = make_rows()
     response = evaluate_escape_risk_production(
         symbols=[SYMBOL],
@@ -170,6 +170,12 @@ def test_escape_production_keeps_minute_capability_fail_closed():
         "s8": "available",
         "s9": "available",
     }
-    assert set(response["capabilities"]["minute"].values()) == {
-        "unavailable_insufficient_immutable_history"
+    assert set(response["capabilities"]["intraday"]["signals"].values()) == {"available"}
+    assert response["capabilities"]["intraday"]["runtime_status"] == "unavailable_reader"
+    minute_reports = {
+        item["signal_id"]: item for item in response["report"]["signals"]
     }
+    assert all(
+        "censor_intraday_data_missing" in minute_reports[signal]["censor_codes"]
+        for signal in ("s2", "s3", "s4", "s5", "s6", "s7", "s10")
+    )

@@ -13,7 +13,7 @@ import hashlib
 import json
 import threading
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -60,6 +60,20 @@ class MarketFact:
     buyable: bool | None = None
     signal_limit_up: bool | None = None
     signal_limit_down: bool | None = None
+
+
+@dataclass(frozen=True)
+class TurnoverFact:
+    """Exact-day turnover inputs with independently proven availability.
+
+    ``available_at`` comes only from an ``ok`` exact-partition
+    ``migration_manifest.source_version``. Missing legacy manifest coverage is
+    represented by ``None`` and must be censored by point-in-time consumers.
+    """
+
+    float_shares: float | None
+    reported_turnover_pct: float | None
+    available_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -114,6 +128,10 @@ class PublishedDailyMarketFactsReader:
                     raise ValueError("published markets snapshot lacks daily_markets")
                 columns = self._conn.execute("PRAGMA table_info('daily_markets')").fetchall()
             names = {str(row[1]).lower() for row in columns}
+            self._has_migration_manifest = any(
+                str(row[0]) == "migration_manifest" for row in tables
+            )
+            self._has_turnover_fields = {"ltgb", "hslv"}.issubset(names)
             self._column_names = names
             for required in ("code", "asset_type"):
                 if required not in names:
@@ -440,6 +458,174 @@ class PublishedDailyMarketFactsReader:
         if fact.published_limit_up is not None and fact.raw_high is None:
             return None  # band without its raw bar is not provable evidence
         return fact
+
+    @staticmethod
+    def _available_at(value: object) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def turnover_fact(self, symbol: str, day: date) -> TurnoverFact | None:
+        """Return exact-day float-share facts without a current-snapshot fallback.
+
+        The daily row may predate manifest coverage. In that case the numeric
+        values remain visible for diagnostics but ``available_at`` is ``None``;
+        intraday research must fail closed rather than infer point-in-time
+        availability from the row's date.
+        """
+        code = symbol_to_code(symbol)
+        if not self._has_turnover_fields:
+            return None
+        rows = self._query(
+            f'SELECT TRY_CAST(ltgb AS DOUBLE), TRY_CAST(hslv AS DOUBLE) '
+            f'FROM daily_markets WHERE asset_type = 1 AND code = ? '
+            f'AND "{self._date_col}" = ? LIMIT 1',
+            [code, day],
+        )
+        if not rows:
+            return None
+        float_shares_raw, turnover_raw = rows[0]
+        available_at = None
+        if self._has_migration_manifest:
+            partition_key = (
+                "table=daily_markets:asset_type=1:"
+                f"code={code}:trade_date={day.isoformat()}"
+            )
+            manifest_rows = self._query(
+                "SELECT source_version FROM migration_manifest "
+                "WHERE source_table = 'daily_markets' "
+                "AND target_table = 'daily_markets' "
+                "AND partition_key = ? AND status = 'ok' "
+                "ORDER BY source_version DESC LIMIT 1",
+                [partition_key],
+            )
+            if manifest_rows:
+                available_at = self._available_at(manifest_rows[0][0])
+        return TurnoverFact(
+            float_shares=(
+                float(float_shares_raw)
+                if float_shares_raw is not None and float(float_shares_raw) > 0
+                else None
+            ),
+            reported_turnover_pct=(
+                float(turnover_raw) if turnover_raw is not None else None
+            ),
+            available_at=available_at,
+        )
+
+    def escape_risk_facts(
+        self, symbols: list[str] | tuple[str, ...], day: date
+    ) -> dict[str, tuple[MarketFact, TurnoverFact]]:
+        """Batch exact-day bands and turnover inputs for intraday research."""
+        normalized = list(dict.fromkeys(symbol.upper() for symbol in symbols))
+        if not normalized:
+            return {}
+        codes = [symbol_to_code(symbol) for symbol in normalized]
+        placeholders = ",".join("?" for _ in codes)
+        selects = ", ".join(self._quote_expr(lo, up) for lo, up in _RAW_QUOTES)
+        ltgb_expr = (
+            "TRY_CAST(ltgb AS DOUBLE)"
+            if self._has_turnover_fields
+            else "CAST(NULL AS DOUBLE)"
+        )
+        hslv_expr = (
+            "TRY_CAST(hslv AS DOUBLE)"
+            if self._has_turnover_fields
+            else "CAST(NULL AS DOUBLE)"
+        )
+        rows = self._query(
+            f"SELECT code, {selects}, {self._value_expr('zrspj')}, "
+            f"{self._ztj_expr()}, {self._name_expr()}, "
+            f"{ltgb_expr}, {hslv_expr} "
+            "FROM daily_markets WHERE asset_type = 1 "
+            f'AND "{self._date_col}" = ? AND code IN ({placeholders})',
+            [day, *codes],
+        )
+        available_by_code: dict[str, datetime | None] = dict.fromkeys(codes)
+        if self._has_migration_manifest:
+            keys = {
+                code: (
+                    "table=daily_markets:asset_type=1:"
+                    f"code={code}:trade_date={day.isoformat()}"
+                )
+                for code in codes
+            }
+            manifest_placeholders = ",".join("?" for _ in keys)
+            manifest_rows = self._query(
+                "SELECT partition_key, MAX(source_version) "
+                "FROM migration_manifest WHERE source_table = 'daily_markets' "
+                "AND target_table = 'daily_markets' AND status = 'ok' "
+                f"AND partition_key IN ({manifest_placeholders}) GROUP BY partition_key",
+                list(keys.values()),
+            )
+            code_by_key = {value: key for key, value in keys.items()}
+            for partition_key, source_version in manifest_rows:
+                code = code_by_key.get(str(partition_key))
+                if code is not None:
+                    available_by_code[code] = self._available_at(source_version)
+
+        result: dict[str, tuple[MarketFact, TurnoverFact]] = {}
+        for (
+            code,
+            raw_open,
+            raw_high,
+            raw_low,
+            raw_close,
+            pre_close_raw,
+            ztj,
+            stock_name,
+            float_shares_raw,
+            turnover_raw,
+        ) in rows:
+            symbol = code_to_symbol(str(code), 1)
+            regime = self._regime(symbol, day)
+            if (
+                regime is None
+                or raw_open is None
+                or raw_high is None
+                or raw_low is None
+                or raw_close is None
+                or pre_close_raw is None
+                or ztj is None
+            ):
+                continue
+            pre_close = float(pre_close_raw)
+            upper = float(ztj)
+            lower = round(pre_close * (1 - REGIME_PCT[regime]), 2)
+            text = str(stock_name).strip() if stock_name else ""
+            fact = MarketFact(
+                raw_open=float(raw_open),
+                raw_high=float(raw_high),
+                raw_low=float(raw_low),
+                raw_close=float(raw_close),
+                pre_close=pre_close,
+                published_limit_up=upper,
+                published_limit_down=lower,
+                regime=regime,
+                is_st=("ST" in text.upper()) if text else None,
+                name=text or None,
+                signal_limit_up=float(raw_high) >= upper - 0.005,
+                signal_limit_down=float(raw_low) <= lower + 0.005,
+            )
+            turnover = TurnoverFact(
+                float_shares=(
+                    float(float_shares_raw)
+                    if float_shares_raw is not None and float(float_shares_raw) > 0
+                    else None
+                ),
+                reported_turnover_pct=(
+                    float(turnover_raw) if turnover_raw is not None else None
+                ),
+                available_at=available_by_code.get(str(code)),
+            )
+            result[symbol] = (fact, turnover)
+        return result
 
     def close(self) -> None:
         with self._lock:
