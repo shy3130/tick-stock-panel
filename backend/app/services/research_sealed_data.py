@@ -104,3 +104,36 @@ class PublishedCanonicalDailyReader:
             symbols=[symbol],
             layout_cache_key=str(self._generation_dir),
         )
+
+    def daily_closes(self, start: date, end: date) -> pl.DataFrame:
+        """Batch canonical close/volume panel over all symbols (exact-day research).
+
+        Column-pruned whole-universe scan of the pinned generation, deduplicated
+        with the repository's deterministic ``unique(symbol, date, keep='last')``
+        policy.  Callers must prove ``close``/``volume`` availability via
+        :meth:`has_columns` before relying on the volume column.
+        """
+        if start > end:
+            raise ValueError("start must be <= end")
+        wanted = [column for column in ("symbol", "date", "close", "volume") if column in self._columns]
+        if "symbol" not in wanted or "date" not in wanted or "close" not in wanted:
+            raise ValueError("canonical generation lacks symbol/date/close columns")
+        sources = self._repo._external_partition_sources(
+            self._generation_dir,
+            start=start,
+            end=end,
+        )
+        if sources == ():
+            return pl.DataFrame()
+        parquet_source: str | tuple[str, ...]
+        if sources is None:
+            parquet_source = str(self._generation_dir / "**" / "*.parquet")
+        else:
+            parquet_source = sources
+        return self._repo._scan_unique_enriched(
+            parquet_source,
+            start=start,
+            end=end,
+            columns=wanted,
+            layout_cache_key=str(self._generation_dir),
+        )

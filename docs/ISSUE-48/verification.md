@@ -11,3 +11,12 @@
 - PR #52 GitHub Codex Review 状态为 Completed，4 条行级意见（2×P1、2×P2）均先由新增回归复现：修复前 `5 failed, 13 passed`，修复后专项 `18 passed`。新增边界覆盖 canonical bar close 时间、ST 5% 跌停制度、S7 平/降开盘窗和 S3 连续触价/重新封板后的开板 episode。
 - PIT 补漏回归先以 NULL historical name 复现错误的 `main_10` 跌停事实，修复后 `limit_band_facts`/`escape_risk_facts` 均返回空；daily-market reader 专项 `6 passed`。
 - 输出只有研究事实、provenance、coverage、censor 和统计；不含交易方向、订单或自动执行动作，`promoted=false`。
+
+## TODO 研究扩展（2026-08-31）
+
+- 新增十字星、筹码峰、周线旗杆、逃生窗口与指数 reader 专项：`65 passed`；既有 hold-firm/N 字/API 研究回归：`116 passed`。
+- 最终完整后端：`3774 passed, 3 skipped, 8 warnings`（157.25s）；warnings 仍仅来自既有 Polars sortedness/deprecation/performance 路径。
+- 新增模块完整 Ruff 规则与全部变更 `F,E9` 检查均为 `All checks passed!`；`git diff --check` 无输出。
+- 真实 API 复验：十字星 `600519.SH` 返回 644 个父事件日，D1 34 个合格事件且因 OOS 四桶/bootstrap 门槛保持 `unavailable`；周线旗杆返回 192 个完整周、20 个旗杆、3 个合格事件；筹码峰因 `2022-12-21` PIT 换手事实不可证明而 fail-closed 为 `unavailable_pit_turnover_provenance`。
+- 真实逃生窗口全周期复算（2007-01-01 至 2026-08-28）：4,797 个交易日、全 A 14,597,621 行、四条市场腿各 24 个主单元、1,056 个敏感性单元、763 个严格 censor；全 A 覆盖 2007-2026，三指数 pinned 日线仅覆盖 2013-2026，故保守保持 `[~]`。
+- 独立 reviewer 首轮 6 个 P1 均由回归复现并修复；第二轮复核结论为“无 findings”。

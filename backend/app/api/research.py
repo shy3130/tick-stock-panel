@@ -81,6 +81,17 @@ from app.services.hold_firm_patterns import (
     evaluate_hold_firm_patterns as evaluate_hold_firm_patterns_v1,
     production_reader_scope as hold_firm_reader_scope,
 )
+from app.services.chip_peak_patterns import ChipPeakRequest, ChipPeakResponse
+from app.services.doji_patterns import DojiPatternsRequest, DojiResponse
+from app.services.escape_windows import (
+    EscapeWindowsRequest,
+    EscapeWindowsResponse,
+)
+from app.services.weekly_flagpole import (
+    WeeklyFlagpoleRequest,
+    WeeklyFlagpoleResponse,
+)
+
 
 from app.services.daily_open_anchor_filter import (
     assess_daily_open_anchor_capability,
@@ -917,6 +928,170 @@ def evaluate_hold_firm_patterns_factor(body: HoldFirmPatternsRequest, request: R
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.get("/doji-patterns", response_model=CapabilityResult)
+def get_doji_patterns_capability(request: Request):
+    """Return immutable-source capability for D1-D4 doji research."""
+    from app.services.doji_patterns import (
+        assess_doji_capability,
+        production_reader_scope,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo) as scope:
+            return assess_doji_capability(
+                scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        detail = f"{exc.reason.value}: {exc.detail}" if exc.detail else exc.reason.value
+        return CapabilityResult(status=HoldFirmStatus.UNAVAILABLE, problems=(detail,))
+    except (AttributeError, TypeError, ValueError) as exc:
+        return CapabilityResult(
+            status=HoldFirmStatus.UNAVAILABLE,
+            problems=(f"unavailable_canonical_reader: {exc}",),
+        )
+
+
+@router.post("/factors/doji-patterns/evaluate", response_model=DojiResponse)
+def evaluate_doji_patterns_factor(body: DojiPatternsRequest, request: Request):
+    """Evaluate four doji hypotheses over one pinned three-source scope."""
+    from app.services.doji_patterns import (
+        DojiStatus,
+        evaluate_doji_patterns,
+        production_reader_scope,
+        UnavailabilityReason,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo) as scope:
+            return evaluate_doji_patterns(
+                body, scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        return DojiResponse(
+            status=DojiStatus.UNAVAILABLE,
+            unavailable_reason=exc.reason,
+        )
+    except AttributeError:
+        return DojiResponse(
+            status=DojiStatus.UNAVAILABLE,
+            unavailable_reason=UnavailabilityReason.CANONICAL_READER,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post(
+    "/factors/chip-peak-patterns/evaluate",
+    response_model=ChipPeakResponse,
+)
+def evaluate_chip_peak_patterns_factor(
+    body: ChipPeakRequest,
+    request: Request,
+):
+    """Evaluate C1-C5 using the frozen local turnover-decay model."""
+    from app.services.chip_peak_patterns import (
+        ChipPeakResponse,
+        ChipProductionScopeUnavailableError,
+        ChipStatus,
+        evaluate,
+        UnavailabilityReason,
+        production_reader_scope,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo, body) as readers:
+            return evaluate(body, readers=readers)
+    except ChipProductionScopeUnavailableError as exc:
+        return ChipPeakResponse(
+            status=ChipStatus.UNAVAILABLE,
+            unavailable_reason=exc.reason,
+        )
+    except AttributeError:
+        return ChipPeakResponse(
+            status=ChipStatus.UNAVAILABLE,
+            unavailable_reason=UnavailabilityReason.CANONICAL_READER,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/weekly-flagpole")
+def get_weekly_flagpole_capability(request: Request):
+    """Expose sealed composite-reader capability for weekly flag research."""
+    from app.services.weekly_flagpole import assess_capability, resolve_reader
+
+    reader = resolve_reader(getattr(request.app.state, "repo", None))
+    try:
+        return assess_capability(reader)
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
+
+
+@router.post(
+    "/factors/weekly-flagpole/evaluate",
+    response_model=WeeklyFlagpoleResponse,
+)
+def evaluate_weekly_flagpole_factor(
+    body: WeeklyFlagpoleRequest,
+    request: Request,
+):
+    """Evaluate F0-F5 without falling back from the pinned composite reader."""
+    from app.services.weekly_flagpole import evaluate, resolve_reader
+
+    reader = resolve_reader(getattr(request.app.state, "repo", None))
+    try:
+        return evaluate(body, reader)
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
+
+
+@router.get("/escape-windows")
+def get_escape_windows_capability(request: Request):
+    """Report the four sealed legs needed by the calendar-effect study."""
+    from app.services.escape_windows import assess_escape_windows_capability
+
+    return assess_escape_windows_capability(
+        getattr(request.app.state, "repo", None)
+    )
+
+
+@router.post(
+    "/escape-windows/evaluate",
+    response_model=EscapeWindowsResponse,
+)
+def evaluate_escape_windows_factor(
+    body: EscapeWindowsRequest,
+    request: Request,
+):
+    """Evaluate six calendar anchors with explicit per-leg coverage censors."""
+    from app.services.escape_windows import evaluate_escape_windows
+
+    repo = getattr(request.app.state, "repo", None)
+    canonical = getattr(repo, "generation_pinned_daily_reader", None)
+    calendar = getattr(repo, "versioned_exchange_calendar", None)
+    presence = getattr(repo, "pit_presence_universe", None)
+    index_reader = getattr(repo, "index_daily_research_reader", None)
+    try:
+        return evaluate_escape_windows(
+            body,
+            canonical_reader=canonical,
+            calendar=calendar,
+            presence_universe=presence,
+            index_reader=index_reader,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(index_reader, "close", None)
+        if callable(close):
+            close()
 
 
 @router.post(

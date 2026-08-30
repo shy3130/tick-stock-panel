@@ -8,3 +8,4 @@
 - 第一轮独立 review 无 P0，报告 1 个 P1：同日分钟 `execution_price` 是原始价，却直接与前复权 forward close 比较。已按信号日 `research_close_adj / quote_close_raw` 把执行价换到同一价格空间，并以复权因子 0.5 的回归用例锁定 10% 收益。第二轮独立复核结论为“闭环”，置信度 0.92。
 - PR #52 GitHub Codex Review 完成后报告 2 个 P1、2 个 P2，四条均核实成立并修复：bar close 时间恢复为 canonical `09:31..11:30,13:01..15:00` 且同步校正 14:30/10:30 索引；historical ST 名称先覆盖为 `st_5` 再推导跌停价；S7 删除冻结定义外的 `first_high > open` 条件；S3 按“首次触板开板/封板后再开”状态转换计数，不按连续触价分钟计数。补充 PIT 复核进一步锁死 name 缺失路径：空/NULL historical name 不能证明 ST/制度，`limit_band_facts` 与 `escape_risk_facts` 均整日删失，不再按 base regime 伪造上下限。
 - API/production 只输出研究统计、provenance、coverage 与 censor，不产生方向字段、订单或交易写入；无冻结 OOS 出场基线时仍不得 promoted。
+- 本分支继续实现 `docs/TODO.md` 的十字星、筹码峰、周线旗杆与逃生窗口复核后，独立 reviewer 首轮发现 6 个 P1：周线 reader 泄漏、`TurnoverDay` 高换手单位误判、筹码网格未来价格泄漏、日历期限缺日仍入样本、D1 交互缺 OOS/bootstrap 门槛、筹码持有期 raw 价格受除权污染。六项均新增回归并从源头修复；同时修正真实 DuckDB 的 VARCHAR 日期比较和短价格网格卷积长度。第二轮只读复核结论为“无 findings”。
