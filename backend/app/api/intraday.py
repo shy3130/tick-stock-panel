@@ -186,6 +186,12 @@ async def quote_stream(request: Request):
                             "ts": int(time.time() * 1000),
                         }),
                     }
+
+                if data.get("auction_updated"):
+                    yield {
+                        "event": "auction_updated",
+                        "data": json.dumps({"ts": int(time.time() * 1000)}),
+                    }
         finally:
             qs.unsubscribe(sub)
 

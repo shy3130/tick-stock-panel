@@ -36,6 +36,7 @@ from app.api import (
     strategy,
     watchlist,
 )
+from app.api import auction as auction_api
 from app.api import auth as auth_api
 from app.api import settings as settings_api
 from app.api.routes import router as core_router
@@ -323,6 +324,27 @@ async def _application_lifespan(app: FastAPI):
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
 
+    try:
+        from app.auction.repository import AuctionRepository
+        from app.auction.research import AuctionResearchService
+        from app.auction.service import AuctionHubService
+        from app.auction.sources import discover_auction_sources
+
+        auction_repo = AuctionRepository(store.data_dir)
+        auction_service = AuctionHubService(auction_repo, discover_auction_sources())
+        auction_service.set_app_state(app.state)
+        auction_service.start()
+        app.state.auction_service = auction_service
+        app.state.auction_research_service = AuctionResearchService(auction_service)
+        logger.info(
+            "auction hub started: %d sources",
+            len(auction_service.sources),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("auction hub init failed: %s", e)
+        app.state.auction_service = None
+        app.state.auction_research_service = None
+
     # 源码内二次开发启动钩子: 仅暴露稳定只读上下文, 单个扩展失败不影响核心启动。
     extension_registry = app.state.extension_registry
     start_backend_extensions(
@@ -353,6 +375,9 @@ async def _application_lifespan(app: FastAPI):
         dsvc = getattr(app.state, "depth_service", None)
         if dsvc:
             dsvc.stop_polling()
+        auction_svc = getattr(app.state, "auction_service", None)
+        if auction_svc:
+            auction_svc.stop()
         wbot = getattr(app.state, "wecom_bot_service", None)
         if wbot:
             wbot.stop()
@@ -460,6 +485,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(auction_api.router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)

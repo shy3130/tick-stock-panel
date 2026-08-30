@@ -105,6 +105,15 @@ class MyProvider:
 
     def get_instruments(self, asset_type="stock") -> list[dict]:
         """标的维表(可选): 返回 tickflow Instrument 形状的行, 供 instrument_sync 复用 flatten"""
+
+    def get_auction_series(self, symbols, trade_date) -> list:
+        """开盘竞价过程点(可选)。无此能力不要声明 auction_capabilities 含 series, 不要伪造点。"""
+
+    def get_auction_finals(self, symbols, trade_date) -> list:
+        """09:25 正式撮合(可选)。单位见 app.auction.contracts: 价格元、量手、涨跌幅小数制。"""
+
+    auction_capabilities = ("series", "finals")  # 过程/撮合可只声明其中一个; 未声明 auction 的源会被跳过
+
 ```
 
 ### config.datasets 的作用
@@ -130,6 +139,12 @@ class MyConfig:
   - `bridge.py` — Python↔Node 桥接 + availability 检测
   - `bridge.mjs` — Node 端(并发池、重试、SDK 解析)
   - `provider.py` — Provider 实现(归一化、分批、错误降级)
+
+- **`backend/app/plugins/tushare/`** — Python 型插件, Tushare Pro SDK
+  - 当前只声明 `auction`(stk_auction / stk_auction_o 日级正式撮合); 无 09:15–09:25 过程序列, `get_auction_series` 返回空列表
+  - Token 在设置页卡片先探后存(`tushare_api_key`), 或 `.env` 配 `TUSHARE_TOKEN`; 设置页一键安装依赖靠 `requirements.txt`
+  - 单位: `vol` 股→手, `amount` 元透传, `stk_auction.price` 只进 vwap, `stk_auction_o.close` 才是 open_price; `open_change_pct` 小数制
+  - 未声明 daily/minute/realtime → 自动回退 TickFlow
 
 - **`backend/app/plugins/eltdx/`** — Python 型插件, 通达信 7709 协议(eltdx SDK, Rust Runtime 驱动进程内 TCP 长连接池)
   - `bridge.py` — TdxClient 单例生命周期管理 + 数据获取薄封装, 统一转 list[dict] 供 provider 消费

@@ -20,13 +20,28 @@ from datetime import date, datetime, time, timedelta, timezone
 
 import polars as pl
 
+from app.auction.contracts import (
+    AuctionFinal,
+    AuctionSnapshot,
+    MarketRankItem,
+    cn_datetime,
+    datetime_to_ms,
+)
+from app.auction.sources import (
+    CAP_FINALS,
+    CAP_MARKET_RANK,
+    CAP_SERIES,
+    as_float,
+    snapshot_from_point,
+)
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
+from app.market_time import cn_now, cn_today
 from app.plugins.eltdx import bridge
 
 logger = logging.getLogger(__name__)
 
 # eltdx 支持的数据集(financial 口径不足 → 不声明, 自动回退 tickflow)
-_DATASETS = ("daily", "adj_factor", "minute", "realtime", "instruments")
+_DATASETS = ("daily", "adj_factor", "minute", "realtime", "instruments", "auction")
 
 # 批量拉取并发度: TdxClient 默认连接池 2 主站 x 4 TCP = 8 连接, 逐 symbol 串行
 # 会浪费连接池吞吐; 并发到 8 对齐池大小, 全市场同步从 N 次往返降到 N/8 轮。
@@ -293,6 +308,7 @@ class EltdxProvider:
 
     name = "eltdx"
     builtin = True
+    auction_capabilities = (CAP_SERIES, CAP_FINALS, CAP_MARKET_RANK)
 
     def __init__(self) -> None:
         self.config = _EltdxConfig()
@@ -429,6 +445,89 @@ class EltdxProvider:
             )
         return rows
 
+    def available(self) -> tuple[bool, str]:
+        return bridge.availability()
+
+    def get_auction_series(self, symbols: list[str], trade_date: date) -> list[AuctionSnapshot]:
+        if not symbols:
+            return []
+        historical = trade_date != cn_today()
+        received = datetime_to_ms(cn_now())
+        targets = [s for s in symbols if _is_supported_symbol(s, "stock")]
+        if not targets:
+            return []
+
+        def _fetch(sym: str) -> list[AuctionSnapshot]:
+            try:
+                payload = bridge.auction_data(to_tdx(sym), None if not historical else trade_date)
+            except Exception as exc:
+                logger.warning("eltdx auction_data failed %s: %s", sym, exc)
+                return []
+            return _auction_snapshots(payload, sym, trade_date, received, historical)
+
+        return _auction_fetch_all(targets, _fetch)
+
+    def get_auction_finals(
+        self,
+        symbols: list[str] | None,
+        trade_date: date,
+    ) -> list[AuctionFinal]:
+        targets = [s for s in (symbols or []) if _is_supported_symbol(s, "stock")]
+        if not targets:
+            return []
+        historical = trade_date != cn_today()
+        available_at = datetime_to_ms(cn_datetime(trade_date, 9, 25, 0))
+
+        def _fetch(sym: str) -> list[AuctionFinal]:
+            try:
+                payload = bridge.auction_data(to_tdx(sym), None if not historical else trade_date)
+            except Exception as exc:
+                logger.warning("eltdx auction final failed %s: %s", sym, exc)
+                return []
+            item = _auction_final(payload, sym, trade_date, available_at)
+            return [item] if item is not None else []
+
+        return _auction_fetch_all(targets, _fetch)
+
+    def get_market_rank(
+        self,
+        *,
+        category: str = "沪深A股",
+        sort_by: str = "涨幅",
+        count: int = 200,
+        ascending: bool = False,
+    ) -> list[MarketRankItem]:
+        """Tier 1 全市场实时排行初筛 (0x054B)。
+
+        change_pct 由百分数 /100 归一到小数制; full_code (sh600519) → 内部 symbol。
+        """
+        try:
+            rows = bridge.market_rank(
+                category=category, sort_by=sort_by, count=count, ascending=ascending
+            )
+        except Exception as exc:
+            logger.warning("eltdx market_rank failed: %s", exc)
+            return []
+        out: list[MarketRankItem] = []
+        for row in rows:
+            full_code = str(row.get("full_code") or "")
+            if len(full_code) <= 2:
+                continue
+            change = as_float(row.get("change_pct"))
+            out.append(
+                MarketRankItem(
+                    symbol=from_tdx(full_code),
+                    name=row.get("name") or None,
+                    source=self.name,
+                    change_pct=change / 100.0 if change is not None else None,
+                    amount=as_float(row.get("amount")),
+                    volume_hand=as_float(row.get("volume_hand")),
+                    opening_rush=as_float(row.get("opening_rush")),
+                    seal_amount=as_float(row.get("seal_amount")),
+                )
+            )
+        return out
+
     # ---- 测试(设置页试拉) ----
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         symbols = symbols or ["000001.SZ"]
@@ -448,6 +547,16 @@ class EltdxProvider:
                 "columns": list(head[0].keys()) if head else [],
                 "preview": head,
             }
+        if dataset == "auction":
+            day = date.today()
+            series = self.get_auction_series(symbols, day)
+            return {
+                "provider": self.name,
+                "dataset": "auction",
+                "rows": len(series),
+                "columns": list(series[0].to_row().keys()) if series else [],
+                "preview": [item.to_row() for item in series[:5]],
+            }
         if dataset == "instruments":
             rows = self.get_instruments("stock")
             head = rows[:5]
@@ -459,6 +568,20 @@ class EltdxProvider:
                 "preview": head,
             }
         raise ValueError(f"eltdx 不支持数据集: {dataset}")
+
+
+def _auction_fetch_all(symbols: list[str], worker: Callable[[str], list]) -> list:
+    """并发拉取每个标的的竞价数据并拼接 (对齐 _IO_WORKERS 连接池上限)。"""
+    out: list = []
+    with ThreadPoolExecutor(max_workers=_IO_WORKERS) as ex:
+        futures = [ex.submit(worker, sym) for sym in symbols]
+        for fut in as_completed(futures):
+            try:
+                out.extend(fut.result())
+            except Exception:
+                # worker 内部已捕获并记日志, 兜底避免单标的异常拖垮整批。
+                continue
+    return out
 
 
 def _clip(
@@ -492,6 +615,77 @@ def _clip(
             )
         df = df.filter(pl.col(col) <= end_v)
     return df
+
+
+def _auction_snapshots(
+    payload: dict,
+    symbol: str,
+    trade_date: date,
+    received_at_ms: int,
+    historical: bool,
+) -> list[AuctionSnapshot]:
+    series = payload.get("series") or {}
+    points = series.get("points") or []
+    pre_close = payload.get("pre_close_price")
+    out: list[AuctionSnapshot] = []
+    for index, point in enumerate(points):
+        if not isinstance(point, dict):
+            continue
+        snap = snapshot_from_point(
+            trade_date=trade_date,
+            symbol=symbol,
+            source="eltdx",
+            time_label=point.get("time_label"),
+            price=point.get("price"),
+            matched_volume=point.get("matched_volume"),
+            unmatched_volume=point.get("unmatched_volume"),
+            unmatched_side=point.get("unmatched_signed_raw")
+            if point.get("unmatched_signed_raw") is not None
+            else point.get("unmatched_direction_raw"),
+            sequence=index,
+            pre_close=pre_close,
+            matched_amount=point.get("matched_amount_estimated"),
+            historical=historical,
+            received_at_ms=None if historical else received_at_ms,
+        )
+        if snap is not None:
+            out.append(snap)
+    return out
+
+
+def _auction_final(
+    payload: dict,
+    symbol: str,
+    trade_date: date,
+    available_at_ms: int,
+) -> AuctionFinal | None:
+    snap = payload.get("snapshot_0925") or {}
+    open_price = as_float(payload.get("open_price") or snap.get("price"))
+    if open_price is None:
+        return None
+    pre_close = as_float(payload.get("pre_close_price"))
+    # eltdx 的 open_change_pct 是百分数 ((price-base)/base*100, 见 SDK helpers._pct),
+    # 内部契约是小数制 (0.0366 = 3.66%), 故 /100。缺字段时才由 open/pre_close 推小数。
+    change = as_float(payload.get("open_change_pct"))
+    if change is not None:
+        change = change / 100.0
+    elif open_price is not None and pre_close not in (None, 0):
+        change = open_price / pre_close - 1.0
+    return AuctionFinal(
+        trade_date=trade_date,
+        symbol=symbol,
+        source="eltdx",
+        available_at_ms=available_at_ms,
+        open_price=open_price,
+        vwap=None,
+        open_volume=as_float(payload.get("open_volume") or snap.get("volume")),
+        open_amount=as_float(payload.get("open_amount") or snap.get("trade_amount_yuan")),
+        pre_close=pre_close,
+        turnover_rate=None,
+        volume_ratio=None,
+        open_change_pct=change,
+        quality_flags=["eltdx_opening_match"],
+    )
 
 
 def _preview(dataset: str, df: pl.DataFrame) -> dict:

@@ -748,6 +748,87 @@ export interface CustomSignalAIGenerateResult {
   conditions: CustomSignalCondition[]
 }
 
+export type AuctionStyle = 'momentum' | 'limit_up' | 'swing' | 'volume_price'
+
+export interface AuctionSourceStatus {
+  name: string
+  available: boolean
+  reason: string
+  series?: boolean
+  finals?: boolean
+}
+
+export interface AuctionStatus {
+  trade_date: string
+  stage: string
+  degraded: boolean
+  has_series?: boolean
+  has_finals?: boolean
+  sources: AuctionSourceStatus[]
+  last_poll_ms: number | null
+  last_error: string | null
+  coverage: { dates: string[]; date_count: number; has_snapshots: boolean; has_finals: boolean }
+}
+
+export interface AuctionRankingRow {
+  symbol: string
+  name?: string
+  score: number
+  style: string
+  gap_pct?: number | null
+  indicative_price?: number | null
+  matched_volume?: number | null
+  unmatched_volume?: number | null
+  unmatched_side?: string
+  quality_score?: number
+  quality_flags?: string[]
+  reasons?: string[]
+  point_count?: number
+}
+
+export interface AuctionRankings {
+  trade_date: string
+  as_of_ms: number
+  style: string
+  degraded: boolean
+  rows: AuctionRankingRow[]
+}
+
+export interface AuctionSeriesPoint {
+  source_time_ms: number
+  received_at_ms: number
+  indicative_price: number | null
+  matched_volume: number | null
+  unmatched_volume: number | null
+  unmatched_side: string
+  source: string
+}
+
+export interface AuctionSeries {
+  symbol: string
+  trade_date: string
+  as_of_ms: number
+  points: AuctionSeriesPoint[]
+  finals: Record<string, unknown>[]
+}
+
+export interface AuctionMarketRow {
+  symbol: string
+  name?: string | null
+  source: string
+  change_pct?: number | null
+  amount?: number | null
+  volume_hand?: number | null
+  opening_rush?: number | null
+  seal_amount?: number | null
+}
+
+export interface AuctionMarket {
+  sort_by: string
+  degraded: boolean
+  rows: AuctionMarketRow[]
+}
+
 // ===== Monitor (监控规则 + 触发记录) =====
 export interface MonitorCondition {
   field: string
@@ -2213,6 +2294,43 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+
+  auctionStatus: (tradeDate?: string) =>
+    request<AuctionStatus>(`/api/auction/status${tradeDate ? `?trade_date=${tradeDate}` : ''}`),
+  auctionRankings: (opts?: { tradeDate?: string; asOfMs?: number; style?: AuctionStyle; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.tradeDate) params.set('trade_date', opts.tradeDate)
+    if (opts?.asOfMs) params.set('as_of_ms', String(opts.asOfMs))
+    if (opts?.style) params.set('style', opts.style)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return request<AuctionRankings>(`/api/auction/rankings${qs ? `?${qs}` : ''}`)
+  },
+  auctionSeries: (symbol: string, tradeDate?: string, asOfMs?: number) => {
+    const params = new URLSearchParams()
+    if (tradeDate) params.set('trade_date', tradeDate)
+    if (asOfMs) params.set('as_of_ms', String(asOfMs))
+    const qs = params.toString()
+    return request<AuctionSeries>(`/api/auction/series/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`)
+  },
+  auctionRefresh: (tradeDate?: string) =>
+    request<{ snapshots: number; finals: number; features: number; degraded: boolean }>(
+      `/api/auction/refresh${tradeDate ? `?trade_date=${tradeDate}` : ''}`,
+      { method: 'POST' },
+    ),
+  auctionSaveCandidate: (body: { trade_date: string; as_of_ms?: number; style: AuctionStyle; limit?: number; name?: string }) =>
+    request<Record<string, unknown>>('/api/auction/candidates', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  auctionMarket: (opts?: { sortBy?: string; count?: number; ascending?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.sortBy) params.set('sort_by', opts.sortBy)
+    if (opts?.count) params.set('count', String(opts.count))
+    if (opts?.ascending) params.set('ascending', String(opts.ascending))
+    const qs = params.toString()
+    return request<AuctionMarket>(`/api/auction/market${qs ? `?${qs}` : ''}`)
+  },
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

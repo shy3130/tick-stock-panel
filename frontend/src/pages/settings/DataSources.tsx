@@ -16,6 +16,7 @@ const DATASET_LABEL: Record<string, string> = {
   realtime: '实时',
   minute: '分钟',
   financial: '财务',
+  auction: '竞价',
 }
 
 /** 数据集 → 路由偏好字段 + 默认值 + 展示标签 (financial 无后端路由消费方, 仅展示不参与切换) */

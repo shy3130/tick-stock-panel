@@ -1,0 +1,12 @@
+# Tushare Pro — 集合竞价日级结果插件
+# 需手动安装 SDK (设置页一键安装或 uv pip install tushare)。未安装/未配 Token 时灰显, 不影响主流程。
+
+name: tushare
+display_name: "Tushare"
+runtime: python
+entry: app.plugins.tushare.provider:TushareProvider
+check: app.plugins.tushare.provider:availability
+datasets: [auction]
+api_key_env: TUSHARE_TOKEN
+description: "Tushare Pro。当前仅提供集合竞价日级结果(stk_auction / stk_auction_o), 不提供 09:15–09:25 过程序列; 其它数据集自动回退 TickFlow。"
+install_hint: "设置页一键安装, 或 uv pip install tushare; Token 在数据源卡片填写(先探后存), 也可在 .env 配置 TUSHARE_TOKEN"

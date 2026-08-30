@@ -8,6 +8,6 @@ display_name: "eltdx（通达信协议）"
 runtime: python
 entry: app.plugins.eltdx.provider:EltdxProvider
 check: app.plugins.eltdx.bridge:availability
-datasets: [daily, adj_factor, minute, realtime, instruments]
-description: "通达信 7709 协议行情(日K/除权因子/分钟/实时/标的维表)。Research-Only 许可, 禁止商业使用。需 Python>=3.10。"
+datasets: [daily, adj_factor, minute, realtime, instruments, auction]
+description: "通达信 7709 协议行情(日K/除权因子/分钟/实时/标的维表/集合竞价过程)。Research-Only 许可, 禁止商业使用。需 Python>=3.10。"
 install_hint: "pip install eltdx (Python>=3.10; 无预编译 wheel 的平台需 Rust 1.89 工具链)"

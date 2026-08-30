@@ -74,8 +74,12 @@ def close_client() -> None:
 
 def _to_jsonable(obj):
     """把 eltdx dataclass/模型转成纯 Python 结构, 转不了就原样返回。"""
-    from eltdx import to_jsonable
-
+    if obj is None or isinstance(obj, (dict, list, str, int, float, bool)):
+        return obj
+    try:
+        from eltdx import to_jsonable
+    except ImportError:
+        return obj
     return to_jsonable(obj)
 
 
@@ -169,6 +173,56 @@ def factors(code: str) -> list[dict]:
     items = list((result or {}).get("items") or [])
     items.sort(key=lambda i: i.get("time") or "")
     return items
+
+
+def _as_day(trade_date: datetime | date | str) -> str:
+    if isinstance(trade_date, datetime):
+        return trade_date.date().isoformat()
+    if isinstance(trade_date, date):
+        return trade_date.isoformat()
+    return str(trade_date)
+
+
+def auction_data(code: str, trade_date: datetime | date | str | None = None) -> dict:
+    """打包竞价过程 + 09:25 正式撮合。date=None 为当日过程。"""
+    client = get_client()
+    kwargs: dict = {"code": code}
+    if trade_date is not None:
+        kwargs["date"] = _as_day(trade_date)
+    return _to_jsonable(client.helpers.auction_data(**kwargs)) or {}
+
+
+def market_rank(
+    *,
+    category: str = "沪深A股",
+    sort_by: str = "涨幅",
+    count: int = 200,
+    ascending: bool = False,
+) -> list[dict]:
+    """全市场分类实时排行 (0x054B), 用于竞价 Tier 1 初筛。
+
+    返回 row dict 列表: full_code / name / change_pct(百分数) / amount(元) /
+    volume_hand(手) / opening_rush(百分数) / seal_amount(元)。
+    """
+    client = get_client()
+    table = client.helpers.realtime_rank(
+        category=category, sort_by=sort_by, count=count, ascending=ascending
+    )
+    rows = getattr(table, "rows", None) or ()
+    out: list[dict] = []
+    for row in rows:
+        out.append(
+            {
+                "full_code": str(getattr(row, "full_code", "") or ""),
+                "name": getattr(row, "name", None),
+                "change_pct": getattr(row, "change_pct", None),
+                "amount": getattr(row, "amount", None),
+                "volume_hand": getattr(row, "volume_hand", None),
+                "opening_rush": getattr(row, "opening_rush", None),
+                "seal_amount": getattr(row, "seal_amount", None),
+            }
+        )
+    return out
 
 
 def snapshots(codes: list[str]) -> list[dict]:

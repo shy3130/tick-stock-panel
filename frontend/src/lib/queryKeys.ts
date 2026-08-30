@@ -47,6 +47,13 @@ export const QK = {
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
+  auctionStatus:        (tradeDate?: string) => ['auction-status', tradeDate ?? ''] as const,
+  auctionRankings:      (tradeDate: string, asOfMs: number, style: string) =>
+                          ['auction-rankings', tradeDate, asOfMs, style] as const,
+  auctionSeries:        (symbol: string, tradeDate: string, asOfMs: number) =>
+                          ['auction-series', symbol, tradeDate, asOfMs] as const,
+  auctionMarket:        (sortBy: string, count: number) =>
+                          ['auction-market', sortBy, count] as const,
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
@@ -136,4 +143,7 @@ export const SSE_INVALIDATE_PREFIXES = [
   'index-quotes',
   'overview-market',
   'limit-ladder',
+  'auction-status',
+  'auction-rankings',
+  'auction-series',
 ] as const

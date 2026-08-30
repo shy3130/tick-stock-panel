@@ -62,6 +62,7 @@ class QuoteSubscriber:
         self._quote_updated = False
         self._strategy_results_updated = False
         self._depth_updated = False
+        self._auction_updated = False
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
 
@@ -77,12 +78,14 @@ class QuoteSubscriber:
                 "quote_updated": self._quote_updated,
                 "strategy_results_updated": self._strategy_results_updated,
                 "depth_updated": self._depth_updated,
+                "auction_updated": self._auction_updated,
                 "alerts": self._alerts,
                 "reviews": self._reviews,
             }
             self._quote_updated = False
             self._strategy_results_updated = False
             self._depth_updated = False
+            self._auction_updated = False
             self._alerts = []
             self._reviews = []
             self._event.clear()
@@ -110,6 +113,7 @@ class QuoteSubscriber:
                 not self._quote_updated
                 and not self._strategy_results_updated
                 and not self._depth_updated
+                and not self._auction_updated
                 and not self._reviews
             ):
                 self._event.clear()
@@ -127,6 +131,11 @@ class QuoteSubscriber:
     def notify_depth(self) -> None:
         with self._lock:
             self._depth_updated = True
+            self._event.set()
+
+    def notify_auction_updated(self) -> None:
+        with self._lock:
+            self._auction_updated = True
             self._event.set()
 
 
@@ -410,6 +419,10 @@ class QuoteService:
         """
         for sub in self._snapshot_subscribers():
             sub.notify_depth()
+
+    def notify_auction_updated(self) -> None:
+        for sub in self._snapshot_subscribers():
+            sub.notify_auction_updated()
 
     def _broadcast_alerts(self, alerts: list[dict]) -> None:
         for sub in self._snapshot_subscribers():

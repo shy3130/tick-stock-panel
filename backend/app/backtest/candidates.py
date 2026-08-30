@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-CandidateKind = Literal["factor", "strategy"]
+CandidateKind = Literal["factor", "strategy", "auction"]
 CandidateStatus = Literal["pending", "validated", "rejected"]
 
 MAX_CANDIDATES = 200
@@ -73,6 +73,15 @@ _CONFIG_FIELDS: dict[str, frozenset[str]] = {
         }
     )
     | _MINING_SOURCE_CONFIG_FIELDS,
+    "auction": frozenset(
+        {
+            "trade_date",
+            "as_of_ms",
+            "style",
+            "symbols",
+            "limit",
+        }
+    ),
 }
 _MINING_METRIC_FIELDS = frozenset(
     {
@@ -120,6 +129,22 @@ _METRIC_FIELDS: dict[str, frozenset[str]] = {
         }
     )
     | _MINING_METRIC_FIELDS,
+    "auction": frozenset(
+        {
+            "coverage_1d",
+            "coverage_5d",
+            "coverage_10d",
+            "coverage_20d",
+            "average_return_1d",
+            "average_return_5d",
+            "average_return_10d",
+            "average_return_20d",
+            "hit_rate_1d",
+            "hit_rate_5d",
+            "hit_rate_10d",
+            "hit_rate_20d",
+        }
+    ),
 }
 _lock = threading.RLock()
 
