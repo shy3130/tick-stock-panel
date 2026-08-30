@@ -23,7 +23,7 @@
 
 `CatalogPinnedEscapeRiskIntradayReader` 在构造时按交易日分别解析 `tdx_minutes` 和 `tdx_trans`，并冻结 catalog route 对应的 generation manifest 身份。历史 `pinned_immutable` 精确日期范围必须先于 later preliminary 回退选择。
 
-每个交易日按全部 symbols 批量查询。分钟表必须包含 0..239 全部索引；逐笔只允许映射到冻结的 09:25/09:30、上午、下午和 14:59/15:00 桶。分钟与逐笔允许午盘/收盘的少量逐桶归属差异，但全日成交量必须严格守恒。high/low/amount/cumulative VWAP 一律来自逐笔；任何 route/query/coverage/integrity 缺口都进入 symbol/day 删失，不回退 raw 或日线近似。
+每个交易日按全部 symbols 批量查询。分钟表必须包含 0..239 全部索引；canonical bar close 固定为 `09:31..11:30,13:01..15:00`，与逐笔交易桶标签分离，禁止把 09:30 桶标签当成 bar 的 `available_at`。逐笔只允许映射到冻结的 09:25/09:30、上午、下午和 14:59/15:00 桶。分钟与逐笔允许午盘/收盘的少量逐桶归属差异，但全日成交量必须严格守恒。high/low/amount/cumulative VWAP 一律来自逐笔；任何 route/query/coverage/integrity 缺口都进入 symbol/day 删失，不回退 raw 或日线近似。historical name 是 ST/制度判断的必需 PIT 事实：缺失或空值时删失该日，包含 ST 时固定为 `st_5`，且必须先于上下限价推导。
 
 ## 聚合
 

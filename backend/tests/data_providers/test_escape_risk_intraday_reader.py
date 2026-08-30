@@ -8,6 +8,7 @@ from app.data_providers.fquant.escape_risk_intraday import (
     CatalogPinnedEscapeRiskIntradayReader,
     EscapeRiskIntradayIntegrityError,
     _minute_times,
+    _minute_timestamp,
 )
 
 
@@ -84,6 +85,16 @@ def _complete_rows():
         clock = _minute_times(index)[-1]
         trans_rows.append((clock, price - 0.01, price + 0.01, 100, price * 100))
     return minute_rows, trans_rows
+
+
+def test_minute_timestamps_use_sealed_bar_close_not_transaction_bucket():
+    day = date(2025, 8, 28)
+    assert _minute_times(0) == ("09:25", "09:30")
+    assert _minute_timestamp(day, 0).strftime("%H:%M") == "09:31"
+    assert _minute_timestamp(day, 59).strftime("%H:%M") == "10:30"
+    assert _minute_timestamp(day, 119).strftime("%H:%M") == "11:30"
+    assert _minute_timestamp(day, 120).strftime("%H:%M") == "13:01"
+    assert _minute_timestamp(day, 239).strftime("%H:%M") == "15:00"
 
 
 def test_build_day_reconciles_hands_to_shares_and_uses_trans_amount():

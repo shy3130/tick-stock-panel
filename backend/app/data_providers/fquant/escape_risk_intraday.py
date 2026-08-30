@@ -88,9 +88,13 @@ def _minute_times(index: int) -> tuple[str, ...]:
 
 
 def _minute_timestamp(day: date, index: int) -> datetime:
-    clock = _minute_times(index)[-1]
-    hour, minute = (int(part) for part in clock.split(":"))
-    return datetime.combine(day, time(hour, minute), tzinfo=_SHANGHAI)
+    if 0 <= index <= 119:
+        close = datetime.combine(day, time(9, 31)) + timedelta(minutes=index)
+    elif 120 <= index <= 239:
+        close = datetime.combine(day, time(13, 1)) + timedelta(minutes=index - 120)
+    else:
+        raise EscapeRiskIntradayIntegrityError(f"unexpected minute_index={index}")
+    return close.replace(tzinfo=_SHANGHAI)
 
 
 def _tdx_code(symbol: str) -> str:

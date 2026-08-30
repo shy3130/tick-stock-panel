@@ -13,6 +13,14 @@ def _reader(tmp_path):
     conn.execute("CREATE TABLE daily_markets (code VARCHAR, asset_type INTEGER, trade_date DATE, price DOUBLE, Ztj DOUBLE, Jrkpj DOUBLE, Zgj DOUBLE, Zdj DOUBLE, Zrspj DOUBLE, name VARCHAR)")
     conn.execute("INSERT INTO daily_markets VALUES ('000001', 1, '2024-01-02', 10.4, 11, 10, 11, 9, 9.5, 'ABC')")
     conn.execute("INSERT INTO daily_markets VALUES ('000001', 1, '2024-01-03', 10.5, 11, 10, 11, 9, NULL, 'ABC')")
+    conn.execute(
+        "INSERT INTO daily_markets VALUES "
+        "('000002', 1, '2024-01-02', 9.8, 10.5, 10, 10.5, 9.5, 10, '*ST ABC')"
+    )
+    conn.execute(
+        "INSERT INTO daily_markets VALUES "
+        "('000003', 1, '2024-01-02', 9.8, 11, 10, 11, 9, 10, NULL)"
+    )
     conn.close()
     manifest = json.dumps({'generation': 'g1', 'entries': [{'logical': 'markets', 'file': db.name}]}).encode()
     return PublishedDailyMarketFactsReader(str(db), 'g1', manifest)
@@ -32,6 +40,37 @@ def test_reader_preserves_direct_case_and_drops_incomplete_fact(tmp_path):
     finally:
         reader.close()
 
+
+def test_st_name_overrides_base_regime_for_lower_limit(tmp_path):
+    reader = _reader(tmp_path)
+    try:
+        daily = reader.limit_band_facts(
+            "000002.SZ", date(2024, 1, 2), date(2024, 1, 2)
+        )[date(2024, 1, 2)]
+        batch = reader.escape_risk_facts(
+            ("000002.SZ",), date(2024, 1, 2)
+        )["000002.SZ"][0]
+        for fact in (daily, batch):
+            assert fact.regime == "st_5"
+            assert fact.is_st is True
+            assert fact.published_limit_down == 9.5
+            assert fact.signal_limit_down is True
+    finally:
+        reader.close()
+
+
+
+def test_missing_pit_name_censors_limit_regime_facts(tmp_path):
+    reader = _reader(tmp_path)
+    try:
+        assert reader.limit_band_facts(
+            "000003.SZ", date(2024, 1, 2), date(2024, 1, 2)
+        ) == {}
+        assert reader.escape_risk_facts(
+            ("000003.SZ",), date(2024, 1, 2)
+        ) == {}
+    finally:
+        reader.close()
 
 def test_turnover_fields_missing_fail_closed_without_breaking_limit_facts(tmp_path):
     reader = _reader(tmp_path)

@@ -26,7 +26,7 @@ from .escape_risk import (
 )
 from .models import Detection, DetectionEvidence
 
-TAIL_START_INDEX = 210  # 14:30
+TAIL_START_INDEX = 209  # 14:30 close
 TAIL_DROP_MIN = 0.02
 TAIL_SPEED_RATIO_MIN = 3.0
 CLOSE_LOCATION_MAX = 0.20
@@ -36,8 +36,8 @@ STALL_CLOSE_CHANGE_MAX = 0.01
 STALL_INTRADAY_HIGH_MIN = 0.03
 HIGH_OPEN_MIN = 0.02
 VWAP_BREAK_MINUTES = 5
-EARLY_FIRST_WINDOW_END = 29  # 09:59
-EARLY_SIGNAL_INDEX = 60  # 10:30
+EARLY_FIRST_WINDOW_END = 29  # 10:00 close
+EARLY_SIGNAL_INDEX = 59  # 10:30 close
 TURNOVER_RATIO_MIN = 2.0
 PRICE_TOLERANCE = 0.005
 
@@ -148,14 +148,15 @@ def _opened_limit_up(day: IntradayDay) -> Detection:
     qualified = bool(touched) and day.minutes[-1].close < threshold
     first_touch = touched[0] if touched else len(day.minutes) - 1
     open_indices: list[int] = []
-    previous_sealed = False
+    seen_touch = False
+    sealed = False
     for index, bar in enumerate(day.minutes):
-        touched_and_opened = bar.high >= threshold and bar.close < threshold
-        broke_seal = previous_sealed and bar.close < threshold
-        if touched_and_opened or broke_seal:
-            if not open_indices or open_indices[-1] != index:
-                open_indices.append(index)
-        previous_sealed = bar.close >= threshold
+        touched_now = bar.high >= threshold
+        sealed_now = bar.close >= threshold
+        if not sealed_now and (sealed or (touched_now and not seen_touch)):
+            open_indices.append(index)
+        seen_touch = seen_touch or touched_now or sealed_now
+        sealed = sealed_now
     execution_index = open_indices[0] if open_indices else first_touch
     execution = day.minutes[execution_index]
     return _detection(
@@ -304,8 +305,7 @@ def _early_stall(day: IntradayDay) -> Detection:
     first_high = max(bar.high for bar in first)
     later_high = max(bar.high for bar in second)
     qualified = (
-        first_high > day.open_price
-        and later_high <= first_high + PRICE_TOLERANCE
+        later_high <= first_high + PRICE_TOLERANCE
         and signal.close < signal.cumulative_vwap
     )
     return _detection(

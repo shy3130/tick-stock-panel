@@ -22,13 +22,11 @@ CST = ZoneInfo("Asia/Shanghai")
 
 def _timestamp(day, index):
     if index <= 119:
-        clock = datetime.combine(day, time(9, 30), tzinfo=CST) + timedelta(minutes=index)
-    elif index <= 238:
-        clock = datetime.combine(day, time(13, 0), tzinfo=CST) + timedelta(
+        clock = datetime.combine(day, time(9, 31), tzinfo=CST) + timedelta(minutes=index)
+    else:
+        clock = datetime.combine(day, time(13, 1), tzinfo=CST) + timedelta(
             minutes=index - 120
         )
-    else:
-        clock = datetime.combine(day, time(15, 0), tzinfo=CST)
     return clock
 
 
@@ -116,14 +114,32 @@ def test_s2_tail_dive_and_s3_opened_limit_up_are_deterministic():
     day = date(2025, 8, 28)
     prices = [100.0] * 211 + [100.0 - 3.0 * (index - 210) / 29 for index in range(211, 240)]
     highs = list(prices)
-    highs[50] = 110.0
+    highs[50:53] = [110.0, 110.0, 110.0]
     result = evaluate(make_day(day, prices=prices, highs=highs), history_before(day))
     evidence = evidence_by_signal(result)
     assert evidence["s2"].qualified is True
     assert evidence["s2"].values["execution_session"] == "next_open"
+    assert evidence["s2"].values["tail_start"].endswith("14:30:00+08:00")
     assert evidence["s3"].qualified is True
     assert evidence["s3"].values["sealed_at_close"] is False
     assert evidence["s3"].values["open_count"] == 1
+
+
+def test_s3_counts_opening_episodes_after_reseal():
+    day = date(2025, 8, 28)
+    prices = [100.0] * 240
+    highs = list(prices)
+    highs[50:53] = [110.0, 110.0, 110.0]
+    prices[60] = highs[60] = 110.0
+    highs[61] = 110.0
+    evidence = evidence_by_signal(
+        evaluate(
+            make_day(day, prices=prices, highs=highs),
+            history_before(day),
+        )
+    )["s3"]
+    assert evidence.qualified is True
+    assert evidence.values["open_count"] == 2
 
 
 def test_s4_s5_s6_s7_frozen_thresholds():
@@ -150,6 +166,25 @@ def test_s4_s5_s6_s7_frozen_thresholds():
     assert evidence["s5"].values["branch"] == "reopened_above_pre_close"
     assert evidence["s6"].qualified is True
     assert evidence["s7"].qualified is True
+
+
+def test_s7_accepts_flat_or_declining_first_window():
+    day = date(2025, 8, 28)
+    prices = [100.0 - index / 100 for index in range(240)]
+    evidence = evidence_by_signal(
+        evaluate(
+            make_day(
+                day,
+                prices=prices,
+                highs=prices,
+                vwaps=[101.0] * 240,
+                open_price=100.0,
+            ),
+            history_before(day),
+        )
+    )["s7"]
+    assert evidence.qualified is True
+    assert evidence.values["available_at"].endswith("10:30:00+08:00")
 
 
 def test_s5_execution_waits_until_limit_down_reopens():

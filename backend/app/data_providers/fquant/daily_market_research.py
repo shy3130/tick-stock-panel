@@ -403,7 +403,7 @@ class PublishedDailyMarketFactsReader:
         for day, raw_open, raw_high, raw_low, raw_close, pre_close_raw, ztj, stock_name in rows:
             if not isinstance(day, date):
                 continue
-            regime = regime_by_day.get(day)
+            base_regime = regime_by_day.get(day)
             # Fail closed: an incomplete row is not provable point-in-time
             # evidence.  Emitting a half-fact (e.g. a band without its raw
             # bar or pre_close) would let consumers trade on guesses, so the
@@ -411,11 +411,14 @@ class PublishedDailyMarketFactsReader:
             if (
                 raw_open is None or raw_high is None or raw_low is None
                 or raw_close is None or pre_close_raw is None or ztj is None
-                or regime is None
+                or base_regime is None
             ):
                 continue
             text = str(stock_name).strip() if stock_name else ""
-            is_st = "ST" in text.upper() if text else None
+            if not text:
+                continue
+            is_st = "ST" in text.upper()
+            regime = "st_5" if is_st else base_regime
             pre_close = float(pre_close_raw)
             upper = float(ztj)
             lower = round(pre_close * (1 - REGIME_PCT[regime]), 2)
@@ -584,9 +587,9 @@ class PublishedDailyMarketFactsReader:
             turnover_raw,
         ) in rows:
             symbol = code_to_symbol(str(code), 1)
-            regime = self._regime(symbol, day)
+            base_regime = self._regime(symbol, day)
             if (
-                regime is None
+                base_regime is None
                 or raw_open is None
                 or raw_high is None
                 or raw_low is None
@@ -595,10 +598,14 @@ class PublishedDailyMarketFactsReader:
                 or ztj is None
             ):
                 continue
+            text = str(stock_name).strip() if stock_name else ""
+            if not text:
+                continue
+            is_st = "ST" in text.upper()
+            regime = "st_5" if is_st else base_regime
             pre_close = float(pre_close_raw)
             upper = float(ztj)
             lower = round(pre_close * (1 - REGIME_PCT[regime]), 2)
-            text = str(stock_name).strip() if stock_name else ""
             fact = MarketFact(
                 raw_open=float(raw_open),
                 raw_high=float(raw_high),
@@ -608,7 +615,7 @@ class PublishedDailyMarketFactsReader:
                 published_limit_up=upper,
                 published_limit_down=lower,
                 regime=regime,
-                is_st=("ST" in text.upper()) if text else None,
+                is_st=is_st,
                 name=text or None,
                 signal_limit_up=float(raw_high) >= upper - 0.005,
                 signal_limit_down=float(raw_low) <= lower + 0.005,
