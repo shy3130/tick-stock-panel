@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import math
+from datetime import date, timedelta
 from typing import Any
 
 from .benchmark import EqualWeightBenchmark
@@ -76,6 +77,28 @@ def _unavailable(request, caps, reasons):
     )
 
 
+def _canonical_closes(rows, symbol):
+    series = {}
+    for row in rows:
+        day = row.get("date")
+        value = row.get("close")
+        if not isinstance(day, date) or value is None:
+            continue
+        try:
+            close = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(close):
+            series[day] = close
+    if not series:
+        return {}, {
+            "symbol": symbol,
+            "code": "censor_canonical_close_missing",
+            "detail": {"rows": len(rows)},
+        }
+    return series, None
+
+
 def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpoleResponse:
     caps = assess_capability(reader)
     if reader is None or not caps.methods_complete or not caps.provenance_valid:
@@ -87,7 +110,7 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
     symbols = sorted(set(request.symbols or reader.universe(request.start, request.end)))
     events = []
     censored = []
-    diagnostics = {"poles": 0, "failures": 0, "re_established": 0}
+    diagnostics = {"poles": 0, "failures": 0, "re_established": 0, "failure_records": []}
     panel = {}
     weeks_total = complete_weeks = incomplete_weeks = 0
     for symbol in symbols:
@@ -97,7 +120,11 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
         if error:
             censored.append(error)
             continue
-        panel[symbol] = {r["date"]: float(r["raw_close"]) for r in rows}
+        adjusted, close_error = _canonical_closes(rows, symbol)
+        if close_error:
+            censored.append(close_error)
+        else:
+            panel[symbol] = adjusted
         facts = reader.limit_regime_facts(symbol, warm_start, request.end)
         weekly = aggregate_weekly_bars(
             symbol=symbol, rows=rows, market_days=calendar, window_end=request.end
@@ -118,12 +145,19 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
         censored.extend(cut)
         for key in ("poles", "failures", "re_established"):
             diagnostics[key] += int(diag.get(key, 0))
+        diagnostics["failure_records"].extend(diag.get("failure_records", []))
     diagnostics["re_establishment_rate"] = (
         diagnostics["re_established"] / diagnostics["failures"] if diagnostics["failures"] else None
     )
     benchmark = EqualWeightBenchmark(panel, calendar)
     research = build_research_layer(
-        events, calendar, benchmark, oos_start=request.oos_start, cost_bps=request.cost_bps
+        events,
+        calendar,
+        benchmark,
+        oos_start=request.oos_start,
+        cost_bps=request.cost_bps,
+        diagnostics=diagnostics,
+        source_provenance=reader.source_provenance(),
     )
     coverage = {
         "symbols_total": len(symbols),
@@ -141,7 +175,8 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
             "provider_id": reader.provider_id(),
         },
         "sources": reader.source_provenance(),
-        "price_scale": "raw",
+        "pattern_price_scale": "raw",
+        "return_price_scale": "canonical_adjusted",
         "benchmark_source": "sealed_universe_equal_weight",
     }
     response = WeeklyFlagpoleResponse(

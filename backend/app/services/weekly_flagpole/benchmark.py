@@ -38,3 +38,33 @@ def layer_status() -> dict[str, dict[str, str]]:
         "industry_momentum": {"status": "unavailable", "reason": "industry_layer_not_sealed"},
         "market_index": {"status": "unavailable", "reason": "index_layer_not_sealed"},
     }
+
+
+def attribution_layers(provenance: object) -> dict[str, dict[str, str]]:
+    """Expose F5 layers only when sealed/PIT provenance is explicit."""
+    if not isinstance(provenance, dict):
+        return {
+            "industry_momentum": {
+                "status": "unavailable",
+                "reason": "industry_pit_provenance_missing",
+            },
+            "market_index": {
+                "status": "unavailable",
+                "reason": "market_pit_provenance_missing",
+            },
+        }
+    out = {}
+    for name, label in (("industry_momentum", "industry"), ("market_index", "market")):
+        fact = provenance.get(label)
+        valid = (
+            isinstance(fact, dict)
+            and fact.get("sealed") is True
+            and fact.get("as_of") is not None
+            and fact.get("generation") is not None
+        )
+        out[name] = (
+            {"status": "ok", "source": "sealed_pit"}
+            if valid
+            else {"status": "unavailable", "reason": f"{label}_pit_provenance_missing"}
+        )
+    return out

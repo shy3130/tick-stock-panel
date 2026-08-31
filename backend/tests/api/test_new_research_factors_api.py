@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 import app.api.research as research_api
 from app.services.daily_event_research.models import (
     UnavailabilityReason as DailyUnavailableReason,
+)
+from app.services.daily_event_research.models import (
     unavailable_response as unavailable_daily_response,
 )
 from app.services.retrieval_routing_research import (
@@ -152,6 +154,7 @@ def test_escape_capability_exposes_intraday_requirements(monkeypatch):
             "symbols": ["000001.SZ"],
             "start": "2024-01-01",
             "end": "2024-12-31",
+            "oos_start": "2024-07-01",
         },
     )
     assert post.status_code == 200

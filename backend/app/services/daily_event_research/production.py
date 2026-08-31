@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import date, timedelta
-from typing import Any, Sequence
+from typing import Any
 
 from app.services.hold_firm_patterns.adapters import (
     PinnedCanonicalDailyReader,
@@ -254,6 +255,7 @@ def evaluate_escape_risk_production(
     symbols: Sequence[str],
     start: date,
     end: date,
+    oos_start: date,
     canonical_reader: Any,
     cost_bps: float = 10.0,
     intraday_reader: Any | None = None,
@@ -327,13 +329,13 @@ def evaluate_escape_risk_production(
             intraday_status = f"unavailable_reader:{exc}"
     if intraday_status != "available":
         external_censors = {
-            signal_id: ("censor_intraday_data_missing",)
-            for signal_id in MINUTE_SIGNAL_IDS
+            signal_id: ("censor_intraday_data_missing",) for signal_id in MINUTE_SIGNAL_IDS
         }
     report = aggregate_escape_signals(
         detections,
         bars_by_symbol,
         cost_bps=cost_bps,
+        oos_start=oos_start,
         external_censor_codes=external_censors,
     )
     return {
@@ -344,6 +346,7 @@ def evaluate_escape_risk_production(
             "symbols": list(symbols),
             "start": start.isoformat(),
             "end": end.isoformat(),
+            "oos_start": oos_start.isoformat(),
             "cost_bps": cost_bps,
         },
         "identity": {

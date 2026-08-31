@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+import pytest
+
 from app.services.swing_zigzag import KIND_HIGH, KIND_LOW, ZigzagPivot
 from app.services.weekly_flagpole import detector
 from app.services.weekly_flagpole.weekly import WeeklyBar
@@ -70,3 +72,16 @@ def test_f3_links_new_pole_within_thirteen_weeks(monkeypatch):
     assert (
         diag["failures"] >= 1 and diag["re_established"] >= 1 and diag["re_establishment_rate"] > 0
     )
+
+
+def test_forward_uses_adjusted_close_not_raw_split_price():
+    calendar = [date(2026, 1, 1) + timedelta(days=i) for i in range(130)]
+    rows = {
+        calendar[0]: {"close": 10.0, "raw_close": 20.0},
+        calendar[21]: {"close": 11.0, "raw_close": 10.0},
+    }
+    result = detector._forward(rows, calendar, calendar[0])
+    assert result["base_close"] == pytest.approx(10.0)
+    assert result["forward_21d_return"] == pytest.approx(0.10)
+    assert "base_raw_close" not in result
+    assert all("raw_return" not in key for key in result)

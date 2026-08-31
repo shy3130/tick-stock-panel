@@ -166,3 +166,117 @@ def test_benchmark_requirement_is_explicitly_censored():
     signal = next(item for item in report.signals if item.signal_id == "s8")
     assert signal.verdict == "unavailable_benchmark_missing"
     assert EscapeCensorReason.BENCHMARK_MISSING.value in signal.censor_codes
+
+
+def test_oos_adjudication_is_independent_and_fail_closed():
+    bars = make_bars([10, 9, 8, 7, 8, 9, 10, 11, 12, 13, 14, 15] * 8)
+    detections = [
+        event("escape_s8", bars[40].date),
+        event("escape_s9", bars[41].date),
+    ]
+    report = aggregate_escape_signals(
+        detections,
+        {SYMBOL: bars},
+        oos_start=bars[30].date,
+    )
+    s8 = next(item for item in report.signals if item.signal_id == "s8")
+    assert s8.oos is not None
+    assert {arm.kind for arm in s8.oos.baselines} == {"no_signal_hold", "ma20", "atr"}
+    assert s8.verdict == "unavailable_insufficient_oos_samples"
+
+
+def test_s10_pit_censor_does_not_affect_other_signals():
+    bars = make_bars([10, 9, 8, 7, 8, 9, 10, 11])
+    report = aggregate_escape_signals(
+        [
+            Detection(
+                "escape_s10",
+                "intraday_v1",
+                SYMBOL,
+                bars[2].date,
+                censor=EscapeCensorReason.PIT_FACT_MISSING,
+            ),
+            event("escape_s8", bars[2].date),
+        ],
+        {SYMBOL: bars},
+    )
+    s10 = next(item for item in report.signals if item.signal_id == "s10")
+    s8 = next(item for item in report.signals if item.signal_id == "s8")
+    assert EscapeCensorReason.PIT_FACT_MISSING.value in s10.censor_codes
+    assert EscapeCensorReason.PIT_FACT_MISSING.value not in s8.censor_codes
+    assert all(stat.events == 0 for stat in s10.horizons)
+    assert s8.horizons[0].events == 1
+
+
+def test_low_oos_sample_is_unavailable():
+    bars = make_bars([10.0 + index for index in range(50)])
+    report = aggregate_escape_signals(
+        [event("escape_s8", bars[30].date)],
+        {SYMBOL: bars},
+        oos_start=bars[20].date,
+    )
+    signal = next(item for item in report.signals if item.signal_id == "s8")
+    assert signal.verdict == "unavailable_insufficient_oos_samples"
+
+
+def test_minute_gap_stays_censored_without_daily_fallback():
+    bars = make_bars([10.0 + index for index in range(20)])
+    report = aggregate_escape_signals(
+        [],
+        {SYMBOL: bars},
+        external_censor_codes={"s2": [EscapeCensorReason.INTRADAY_DATA_MISSING.value]},
+        oos_start=bars[5].date,
+    )
+    signal = next(item for item in report.signals if item.signal_id == "s2")
+    assert signal.verdict == "unavailable_no_qualified_events"
+    assert EscapeCensorReason.INTRADAY_DATA_MISSING.value in signal.censor_codes
+    assert all(item.events == 0 for item in signal.horizons)
+
+
+def test_oos_report_exposes_strongest_baseline_bootstrap_metadata():
+    bars = make_bars([10.0 + index for index in range(100)])
+    detections = [event("escape_s8", bars[index].date) for index in range(30, 60)]
+    report = aggregate_escape_signals(
+        detections,
+        {SYMBOL: bars},
+        oos_start=bars[20].date,
+    )
+    signal = next(item for item in report.signals if item.signal_id == "s8")
+    assert signal.oos is not None
+    assert signal.oos.comparator is None or signal.oos.comparator in {
+        "no_signal_hold",
+        "ma20",
+        "atr",
+    }
+    assert isinstance(signal.oos.valid_replicates, int)
+
+
+def test_oos_cluster_gate_stays_unavailable_with_one_symbol():
+    bars = make_bars([10.0 + index for index in range(100)])
+    detections = [event("escape_s8", bars[index].date) for index in range(30, 60)]
+    report = aggregate_escape_signals(
+        detections,
+        {SYMBOL: bars},
+        oos_start=bars[20].date,
+    )
+    signal = next(item for item in report.signals if item.signal_id == "s8")
+    assert signal.verdict == "unavailable_insufficient_oos_samples"
+    assert signal.oos is not None
+    assert signal.oos.valid_replicates == 0
+    assert any(value is None for value in signal.oos.bootstrap_lower_by_horizon.values())
+
+
+def test_ma20_penultimate_close_executes_at_last_bar_open():
+    closes = [10.0] * 21 + [1.0, 5.0]
+    opens = [10.0] * 22 + [2.0]
+    bars = make_bars(closes, opens=opens)
+    report = aggregate_escape_signals(
+        [event("escape_s9", bars[20].date)],
+        {SYMBOL: bars},
+        horizons=(3,),
+        oos_start=bars[0].date,
+    )
+    signal = next(item for item in report.signals if item.signal_id == "s9")
+    assert signal.oos is not None
+    ma20 = next(item for item in signal.oos.baselines if item.kind == "ma20")
+    assert ma20.net_return_mean_by_horizon[3] == pytest.approx(2.0 / 10.0 - 1.0 - 0.001)

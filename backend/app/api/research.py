@@ -21,6 +21,7 @@ from app.data_providers.fquant.daily_market_research import (
 
 from app.services.macd_stages import (
     MacdStagesRequest,
+    evaluate_macd_arms,
     evaluate_macd_stages,
     macd_stages_availability,
 )
@@ -47,7 +48,9 @@ from app.services.short_pool import (
 )
 from app.services.single_yang_no_break import (
     SINGLE_YANG_DEFINITION,
+    SingleYangCompositeReader,
     evaluate_single_yang,
+    evaluate_single_yang_increment,
     run_single_yang_research,
 )
 from app.services.single_yang_no_break import (
@@ -176,6 +179,7 @@ class EscapeRiskEvaluateIn(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=200)
     start: date
     end: date
+    oos_start: date
     cost_bps: float = Field(default=10.0, ge=0.0, le=1000.0)
 
     @field_validator("symbols")
@@ -187,6 +191,8 @@ class EscapeRiskEvaluateIn(BaseModel):
     def validate_dates(self):
         if self.start > self.end:
             raise ValueError("start must be <= end")
+        if not self.start <= self.oos_start <= self.end:
+            raise ValueError("oos_start must be within [start, end]")
         return self
 
 
@@ -847,19 +853,44 @@ def get_single_yang_no_break(request: Request):
 
 @router.post("/factors/single-yang-no-break/evaluate")
 def evaluate_single_yang_factor(body: SingleYangEvaluateIn, request: Request):
+    markets = None
     try:
-        return evaluate_single_yang(
-            reader=getattr(
-                getattr(request.app.state, "repo", None), "generation_pinned_daily_reader", None
-            ),
+        reader = getattr(
+            getattr(request.app.state, "repo", None),
+            "generation_pinned_daily_reader",
+            None,
+        )
+        response = evaluate_single_yang(
+            reader=reader,
             start=body.start,
             end=body.end,
             symbols=body.symbols,
             oos_start=body.oos_start,
             cost_bps=body.cost_bps,
         )
+        increment_reader = reader
+        manifest = getattr(reader, "manifest", None)
+        if callable(manifest):
+            try:
+                markets = PublishedDailyMarketFactsReader.from_canonical_manifest(manifest())
+                increment_reader = SingleYangCompositeReader(reader, markets)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                markets = None
+        response["increment_research"] = evaluate_single_yang_increment(
+            reader=increment_reader,
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+            cost_bps=body.cost_bps,
+        )
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(markets, "close", None)
+        if callable(close):
+            close()
 
 
 @router.get("/macd-stages")
@@ -873,13 +904,22 @@ def get_macd_stages(request: Request):
 @router.post("/factors/macd-stages/evaluate")
 def evaluate_macd_stages_factor(body: MacdStagesRequest, request: Request):
     try:
-        return evaluate_macd_stages(
-            resolve_macd_reader(getattr(request.app.state, "repo", None)),
+        reader = resolve_macd_reader(getattr(request.app.state, "repo", None))
+        response = evaluate_macd_stages(
+            reader,
             start=body.start,
             end=body.end,
             symbols=body.symbols,
             oos_start=body.oos_start,
         )
+        response["arms_research"] = evaluate_macd_arms(
+            reader,
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+        )
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1192,6 +1232,7 @@ def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
             symbols=body.symbols,
             start=body.start,
             end=body.end,
+            oos_start=body.oos_start,
             canonical_reader=canonical,
             intraday_reader=intraday_reader,
             cost_bps=body.cost_bps,

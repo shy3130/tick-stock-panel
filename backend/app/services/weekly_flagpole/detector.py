@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date
 
 from app.services.swing_zigzag import KIND_HIGH, KIND_LOW, confirmed_zigzag
@@ -17,18 +18,26 @@ from .models import (
 )
 
 
+def _finite(value):
+    try:
+        return value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _forward(rows, calendar, anchor):
-    base = rows.get(anchor, {}).get("raw_close")
-    out = {"base_raw_close": base}
+    base_row = rows.get(anchor, {})
+    base = float(base_row["close"]) if _finite(base_row.get("close")) else None
+    out = {"base_close": base}
     index = {d: i for i, d in enumerate(calendar)}
     idx = index.get(anchor)
     for h in FORWARD_HORIZONS:
         value = None
         if base is not None and idx is not None and idx + h < len(calendar):
-            close = rows.get(calendar[idx + h], {}).get("raw_close")
-            if close is not None:
-                value = float(close) / float(base) - 1
-        out[f"forward_{h}d_raw_return"] = value
+            end_row = rows.get(calendar[idx + h], {})
+            if _finite(end_row.get("close")):
+                value = float(end_row["close"]) / base - 1
+        out[f"forward_{h}d_return"] = value
     return out
 
 

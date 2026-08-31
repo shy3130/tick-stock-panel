@@ -162,6 +162,7 @@ def test_escape_production_censors_intraday_when_reader_is_missing():
         symbols=[SYMBOL],
         start=date(2023, 6, 1),
         end=date(2024, 1, 31),
+        oos_start=date(2023, 10, 1),
         canonical_reader=Canonical(rows),
     )
     assert response["status"] == "ok"
@@ -172,9 +173,7 @@ def test_escape_production_censors_intraday_when_reader_is_missing():
     }
     assert set(response["capabilities"]["intraday"]["signals"].values()) == {"available"}
     assert response["capabilities"]["intraday"]["runtime_status"] == "unavailable_reader"
-    minute_reports = {
-        item["signal_id"]: item for item in response["report"]["signals"]
-    }
+    minute_reports = {item["signal_id"]: item for item in response["report"]["signals"]}
     assert all(
         "censor_intraday_data_missing" in minute_reports[signal]["censor_codes"]
         for signal in ("s2", "s3", "s4", "s5", "s6", "s7", "s10")

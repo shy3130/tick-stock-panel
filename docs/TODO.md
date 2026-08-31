@@ -220,7 +220,7 @@
 
 - [~] **验证并评估 `MACD(10,20,7) + 零轴回踩 + MA5/MA20` 多阶段趋势因子**
 
-  > 复核状态（2026-08-29）：在 canonical generation `20260829T002957-4b1bfcad` 上扩大到 200 标的，得到 IS 91,594 行、OOS 78,684 行与完整六状态分布；现有入口仅输出阶段序列，不实现 TODO 要求的 `(10,20,7)` vs `(12,26,9)`/MA 基线、成本后收益及最终 verdict，故保持 `[~]`。
+  > 实施与复核状态（2026-08-31）：现有入口已追加固定 `(12,26,9)` / `(10,20,7)` 双基线，以及交叉→零轴突破→零轴回踩→MA5/MA20 风控五臂的逐阶段 OOS 裁决；统一使用 canonical 复权 `close`、次交易日收盘执行、往返成本、已平仓标的门禁与 symbol-cluster bootstrap，原六状态序列保持兼容。真实 `600519.SH` 2024-01-01..2026-08-28 接口烟测返回 `status=ok`，五臂在单标的样本均按门禁 `unavailable`。尚未完成全市场 walk-forward、行情/行业失败分层，以及最大回撤、Sharpe/Sortino、换手率等完整验收指标，故保持 `[~]`。
 
   **定位**
 
@@ -272,7 +272,7 @@
 
 - [~] **独立复现“单阳不破（首板涨停后缩量回调）”形态因子**
 
-  > 复核状态（2026-08-29）：同一 pinned canonical generation 的 200 标的扩大评估得到 14,320 个完整事件（IS 8,158 / OOS 6,162，另有 71 个 censored）；入口仍未复现原稿长周期，也没有“全部首板”基线、成本后增量与最终 verdict，故保持 `[~]`。
+  > 实施与复核状态（2026-08-31）：现有入口已追加 1/2/3/5/10/20/60 日长周期、全部 exact first-board 基线、T+1 次日 canonical 复权开盘执行、成本后增量与 symbol-cluster bootstrap；涨停制度来自同一 canonical manifest pin 的 markets `published_limit_up`，缺 PIT 事实即 fail-closed，不再按代码前缀近似。真实 `600519.SH` 2024-01-01..2026-08-28 得到 25 个形态事件、0 个首板基线事件，主 horizon 因样本不足保持 `unavailable`。尚需全市场冻结 OOS 裁决与完整失败分层，故保持 `[~]`。
 
   **定位**
 
@@ -623,7 +623,7 @@
 
 - [~] **评估“10个盘中逃命信号”风险信号组（S1-S10 卖出侧事件因子）**
 
-  > 复核状态（2026-08-29）：S1-S10 的确定性检测与 production 聚合均已接入；S2-S7/S10 使用 provider 窄扩展的 catalog-pinned minutes/trans composite reader，逐笔重建 high/low/amount/VWAP，并以 240 桶、全日成交量守恒和 generation manifest 做 fail-closed 完整性门禁。真实 `600519.SH` 2025-08-21..28 六个交易日读取 6/6 可用；S10 因该历史区间 `ltgb.available_at` 不可证明而单独返回 `censor_pit_fact_missing`，没有降级当前快照。仍缺冻结 OOS 出场基线与全样本 coverage 复核，verdict 仍为 `unavailable_no_frozen_oos_baseline`，故保持 `[~]`、不得 promoted。
+  > 实施与复核状态（2026-08-31）：S1-S10 检测及 catalog-pinned minutes/trans composite reader保持不变；production 请求现强制显式 `oos_start`，并新增同一信号事件配对的立即退出、无信号持有、MA20、ATR 吊灯三基线，按 T+1/同日执行、退出成本、卖飞率、规避回撤和 symbol-cluster paired bootstrap 相对最强基线独立裁决。真实 `600519.SH` 2025-07-01..08-29 接口烟测中 intraday reader=`available`，S8/S7 因单标的样本不足显式 `unavailable`，S10 继续单独 `censor_pit_fact_missing`，没有降级当前快照。仍缺全市场 coverage 与 S1-S10 各自达到门禁后的最终 verdict，故保持 `[~]`、不得 promoted。
 
   **定位**
 
@@ -901,9 +901,9 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已实现确定性日转周、仅使用已确认摆动点的 streaming zigzag、F1 旗杆/旗面、F2 三种触发口径、F3 失败后 13 周重立、F4 涨停条件消融，以及 sealed 全 A 等权基准；入口为 `POST /api/research/factors/weekly-flagpole/evaluate`。
-  - 真实 `600519.SH` 有界复核返回 `status=ok`：192 个完整周、20 个旗杆、3 个合格事件、16 次失败且 16 次在窗口内重立。
-  - F5 行业动量与市场指数归因仍按缺少 sealed 映射/序列显式 `unavailable`，且尚未完成全市场 walk-forward 裁决，因此保持 `[~]`。
+  - 已实现确定性日转周、仅使用已确认摆动点的 streaming zigzag、F1 旗杆/旗面总体臂、F2 三种介入口径、F3 失败后 13 周重立、F4 同参数严格含涨停 vs 宽松消融，以及 sealed 全 A 等权基准；形态/涨停使用 raw OHLC，21/63/126 日收益与基准强制使用 canonical 复权 `close`，入口为 `POST /api/research/factors/weekly-flagpole/evaluate`。
+  - 真实 `600519.SH` 2022-01-01..2026-08-28 接口烟测返回 `status=ok`：295 个完整周、6 个事件；F1、F2 三臂、F3、F4 三臂均因单标的样本不足按门禁 `unavailable`，未把稀疏事件伪装成结论。
+  - F5 行业动量与市场指数归因仍按缺少 sealed PIT 映射/序列分别显式 `unavailable`，且尚未完成全市场 walk-forward 裁决，因此保持 `[~]`。
 
   来源：作手安神 2026-08-28 视频（`clipper/2026-08-30-zuoshou-anshen-weekly-flagpole.md`，视频 7679022123452615963）。
   定义：周线 2-4 根连续阳线拉起旗杆（累计涨幅<=θ 扫参，“不能拉得特别高”）-> 回踩形成旗面低点 ->

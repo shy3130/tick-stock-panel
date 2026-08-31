@@ -20,3 +20,12 @@
 - 真实 API 复验：十字星 `600519.SH` 返回 644 个父事件日，D1 34 个合格事件且因 OOS 四桶/bootstrap 门槛保持 `unavailable`；周线旗杆返回 192 个完整周、20 个旗杆、3 个合格事件；筹码峰因 `2022-12-21` PIT 换手事实不可证明而 fail-closed 为 `unavailable_pit_turnover_provenance`。
 - 真实逃生窗口全周期复算（2007-01-01 至 2026-08-28）：4,797 个交易日、全 A 14,597,621 行、四条市场腿各 24 个主单元、1,056 个敏感性单元、763 个严格 censor；全 A 覆盖 2007-2026，三指数 pinned 日线仅覆盖 2013-2026，故保守保持 `[~]`。
 - 独立 reviewer 首轮 6 个 P1 均由回归复现并修复；第二轮复核结论为“无 findings”。
+
+## 可审计 OOS 退出裁决扩展（2026-08-31）
+
+- `POST /api/research/factors/escape-risk/evaluate` 现强制调用方显式提交 `oos_start`，并拒绝不在 `[start, end]` 内的边界；production 响应回显该冻结边界。
+- S1-S10 的每个合格事件按同一持仓样本配对比较立即退出、无信号持有、MA20 退出和 ATR 吊灯退出；以终值最高的基线为 strongest baseline，方向统一为 `signal_exit - baseline`，同时披露卖飞与规避回撤。
+- OOS 裁决使用 symbol-cluster paired bootstrap；标的簇或有效复算不足时保持 `unavailable`，不再误标为 `rejected`。MA20/ATR 在倒数第二根触发时固定按下一根开盘执行，避免最后一根收盘偷看。
+- 独立 reviewer 首轮指出 5 个有效边界问题（另含 MACD/单阳共用裁决层），均新增回归后修复；二次只读复核结论为 `no findings`。
+- 本轮研究定向套件最终为 `78 passed`；实现后完整后端为 `3803 passed, 3 skipped, 8 warnings`（170.76s）。收敛 API 无关格式差异后再次运行定向套件仍为 `78 passed`，changed-scope Ruff 与 `git diff --check` 均通过。
+- 真实 `600519.SH` 请求（2025-07-01 至 2025-08-29，`oos_start=2025-07-15`）返回 `status=ok` 且 intraday reader 可用；S8/S7 因单标的样本不足保持 `unavailable`，S10 因 PIT 事实缺失保持严格 censor，没有生成伪结论。
