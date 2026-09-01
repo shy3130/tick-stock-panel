@@ -53,6 +53,7 @@ _MONEYFLOW_WINDOW_MINUTES = 30
 _ACCELERATED_OUTFLOW_CNY = -50_000_000.0
 _MISSING_BUCKET_RATIO = 0.95
 _DUPLICATE_BUCKET_RATIO = 1.20
+_provider_instance = None
 
 
 class MoneyflowState(StrEnum):
@@ -219,7 +220,7 @@ class PositionAnalysisService:
         research_adapter: AgentReachResearchAdapter | None = None,
     ) -> None:
         self._holdings_fetcher = holdings_fetcher
-        self._provider_getter = provider_getter or _active_provider
+        self._provider_getter = provider_getter or _get_data_provider
         self._research_adapter = research_adapter
         self._snapshot_lock = threading.Lock()
         self._daily_snapshot: _DailyHoldingsSnapshot | None = None
@@ -865,10 +866,16 @@ def render_markdown(result: PositionAnalysisResult) -> str:
     return "\n".join(lines)
 
 
-def _active_provider() -> Any:
-    from app.data_providers.registry import get_active_provider_name, get_provider
+def _get_data_provider() -> Any:
+    """Return the process-scoped daily provider tracked by the shutdown chain."""
+    global _provider_instance
+    if _provider_instance is None:
+        from app.data_providers.registry import get_active_provider_name, get_provider
 
-    return get_provider(get_active_provider_name("daily"))
+        provider_name = get_active_provider_name("daily")
+        _provider_instance = get_provider(provider_name)
+        logger.info("position analysis data provider initialized: %s", provider_name)
+    return _provider_instance
 
 
 def _asset_type(symbol: str) -> Literal["stock", "hk", "etf"]:
@@ -1233,13 +1240,32 @@ def _sum_or_none(values) -> float | None:
 
 
 def _has_bucket_gap(times: list[datetime]) -> bool:
-    if len(times) < 3:
-        return False
-    deltas = [later - earlier for earlier, later in pairwise(times) if later > earlier]
-    if not deltas:
-        return False
-    baseline = min(deltas)
-    return any(delta > baseline * 2 for delta in deltas)
+    sessions: dict[tuple[date, str], list[datetime]] = {}
+    for moment in times:
+        clock = moment.timetz().replace(tzinfo=None)
+        if clock <= time(11, 30):
+            session = "morning"
+        elif clock >= time(13, 0):
+            session = "afternoon"
+        else:
+            continue
+        sessions.setdefault((moment.date(), session), []).append(moment)
+
+    for session_times in sessions.values():
+        ordered = sorted(session_times)
+        if len(ordered) < 3:
+            continue
+        deltas = [
+            later - earlier
+            for earlier, later in pairwise(ordered)
+            if later > earlier
+        ]
+        if not deltas:
+            continue
+        baseline = min(deltas)
+        if any(delta > baseline * 2 for delta in deltas):
+            return True
+    return False
 
 
 def _prefix_sums(values) -> list[float]:

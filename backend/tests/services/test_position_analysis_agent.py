@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+import app.services.position_analysis_agent as position_analysis_agent
 
 from app.data_providers.base import ProviderCapabilities
 from app.services.agent_reach_research import (
@@ -182,6 +183,41 @@ def test_recent_slope_is_separate_from_cumulative_net():
     assert assessment.state is MoneyflowState.AVAILABLE
 
 
+def test_moneyflow_gap_detection_ignores_lunch_break_but_keeps_intraday_gaps():
+    complete_rows = [
+        {
+            "bucket_time": bucket_time,
+            "super_large_net": 1,
+            "large_net": 1,
+            "total_amount": 1,
+        }
+        for bucket_time in ("11:28", "11:29", "11:30", "13:00", "13:01", "13:02")
+    ]
+    complete = _assess_moneyflow(
+        complete_rows,
+        datetime(2026, 8, 31, 13, 2),
+        None,
+    )
+    assert complete.state is MoneyflowState.AVAILABLE
+
+    incomplete_rows = [
+        {
+            "bucket_time": bucket_time,
+            "super_large_net": 1,
+            "large_net": 1,
+            "total_amount": 1,
+        }
+        for bucket_time in ("13:00", "13:01", "13:05")
+    ]
+    incomplete = _assess_moneyflow(
+        incomplete_rows,
+        datetime(2026, 8, 31, 13, 5),
+        None,
+    )
+    assert incomplete.state is MoneyflowState.INCOMPLETE
+    assert "分钟桶断档" in incomplete.note
+
+
 def test_cross_check_below_one_marks_missing_buckets_and_degrades():
     rows = [
         {"bucket_time": "09:30", "super_large_net": -1_000_000, "large_net": -500_000, "total_amount": 83_000_000},
@@ -265,6 +301,25 @@ def test_holdings_snapshot_is_frozen_after_first_success_but_retries_initial_fai
     assert second.rows[0].quantity == 1000
     assert third.rows[0].quantity == 1000
     assert calls == 2
+
+
+def test_daily_provider_factory_reuses_process_scoped_provider(monkeypatch):
+    provider = object()
+    calls: list[str] = []
+
+    monkeypatch.setattr(position_analysis_agent, "_provider_instance", None)
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability: "fquant_local",
+    )
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_provider",
+        lambda name: calls.append(name) or provider,
+    )
+
+    assert position_analysis_agent._get_data_provider() is provider
+    assert position_analysis_agent._get_data_provider() is provider
+    assert calls == ["fquant_local"]
 
 
 def test_moneyflow_ignores_medium_and_small_fields_and_freezes_stale_data():
