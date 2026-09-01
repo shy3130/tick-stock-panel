@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.retrieval_routing_research import (
     DEFAULT_FEATURE_IDS,
     RoutingUnavailableReason,
@@ -36,7 +36,7 @@ class MeraFullMarketRequest:
 
     start: date
     end: date
-    symbols: tuple[str, ...]
+    symbols: list[str]
     routing: RetrievalRoutingRequest
 
 
@@ -53,7 +53,24 @@ class MeraAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> MeraFullMarketRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters,
+                {"start", "end", "label_horizon", "cost_bps", "placebo_rounds", "feature_names"},
+            )
+            return MeraFullMarketRequest(
+                start=parameters["start"],
+                end=parameters["end"],
+                symbols=list(cohort),
+                routing=RetrievalRoutingRequest(
+                    label_horizon=parameters["label_horizon"],
+                    cost_bps=parameters["cost_bps"],
+                    placebo_rounds=parameters["placebo_rounds"],
+                    feature_names=parameters["feature_names"],
+                ),
+            )
         # The FULL cohort is embedded in a single request; the evaluator is
         # invoked exactly once — no batching, no verdict stitching.
         # ``oos_start`` is accepted for interface uniformity and deliberately
@@ -62,7 +79,7 @@ class MeraAdapter:
         return MeraFullMarketRequest(
             start=start,
             end=end,
-            symbols=tuple(cohort),
+            symbols=list(cohort),
             routing=RetrievalRoutingRequest(
                 label_horizon=DEFAULT_LABEL_HORIZON,
                 cost_bps=cost_bps if cost_bps is not None else DEFAULT_COST_BPS,
@@ -105,7 +122,7 @@ class MeraAdapter:
                 request.symbols,
                 request.start,
                 request.end,
-                feature_ids=DEFAULT_FEATURE_IDS,
+                feature_ids=request.routing.feature_names or DEFAULT_FEATURE_IDS,
                 label_horizon=request.routing.label_horizon,
             )
         except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:

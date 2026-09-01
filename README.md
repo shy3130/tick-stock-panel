@@ -219,6 +219,17 @@ git pull
 - 权重表 + 环形图 + 年化波动 / 分散度统计
 - 可从策略池一键导入命中标的再做组合配置
 
+### 🧬 研究工作台(Research Workbench)
+
+`/research` 统一承载 **19 项公开研究因子**，把工程完成度、数据可用性、研究裁决与晋级状态分开呈现，不再用多个因子专用页面或接口混淆这些状态：
+
+- Factor Catalog 展示全部因子的参数 schema、数据依赖、已知缺口、支持 scope 与最近运行；参数表单只由七类受控字段生成
+- 每次运行先做 preflight，冻结 symbol/full-market scope、日期、数据 generation、manifest、cohort 与缺失原因；样本/PIT 覆盖不足以正常 `unavailable` Run 收口
+- Interactive Run 使用持久化队列与 SSE；11 项既有全市场研究由单实例独立进程执行，结果发布为不可变 artifact
+- Run Center/Detail 提供摘要、arms/baseline、horizon、风险曲线、事件分页与数据谱系，并可关联研究假设和证据
+- Automation 保留三类 recap 定时模板，并新增冻结 factor/scope/parameters 的 `factor_run`；factor Run 不冒充旧 run-card
+- 研究结果**不会自动进入策略池、Agent 候选或交易执行**；前端只展示后端指标和 verdict，不重算研究口径
+
 ### 📡 监控中心(Monitor)
 
 统一规则引擎,一个页面管理**四类监控**(策略 · 个股信号 · 价格涨跌 · 全市场异动):

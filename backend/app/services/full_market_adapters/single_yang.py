@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.single_yang_no_break import (
     DEFAULT_HOLD_HORIZONS,
     INCREMENT_RESEARCH_ID,
@@ -109,7 +109,12 @@ class SingleYangFullMarketAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> SingleYangFullMarketRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(parameters, {"start", "end", "oos_start", "cost_bps"})
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
         return SingleYangFullMarketRequest(
             start=start,
             end=end,

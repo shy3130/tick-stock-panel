@@ -43,8 +43,6 @@ import {
   NotebookPen,
   Bot,
   FlaskConical,
-  Target,
-  Network,
   Globe,
   ChevronDown,
   Menu,
@@ -84,8 +82,6 @@ const nav = [
   { to: '/agent', label: 'AI 助手', icon: Bot },
   { to: '/journal', label: '交易复盘', icon: NotebookPen },
   { to: '/research', label: '研究中心', icon: FlaskConical },
-  { to: '/signal-scorecard', label: '信号记分卡', icon: Target },
-  { to: '/cross-section', label: '横截面分析', icon: Network },
 
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/trading', label: '交易', icon: Cable },
@@ -108,8 +104,6 @@ const NAV_DOMAIN: Record<string, NavDomain> = {
   '/regime': 'research',
   '/financials': 'research',
   '/research': 'research',
-  '/signal-scorecard': 'research',
-  '/cross-section': 'research',
   '/screener': 'strategy',
   '/condition-screener': 'strategy',
   '/backtest': 'strategy',
@@ -222,6 +216,12 @@ function SidebarIndexQuotes({ data, items }: { data: IndexQuotesResponse | undef
 function pathTitle(pathname: string, navItems: { to: string; label: string }[]): string {
   if (pathname === '/settings' || pathname.startsWith('/settings/')) return '设置'
   if (pathname === '/guide' || pathname.startsWith('/guide/')) return '功能说明'
+  if (pathname.startsWith('/research/factors/') && pathname !== '/research/factors') return '因子工作台'
+  if (pathname.startsWith('/research/runs/') && pathname !== '/research/runs') return '运行详情'
+  if (pathname.startsWith('/research/analytics/signals')) return '信号记分卡'
+  if (pathname.startsWith('/research/analytics/cross-section')) return '横截面分析'
+  if (pathname.startsWith('/research/analytics/symbol')) return '单标的分析'
+  if (pathname.startsWith('/research')) return '研究中心'
   const hit = navItems.find(n =>
     n.to === '/' ? pathname === '/' : pathname === n.to || pathname.startsWith(`${n.to}/`),
   )

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.negative_exclusion import CLASS_V5, capability_report
 from app.services.negative_exclusion_production import (
     SCHEMA,
@@ -50,6 +50,7 @@ class NegativeV5Request:
     oos_start: date
     cost_bps: float
     horizon_days: int
+    enabled_classes: tuple[str, ...] = (CLASS_V5,)
 
 
 def _unavailable(reason: str, detail: str) -> dict[str, Any]:
@@ -82,7 +83,24 @@ class NegativeV5Adapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> NegativeV5Request:
+        horizon_days = DEFAULT_HORIZON_DAYS
+        enabled_classes = None
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters,
+                {"start", "oos_start", "end", "enabled_classes", "horizon_days", "cost_bps"},
+            )
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
+            enabled_classes = parameters["enabled_classes"]
+            horizon_days = parameters["horizon_days"]
+            if enabled_classes is not None and list(enabled_classes) != [CLASS_V5]:
+                raise ValueError(
+                    "negative-exclusion full-market runs are pinned to V5: "
+                    f"enabled_classes must be None or [{CLASS_V5!r}], got {enabled_classes!r}"
+                )
         resolved_oos = oos_start or DEFAULT_OOS_START
         if not (start <= resolved_oos <= end):
             raise ValueError(
@@ -97,7 +115,8 @@ class NegativeV5Adapter:
             symbols=list(cohort),
             oos_start=resolved_oos,
             cost_bps=DEFAULT_COST_BPS if cost_bps is None else cost_bps,
-            horizon_days=DEFAULT_HORIZON_DAYS,
+            horizon_days=horizon_days,
+            enabled_classes=tuple(enabled_classes) if enabled_classes is not None else (CLASS_V5,),
         )
 
     def evaluate(self, context: RunnerContext, request: NegativeV5Request) -> dict[str, Any]:
@@ -108,28 +127,33 @@ class NegativeV5Adapter:
                 "unavailable_universe_presence_reader",
                 f"repo lacks a pinned {UNIVERSE_READER_ATTR} reader",
             )
-        # One-shot panel warmup for the FULL cohort ahead of the production
-        # evaluator; a missing preload hook is skipped while preload errors
-        # propagate fail-closed — never a per-symbol disk fallback.
-        preload_panel = getattr(context.reader, "preload_panel", None)
-        if preload_panel is not None:
-            preload_panel(
-                request.start - timedelta(days=PRELOAD_WARMUP_DAYS),
-                request.end + timedelta(days=PRELOAD_FORWARD_DAYS),
-                symbols=list(request.symbols),
+        try:
+            # One-shot panel warmup for the FULL cohort ahead of the production
+            # evaluator; a missing preload hook is skipped while preload errors
+            # propagate fail-closed, never a per-symbol disk fallback.
+            preload_panel = getattr(context.reader, "preload_panel", None)
+            if preload_panel is not None:
+                preload_panel(
+                    request.start - timedelta(days=PRELOAD_WARMUP_DAYS),
+                    request.end + timedelta(days=PRELOAD_FORWARD_DAYS),
+                    symbols=list(request.symbols),
+                )
+            return evaluate_negative_exclusion_production(
+                symbols=request.symbols,
+                start=request.start,
+                oos_start=request.oos_start,
+                end=request.end,
+                canonical_reader=context.reader,
+                market_facts_reader=context.reader,
+                universe_reader=universe_reader,
+                enabled_classes=request.enabled_classes,
+                horizon_days=request.horizon_days,
+                cost_bps=request.cost_bps,
             )
-        return evaluate_negative_exclusion_production(
-            symbols=request.symbols,
-            start=request.start,
-            oos_start=request.oos_start,
-            end=request.end,
-            canonical_reader=context.reader,
-            market_facts_reader=context.reader,
-            universe_reader=universe_reader,
-            enabled_classes=(CLASS_V5,),
-            horizon_days=request.horizon_days,
-            cost_bps=request.cost_bps,
-        )
+        finally:
+            close = getattr(universe_reader, "close", None)
+            if callable(close):
+                close()
 
     def serialize_verdict(self, verdict: dict[str, Any]) -> dict[str, Any]:
         return json.loads(

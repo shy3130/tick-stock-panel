@@ -160,3 +160,23 @@ def test_serialization_and_coverage_are_json_safe():
     serialized = adapter.serialize_verdict(verdict)
     assert serialized["request"]["start"] == START.isoformat()
     assert adapter.extract_coverage(serialized) == {"observations": 4}
+
+
+def test_build_request_consumes_negative_parameters():
+    request = NegativeV5Adapter().build_request(
+        START,
+        END,
+        COHORT,
+        oos_start=OOS_START,
+        cost_bps=None,
+        parameters={
+            "start": START,
+            "oos_start": OOS_START,
+            "end": END,
+            "enabled_classes": ["v5"],
+            "horizon_days": 15,
+            "cost_bps": 25.0,
+        },
+    )
+    assert request.enabled_classes == ("v5",)
+    assert request.horizon_days == 15

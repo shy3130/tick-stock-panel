@@ -282,7 +282,7 @@ def test_build_request_embeds_full_cohort_with_defaults():
     adapter = adapter_mod.EscapeRiskAdapter()
     cohort = ["000001.SZ", "600000.SH", "300750.SZ"]
     request = adapter.build_request(SIGNAL_DAY, SIGNAL_DAY, cohort, oos_start=None, cost_bps=None)
-    assert request.symbols == tuple(cohort)
+    assert request.symbols == cohort
     assert request.oos_start == DEFAULT_OOS_START
     assert request.cost_bps == 10.0
     explicit = adapter.build_request(

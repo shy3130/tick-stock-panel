@@ -5,10 +5,6 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from app.api.research import router as research_router
 from app.services.macd_stages import (
     ARMS_SCHEMA,
     ARMS_WARMUP_BARS,
@@ -30,10 +26,6 @@ from app.services.macd_stages import (
 )
 
 
-def _client() -> TestClient:
-    app = FastAPI()
-    app.include_router(research_router)
-    return TestClient(app)
 
 
 class _Reader:
@@ -60,16 +52,6 @@ class _Reader:
         return self.frame.filter((pl.col("date") >= start) & (pl.col("date") <= end))
 
 
-def test_capability_endpoint_reports_only_real_reader_gap():
-    body = _client().get("/api/research/macd-stages").json()
-    assert body["status"] == "unavailable"
-    assert body["reasons"] == ["generation_pinned_reader_missing"]
-    assert body["missing_capabilities"] == {
-        "daily_state_machine": False,
-        "oos_evaluation": False,
-        "pit_reader": True,
-    }
-    assert "rows" not in body
 
 
 def test_parameters_and_stage_classifier_are_frozen():

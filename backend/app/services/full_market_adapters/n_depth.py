@@ -17,9 +17,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.n_shape_golden_phoenix import REQUIRED_READER_METHODS
 from app.services.n_shape_pullback_depth import (
+    DEFAULT_REVERSAL_MODE,
+    DEFAULT_REVERSAL_VALUE,
     ROUND_TRIP_COST_BPS,
     evaluate_n_shape_pullback_depth,
 )
@@ -37,6 +39,8 @@ class NDepthRequest:
     symbols: list[str]
     oos_start: date | None
     cost_bps: float
+    reversal_mode: str = DEFAULT_REVERSAL_MODE
+    reversal_value: float = DEFAULT_REVERSAL_VALUE
 
 
 class NDepthAdapter:
@@ -58,7 +62,21 @@ class NDepthAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> NDepthRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters, {"start", "end", "reversal_mode", "reversal_value", "cost_bps"}
+            )
+            return NDepthRequest(
+                start=parameters["start"],
+                end=parameters["end"],
+                symbols=list(cohort),
+                oos_start=oos_start,
+                cost_bps=parameters["cost_bps"],
+                reversal_mode=parameters["reversal_mode"],
+                reversal_value=parameters["reversal_value"],
+            )
         return NDepthRequest(
             start=start,
             end=end,
@@ -87,6 +105,8 @@ class NDepthAdapter:
             end=request.end,
             symbols=request.symbols,
             reader=reader,
+            reversal_mode=request.reversal_mode,
+            reversal_value=request.reversal_value,
             cost_bps=request.cost_bps,
         )
 

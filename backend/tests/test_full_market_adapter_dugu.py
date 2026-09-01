@@ -135,6 +135,7 @@ def test_evaluate_preloads_once_prefetches_facts_once_and_reuses_bundle(monkeypa
 
     monkeypatch.setattr(dugu_module, "evaluate_daily_events", spy)
     verdict = adapter.evaluate(RunnerContext(repo=repo, reader=_Composite()), _request())
+    assert verdict["status"] == "ok", verdict.get("unavailable_reasons")
     expected = [dugu_scan_cell_id(config) for config in iter_dugu_scan_grid()]
     assert len(expected) == len(set(expected)) == 32 and len(calls) == 32
     assert {
@@ -190,3 +191,29 @@ def test_missing_market_facts_is_explicitly_unavailable(monkeypatch):
         and verdict["unavailable_reasons"] == ["unavailable_market_facts"]
         and verdict["cells"] == {}
     )
+
+
+def test_build_request_consumes_dugu_parameters():
+    request = DuguTrendAdapter().build_request(
+        START,
+        END,
+        COHORT,
+        oos_start=OOS_START,
+        cost_bps=None,
+        parameters={
+            "variant": "ma_20_70",
+            "band_mode": "atr",
+            "require_m3": True,
+            "alignment_days": 50,
+            "start": START,
+            "oos_start": OOS_START,
+            "end": END,
+            "horizon_days": 45,
+            "cost_bps": 11.0,
+        },
+    )
+    assert request.selection.variant == "ma_20_70"
+    assert request.selection.band_mode == "atr"
+    assert request.selection.require_m3 is True
+    assert request.selection.alignment_days == 50
+    assert request.horizon_days == 45

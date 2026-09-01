@@ -28,7 +28,10 @@ for (const rel of files) {
 }
 
 const shortPoolPanel = readFileSync(join(root, 'components/agent/ShortPoolPanel.tsx'), 'utf8')
-assert(shortPoolPanel.includes('researchConfirmTSuitabilityHypothesis'), '做T确认必须调用服务端重算门禁入口')
+const evidenceApi = readFileSync(join(root, 'features/research/api/evidence.ts'), 'utf8')
+assert(shortPoolPanel.includes('confirmTSuitabilityHypothesis'), '做T确认必须调用服务端重算门禁入口')
+assert(evidenceApi.includes('/api/research/t-suitability/hypotheses'), '做T确认必须打到专用服务端门禁路径')
 assert(!shortPoolPanel.includes('researchCreateHypothesis'), '做T确认不得绕过专用服务端门禁')
+assert(!shortPoolPanel.includes('createHypothesis('), '做T确认不得走通用假设创建入口')
 
 console.log('aiUiCopy.test.ts ok')

@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, BookmarkPlus, ClipboardCheck, Eye, Filter, LineChart, Loader2, ShieldCheck, X } from 'lucide-react'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toast } from '@/components/Toast'
-import { api } from '@/lib/api'
-import { QK } from '@/lib/queryKeys'
+import { confirmTSuitabilityHypothesis } from '@/features/research/api/evidence'
+import { researchKeys } from '@/features/research/queryKeys'
 import { T_RESEARCH_PROTOCOL, type ShortPoolCard } from '@/lib/shortPoolCard'
 import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -33,13 +33,13 @@ function marketResearchReasons(card: ShortPoolCard): string[] {
 function TResearchConfirmDialog({ card, onClose }: { card: ShortPoolCard; onClose: () => void }) {
   const qc = useQueryClient()
   const create = useMutation({
-    mutationFn: () => api.researchConfirmTSuitabilityHypothesis({
+    mutationFn: () => confirmTSuitabilityHypothesis({
       pool_id: card.pool_id,
       as_of: card.as_of,
       limit: card.limit,
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: QK.researchHypothesesRoot })
+      void qc.invalidateQueries({ queryKey: researchKeys.hypothesesRoot })
       toast('已创建做T研究假设；未自动运行回测。', 'success')
       onClose()
     },
