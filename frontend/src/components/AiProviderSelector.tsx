@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type AiProviderKind } from '@/lib/api'
 import { rememberProfile, resolveEntryProfile } from '@/lib/aiProfile'
 import { cn } from '@/lib/cn'
 
@@ -10,17 +10,25 @@ interface Props {
   value?: string
   onChange: (id: string) => void
   compact?: boolean
+  providers?: readonly AiProviderKind[]
 }
 
-export function AiProviderSelector({ entry, value, onChange, compact = false }: Props) {
+export function AiProviderSelector({ entry, value, onChange, compact = false, providers }: Props) {
   const q = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
-  const profiles = q.data?.profiles ?? []
+  const allProfiles = q.data?.profiles ?? []
+  const profiles = providers?.length
+    ? allProfiles.filter(profile => providers.some(kind => profile.provider === kind))
+    : allProfiles
   const defaultId = q.data?.default_id ?? ''
-  const current = value || resolveEntryProfile(entry, profiles, defaultId)
+  const resolved = resolveEntryProfile(entry, profiles, defaultId)
+  const valueAllowed = Boolean(value && profiles.some(profile => profile.id === value))
+  const current = (!providers || valueAllowed) ? (value || resolved) : resolved
 
   useEffect(() => {
-    if (current && current !== value) onChange(current)
-  }, [current, onChange, value])
+    if (current === value) return
+    if (current) onChange(current)
+    else if (providers) onChange('')
+  }, [current, onChange, value, providers])
 
   if (profiles.length <= 1) return null
 

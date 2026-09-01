@@ -1,5 +1,12 @@
 import { useSyncExternalStore } from 'react'
-import { api, type AiExecutionMeta, type PriceLevel, type LevelType } from './api'
+import {
+  api,
+  type AiExecutionMeta,
+  type PriceLevel,
+  type LevelType,
+  type PublicResearchBundle,
+  type StockAnalysisResearchConfig,
+} from './api'
 import { nextConnection, type AiConnection } from './aiStreamStatus'
 
 /**
@@ -22,6 +29,7 @@ export interface StockDataMeta {
   adjustment?: string
   degraded?: boolean
   warnings?: string[]
+  public_research?: PublicResearchBundle
 }
 
 export interface ActiveTask {
@@ -30,6 +38,7 @@ export interface ActiveTask {
   name: string
   focus: string
   profileId?: string
+  publicResearch: Required<Pick<StockAnalysisResearchConfig, 'enabled' | 'channels'>>
   phase: Phase
   content: string
   error: string
@@ -193,7 +202,13 @@ export async function findTodayReport(symbol: string): Promise<HistoryReport | n
   }) ?? null
 }
 
-export async function startAnalysis(symbol: string, name: string, focus = '', profileId?: string): Promise<{ id?: string; error?: string }> {
+export async function startAnalysis(
+  symbol: string,
+  name: string,
+  focus = '',
+  profileId?: string,
+  publicResearch?: StockAnalysisResearchConfig,
+): Promise<{ id?: string; error?: string }> {
   const existing = activeTasks.find(t => t.symbol === symbol && (t.phase === 'loading' || t.phase === 'streaming'))
   if (existing) {
     activeDialogTaskId = existing.id
@@ -208,8 +223,12 @@ export async function startAnalysis(symbol: string, name: string, focus = '', pr
   }
 
   const id = `stask_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+  const research = {
+    enabled: publicResearch?.enabled ?? false,
+    channels: publicResearch?.channels ?? ['twitter' as const],
+  }
   const task: ActiveTask = {
-    id, symbol, name, focus, profileId,
+    id, symbol, name, focus, profileId, publicResearch: research,
     phase: 'loading', content: '', error: '',
     meta: null, dataMeta: null, connection: 'connecting', createdAt: Date.now(),
   }
@@ -219,16 +238,29 @@ export async function startAnalysis(symbol: string, name: string, focus = '', pr
   rebuildSnap()
   emit()
 
-  runStream(id, symbol, name, focus, profileId)
+  runStream(id, symbol, name, focus, profileId, research)
   return { id }
 }
 
-async function runStream(id: string, symbol: string, _name: string, focus: string, profileId?: string) {
+async function runStream(
+  id: string,
+  symbol: string,
+  name: string,
+  focus: string,
+  profileId: string | undefined,
+  publicResearch: Required<Pick<StockAnalysisResearchConfig, 'enabled' | 'channels'>>,
+) {
   const ac = new AbortController()
   abortByTask.set(id, ac)
   try {
     let firstDelta = true
-    for await (const chunk of api.stockAnalyzeStream(symbol, focus, profileId, ac.signal)) {
+    for await (const chunk of api.stockAnalyzeStream(
+      symbol,
+      focus,
+      profileId,
+      ac.signal,
+      { name, ...publicResearch },
+    )) {
       const cur = activeTasks.find(t => t.id === id)
       if (!cur || cur.phase === 'cancelled' || ac.signal.aborted) return
       switch (chunk.type) {
@@ -244,6 +276,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
               adjustment: chunk.adjustment,
               degraded: chunk.degraded,
               warnings: chunk.warnings,
+              public_research: chunk.public_research,
             },
           })
           break
@@ -339,8 +372,20 @@ export function restoreDialog(taskId: string) {
   }
   activeDialogTaskId = taskId; dialogMinimized = false; rebuildSnap(); emit()
 }
-export async function retryAnalysis(task: { symbol: string; name: string; focus: string; profileId?: string }): Promise<{ error?: string }> {
-  return startAnalysis(task.symbol, task.name, task.focus, task.profileId)
+export async function retryAnalysis(task: {
+  symbol: string
+  name: string
+  focus: string
+  profileId?: string
+  publicResearch?: StockAnalysisResearchConfig
+}): Promise<{ error?: string }> {
+  return startAnalysis(
+    task.symbol,
+    task.name,
+    task.focus,
+    task.profileId,
+    task.publicResearch,
+  )
 }
 export async function deleteReport(reportId: string): Promise<void> {
   try {

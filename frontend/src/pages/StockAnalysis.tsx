@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, GitCompare, X } from 'lucide-react'
+import {
+  Sparkles,
+  LineChart,
+  History as HistoryIcon,
+  Loader2,
+  ExternalLink,
+  GitCompare,
+  X,
+  MessagesSquare,
+} from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
@@ -36,8 +45,16 @@ export function StockAnalysis() {
   const [showHistory, setShowHistory] = useState(false)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [profileId, setProfileId] = useState<string>()
+  const [publicResearchEnabled, setPublicResearchEnabled] = useState(false)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
   const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
+  const publicResearchHealth = useQuery({
+    queryKey: ['stockAnalysisPublicResearchHealth'],
+    queryFn: api.stockAnalysisPublicResearchHealth,
+    enabled: publicResearchEnabled,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  })
 
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
@@ -67,7 +84,13 @@ export function StockAnalysis() {
 
   const doAnalysis = async () => {
     const resolvedProfileId = resolveEntryProfile('stock_analysis', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
-    const r = await startAnalysis(symbol, name, '', resolvedProfileId || profileId)
+    const r = await startAnalysis(
+      symbol,
+      name,
+      '',
+      resolvedProfileId || profileId,
+      { enabled: publicResearchEnabled, channels: ['twitter'] },
+    )
     if (r.error) toast(r.error, 'error')
   }
 
@@ -80,7 +103,7 @@ export function StockAnalysis() {
             Beta
           </span>
         }
-        subtitle="日 K · 关键价位 · AI 四维诊断（解释行情，不给交易指令）"
+        subtitle="日 K · 关键价位 · AI 四维诊断 · 可选公开消息搜索（解释行情，不给交易指令）"
         right={
           <div className="workspace-toolbar">
             <LastStockChip stock={lastStock} onSelect={onSelect} />
@@ -124,6 +147,28 @@ export function StockAnalysis() {
                 {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                 AI 个股分析
               </button>
+              <label
+                className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-btn border border-border bg-elevated/30 px-2 text-[11px] text-secondary transition-colors hover:border-sky-500/30 hover:text-foreground"
+                title="通过 Agent Reach 搜索 Twitter/X 公开消息；默认关闭，外部内容按 C 级未核验证据处理"
+              >
+                <input
+                  type="checkbox"
+                  checked={publicResearchEnabled}
+                  onChange={event => setPublicResearchEnabled(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-border accent-sky-500"
+                />
+                <MessagesSquare className="h-3.5 w-3.5 text-sky-300" />
+                <span>公开消息</span>
+                {publicResearchEnabled && (
+                  <span className="font-mono text-[9px] text-muted">
+                    {publicResearchHealth.isLoading
+                      ? '检查中'
+                      : publicResearchHealth.data?.health.twitter?.status === 'ok'
+                        ? `X · ${publicResearchHealth.data.health.twitter.active_backend ?? '可用'}`
+                        : '源不可用'}
+                  </span>
+                )}
+              </label>
               <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
             </>
           )}

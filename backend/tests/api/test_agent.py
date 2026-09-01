@@ -5,8 +5,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.agent import _parse_tool_request, list_tools, router as agent_router
+from app.api.agent import _parse_tool_request, list_tools
+from app.api.agent import router as agent_router
 from app.services.agent_tools import TOOLS, _truncate, call_tool
+
 
 def test_agent_tools_endpoint_lists_builtin_tools():
     names = {tool["name"] for tool in list_tools()["tools"]}
@@ -72,6 +74,91 @@ def test_agent_runtime_is_readonly():
     assert body["switchable"] is False
 
 
+def test_position_analysis_feedback_api_is_typed_and_rejects_hard_gate_mutation(
+    tmp_path, monkeypatch
+):
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    client = TestClient(app)
+    payload = {
+        "observation_id": "pa-0000000000000001",
+        "trade_date": "2026-08-31",
+        "symbol": "600519.SH",
+        "outcome": "weak",
+        "evidence_grade": "B",
+        "note": "EOD 复核",
+    }
+    response = client.post("/api/agent/position-analysis/feedback", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"recorded": True, "candidate": None}
+
+    rejected = client.post(
+        "/api/agent/position-analysis/feedback",
+        json={**payload, "price_anomaly_ratio": 0.5},
+    )
+    assert rejected.status_code == 422
+    stream_rejected = client.post(
+        "/api/agent/position-analysis/stream",
+        json={"price_anomaly_ratio": 0.5},
+    )
+    assert stream_rejected.status_code == 422
+    invalid_channel = client.post(
+        "/api/agent/position-analysis/stream",
+        json={
+            "public_research_enabled": True,
+            "public_research_channels": ["xueqiu"],
+        },
+    )
+    assert invalid_channel.status_code == 422
+
+    monkeypatch.setattr(
+        "app.services.position_analysis_agent.public_research_health",
+        lambda _state: {
+            "default_enabled": False,
+            "supported_channels": ["twitter"],
+            "health": {
+                "twitter": {
+                    "status": "warn",
+                    "active_backend": None,
+                    "runtime_state": "not_exercised",
+                }
+            },
+        },
+    )
+    health = client.get("/api/agent/position-analysis/public-research/health")
+    assert health.status_code == 200
+    assert health.json()["default_enabled"] is False
+    assert health.json()["health"]["twitter"]["status"] == "warn"
+
+    candidate = None
+    for index in range(2, 11):
+        learned = client.post(
+            "/api/agent/position-analysis/feedback",
+            json={
+                **payload,
+                "observation_id": f"pa-{index:016x}",
+                "trade_date": f"2026-08-{index:02d}",
+            },
+        )
+        assert learned.status_code == 200
+        candidate = learned.json()["candidate"]
+    assert candidate["status"] == "validated"
+
+    listed = client.get("/api/agent/position-analysis/learning-candidates")
+    assert listed.status_code == 200
+    assert listed.json()["candidates"][0]["id"] == candidate["id"]
+    applied = client.post(
+        f"/api/agent/position-analysis/learning-candidates/{candidate['id']}/apply"
+    )
+    assert applied.status_code == 200
+    assert applied.json()["status"] == "applied"
+    rolled_back = client.post(
+        f"/api/agent/position-analysis/learning-candidates/{candidate['id']}/rollback"
+    )
+    assert rolled_back.status_code == 200
+    assert rolled_back.json()["status"] == "rolled_back"
+
 
 def test_list_strategies_tool_limits_shape():
     strategies = [
@@ -101,8 +188,10 @@ class _FakePortfolioRepo:
         self._n_days = n_days
 
     def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+        from datetime import date as _date
+        from datetime import timedelta as _timedelta
+
         import numpy as np
-        from datetime import date as _date, timedelta as _timedelta
 
         if symbol not in self._symbols:
             return pl.DataFrame()
@@ -145,8 +234,10 @@ def test_optimize_portfolio_tool_weights_sum_to_one():
 
 
 def _factor_panel(symbols, n_days, factor_name):
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
     import numpy as np
-    from datetime import date as _date, timedelta as _timedelta
 
     rng = np.random.default_rng(11)
     rows = []
@@ -342,8 +433,10 @@ def test_compose_factor_score_all_factors_excluded_returns_error(monkeypatch):
 
 
 def _combined_factor_panel(symbols, n_days, factor_names):
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
     import numpy as np
-    from datetime import date as _date, timedelta as _timedelta
 
     rng = np.random.default_rng(11)
     rows = []

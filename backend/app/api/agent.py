@@ -6,14 +6,16 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.services import agent_tools
-from app.services import agent_sessions
+from app.services import agent_sessions, agent_tools
 from app.services.agent_bus import get_bus
+from app.services.agent_reach_research import AgentReachChannel
 from app.services.agent_runner import run_agent_turn
 from app.services.ai_attempts import get_registry, new_attempt_id
 from app.services.ai_structured import CancellationToken
+from app.services.position_analysis_agent import PositionAnalysisL2Rule
+from app.services.position_analysis_learning import PositionLearningFeedback
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -26,6 +28,21 @@ class AgentChatIn(BaseModel):
 class AgentSendIn(BaseModel):
     messages: list[dict]
     profile_id: str | None = None
+
+
+class PositionAnalysisIn(BaseModel):
+    """持仓分析显式入口；L2 只允许结构化、待用户裁决条件。"""
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str | None = None
+    l2_rules: list[PositionAnalysisL2Rule] = Field(default_factory=list, max_length=20)
+    index_rebalance_tail_window: bool = False
+    public_research_enabled: bool = False
+    public_research_channels: list[AgentReachChannel] = Field(
+        default_factory=lambda: [AgentReachChannel.TWITTER],
+        min_length=1,
+        max_length=1,
+    )
 
 
 class AgentSessionCreateIn(BaseModel):
@@ -161,6 +178,85 @@ async def send_message(session_id: str, req: AgentSendIn, request: Request) -> d
     get_registry().register(attempt_id=attempt_id, task=task, token=token)
     return {"attempt_id": attempt_id, "session_id": session_id}
 
+
+@router.get("/position-analysis/public-research/health")
+def position_analysis_public_research_health(request: Request) -> dict:
+    from app.services.position_analysis_agent import public_research_health
+
+    return public_research_health(request.app.state)
+
+
+@router.post("/position-analysis/stream")
+async def position_analysis_stream(req: PositionAnalysisIn, request: Request):
+    """独立持仓分析 Pi Agent；不进入通用 Agent 会话或交易写入链。"""
+    from app.services.position_analysis_agent import run_position_analysis_stream
+
+    rules = tuple(req.l2_rules)
+
+    async def gen():
+        async for line in run_position_analysis_stream(
+            request.app.state,
+            profile_id=req.profile_id,
+            l2_rules=rules,
+            index_rebalance_tail_window=req.index_rebalance_tail_window,
+            public_research_enabled=req.public_research_enabled,
+            public_research_channels=tuple(req.public_research_channels),
+        ):
+            yield line + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/position-analysis/feedback")
+def position_analysis_feedback(
+    payload: PositionLearningFeedback, request: Request
+) -> dict:
+    """记录脱敏收盘反馈并评估校准候选；候选不会自动生效。"""
+    from app.services.position_analysis_learning import record_feedback
+
+    return record_feedback(_data_dir(request), payload)
+
+
+@router.get("/position-analysis/learning-candidates")
+def position_analysis_learning_candidates(request: Request) -> dict:
+    from app.services.position_analysis_learning import list_candidates
+
+    return {"candidates": list_candidates(_data_dir(request))}
+
+
+@router.post("/position-analysis/learning-candidates/{candidate_id}/apply")
+def apply_position_analysis_learning(candidate_id: str, request: Request) -> dict:
+    """显式人工批准已通过留出验证的候选。"""
+    from app.services.position_analysis_learning import apply_candidate
+
+    try:
+        return apply_candidate(_data_dir(request), candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/position-analysis/learning-candidates/{candidate_id}/rollback")
+def rollback_position_analysis_learning(candidate_id: str, request: Request) -> dict:
+    from app.services.position_analysis_learning import rollback_candidate
+
+    try:
+        return rollback_candidate(_data_dir(request), candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/position-analysis/learning-candidates/{candidate_id}/reject")
+def reject_position_analysis_learning(candidate_id: str, request: Request) -> dict:
+    from app.services.position_analysis_learning import reject_candidate
+
+    try:
+        return reject_candidate(_data_dir(request), candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @router.get("/sessions/{session_id}/stream")
 async def watch_stream(session_id: str, request: Request):

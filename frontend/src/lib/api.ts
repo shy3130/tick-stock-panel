@@ -269,6 +269,102 @@ export interface AiStockReport {
   created_at: string
 }
 
+export type PublicResearchChannel = 'twitter'
+
+export interface PublicResearchEvidence {
+  platform: PublicResearchChannel
+  source: string
+  url: string
+  author?: string | null
+  excerpt: string
+  published_at?: string | null
+  retrieved_at: string
+  evidence_grade: 'C'
+  unverified: true
+}
+
+export interface PublicResearchBundle {
+  status: 'disabled' | 'available' | 'partial' | 'unavailable'
+  scope: 'primary_position_only' | 'single_stock_analysis'
+  subject_symbol?: string | null
+  channels_requested: string[]
+  channels_used: string[]
+  evidence: PublicResearchEvidence[]
+  warnings: string[]
+  retrieved_at?: string | null
+}
+
+export interface PublicResearchHealth {
+  default_enabled: false
+  supported_channels: PublicResearchChannel[]
+  health: Record<PublicResearchChannel, {
+    status?: string | null
+    active_backend?: string | null
+    runtime_state?: string | null
+  }>
+}
+
+export interface StockAnalysisResearchConfig {
+  name?: string
+  enabled?: boolean
+  channels?: PublicResearchChannel[]
+}
+
+export interface PositionAnalysisRequest {
+  profile_id?: string
+  l2_rules: []
+  index_rebalance_tail_window: boolean
+  public_research_enabled: boolean
+  public_research_channels: PublicResearchChannel[]
+}
+
+export type PositionAnalysisEvent =
+  | { type: 'delta'; content: string }
+  | { type: 'done'; elapsed_ms?: number }
+  | { type: 'error'; message: string; elapsed_ms?: number }
+
+const POSITION_ANALYSIS_HTTP_ERROR_LIMIT = 240
+
+function boundedPositionAnalysisHttpError(status: number, statusText: string, bodyText: string): string {
+  const clipped = bodyText.slice(0, 1024)
+  let detail = ''
+  try {
+    const parsed: unknown = JSON.parse(clipped)
+    if (parsed && typeof parsed === 'object') {
+      const rec = parsed as Record<string, unknown>
+      const raw = rec.detail ?? rec.message
+      if (typeof raw === 'string') detail = raw
+      else if (raw != null) detail = JSON.stringify(raw)
+    }
+  } catch {
+    /* HTML / proxy bodies stay as status text */
+  }
+  const msg = (detail || `${status} ${statusText}`).replace(/\s+/g, ' ').trim()
+  return msg.length > POSITION_ANALYSIS_HTTP_ERROR_LIMIT
+    ? `${msg.slice(0, POSITION_ANALYSIS_HTTP_ERROR_LIMIT - 3)}...`
+    : msg
+}
+
+function parsePositionAnalysisEvent(raw: unknown): PositionAnalysisEvent | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as Record<string, unknown>
+  if (rec.type === 'delta' && typeof rec.content === 'string') {
+    return { type: 'delta', content: rec.content }
+  }
+  if (rec.type === 'done') {
+    return typeof rec.elapsed_ms === 'number'
+      ? { type: 'done', elapsed_ms: rec.elapsed_ms }
+      : { type: 'done' }
+  }
+  if (rec.type === 'error' && typeof rec.message === 'string') {
+    return typeof rec.elapsed_ms === 'number'
+      ? { type: 'error', message: rec.message, elapsed_ms: rec.elapsed_ms }
+      : { type: 'error', message: rec.message }
+  }
+  return null
+}
+
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string | null
@@ -2913,6 +3009,64 @@ export const api = {
     request<{ cancelled: boolean }>(`/api/agent/attempts/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' }),
   agentRuntime: () =>
     request<{ runtime: 'python' | 'pi'; switchable: boolean }>('/api/agent/runtime'),
+  positionAnalysisPublicResearchHealth: () =>
+    request<PublicResearchHealth>('/api/agent/position-analysis/public-research/health'),
+
+  async *positionAnalysisStream(
+    payload: PositionAnalysisRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<PositionAnalysisEvent> {
+    const res = await fetch('/api/agent/position-analysis/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+    if (!res.ok) {
+      let bodyText = ''
+      try {
+        bodyText = await res.text()
+      } catch {
+        bodyText = ''
+      }
+      throw new Error(boundedPositionAnalysisHttpError(res.status, res.statusText, bodyText))
+    }
+    if (!res.body) throw new Error('持仓分析响应无流数据')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(s)
+        } catch {
+          continue
+        }
+        const event = parsePositionAnalysisEvent(parsed)
+        if (event) yield event
+      }
+    }
+    if (buf.trim()) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(buf.trim())
+      } catch {
+        return
+      }
+      const event = parsePositionAnalysisEvent(parsed)
+      if (event) yield event
+    }
+  },
+
 
   readDocument: (file: File) => {
     const fd = new FormData()
@@ -3921,6 +4075,9 @@ export const api = {
   // ===== 个股分析 =====
   stockAnalysisLevels: (symbol: string, days = 120) =>
     request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+  stockAnalysisPublicResearchHealth: () =>
+    request<PublicResearchHealth>('/api/stock-analysis/public-research/health'),
+
 
   stockAnalysisReportsList: () =>
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),
@@ -3941,7 +4098,13 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+  async *stockAnalyzeStream(
+    symbol: string,
+    focus?: string,
+    profileId?: string,
+    signal?: AbortSignal,
+    research?: StockAnalysisResearchConfig,
+  ): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done' | 'attempt' | 'summary'
     symbol?: string
     summary?: string
@@ -3960,11 +4123,19 @@ export const api = {
     struct_summary?: { trend: string; key_levels: string[]; data_gaps: string[] }
     /** P3: meta chunk 可带执行元信息;流式 provider 不上报 usage 时缺失,不得展示伪数据 */
     ai_meta?: AiExecutionMeta | null
+    public_research?: PublicResearchBundle
   }> {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      body: JSON.stringify({
+        symbol,
+        name: research?.name ?? '',
+        focus: focus ?? '',
+        ...(profileId ? { profile_id: profileId } : {}),
+        public_research_enabled: research?.enabled ?? false,
+        public_research_channels: research?.channels ?? ['twitter'],
+      }),
       signal,
     })
     if (!res.ok) {

@@ -83,7 +83,8 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const handleStartNew = useCallback(async () => {
     if (!task) return
     const name = 'name' in task ? task.name : ''
-    await startAnalysis(task.symbol, name, focus.trim(), profileId)
+    const publicResearch = 'publicResearch' in task ? task.publicResearch : undefined
+    await startAnalysis(task.symbol, name, focus.trim(), profileId, publicResearch)
   }, [task, focus, profileId])
 
   const handleCopy = async () => {
@@ -156,6 +157,25 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   )}
                   {dataMeta?.source && <span className="shrink-0">· {dataMeta.source}</span>}
                   {dataMeta?.adjustment && <span className="shrink-0">· {dataMeta.adjustment}</span>}
+                  {dataMeta?.public_research?.status !== undefined
+                    && dataMeta.public_research.status !== 'disabled' && (
+                    <span
+                      className={cn(
+                        'shrink-0',
+                        dataMeta.public_research.status === 'available'
+                          || dataMeta.public_research.status === 'partial'
+                          ? 'text-sky-300'
+                          : 'text-warning',
+                      )}
+                      title={(dataMeta.public_research.warnings ?? []).join('；') || '公开消息均为 C 级未核验证据'}
+                    >
+                      · 公开消息 {dataMeta.public_research.status === 'available'
+                        ? `${dataMeta.public_research.evidence.length} 条 [UNVERIFIED]`
+                        : dataMeta.public_research.status === 'partial'
+                          ? `部分可用 · ${dataMeta.public_research.evidence.length} 条`
+                          : '不可用'}
+                    </span>
+                  )}
                   {status && (
                     <span className={cn(
                       'flex items-center gap-1 shrink-0',
@@ -184,11 +204,16 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                     <span className="shrink-0">{fmtRelative(task.created_at)}</span>
                   )}
                 </div>
-                {(dataMeta?.degraded || (dataMeta?.warnings?.length ?? 0) > 0) && (
+                {(dataMeta?.degraded
+                  || (dataMeta?.warnings?.length ?? 0) > 0
+                  || (dataMeta?.public_research?.warnings?.length ?? 0) > 0) && (
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted/70">
                     {dataMeta?.degraded && <span className="shrink-0">数据维度降级</span>}
                     {(dataMeta?.warnings ?? []).map((w, i) => (
-                      <span key={i} className="truncate" title={w}>{w}</span>
+                      <span key={`data-${i}`} className="truncate" title={w}>{w}</span>
+                    ))}
+                    {(dataMeta?.public_research?.warnings ?? []).map((w, i) => (
+                      <span key={`research-${i}`} className="truncate" title={w}>公开消息：{w}</span>
                     ))}
                   </div>
                 )}

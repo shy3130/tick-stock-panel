@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -580,3 +581,66 @@ async def test_pi_runtime_short_pool_miss_forwards_buffered_deltas(monkeypatch, 
     replies = [m for m in process.stdin.messages if m["type"] == "tool_result"]
     assert [r["request_id"] for r in replies] == ["req_1", "req_2"]
     assert events[-1]["elapsed_ms"] == 7.5
+
+
+@pytest.mark.asyncio
+async def test_scoped_pi_definition_terminates_before_private_tool_result_reaches_worker(
+    monkeypatch, tmp_path
+):
+    _enable_pi(monkeypatch, tmp_path)
+    process = _FakeProcess(complete_after_tool=True)
+
+    async def fake_spawn(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    private_result = {"positions": [{"cost_price": 100.0}], "markdown": "确定性判定"}
+    definition = agent_runtime.PiAgentDefinition(
+        tools=(
+            {
+                "name": "list_strategies",
+                "description": "test",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                "read_only": True,
+            },
+        ),
+        system_prompt="call once",
+        final_prompt="no reply",
+        dispatch_tool=lambda _name, _state, _args: private_result,
+        terminal_text=lambda _name, result: result["markdown"],
+        terminal_before_reply=True,
+        emit_tool_events=False,
+    )
+    events = await _collect(
+        agent_runtime.run_scoped_pi_agent_stream(
+            [{"role": "user", "content": "analyze"}],
+            SimpleNamespace(),
+            "p_test",
+            definition,
+        )
+    )
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert events[0]["content"] == "确定性判定"
+    assert all(message["type"] != "tool_result" for message in process.stdin.messages)
+    assert "cost_price" not in json.dumps(events, ensure_ascii=False)
+
+    process = _FakeProcess(complete_after_tool=True)
+
+    def fail_dispatch(_name, _state, _args):
+        raise RuntimeError("private dispatch failure")
+
+    failed = await _collect(
+        agent_runtime.run_scoped_pi_agent_stream(
+            [{"role": "user", "content": "analyze"}],
+            SimpleNamespace(),
+            "p_test",
+            replace(definition, dispatch_tool=fail_dispatch),
+        )
+    )
+    assert [event["type"] for event in failed] == ["error"]
+    assert failed[0]["message"] == "Agent 失败: private dispatch failure"
+    assert all(message["type"] != "tool_result" for message in process.stdin.messages)
