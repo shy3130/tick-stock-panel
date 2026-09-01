@@ -184,16 +184,18 @@ class DojiPatternsFullMarketAdapter:
     def _open_intraday_bundle(
         self, scope: ProductionReaderScope, request: DojiFullMarketRequest
     ) -> tuple[object | None, dict[str, Any], Callable[[], None]]:
-        """Open the D5 catalog-pinned minutes bundle from the pinned scope.
-
-        The bundle is request-owned: per-day catalog routes are pinned at
-        construction and the returned ``close`` must run after evaluation.
-        Any intraday failure degrades to ``bundle=None`` — D5 then evaluates
-        as unavailable/censored while D1-D4 keep their complete evaluation.
-        """
+        """Open D5 routes from the preflight pin when available."""
         try:
             days = scope.canonical.market_days(request.start, request.end)
-            reader = CatalogPinnedEscapeRiskIntradayReader(days, scope.market_facts)
+            pinned_opener = getattr(
+                getattr(scope, "repo", None), "open_escape_risk_intraday_reader", None
+            )
+            if callable(pinned_opener):
+                reader = pinned_opener(scope.canonical.manifest(), tuple(days))
+            else:
+                reader = CatalogPinnedEscapeRiskIntradayReader(days, scope.market_facts)
+            if reader is None:
+                return None, {"provided": False, "unavailable_symbol_days": None}, _noop
         except Exception:
             return None, {"provided": False, "unavailable_symbol_days": None}, _noop
         try:

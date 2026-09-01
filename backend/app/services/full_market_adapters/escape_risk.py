@@ -117,7 +117,7 @@ class EscapeRiskAdapter:
                 envelope = self._unavailable(request, [REASON_PRELOAD_FAILED])
                 envelope["preload_error"] = str(exc)
                 return envelope
-        intraday_reader = self._open_intraday_reader(canonical, request)
+        intraday_reader = self._open_intraday_reader(context.repo, canonical, request)
         if intraday_reader is None:
             return self._unavailable(request, ["unavailable_intraday_reader"])
         try:
@@ -169,25 +169,27 @@ class EscapeRiskAdapter:
 
     @staticmethod
     def _open_intraday_reader(
+        repo: Any,
         canonical: PublishedCanonicalDailyReader,
         request: EscapeRiskFullMarketRequest,
     ) -> Any | None:
-        """Open the catalog-pinned minutes/trans reader; ``None`` fails closed.
-
-        The markets generation is bound to the canonical manifest; minutes and
-        transactions are resolved once per requested day through the staged
-        catalog. Query failures never fall back to raw storage.
-        """
+        """Open exact preflight routes; only unpinned interactive fallback uses provider current."""
+        pinned_opener = getattr(repo, "open_escape_risk_intraday_reader", None)
+        market_days = canonical.market_days(
+            request.start - timedelta(days=INTRADAY_LOOKBACK_CALENDAR_DAYS),
+            request.end,
+        )
+        if callable(pinned_opener):
+            try:
+                return pinned_opener(canonical.manifest(), tuple(market_days))
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                return None
         try:
             provider_name = get_active_provider_name(capability="minute")
             provider = get_provider(provider_name)
             opener = getattr(provider, "open_escape_risk_intraday_reader", None)
             if not callable(opener):
                 return None
-            market_days = canonical.market_days(
-                request.start - timedelta(days=INTRADAY_LOOKBACK_CALENDAR_DAYS),
-                request.end,
-            )
             return opener(canonical.manifest(), tuple(market_days))
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None

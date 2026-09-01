@@ -172,6 +172,16 @@ def factors(
         if run is not None:
             item["latest_data_status"] = run.get("data_status")
             item["latest_verdict"] = run.get("verdict")
+        item["latest_run"] = (
+            {
+                "run_id": run.get("run_id"),
+                "created_at": run.get("created_at"),
+                "job_status": run.get("job_status"),
+                "verdict": run.get("verdict"),
+            }
+            if run is not None
+            else None
+        )
         if data_status and item.get("latest_data_status") != data_status:
             continue
         if verdict and item.get("latest_verdict") != verdict:
@@ -397,13 +407,15 @@ async def cancel(run_id: str, request: Request):
     if record.get("job_status") in {"completed", "failed", "cancelled", "interrupted"}:
         _error(409, "invalid_run_state", "run is terminal")
     if record.get("scope", {}).get("type") == "full_market":
+        cancelled = jobs.transition(run_id, "cancelled")
+        if cancelled is None:
+            _error(409, "invalid_run_state", "run is finalizing or terminal")
         process = getattr(request.app.state, "full_market_process", None)
         if process is not None and process.poll() is None:
             with suppress(ProcessLookupError):
                 process.terminate()
-        jobs.transition(run_id, "cancelled")
-    else:
-        worker.cancel(run_id)
+    elif not worker.cancel(run_id):
+        _error(409, "invalid_run_state", "run is finalizing or terminal")
     jobs.append_event(run_id, "cancelled")
     return jobs.get(run_id)
 

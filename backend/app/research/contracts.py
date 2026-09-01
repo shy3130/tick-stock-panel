@@ -414,6 +414,7 @@ class PreflightSource(BaseModel):
     status: str
     generation: str | None = None
     manifest_sha256: str | None = None
+    pin: dict[str, Any] = Field(default_factory=dict)
     available_from: date | None = None
     available_to: date | None = None
 

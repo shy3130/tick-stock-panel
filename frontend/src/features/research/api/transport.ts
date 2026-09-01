@@ -4,7 +4,7 @@ export async function researchRequest<T>(
   path: string,
   init: RequestInit | undefined,
   parse: (json: unknown) => T,
-  opts?: { nullOn404?: boolean },
+  opts?: { nullOn404?: boolean; acceptStatuses?: readonly number[] },
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (init?.body && !(init.body instanceof FormData)) headers['Content-Type'] = 'application/json'
@@ -36,6 +36,7 @@ export async function researchRequest<T>(
 
   if (!res.ok) {
     if (opts?.nullOn404 && res.status === 404) return parse(null)
+    if (opts?.acceptStatuses?.includes(res.status)) return parse(json)
     throw researchApiErrorFromBody(res.status, json)
   }
   return parse(json)

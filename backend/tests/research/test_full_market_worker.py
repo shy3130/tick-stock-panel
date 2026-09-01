@@ -42,6 +42,11 @@ def test_worker_rehydrates_persisted_parameter_dates_before_adapter(monkeypatch,
         return {"status": "unavailable", "reason": "insufficient_oos_samples"}
 
     monkeypatch.setattr(worker, "run_full_market_research", fake_run)
+    monkeypatch.setattr(
+        worker.PinnedResearchRepository,
+        "bind",
+        classmethod(lambda cls, repo, record, factor: repo),
+    )
 
     assert worker.execute_job(record, object(), jobs, runs) == 0
     assert isinstance(captured["start"], date)

@@ -178,16 +178,21 @@ def execute_factor(factor_id, repo, scope, params):
         intraday_reader = None
         provider = None
         try:
-            try:
-                from app.data_providers.registry import get_active_provider_name, get_provider
+            pinned_opener = getattr(repo, "open_escape_risk_intraday_reader", None)
+            if callable(pinned_opener):
+                days = canonical.market_days(p["start"] - timedelta(days=30), p["end"])
+                intraday_reader = pinned_opener(canonical.manifest(), tuple(days))
+            else:
+                try:
+                    from app.data_providers.registry import get_active_provider_name, get_provider
 
-                provider = get_provider(get_active_provider_name(capability="minute"))
-                opener = getattr(provider, "open_escape_risk_intraday_reader", None)
-                if callable(opener):
-                    days = canonical.market_days(p["start"] - timedelta(days=30), p["end"])
-                    intraday_reader = opener(canonical.manifest(), tuple(days))
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-                intraday_reader = None
+                    provider = get_provider(get_active_provider_name(capability="minute"))
+                    opener = getattr(provider, "open_escape_risk_intraday_reader", None)
+                    if callable(opener):
+                        days = canonical.market_days(p["start"] - timedelta(days=30), p["end"])
+                        intraday_reader = opener(canonical.manifest(), tuple(days))
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                    intraday_reader = None
             return _norm(
                 "event_signal",
                 evaluate_escape_risk_production(
@@ -555,10 +560,11 @@ def _extended(factor_id, repo, scope, p):
                 resolve_minute_reader,
             )
 
-            reader = resolve_minute_reader()
+            pinned_opener = getattr(repo, "open_ordered_trans_reader", None)
+            reader = pinned_opener() if callable(pinned_opener) else resolve_minute_reader()
             provider = None
             try:
-                if reader is None:
+                if reader is None and not callable(pinned_opener):
                     provider = get_provider(
                         get_active_provider_name(capability="ordered_trans_research")
                     )

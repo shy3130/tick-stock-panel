@@ -24,6 +24,7 @@ from app.research.job_store import (
     FactorJobStore,
     InvalidRunIdError,
 )
+from app.research.pinning import PinnedResearchRepository
 from app.research.run_store import FactorRunStore
 from app.services.full_market_research import FullMarketRunnerError, run_full_market_research
 from app.storage.repository import DataStore, KlineRepository
@@ -101,7 +102,8 @@ def execute_job(
     factor = get_factor(record.get("factor_id", ""))
     if factor is None or factor.full_market_executor is None:
         raise FullMarketRunnerError("full_market_executor_unavailable")
-    if jobs.transition(run_id, RUNNING) is None:
+    running = jobs.transition(run_id, RUNNING)
+    if running is None:
         return 0
     params = factor.request_model.model_validate(record.get("parameters") or {})
     start = getattr(params, "start", None)
@@ -109,9 +111,10 @@ def execute_job(
     if not isinstance(start, date) or not isinstance(end, date):
         raise FullMarketRunnerError("full_market_date_window_missing")
     try:
+        pinned_repo = PinnedResearchRepository.bind(repo, running, factor)
         payload = run_full_market_research(
             factor.id,
-            repo,
+            pinned_repo,
             start,
             end,
             oos_start=getattr(params, "oos_start", None),
@@ -120,6 +123,9 @@ def execute_job(
         )
         current = jobs.get(run_id)
         if current is None or current.get("job_status") == CANCELLED:
+            return 0
+        claimed = jobs.claim_finalization(run_id)
+        if claimed is None:
             return 0
         normalized = _norm(factor.result_profile, payload)
         summary = normalized.model_dump(mode="json")
@@ -130,19 +136,23 @@ def execute_job(
             [row.model_dump(mode="json") for row in normalized.events],
             normalized.series,
         )
-        jobs.transition(
+        completed = jobs.transition(
             run_id,
             COMPLETED,
             verdict=normalized.verdict,
             data_status=result_data_status(
-                normalized, fallback=str(record.get("data_status") or "ready")
+                normalized, fallback=str(claimed.get("data_status") or "ready")
             ),
         )
-        jobs.append_event(run_id, "completed", {"verdict": normalized.verdict})
+        if completed is not None:
+            jobs.append_event(run_id, "completed", {"verdict": normalized.verdict})
         return 0
     except Exception as exc:
-        jobs.transition(run_id, FAILED, error={"code": "worker_failed", "message": str(exc)})
-        jobs.append_event(run_id, "failed", {"message": str(exc)})
+        failed = jobs.transition(
+            run_id, FAILED, error={"code": "worker_failed", "message": str(exc)}
+        )
+        if failed is not None:
+            jobs.append_event(run_id, "failed", {"message": str(exc)})
         return 1
 
 
@@ -166,16 +176,20 @@ def main(argv: list[str] | None = None) -> int:
             return execute_job(record, repo, jobs, runs)
     except FullMarketRunnerError as exc:
         code = "lock_conflict" if str(exc) == "full_market_busy" else "worker_failed"
-        jobs.transition(
+        failed = jobs.transition(
             args.run_id,
             FAILED,
             error={"code": code, "message": str(exc)},
         )
-        jobs.append_event(args.run_id, "failed", {"code": code, "message": str(exc)})
+        if failed is not None:
+            jobs.append_event(args.run_id, "failed", {"code": code, "message": str(exc)})
         return 1
     except Exception as exc:
-        jobs.transition(args.run_id, FAILED, error={"code": "worker_failed", "message": str(exc)})
-        jobs.append_event(args.run_id, "failed", {"message": str(exc)})
+        failed = jobs.transition(
+            args.run_id, FAILED, error={"code": "worker_failed", "message": str(exc)}
+        )
+        if failed is not None:
+            jobs.append_event(args.run_id, "failed", {"message": str(exc)})
         return 1
 
 

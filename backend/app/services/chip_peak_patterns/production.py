@@ -19,7 +19,6 @@ from app.services.research_sealed_data import PublishedCanonicalDailyReader
 from app.services.universe_presence_history import (
     PresenceHistoryError,
     PublishedPresenceUniverseReader,
-    universe_presence_root,
 )
 
 from .adapters import ChipReaderBundle, frame_to_chip_bars, request_windows
@@ -145,11 +144,10 @@ def production_reader_scope(repo: Any, request: ChipPeakRequest) -> Iterator[Chi
                 f"pinned markets facts prefetch failed: {exc}",
             ) from exc
         try:
-            data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
-            presence = PinnedChipPresence(
-                PublishedPresenceUniverseReader(universe_presence_root(), data_dir=data_dir),
-                event_days,
-            )
+            universe_reader = getattr(repo, "pit_presence_universe", None)
+            if universe_reader is None:
+                raise RuntimeError("pinned universe presence reader unavailable")
+            presence = PinnedChipPresence(universe_reader, event_days)
         except (OSError, PresenceHistoryError, RuntimeError, TypeError, ValueError) as exc:
             raise ChipProductionScopeUnavailableError(
                 UnavailabilityReason.UNIVERSE_PRESENCE, f"universe presence unavailable: {exc}"

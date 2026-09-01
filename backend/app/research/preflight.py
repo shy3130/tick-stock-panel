@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from contextlib import suppress
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from app.research.catalog import get_factor
@@ -15,53 +13,33 @@ from app.research.contracts import (
     PreflightSource,
     ResourceEstimate,
 )
+from app.research.pinning import PinnedResearchRepository, reader_identity
 
 
-def _identity(reader: Any) -> tuple[str | None, str | None]:
-    identity = getattr(reader, "identity", None)
-    if callable(identity):
-        value = identity()
-        if hasattr(value, "model_dump"):
-            value = value.model_dump()
-        if isinstance(value, dict):
-            return value.get("generation"), value.get("manifest_sha256")
-    pin = getattr(reader, "pin", None)
-    if callable(pin):
-        value = pin()
-        if hasattr(value, "model_dump"):
-            value = value.model_dump()
-        if isinstance(value, dict):
-            generations = {
-                key: item
-                for key, item in value.items()
-                if key.endswith("_generation") and isinstance(item, str) and item
-            }
-            manifests = {
-                key: item
-                for key, item in value.items()
-                if key.endswith("_manifest_sha256") and isinstance(item, str) and item
-            }
-            if generations and len(generations) == len(manifests):
-                generation = "|".join(
-                    f"{key.removesuffix('_generation')}={generations[key]}"
-                    for key in sorted(generations)
-                )
-                digest = hashlib.sha256(
-                    json.dumps(manifests, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
-                return generation, digest
-    generation = getattr(reader, "generation", None)
-    digest = getattr(reader, "manifest_sha256", None)
-    return (
-        generation() if callable(generation) else generation,
-        digest() if callable(digest) else digest,
-    )
+def _requirement_reader(repo: Any, factor_id: str, kind: str) -> tuple[str, Any]:
+    if kind == "canonical":
+        from app.services.research_sealed_data import PublishedCanonicalDailyReader
+
+        return kind, PublishedCanonicalDailyReader.from_repository(repo)
+    if kind == "markets":
+        return kind, getattr(repo, "generation_pinned_market_facts_reader", None)
+    if kind == "index_daily":
+        return kind, getattr(repo, "index_daily_research_reader", None)
+    if kind == "universe":
+        if factor_id == "volume-breakout":
+            return "eligible_universe", getattr(repo, "pit_eligible_universe", None)
+        return kind, getattr(repo, "pit_presence_universe", None) or getattr(
+            repo, "pit_universe", None
+        )
+    if kind == "calendar":
+        return kind, getattr(repo, "versioned_exchange_calendar", None)
+    return kind, None
 
 
 def _source(
     kind: str, reader: Any, start: date | None = None, end: date | None = None
 ) -> PreflightSource:
-    generation, digest = _identity(reader)
+    generation, digest = reader_identity(reader)
     if not generation or not digest:
         raise ValueError(f"{kind} pinned generation or manifest is unavailable")
     available_from = available_to = None
@@ -79,6 +57,168 @@ def _source(
         available_to=available_to,
     )
 
+def _collect_requirement_source(
+    repo: Any,
+    factor_id: str,
+    kind: str,
+    start: date | None,
+    end: date | None,
+    sources: list[PreflightSource],
+    blockers: list[BlockingReason],
+    warnings: list[str],
+) -> None:
+    if kind in {"minutes", "trans"}:
+        if factor_id == "mtf-direction" and kind == "trans":
+            _collect_ordered_trans_source(repo, sources, blockers)
+        elif factor_id == "escape-risk" and kind == "minutes":
+            _collect_escape_intraday_source(repo, start, end, sources, warnings)
+        else:
+            warnings.append(
+                f"{kind} reader is optional; unavailable signals remain explicitly censored"
+            )
+        return
+    source_kind = "eligible_universe" if kind == "universe" and factor_id == "volume-breakout" else kind
+    try:
+        source_kind, reader = _requirement_reader(repo, factor_id, kind)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        reader = None
+    if reader is None:
+        sources.append(PreflightSource(kind=source_kind, status="missing"))
+        blockers.append(
+            BlockingReason(
+                code=f"{source_kind}_reader_missing",
+                message=f"{source_kind} reader unavailable",
+                source=source_kind,
+            )
+        )
+        return
+    try:
+        sources.append(_source(source_kind, reader, start, end))
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        sources.append(PreflightSource(kind=source_kind, status="missing"))
+        blockers.append(
+            BlockingReason(
+                code=f"{source_kind}_provenance_unavailable",
+                message=f"{source_kind} generation or manifest unavailable",
+                source=source_kind,
+            )
+        )
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+
+def _collect_ordered_trans_source(
+    repo: Any,
+    sources: list[PreflightSource],
+    blockers: list[BlockingReason],
+) -> None:
+    from app.data_providers.registry import get_active_provider_name, get_provider
+
+    reader = None
+    provider = None
+    try:
+        provider = get_provider(get_active_provider_name(capability="ordered_trans_research"))
+        opener = getattr(provider, "open_ordered_trans_reader", None)
+        reader = opener() if callable(opener) else None
+        if reader is None:
+            sources.append(PreflightSource(kind="ordered_trans", status="missing"))
+            blockers.append(
+                BlockingReason(
+                    code="ordered_trans_reader_missing",
+                    message="ordered-trans research reader unavailable",
+                    source="ordered_trans",
+                )
+            )
+            return
+        sources.append(_source("ordered_trans", reader))
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        sources.append(PreflightSource(kind="ordered_trans", status="missing"))
+        blockers.append(
+            BlockingReason(
+                code="ordered_trans_provenance_unavailable",
+                message="ordered-trans generation or manifest unavailable",
+                source="ordered_trans",
+            )
+        )
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+        close = getattr(provider, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+
+def _collect_escape_intraday_source(
+    repo: Any,
+    start: date | None,
+    end: date | None,
+    sources: list[PreflightSource],
+    warnings: list[str],
+    *,
+    lookback_calendar_days: int = 30,
+) -> None:
+    if any(source.kind == "escape_intraday" for source in sources):
+        return
+    if start is None or end is None:
+        warnings.append("escape-risk intraday route pin skipped because the date window is missing")
+        return
+    from app.data_providers.registry import get_active_provider_name, get_provider
+    from app.services.research_sealed_data import PublishedCanonicalDailyReader
+
+    canonical = None
+    reader = None
+    provider = None
+    try:
+        canonical = PublishedCanonicalDailyReader.from_repository(repo)
+        if canonical is None:
+            warnings.append("escape-risk intraday route pin unavailable")
+            return
+        days = canonical.market_days(start - timedelta(days=lookback_calendar_days), end)
+        provider = get_provider(get_active_provider_name(capability="minute"))
+        opener = getattr(provider, "open_escape_risk_intraday_reader", None)
+        reader = opener(canonical.manifest(), tuple(days)) if callable(opener) else None
+        if reader is None:
+            warnings.append("escape-risk intraday route pin unavailable")
+            return
+        generation, manifest = reader_identity(reader)
+        route_pins = getattr(reader, "route_pins", None)
+        routes = route_pins() if callable(route_pins) else None
+        if not isinstance(routes, dict):
+            raise ValueError("escape-risk route pins unavailable")
+        if not generation or not manifest:
+            raise ValueError("escape-risk route identity unavailable")
+        sources.append(
+            PreflightSource(
+                kind="escape_intraday",
+                status="ready",
+                generation=generation,
+                manifest_sha256=manifest,
+                pin={"routes": routes},
+                available_from=days[0] if days else start,
+                available_to=days[-1] if days else end,
+            )
+        )
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        warnings.append(f"escape-risk intraday route pin unavailable: {exc}")
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+        close = getattr(canonical, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+        close = getattr(provider, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
 
 def preflight(repo: Any, request: PreflightRequest) -> PreflightResult:
     factor = get_factor(request.factor_id)
@@ -131,6 +271,7 @@ def preflight(repo: Any, request: PreflightRequest) -> PreflightResult:
 
         blockers: list[BlockingReason] = []
         sources: list[PreflightSource] = []
+        warnings: list[str] = []
         try:
             executor_available = (
                 factor.full_market_executor is not None
@@ -179,6 +320,62 @@ def preflight(repo: Any, request: PreflightRequest) -> PreflightResult:
                             available_to=end_date,
                         )
                     )
+                    component_provenance = reader.source_provenance()
+                    for source_kind in ("canonical", "markets"):
+                        component = component_provenance.get(source_kind)
+                        if not isinstance(component, dict):
+                            raise ValueError(f"{source_kind} component pin is unavailable")
+                        component_generation = component.get("generation")
+                        component_manifest = component.get("manifest_sha256")
+                        if not isinstance(component_generation, str) or not component_generation:
+                            raise ValueError(f"{source_kind} component generation is invalid")
+                        if (
+                            not isinstance(component_manifest, str)
+                            or len(component_manifest) != 64
+                            or any(
+                                value not in "0123456789abcdef"
+                                for value in component_manifest.lower()
+                            )
+                        ):
+                            raise ValueError(f"{source_kind} component manifest is invalid")
+                        sources.append(
+                            PreflightSource(
+                                kind=source_kind,
+                                status="ready",
+                                generation=component_generation,
+                                manifest_sha256=component_manifest.lower(),
+                                available_from=start_date if source_kind == "canonical" else None,
+                                available_to=end_date if source_kind == "canonical" else None,
+                            )
+                        )
+                    pinned_repo = PinnedResearchRepository.from_sources(
+                        repo, [source.model_dump(mode="json") for source in sources]
+                    )
+                    for kind in factor.data_requirements:
+                        if kind in {"canonical", "markets"}:
+                            continue
+                        requirement_repo = (
+                            pinned_repo if kind in {"calendar", "index_daily"} else repo
+                        )
+                        _collect_requirement_source(
+                            requirement_repo,
+                            factor.id,
+                            kind,
+                            start_date,
+                            end_date,
+                            sources,
+                            blockers,
+                            warnings,
+                        )
+                    if factor.id == "doji-patterns":
+                        _collect_escape_intraday_source(
+                            repo,
+                            start_date,
+                            end_date,
+                            sources,
+                            warnings,
+                            lookback_calendar_days=0,
+                        )
                 except Exception as exc:
                     blockers.append(
                         BlockingReason(
@@ -200,6 +397,7 @@ def preflight(repo: Any, request: PreflightRequest) -> PreflightResult:
             cohort=CohortEstimate(
                 requested_symbols=0, eligible_symbols=cohort_count, censored_symbols=0
             ),
+            warnings=warnings,
             blocking_reasons=blockers,
             resource_estimate=ResourceEstimate(
                 resource_class="full_market", full_market_supported=True
@@ -213,56 +411,16 @@ def preflight(repo: Any, request: PreflightRequest) -> PreflightResult:
     start_date = date.fromisoformat(start) if isinstance(start, str) else None
     end_date = date.fromisoformat(end) if isinstance(end, str) else None
     for kind in factor.data_requirements:
-        reader = None
-        if kind == "canonical":
-            try:
-                from app.services.research_sealed_data import PublishedCanonicalDailyReader
-
-                reader = PublishedCanonicalDailyReader.from_repository(repo)
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-                reader = None
-        elif kind == "markets":
-            reader = getattr(repo, "generation_pinned_market_facts_reader", None)
-        elif kind == "index_daily":
-            reader = getattr(repo, "index_daily_research_reader", None)
-        elif kind == "universe":
-            reader = getattr(repo, "pit_presence_universe", None) or getattr(
-                repo, "pit_universe", None
-            )
-        elif kind == "calendar":
-            reader = getattr(repo, "versioned_exchange_calendar", None)
-        elif kind in {"minutes", "trans"}:
-            warnings.append(
-                f"{kind} reader is optional; unavailable signals remain explicitly censored"
-            )
-            continue
-        if reader is None:
-            sources.append(PreflightSource(kind=kind, status="missing"))
-            if kind in {"canonical", "markets", "universe", "calendar", "index_daily"}:
-                blockers.append(
-                    BlockingReason(
-                        code=f"{kind}_reader_missing",
-                        message=f"{kind} reader unavailable",
-                        source=kind,
-                    )
-                )
-        else:
-            try:
-                sources.append(_source(kind, reader, start_date, end_date))
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-                sources.append(PreflightSource(kind=kind, status="missing"))
-                blockers.append(
-                    BlockingReason(
-                        code=f"{kind}_provenance_unavailable",
-                        message=f"{kind} generation or manifest unavailable",
-                        source=kind,
-                    )
-                )
-            finally:
-                close = getattr(reader, "close", None)
-                if callable(close):
-                    with suppress(Exception):
-                        close()
+        _collect_requirement_source(
+            repo,
+            factor.id,
+            kind,
+            start_date,
+            end_date,
+            sources,
+            blockers,
+            warnings,
+        )
     cohort = CohortEstimate(
         requested_symbols=len(symbols), eligible_symbols=len(symbols), censored_symbols=0
     )

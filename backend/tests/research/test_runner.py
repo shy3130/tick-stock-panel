@@ -1,9 +1,20 @@
+import pytest
+
 from app.research.adapters import _norm, result_data_status
 from app.research.catalog import FACTOR_REGISTRY
-from app.research.contracts import PreflightRequest, PreflightResult, RunScopeModel
+from app.research.contracts import (
+    CancellationToken,
+    NormalizedResearchResult,
+    PreflightRequest,
+    PreflightResult,
+    RunScopeModel,
+)
 from app.research.control import create_durable_run
 from app.research.job_store import FactorJobStore
+from app.research.pinning import PinnedResearchRepository
 from app.research.preflight import preflight
+from app.research.run_store import FactorRunStore
+from app.research.runner import InteractiveWorker
 from app.services.research_sealed_data import PublishedCanonicalDailyReader
 
 
@@ -14,6 +25,58 @@ def test_terminal_job_status_is_not_overwritten(tmp_path):
     assert store.transition(run_id, "cancelled") is not None
     assert store.transition(run_id, "completed") is None
     assert store.get(run_id)["job_status"] == "cancelled"
+
+@pytest.mark.asyncio
+async def test_finalization_claim_rejects_cancel_during_publish(monkeypatch, tmp_path):
+    jobs = FactorJobStore(tmp_path)
+    runs = FactorRunStore(tmp_path)
+    run_id = "rr-0123456789abcdef"
+    jobs.create(
+        {
+            "run_id": run_id,
+            "factor_id": "n-shape",
+            "scope": {"type": "symbols", "symbols": ["000001.SZ"]},
+            "preflight": {"sources": []},
+            "job_status": "pending",
+            "data_status": "ready",
+        }
+    )
+    worker = InteractiveWorker(jobs, runs)
+    monkeypatch.setattr(
+        PinnedResearchRepository,
+        "bind",
+        classmethod(lambda cls, repo, record, factor: repo),
+    )
+    monkeypatch.setattr(
+        "app.research.runner.execute_factor",
+        lambda *_args: NormalizedResearchResult(
+            profile="event_signal",
+            status="unavailable",
+            verdict="unavailable",
+        ),
+    )
+    publish = runs.publish
+
+    def racing_publish(*args, **kwargs):
+        assert worker.cancel(run_id) is False
+        return publish(*args, **kwargs)
+
+    monkeypatch.setattr(runs, "publish", racing_publish)
+
+    await worker._execute(
+        run_id,
+        "n-shape",
+        object(),
+        RunScopeModel(type="symbols", symbols=["000001.SZ"]),
+        object(),
+        CancellationToken(),
+    )
+
+    record = jobs.get(run_id)
+    assert record["job_status"] == "completed"
+    assert record["finalizing"] is False
+    assert [event["event_type"] for event in record["events"]].count("completed") == 1
+    assert not any(event["event_type"] == "cancelled" for event in record["events"])
 
 
 def test_full_market_nested_verdict_is_preserved_by_unified_normalizer():

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from .catalog import FactorDefinition, get_factor
 from .contracts import PreflightRequest, RunScopeModel
 from .job_store import ACTIVE_JOB_STATUSES, FactorJobStore, new_run_id
+from .pinning import PinnedResearchRepository
 from .preflight import preflight
 from .run_store import FactorRunStore
 
@@ -135,10 +136,16 @@ def run_factor_sync(
     from .adapters import execute_factor, result_data_status
 
     definition, scope_model, _checked, parameters_model = plan
-    jobs.transition(run_id, "running")
+    running = jobs.transition(run_id, "running")
+    if running is None:
+        return jobs.get(run_id) or {}
     jobs.append_event(run_id, "progress", {"percent": 5, "stage": "running"})
     try:
-        result = execute_factor(definition.id, repo, scope_model, parameters_model)
+        pinned_repo = PinnedResearchRepository.bind(repo, running, definition)
+        result = execute_factor(definition.id, pinned_repo, scope_model, parameters_model)
+        claimed = jobs.claim_finalization(run_id)
+        if claimed is None:
+            return jobs.get(run_id) or {}
         runs.publish(
             run_id,
             result.model_dump(mode="json"),
@@ -146,18 +153,22 @@ def run_factor_sync(
             [row.model_dump(mode="json") for row in result.events],
             result.series,
         )
-        jobs.transition(
+        completed = jobs.transition(
             run_id,
             "completed",
             verdict=result.verdict,
             data_status=result_data_status(
-                result, fallback=str((jobs.get(run_id) or {}).get("data_status") or "ready")
+                result, fallback=str(claimed.get("data_status") or "ready")
             ),
         )
-        jobs.append_event(run_id, "completed", {"verdict": result.verdict})
+        if completed is not None:
+            jobs.append_event(run_id, "completed", {"verdict": result.verdict})
     except Exception as exc:
-        jobs.transition(run_id, "failed", error={"code": "worker_failed", "message": str(exc)})
-        jobs.append_event(run_id, "failed", {"message": str(exc)})
+        failed = jobs.transition(
+            run_id, "failed", error={"code": "worker_failed", "message": str(exc)}
+        )
+        if failed is not None:
+            jobs.append_event(run_id, "failed", {"message": str(exc)})
     return jobs.get(run_id) or {}
 
 
@@ -195,8 +206,9 @@ def watch_full_market_process(
         }:
             return
         code = "runner_rss_exceeded" if return_code == 75 else "runner_exit"
-        jobs.transition(run_id, "failed", error={"code": code, "message": message})
-        jobs.append_event(run_id, "failed", {"code": code, "message": message})
+        failed = jobs.transition(run_id, "failed", error={"code": code, "message": message})
+        if failed is not None:
+            jobs.append_event(run_id, "failed", {"code": code, "message": message})
 
     thread = threading.Thread(
         target=watch,

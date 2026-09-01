@@ -101,6 +101,7 @@ export function getResearchSymbolAnalysis(
     `/api/research/analysis/symbol/${encodeURIComponent(symbol)}${query ? `?${query}` : ''}`,
     undefined,
     parseResearchSymbolAnalysis,
+    { acceptStatuses: [503] },
   )
 }
 

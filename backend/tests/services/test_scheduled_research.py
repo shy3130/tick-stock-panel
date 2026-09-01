@@ -134,6 +134,7 @@ def test_factor_run_schedule_requires_exact_params(tmp_path):
 
 def test_factor_run_schedule_creates_durable_run_without_run_card(tmp_path, monkeypatch):
     from app.research.contracts import PreflightResult
+    from app.research.pinning import PinnedResearchRepository
 
     item = ScheduledResearchStore(tmp_path).create(
         "因子",
@@ -162,6 +163,11 @@ def test_factor_run_schedule_creates_durable_run_without_run_card(tmp_path, monk
             status="unavailable",
             verdict="unavailable",
         ),
+    )
+    monkeypatch.setattr(
+        PinnedResearchRepository,
+        "bind",
+        classmethod(lambda cls, repo, record, factor: repo),
     )
     state = app_state(tmp_path)
     result = run_schedule(item, state)

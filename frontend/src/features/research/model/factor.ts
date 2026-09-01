@@ -151,7 +151,18 @@ function parseFactorCatalogItem(value: unknown): FactorCatalogItem | null {
     data_requirements: asStringArray(rec.data_requirements),
     todo_status: asString(rec.todo_status),
     docs: asStringArray(rec.docs),
-    latest_run: parseLatestRun(rec.latest_run),
+    latest_run: parseLatestRun(
+      rec.latest_run ?? (
+        rec.latest_run_id
+          ? {
+              run_id: rec.latest_run_id,
+              created_at: null,
+              job_status: null,
+              verdict: rec.latest_verdict,
+            }
+          : null
+      ),
+    ),
     scope_capabilities: parseScopeCapabilities(rec.scope_capabilities, supported),
   }
 }

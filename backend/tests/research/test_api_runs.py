@@ -18,6 +18,29 @@ def test_catalog_exposes_all_factors(tmp_path):
     assert response.status_code == 200
     assert len(response.json()["items"]) == 19
 
+def test_catalog_returns_nested_latest_run_contract(tmp_path):
+    run_id = "rr-0123456789abcdef"
+    stored = FactorJobStore(tmp_path).create(
+        {
+            "run_id": run_id,
+            "factor_id": "n-shape",
+            "scope": {"type": "symbols", "symbols": ["000001.SZ"]},
+            "job_status": "completed",
+            "verdict": "unavailable",
+            "data_status": "ready",
+        }
+    )
+
+    response = _client(tmp_path).get("/api/research/factors")
+
+    item = next(row for row in response.json()["items"] if row["id"] == "n-shape")
+    assert item["latest_run"] == {
+        "run_id": run_id,
+        "created_at": stored["created_at"],
+        "job_status": "completed",
+        "verdict": "unavailable",
+    }
+
 
 def test_factor_detail_exposes_parameter_schema(tmp_path):
     response = _client(tmp_path).get("/api/research/factors/macd-arms")

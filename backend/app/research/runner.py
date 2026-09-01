@@ -6,8 +6,10 @@ import asyncio
 from typing import Any
 
 from .adapters import execute_factor, result_data_status
+from .catalog import get_factor
 from .contracts import CancellationToken
 from .job_store import CANCELLED, COMPLETED, FAILED, RUNNING, TERMINAL_JOB_STATUSES, FactorJobStore
+from .pinning import PinnedResearchRepository
 from .run_store import FactorRunStore
 
 _TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -48,9 +50,19 @@ class InteractiveWorker:
                 return
             self.jobs.append_event(run_id, "progress", {"percent": 5, "stage": "running"})
             try:
-                result = await asyncio.to_thread(execute_factor, factor_id, repo, scope, parameters)
+                record = self.jobs.get(run_id)
+                factor = get_factor(factor_id)
+                if record is None or factor is None:
+                    raise RuntimeError("durable factor run definition unavailable")
+                pinned_repo = PinnedResearchRepository.bind(repo, record, factor)
+                result = await asyncio.to_thread(
+                    execute_factor, factor_id, pinned_repo, scope, parameters
+                )
                 current = self.jobs.get(run_id)
                 if token.cancelled or (current and current.get("job_status") == CANCELLED):
+                    return
+                claimed = self.jobs.claim_finalization(run_id)
+                if claimed is None:
                     return
                 self.runs.publish(
                     run_id,
@@ -59,27 +71,33 @@ class InteractiveWorker:
                     [row.model_dump(mode="json") for row in result.events],
                     result.series,
                 )
-                self.jobs.transition(
+                completed = self.jobs.transition(
                     run_id,
                     COMPLETED,
                     verdict=result.verdict,
                     data_status=result_data_status(
-                        result, fallback=str(current.get("data_status") or "ready")
+                        result, fallback=str(claimed.get("data_status") or "ready")
                     ),
                 )
-                self.jobs.append_event(run_id, "completed", {"verdict": result.verdict})
+                if completed is not None:
+                    self.jobs.append_event(run_id, "completed", {"verdict": result.verdict})
             except asyncio.CancelledError:
-                self.jobs.transition(run_id, CANCELLED)
-                self.jobs.append_event(run_id, "cancelled")
+                cancelled = self.jobs.transition(run_id, CANCELLED)
+                if cancelled is not None:
+                    self.jobs.append_event(run_id, "cancelled")
             except Exception as exc:
-                self.jobs.transition(
+                failed = self.jobs.transition(
                     run_id, FAILED, error={"code": "worker_failed", "message": str(exc)}
                 )
-                self.jobs.append_event(run_id, "failed", {"message": str(exc)})
+                if failed is not None:
+                    self.jobs.append_event(run_id, "failed", {"message": str(exc)})
 
     def cancel(self, run_id: str) -> bool:
         current = self.jobs.get(run_id)
         if current is None or current.get("job_status") in TERMINAL_JOB_STATUSES:
+            return False
+        cancelled = self.jobs.transition(run_id, CANCELLED)
+        if cancelled is None:
             return False
         token = _TOKENS.get(run_id)
         task = _TASKS.get(run_id)
@@ -87,7 +105,7 @@ class InteractiveWorker:
             token.cancel()
         if task is not None and current.get("job_status") != RUNNING:
             task.cancel()
-        return self.jobs.transition(run_id, CANCELLED) is not None
+        return True
 
 
 def recover_orphans(data_dir: Any) -> int:
