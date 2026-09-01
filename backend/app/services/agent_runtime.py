@@ -7,8 +7,9 @@ import os
 import shutil
 import sys
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -53,6 +54,52 @@ _WORKER_ENV_KEYS = frozenset(
 )
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 logger = logging.getLogger(__name__)
+@dataclass(frozen=True)
+class PiAgentDefinition:
+    """One explicitly scoped Pi tool loop, optionally terminated by Python."""
+
+    tools: tuple[dict[str, Any], ...]
+    system_prompt: str
+    final_prompt: str
+    dispatch_tool: Callable[[str, Any, dict[str, Any]], dict[str, Any]]
+    terminal_text: Callable[[str, dict[str, Any]], str | None] | None = None
+    terminal_before_reply: bool = False
+    emit_tool_events: bool = True
+
+
+def _default_pi_definition() -> PiAgentDefinition:
+    return PiAgentDefinition(
+        tools=tuple(ALLOWED_AGENT_TOOLS),
+        system_prompt=_tools_system(),
+        final_prompt=_final_system(),
+        dispatch_tool=agent_tools.call_tool,
+        terminal_text=None,
+    )
+
+
+def _definition_tool_specs(definition: PiAgentDefinition) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for tool in definition.tools:
+        if tool.get("read_only") is not True:
+            raise RuntimeError("Pi Agent 试点拒绝非只读工具")
+        schema = tool.get("parameters") or tool.get("input_schema")
+        if not isinstance(schema, dict):
+            raise RuntimeError("Pi Agent 工具缺少输入 schema")
+        name = str(tool.get("name") or "").strip()
+        if not name or name in names:
+            raise RuntimeError("Pi Agent 工具名缺失或重复")
+        names.add(name)
+        specs.append(
+            {
+                "name": name,
+                "description": str(tool["description"]),
+                "input_schema": schema,
+                "read_only": True,
+            }
+        )
+    return specs
+
 
 
 async def run_agent_stream(
@@ -80,28 +127,46 @@ async def run_agent_stream(
         yield _error_line("未知 Agent 运行时，请检查 AGENT_RUNTIME", 0.0)  # noqa: RUF001
         return
 
+    async with aclosing(
+        run_scoped_pi_agent_stream(
+            messages, app_state, profile_id, _default_pi_definition()
+        )
+    ) as stream:
+        async for line in stream:
+            yield line
+
+
+async def run_scoped_pi_agent_stream(
+    messages: list[dict],
+    app_state: Any,
+    profile_id: str | None,
+    definition: PiAgentDefinition,
+) -> AsyncIterator[str]:
+    """Run an explicit Pi definition independently from the general runtime switch."""
     started_at = perf_counter()
     if not try_acquire_agent_slot():
         yield occupancy_error_line(started_at)
         return
-    logger.info("Pi Agent runtime attempt started")
+    logger.info("Scoped Pi Agent runtime attempt started")
     secret = ""
     try:
         profile, secret = _resolve_pi_profile(profile_id)
-        async with aclosing(_run_pi_worker(messages, app_state, profile, secret)) as stream:
+        async with aclosing(
+            _run_pi_worker(messages, app_state, profile, secret, definition)
+        ) as stream:
             async for line in stream:
                 yield line
     except asyncio.CancelledError:
-        logger.info("Pi Agent runtime attempt cancelled")
+        logger.info("Scoped Pi Agent runtime attempt cancelled")
         raise
     except Exception as exc:
         elapsed_ms = round((perf_counter() - started_at) * 1000, 1)
         message = _sanitize_runtime_error(exc, secret)
-        logger.warning("Pi Agent runtime attempt failed: %s", type(exc).__name__)
+        logger.warning("Scoped Pi Agent runtime attempt failed: %s", type(exc).__name__)
         yield _error_line(message, elapsed_ms)
     else:
         logger.info(
-            "Pi Agent runtime attempt completed in %.1fms",
+            "Scoped Pi Agent runtime attempt completed in %.1fms",
             (perf_counter() - started_at) * 1000,
         )
     finally:
@@ -173,22 +238,8 @@ def _resolve_node_command() -> str:
 
 
 def _tool_specs() -> list[dict[str, Any]]:
-    specs: list[dict[str, Any]] = []
-    for tool in ALLOWED_AGENT_TOOLS:
-        if tool.get("read_only") is not True:
-            raise RuntimeError("Pi Agent 试点拒绝非只读工具")
-        schema = tool.get("parameters") or tool.get("input_schema")
-        if not isinstance(schema, dict):
-            raise RuntimeError("Pi Agent 工具缺少输入 schema")
-        specs.append(
-            {
-                "name": str(tool["name"]),
-                "description": str(tool["description"]),
-                "input_schema": schema,
-                "read_only": True,
-            }
-        )
-    return specs
+    """Backward-compatible introspection helper for the default definition."""
+    return _definition_tool_specs(_default_pi_definition())
 
 def _worker_environment() -> dict[str, str]:
     """Pass only process settings required by Node itself, never backend secrets."""
@@ -204,6 +255,7 @@ async def _run_pi_worker(
     app_state: Any,
     profile: dict[str, Any],
     secret: str,
+    definition: PiAgentDefinition,
 ) -> AsyncIterator[str]:
     worker_path = _worker_path()
     if not worker_path.is_file():
@@ -240,14 +292,13 @@ async def _run_pi_worker(
             raise RuntimeError(_message_field(ready, "Pi Agent worker 启动失败"))
         if ready.get("type") != "ready":
             raise RuntimeError("Pi Agent worker 未返回 ready")
-
         start_message = {
             "type": "start",
             "profile": profile,
             "messages": _history_messages(messages),
-            "system_prompt": _tools_system(),
-            "final_prompt": _final_system(),
-            "tools": _tool_specs(),
+            "system_prompt": definition.system_prompt,
+            "final_prompt": definition.final_prompt,
+            "tools": _definition_tool_specs(definition),
             "max_tool_rounds": MAX_TOOL_ROUNDS,
         }
         seen_request_ids: set[str] = set()
@@ -256,8 +307,7 @@ async def _run_pi_worker(
         # 只输出与 Python runtime 相同的确定性摘要；未命中则在 done 前按序转发。
         delta_buffer: list[str] = []
         await _write_envelope(proc.stdin, start_message)
-
-        allowed_names = {tool["name"] for tool in ALLOWED_AGENT_TOOLS}
+        allowed_names = {tool["name"] for tool in definition.tools}
         while True:
             try:
                 envelope = await asyncio.wait_for(
@@ -292,17 +342,57 @@ async def _run_pi_worker(
                 if tool_request_count > _MAX_TOOL_REQUESTS:
                     raise RuntimeError("Pi Agent worker 工具请求超过安全上限")
 
-                yield json.dumps(
-                    {"type": "tool_call", "name": name, "args": args},
-                    ensure_ascii=False,
-                )
+                if definition.emit_tool_events:
+                    yield json.dumps(
+                        {"type": "tool_call", "name": name, "args": args},
+                        ensure_ascii=False,
+                    )
                 tool_started_at = perf_counter()
                 ok = True
                 try:
-                    result = await asyncio.to_thread(agent_tools.call_tool, name, app_state, args)
+                    result = await asyncio.to_thread(
+                        definition.dispatch_tool, name, app_state, args
+                    )
                 except Exception as exc:
                     ok = False
                     result = {"error": agent_tools.sanitize_tool_error(exc)}
+                if not ok and definition.terminal_before_reply:
+                    raise RuntimeError(str(result["error"]))
+
+
+                if ok and definition.terminal_before_reply and definition.terminal_text is not None:
+                    final_text = definition.terminal_text(name, result)
+                    if final_text is not None:
+                        terminal = True
+                        await _stop_process(proc)
+                        delta_buffer.clear()
+                        if definition.emit_tool_events:
+                            yield json.dumps(
+                                {
+                                    "type": "tool_result",
+                                    "name": name,
+                                    "result": {
+                                        "status": "success",
+                                        "summary": "持仓分析已在 Python 事实层完成",
+                                    },
+                                    "elapsed_ms": round(
+                                        (perf_counter() - tool_started_at) * 1000, 1
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            )
+                        yield json.dumps(
+                            {"type": "delta", "content": final_text},
+                            ensure_ascii=False,
+                        )
+                        yield json.dumps(
+                            {
+                                "type": "done",
+                                "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
+                            },
+                            ensure_ascii=False,
+                        )
+                        return
 
                 reply: dict[str, Any] = {
                     "type": "tool_result",
@@ -315,16 +405,19 @@ async def _run_pi_worker(
                     reply["error"] = str(result["error"])
                 await _write_envelope(proc.stdin, reply)
 
-                yield json.dumps(
-                    {
-                        "type": "tool_result",
-                        "name": name,
-                        "result": result,
-                        "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
-                    },
-                    ensure_ascii=False,
-                    default=str,
-                )
+                if definition.emit_tool_events:
+                    yield json.dumps(
+                        {
+                            "type": "tool_result",
+                            "name": name,
+                            "result": result,
+                            "elapsed_ms": round(
+                                (perf_counter() - tool_started_at) * 1000, 1
+                            ),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
                 if (outcome := _short_pool_outcome(name, result)) is not None:
                     # 成功固定短线池是终端工具结果：立即终止 worker，丢弃全部
                     # 缓冲 delta，只输出与 Python runtime 相同的确定性摘要。
