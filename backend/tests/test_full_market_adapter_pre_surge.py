@@ -256,3 +256,22 @@ def test_serialize_verdict_preserves_risk_metrics_and_definitions():
     json.dumps(serialized, allow_nan=False)
     assert adapter.extract_coverage(serialized) == coverage
     assert adapter.extract_coverage({"status": "unavailable"}) is None
+
+
+def test_build_request_consumes_benchmark_parameter():
+    cohort = ["600000.SH"]
+    request = PreSurgeAdapter().build_request(
+        START,
+        END,
+        cohort,
+        oos_start=OOS_START,
+        cost_bps=None,
+        parameters={
+            "start": START,
+            "oos_start": OOS_START,
+            "end": END,
+            "benchmark_symbol": "000001.SH",
+            "cost_bps": 12.0,
+        },
+    )
+    assert request.benchmark_symbol == "000001.SH"

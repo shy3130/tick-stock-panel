@@ -34,9 +34,9 @@ for variable in THREAD_ENV_VARS:
 DEFAULT_MAX_RSS_GIB = 8.0
 DEFAULT_LOCK_PATH = Path(tempfile.gettempdir()) / "tickflow-full-market-research.lock"
 
+from app.research.catalog import full_market_factor_ids  # noqa: E402
 from app.services.full_market_research import (  # noqa: E402
     FullMarketRunnerError,
-    registered_factor_names,
     run_full_market_research,
     write_payload_json,
 )
@@ -131,7 +131,7 @@ def _emit_payload(payload: dict, output: Path | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--factor", choices=registered_factor_names(), required=True)
+    parser.add_argument("--factor", choices=full_market_factor_ids(), required=True)
     parser.add_argument("--start", type=_day, required=True)
     parser.add_argument("--end", type=_day, required=True)
     parser.add_argument("--oos-start", type=_day)

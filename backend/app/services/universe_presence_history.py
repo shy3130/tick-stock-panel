@@ -533,7 +533,12 @@ def _parse_day(v: Any, what: str) -> date:
 
 class PublishedPresenceUniverseReader:
     def __init__(
-        self, root: str | os.PathLike[str], *, data_dir: str | os.PathLike[str] | None = None
+        self,
+        root: str | os.PathLike[str],
+        *,
+        data_dir: str | os.PathLike[str] | None = None,
+        generation: str | None = None,
+        manifest_sha256: str | None = None,
     ) -> None:
         self._root = os.path.realpath(os.fspath(root))
         if data_dir is not None:
@@ -541,14 +546,25 @@ class PublishedPresenceUniverseReader:
                 validate_root_outside_data_dir(self._root, data_dir)
             except Exception as e:
                 raise PresenceHistoryIntegrityError(str(e)) from e
-        cur = _read_current(self._root)
-        if cur is None:
-            raise PresenceHistoryNotPublishedError("presence not published")
-        p = _require_json(cur, "presence current")
-        gen = p.get("generation")
+        if generation is None:
+            cur = _read_current(self._root)
+            if cur is None:
+                raise PresenceHistoryNotPublishedError("presence not published")
+            p = _require_json(cur, "presence current")
+            gen = p.get("generation")
+        else:
+            gen = generation
         if not isinstance(gen, str) or not _PRESENCE_GENERATION_RE.fullmatch(gen):
             raise PresenceHistoryIntegrityError("invalid generation")
         mb = _read_relative_nofollow(self._root, f"{gen}/manifest.json")
+        resolved_manifest_sha256 = sha256_hex(mb)
+        if manifest_sha256 is not None:
+            if not isinstance(manifest_sha256, str) or not _HEX64_RE.fullmatch(
+                manifest_sha256.lower()
+            ):
+                raise PresenceHistoryIntegrityError("invalid manifest pin")
+            if resolved_manifest_sha256 != manifest_sha256.lower():
+                raise PresenceHistoryIntegrityError("manifest identity mismatch")
         m = _require_json(mb, "presence manifest")
         if m.get("generation") != gen or canonical_json_bytes(m) != mb:
             raise PresenceHistoryIntegrityError("manifest canonical/generation mismatch")
@@ -675,6 +691,7 @@ class PublishedPresenceUniverseReader:
             raise PresenceHistoryIntegrityError("last interval boundary")
         self._generation = gen
         self._manifest = m
+        self._manifest_sha256 = resolved_manifest_sha256
         self._market_days = days
         self._day_index = idx
         self._intervals = intervals
@@ -682,6 +699,12 @@ class PublishedPresenceUniverseReader:
         self._symbols_by_hash = symbols
         self._coverage_start = start
         self._coverage_end = end
+
+    def identity(self) -> dict[str, str]:
+        return {
+            "generation": self._generation,
+            "manifest_sha256": self._manifest_sha256,
+        }
 
     def source_manifest(self) -> dict[str, Any]:
         return deepcopy(self._manifest)

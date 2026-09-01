@@ -168,7 +168,10 @@ class PublishedDailyMarketFactsReader:
             raise
 
     @classmethod
-    def from_repository(cls, repo: Any) -> PublishedDailyMarketFactsReader:
+    def from_repository(cls, repo: Any) -> PublishedDailyMarketFactsReader | None:
+        pinned_opener = getattr(repo, "_open_research_market_pin", None)
+        if callable(pinned_opener):
+            return pinned_opener()
         path = current_path("markets")
         if not path:
             raise FileNotFoundError("no published markets snapshot")

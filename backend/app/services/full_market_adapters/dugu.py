@@ -21,13 +21,14 @@ from app.data_providers.fquant.daily_market_research import (
 )
 from app.services.daily_event_research.dugu_trend import (
     DUGU_SCAN_SCHEMA,
+    DuguTrendConfig,
     dugu_scan_cell_id,
     iter_dugu_scan_grid,
 )
 from app.services.daily_event_research.evaluation import evaluate_daily_events
 from app.services.daily_event_research.models import COST_BPS_DEFAULT
 from app.services.full_market_adapters.pinning import source_reader_matches
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.research_sealed_data import PublishedCanonicalDailyReader
 
 DUGU_FULL_MARKET_SCHEMA = "tickflow.research.full-market-dugu-scan.v1"
@@ -62,6 +63,8 @@ class DuguScanRequest:
     symbols: list[str]
     oos_start: date
     cost_bps: float
+    selection: DuguTrendConfig | None = None
+    horizon_days: int = 20
 
 
 class DuguTrendAdapter:
@@ -77,7 +80,34 @@ class DuguTrendAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> DuguScanRequest:
+        selection = None
+        horizon_days = 20
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters,
+                {
+                    "variant",
+                    "band_mode",
+                    "require_m3",
+                    "alignment_days",
+                    "start",
+                    "oos_start",
+                    "end",
+                    "horizon_days",
+                    "cost_bps",
+                },
+            )
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
+            selection = DuguTrendConfig(
+                variant=parameters["variant"],
+                band_mode=parameters["band_mode"],
+                require_m3=parameters["require_m3"],
+                alignment_days=parameters["alignment_days"],
+            )
+            horizon_days = parameters["horizon_days"]
         if oos_start is None:
             raise ValueError("dugu_oos_start_required")
         return DuguScanRequest(
@@ -86,6 +116,8 @@ class DuguTrendAdapter:
             symbols=list(cohort),
             oos_start=oos_start,
             cost_bps=COST_BPS_DEFAULT if cost_bps is None else cost_bps,
+            selection=selection,
+            horizon_days=horizon_days,
         )
 
     def evaluate(self, context: RunnerContext, request: DuguScanRequest) -> dict[str, Any]:
@@ -94,13 +126,22 @@ class DuguTrendAdapter:
         if canonical is None:
             return self._unavailable(echo, "unavailable_canonical_reader")
         if not source_reader_matches(context, "canonical", canonical):
+            close = getattr(canonical, "close", None)
+            if callable(close):
+                close()
             return self._unavailable(echo, "pinned_canonical_generation_mismatch")
         try:
             facts = PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
         except (OSError, RuntimeError, TypeError, ValueError):
+            close = getattr(canonical, "close", None)
+            if callable(close):
+                close()
             return self._unavailable(echo, "unavailable_market_facts")
         if not source_reader_matches(context, "markets", facts):
             close = getattr(facts, "close", None)
+            if callable(close):
+                close()
+            close = getattr(canonical, "close", None)
             if callable(close):
                 close()
             return self._unavailable(echo, "pinned_markets_generation_mismatch")
@@ -108,6 +149,20 @@ class DuguTrendAdapter:
         preload_start = request.start - timedelta(days=PRELOAD_LOOKBACK_DAYS)
         preload_end = request.end + timedelta(days=PRELOAD_FORWARD_DAYS)
         grid = iter_dugu_scan_grid()
+        if request.selection is not None:
+            grid = tuple(
+                config
+                for config in grid
+                if (config.variant, config.band_mode, config.require_m3, config.alignment_days)
+                == (
+                    request.selection.variant,
+                    request.selection.band_mode,
+                    request.selection.require_m3,
+                    request.selection.alignment_days,
+                )
+            )
+            if not grid:
+                raise ValueError("dugu parameter selection matches no frozen grid cell")
         cells: dict[str, Any] = {}
         try:
             try:
@@ -129,15 +184,18 @@ class DuguTrendAdapter:
                     alignment_days=config.alignment_days,
                     symbols=list(request.symbols),
                     start=request.start,
+                    horizon_days=request.horizon_days,
                     oos_start=request.oos_start,
                     end=request.end,
-                    horizon_days=20,
                     cost_bps=request.cost_bps,
                 )
                 response = evaluate_daily_events(cell_request, canonical, bundle)
                 cells[dugu_scan_cell_id(config)] = response.model_dump(mode="json")
         finally:
             close = getattr(facts, "close", None)
+            if callable(close):
+                close()
+            close = getattr(canonical, "close", None)
             if callable(close):
                 close()
         return {
@@ -196,7 +254,7 @@ class DuguTrendAdapter:
         )
 
     def _request_echo(self, request: DuguScanRequest) -> dict[str, Any]:
-        return {
+        echo = {
             "factor": self.name,
             "start": request.start.isoformat(),
             "end": request.end.isoformat(),
@@ -205,6 +263,15 @@ class DuguTrendAdapter:
             "symbols": len(request.symbols),
             "scan_grid_schema": DUGU_SCAN_SCHEMA,
         }
+        if request.selection is not None:
+            echo["parameters"] = {
+                "variant": request.selection.variant,
+                "band_mode": request.selection.band_mode,
+                "require_m3": request.selection.require_m3,
+                "alignment_days": request.selection.alignment_days,
+                "horizon_days": request.horizon_days,
+            }
+        return echo
 
     def _unavailable(self, echo: dict[str, Any], reason: str) -> dict[str, Any]:
         return {
@@ -214,7 +281,7 @@ class DuguTrendAdapter:
             "unavailable_reasons": [reason],
             "scan_grid": {
                 "schema": DUGU_SCAN_SCHEMA,
-                "cell_count": len(iter_dugu_scan_grid()),
+                "cell_count": 1 if "parameters" in echo else len(iter_dugu_scan_grid()),
                 "cell_ids": [],
             },
             "cells": {},

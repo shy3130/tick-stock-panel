@@ -113,17 +113,7 @@ export const QK = {
   marketDataTransactions: (symbol: string, date: string, limit: number) =>
                             ['market-data-transactions', symbol, date, limit] as const,
 
-  // Research analysis（canonical enriched 日 K；用户显式触发）
-  researchSymbolAnalysis: (symbol: string, start: string, end: string) =>
-                            ['research-symbol-analysis', symbol, start, end] as const,
 
-  // Research (假设注册 + 定时研究)
-  researchHypothesesRoot: ['research-hypotheses'] as const,
-  researchHypotheses: (status?: string, query?: string) =>
-    ['research-hypotheses', status ?? '', query ?? ''] as const,
-  researchHypothesis: (id: string) => ['research-hypothesis', id] as const,
-  researchRunCard:    (runId: string) => ['research-run-card', runId] as const,
-  researchSchedules:  ['research-schedules'] as const,
   // Trading (结构化计划检查 · M25 连续性链)
   planCheckContinuity: (attemptId: string) => ['plan-check-continuity', attemptId] as const,
 } as const

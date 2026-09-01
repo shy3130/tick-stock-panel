@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -11,11 +12,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 STATUSES = {"exploring", "testing", "validated", "rejected", "monitoring"}
+# factor_run 有意不进通用证据白名单：唯一合法写入入口是 link_factor_run
+# （run_id 白名单 + hypothesis/run 存在性门禁 + 幂等），通用 add_evidence 对它 fail-closed。
 EVIDENCE_KINDS = {"backtest", "note", "observation"}
 
 # 做T确认幂等锁：ResearchStore 实例按请求新建，实例级锁无法跨请求互斥，
 # 故用模块级锁在持久化边界串行化「按保留标签 create-or-return-existing」。
 _RESERVED_TAG_LOCK = threading.Lock()
+
+# factor_run 关联幂等锁：同一 (hyp_id, run_id) 的重复/并发 link 只允许落一条。
+_FACTOR_RUN_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -59,7 +65,8 @@ class RunCard:
 
 class ResearchStore:
     def __init__(self, data_dir: Path) -> None:
-        root = Path(data_dir) / "research"
+        self.data_dir = Path(data_dir)
+        root = self.data_dir / "research"
         self.hyp_dir = root / "hypotheses"
         self.card_dir = root / "run_cards"
 
@@ -135,6 +142,9 @@ class ResearchStore:
         return h
 
     def add_evidence(self, hyp_id: str, kind: str, ref: str, summary: str) -> Hypothesis:
+        if kind == "factor_run":
+            # fail-closed: factor_run 证据只能经 link_factor_run 的验证门禁写入。
+            raise ValueError("factor_run evidence must use link_factor_run")
         if kind not in EVIDENCE_KINDS:
             raise ValueError(f"invalid evidence kind: {kind}")
         h = self.get_hypothesis(hyp_id)
@@ -142,6 +152,61 @@ class ResearchStore:
         h.updated_at = _now()
         self._write_hypothesis(h)
         return h
+
+    def link_factor_run(self, hyp_id: str, run_id: str, summary: str = "") -> Hypothesis:
+        """关联持久 factor run 到 hypothesis 的唯一验证入口（幂等、并发安全）。
+
+        - run_id 先过 Control Plane job_store 白名单正则（防路径穿越/非法字符）；
+        - hypothesis 必须已存在（KeyError）；持久 run 必须已存在（FactorJobStore.get）；
+        - 同一 (hyp_id, run_id) 重复/并发关联只保留首条，
+          既有记录不覆盖、不重复、不动 updated_at。
+        """
+        _check_hypothesis_id(hyp_id)
+        _check_factor_run_id(run_id)
+        with _FACTOR_RUN_LOCK:
+            hypothesis = self.get_hypothesis(hyp_id)
+            if any(
+                evidence.get("kind") == "factor_run" and evidence.get("ref") == run_id
+                for evidence in hypothesis.evidence
+            ):
+                return hypothesis
+            if not self._factor_run_exists(run_id):
+                raise ValueError(f"factor run not found: {run_id}")
+            hypothesis.evidence.append(
+                {"ts": _now(), "kind": "factor_run", "ref": run_id, "summary": summary}
+            )
+            hypothesis.updated_at = _now()
+            self._write_hypothesis(hypothesis)
+            return hypothesis
+
+    def _factor_run_exists(self, run_id: str) -> bool:
+        """Control Plane 持久 run 存在性门禁（lazy import 避免模块加载环）。"""
+        from app.research.job_store import FactorJobStore
+
+        return FactorJobStore(self.data_dir).get(run_id) is not None
+
+    def hypotheses_for_run(self, run_id: str) -> list[Hypothesis]:
+        """Return hypotheses whose evidence references the durable run.
+
+        只读反查：非法 run_id 直接返回空（不可能有合法假设引用它），按
+        文件名（即 hypothesis id）稳定排序。
+        """
+        if _factor_run_id_is_safe(run_id) is False:
+            return []
+        if not self.hyp_dir.exists():
+            return []
+        out: list[Hypothesis] = []
+        for path in sorted(self.hyp_dir.glob("*.json")):
+            try:
+                hypothesis = Hypothesis(**json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+            if any(
+                evidence.get("kind") == "factor_run" and evidence.get("ref") == run_id
+                for evidence in hypothesis.evidence
+            ):
+                out.append(hypothesis)
+        return out
 
     def search(self, status: str | None = None, query: str | None = None) -> list[Hypothesis]:
         if status is not None:
@@ -206,3 +271,22 @@ class ResearchStore:
 def _check_status(status: str) -> None:
     if status not in STATUSES:
         raise ValueError(f"invalid status: {status}")
+
+
+def _factor_run_id_is_safe(run_id: str) -> bool:
+    """复用 Control Plane job_store 的 run_id 白名单正则。"""
+    from app.research.job_store import RUN_ID_PATTERN
+
+    return isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id) is not None
+
+
+def _check_factor_run_id(run_id: str) -> str:
+    if not _factor_run_id_is_safe(run_id):
+        raise ValueError(f"invalid factor run_id: {run_id!r}")
+    return run_id
+
+
+def _check_hypothesis_id(hyp_id: str) -> str:
+    if not isinstance(hyp_id, str) or re.fullmatch(r"hyp-[0-9a-f]{8}", hyp_id) is None:
+        raise ValueError(f"invalid hypothesis id: {hyp_id!r}")
+    return hyp_id

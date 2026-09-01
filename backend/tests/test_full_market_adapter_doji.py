@@ -189,7 +189,7 @@ def test_complete_cohort_is_passed_once_and_d5_owns_bundle(monkeypatch, scope_an
 
     assert len(calls) == 1
     assert calls[0][0] is request
-    assert calls[0][0].symbols == COHORT
+    assert calls[0][0].symbols == list(COHORT)
     assert len(calls[0][0].symbols) > 200
     assert calls[0][4] is not None
 
@@ -341,3 +341,21 @@ def test_build_request_defaults_and_validation():
         adapter.build_request(START, END, COHORT, oos_start=START, cost_bps=None)
     with pytest.raises(ValueError, match="canonical"):
         adapter.build_request(START, END, ["bad"], oos_start=OOS_START, cost_bps=None)
+
+
+def test_build_request_consumes_theta_body_ratio_parameter():
+    request = doji_adapter.DojiPatternsFullMarketAdapter().build_request(
+        START,
+        END,
+        COHORT,
+        oos_start=OOS_START,
+        cost_bps=None,
+        parameters={
+            "start": START,
+            "oos_start": OOS_START,
+            "end": END,
+            "theta_body_ratio": 0.25,
+            "cost_bps": 12.0,
+        },
+    )
+    assert request.theta_body_ratio == 0.25

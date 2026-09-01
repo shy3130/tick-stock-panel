@@ -281,3 +281,23 @@ def test_preload_panel_called_once_before_evaluator_with_warmup_window(monkeypat
     assert log[0][0] == "preload" and log[1][0] == "evaluate"
     assert len(log) == 2  # exactly one preload + exactly one evaluator call
     assert verdict is sentinel_verdict
+
+
+def test_build_request_consumes_reversal_parameters():
+    start, end = date(2024, 1, 1), date(2025, 1, 31)
+    request = NDepthAdapter().build_request(
+        start,
+        end,
+        list(COHORT),
+        oos_start=None,
+        cost_bps=None,
+        parameters={
+            "start": start,
+            "end": end,
+            "reversal_mode": "atr_multiple",
+            "reversal_value": 2.5,
+            "cost_bps": 25.0,
+        },
+    )
+    assert request.reversal_mode == "atr_multiple"
+    assert request.reversal_value == 2.5

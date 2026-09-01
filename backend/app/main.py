@@ -13,10 +13,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import (
-    agent,
     abnormal,
+    agent,
+    alerts,
     analysis,
-    auth as auth_api,
     backtest,
     backtest_optimizer,
     backtest_parameter_grid,
@@ -32,17 +32,16 @@ from app.api import (
     market_recap,
     market_state,
     monitor_rules,
-    alerts,
     overview,
     patterns,
     pipeline,
     regime,
     research,
     research_analysis,
+    research_runs,
     review,
     rps,
     screener,
-    settings as settings_api,
     signal_scorecard,
     signals,
     stock_analysis,
@@ -54,12 +53,18 @@ from app.api import (
     trading_review,
     watchlist,
 )
+from app.api import (
+    auth as auth_api,
+)
+from app.api import (
+    settings as settings_api,
+)
 from app.api.routes import router as core_router
 from app.config import settings
-from app.log_redaction import install_secret_redaction_filter
 from app.data_providers.capability_gate import detect_capabilities
-from app.jobs import daily_pipeline
 from app.data_providers.registry import close_all_providers
+from app.jobs import daily_pipeline
+from app.log_redaction import install_secret_redaction_filter
 from app.services.data_mode import current_data_mode
 from app.services.quote_service import QuoteService
 from app.services.screener import close_screener_sql_connection
@@ -76,7 +81,7 @@ logger = logging.getLogger(__name__)
 def _run_shutdown_step(name: str, callback) -> None:
     try:
         callback()
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("shutdown step failed: %s", name)
 
 
@@ -94,7 +99,7 @@ async def lifespan(app: FastAPI):
         from app.services import auth as auth_service
 
         auth_service.bootstrap_from_env()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("auth bootstrap failed: %s", e)
 
     # 数据层
@@ -143,7 +148,7 @@ async def lifespan(app: FastAPI):
         scheduler = daily_pipeline.start_scheduler(repo, capset)
         app.state.scheduler = scheduler
         daily_pipeline.start_local_enriched_bootstrap(repo, capset)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
 
@@ -151,7 +156,7 @@ async def lifespan(app: FastAPI):
     try:
         depth_service.boot_check()
         depth_service.start_polling()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("depth_service init failed: %s", e)
 
     # 扩展数据定时拉取
@@ -167,7 +172,7 @@ async def lifespan(app: FastAPI):
         from app.services.ext_presets import ensure_builtin_presets
 
         await ensure_builtin_presets(store.data_dir)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
 
     # 财务数据 (需 FINANCIAL capability): 仅初始化调度器供 /api/financials/sync/* 手动同步,
@@ -178,10 +183,10 @@ async def lifespan(app: FastAPI):
     app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
-    from app.strategy.engine import StrategyEngine
-    from app.strategy import config as strategy_config
-    from app.strategy.monitor import StrategyMonitorService
     from app.services.screener import ScreenerService
+    from app.strategy import config as strategy_config
+    from app.strategy.engine import StrategyEngine
+    from app.strategy.monitor import StrategyMonitorService
 
     _screener_svc = ScreenerService(repo)
     strategy_dirs = [
@@ -206,7 +211,7 @@ async def lifespan(app: FastAPI):
         logger.info(
             "screen strategies synced: %d", sync_screen_strategies(strategy_engine, store.data_dir)
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("screen strategy sync failed (不影响启动): %s", e)
     strategy_engine.post_reload_hooks.append(
         lambda: sync_screen_strategies(strategy_engine, store.data_dir)
@@ -221,20 +226,28 @@ async def lifespan(app: FastAPI):
         recovered = recover_stale_backtest_jobs(store.data_dir)
         if any(recovered.values()):
             logger.info("backtest job recovery: %s", recovered)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("backtest job recovery failed (不影响启动): %s", e)
+    try:
+        from app.research.job_store import FactorJobStore
+
+        recovered = FactorJobStore(store.data_dir).recover_orphans()
+        if recovered:
+            logger.info("research job recovery: %d interrupted", recovered)
+    except Exception as e:
+        logger.warning("research job recovery failed (不影响启动): %s", e)
 
     try:
         from app.services.scheduled_research import ScheduledResearchStore, register_jobs
 
         register_jobs(app.state.scheduler, ScheduledResearchStore(store.data_dir), app.state)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("scheduled research registration failed: %s", e)
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
-    from app.strategy.monitor import MonitorRuleEngine
-    from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+    from app.strategy import monitor_rules as mr_store
+    from app.strategy.monitor import MonitorRuleEngine
 
     monitor_engine = MonitorRuleEngine()
     monitor_engine.set_strategy_engine(strategy_engine)
@@ -254,14 +267,14 @@ async def lifespan(app: FastAPI):
                 names = {s.id: s.name for s in strategy_engine.list_strategies()}
                 mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
                 logger.info("strategy monitor migrated: %d strategies", len(ids))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("strategy monitor migration failed: %s", e)
 
     try:
         rules = mr_store.load_all(store.data_dir)
         monitor_engine.set_rules(rules)
         logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
 
@@ -370,6 +383,7 @@ app.include_router(analysis.router)
 app.include_router(agent.router)
 app.include_router(pipeline.router)
 app.include_router(research.router)
+app.include_router(research_runs.router)
 app.include_router(cross_section.router)
 app.include_router(research_analysis.router)
 app.include_router(market_data.router)
@@ -388,6 +402,7 @@ app.include_router(signals.router)
 app.include_router(signal_scorecard.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
+research_runs.install_error_handlers(app)
 app.include_router(rps.router)
 app.include_router(patterns.router)
 app.include_router(trade_journal.router)
@@ -401,8 +416,6 @@ app.include_router(abnormal.router)
 # 能力门控异常 → 403(而非默认 500)
 # 业务代码用 capset.require(Cap.X) 断言能力,缺失时抛 CapabilityDenied;
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
-from fastapi import Request
-from fastapi.responses import JSONResponse
 from app.capabilities import CapabilityDenied
 from app.data_providers.fquant.catalog_resolver import CatalogError, StaleCatalogError
 from app.errors import AppError, app_error_handler
@@ -450,7 +463,7 @@ if _static.exists():
         app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    def spa_fallback(full_path: str):  # noqa: ARG001
+    def spa_fallback(full_path: str):
         """所有未匹配路径回退到 index.html — React Router 接管。
 
         index.html 禁止缓存 (Cache-Control: no-store), 确保浏览器每次拿到

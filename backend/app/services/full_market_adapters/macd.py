@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.macd_stages import MacdArmsRequest, evaluate_macd_arms
 from app.services.volume_breakout import DEFAULT_OOS_START
 
@@ -37,7 +37,13 @@ class MacdArmsAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> MacdArmsRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(parameters, {"start", "end", "oos_start"})
+            start = parameters["start"]
+            end = parameters["end"]
+            oos_start = parameters["oos_start"]
         # The FULL cohort is embedded in a single request; the evaluator is
         # invoked exactly once — no batching, no verdict stitching.
         return MacdArmsRequest(

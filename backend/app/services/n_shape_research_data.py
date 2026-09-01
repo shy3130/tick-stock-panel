@@ -17,12 +17,11 @@ class PublishedNShapeResearchReader:
 
     def __init__(self, repo: Any) -> None:
         canonical = PublishedCanonicalDailyReader.from_repository(repo)
-        facts = PublishedDailyMarketFactsReader.from_repository(repo)
+        if canonical is None:
+            raise RuntimeError("n_shape_canonical_source_unavailable")
+        facts = PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
         if facts is None:
             raise RuntimeError("n_shape_market_facts_source_unavailable")
-        if canonical is None:
-            facts.close()
-            raise RuntimeError("n_shape_canonical_source_unavailable")
         self._canonical = canonical
         self._facts = facts
         self._generation = f"canonical:{canonical.generation()}|markets:{facts.generation()}"
