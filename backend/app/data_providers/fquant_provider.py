@@ -250,6 +250,40 @@ class FQuantProvider:
             )
             return None
 
+    def open_escape_risk_intraday_reader(
+        self,
+        canonical_manifest: Mapping[str, object],
+        market_days: list[date] | tuple[date, ...],
+    ):
+        """Open one request-owned, catalog-pinned Issue #48 research reader.
+
+        This provider-specific extension intentionally stays outside
+        ``MarketDataProvider``. The markets generation is bound to the supplied
+        canonical manifest; minutes/trans are resolved once per requested day
+        through the staged catalog and never fall back to raw files.
+        """
+        from app.data_providers.fquant.daily_market_research import (
+            PublishedDailyMarketFactsReader,
+        )
+        from app.data_providers.fquant.escape_risk_intraday import (
+            CatalogPinnedEscapeRiskIntradayReader,
+        )
+
+        markets = None
+        try:
+            markets = PublishedDailyMarketFactsReader.from_canonical_manifest(
+                canonical_manifest
+            )
+            return CatalogPinnedEscapeRiskIntradayReader(market_days, markets)
+        except Exception:  # noqa: BLE001 - capability probe returns explicit None
+            if markets is not None:
+                markets.close()
+            logger.warning(
+                "FQuantProvider: escape-risk intraday reader unavailable",
+                exc_info=True,
+            )
+            return None
+
     def refresh_fstore_clients(self) -> None:
         """刷新所有 fstore 客户端连接，下次查询重新解析 generation 快照。
 

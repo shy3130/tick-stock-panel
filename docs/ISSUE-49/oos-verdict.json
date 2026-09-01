@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "issue": 49,
+  "status": "ok",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 200 只",
+    "symbol_count": 200,
+    "start": "2022-01-01",
+    "end": "2026-08-28",
+    "reversal_mode": "fixed_pct",
+    "reversal_value": 0.08,
+    "cost_bps": 20.0
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "factor_id": "n_shape_pullback_depth_v1",
+    "causality": "confirmed pivots only; unconfirmed terminal leg emits no event"
+  },
+  "coverage": {
+    "events": 1734,
+    "structure_failures": 2296,
+    "censored": 0
+  },
+  "populations": {
+    "A": {
+      "count": 1282,
+      "test_incremental_10d_mean": -0.007552370194178965,
+      "placebo_p_value": 1.0,
+      "verdict": "rejected"
+    },
+    "B": {
+      "count": 388,
+      "test_incremental_10d_mean": 0.014726074868742087,
+      "placebo_p_value": 0.38613861386138615,
+      "verdict": "rejected"
+    },
+    "C": {
+      "count": 64,
+      "test_incremental_10d_mean": 0.05870046145686977,
+      "placebo_p_value": 0.019801980198019802,
+      "verdict": "unavailable_insufficient_samples"
+    },
+    "unstratified": {
+      "count": 1734,
+      "test_incremental_10d_mean": 0.0,
+      "placebo_p_value": 1.0,
+      "verdict": "rejected"
+    },
+    "bucket_c_golden_phoenix": {
+      "count": 6,
+      "test_incremental_10d_mean": null,
+      "placebo_p_value": null,
+      "verdict": "unavailable_insufficient_samples"
+    }
+  },
+  "promoted": false,
+  "conclusion": "A/B 与不分档基线均 rejected；C 虽观察到正向 test 均值和低 placebo p 值，但冻结独立样本门槛未满足，C 及 C×金凤凰分别以 64/6 个事件保持 unavailable，不作晋级或交易解释。"
+}

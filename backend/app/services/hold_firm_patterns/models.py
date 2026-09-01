@@ -96,6 +96,7 @@ class CensorReason(str, Enum):
     PENDING_EXIT = "realization_censor_pending_exit"
     EVENT_OVERLAP = "censor_same_factor_symbol_overlap"
     DIAGNOSTIC_WINDOW_INCOMPLETE = "censor_diagnostic_window_incomplete"
+    MINUTE_DATA_INCOMPLETE = "censor_minute_data_incomplete"
 
 
 class DenominatorAuditCode(str, Enum):

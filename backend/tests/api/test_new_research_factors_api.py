@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 import app.api.research as research_api
 from app.services.daily_event_research.models import (
     UnavailabilityReason as DailyUnavailableReason,
+)
+from app.services.daily_event_research.models import (
     unavailable_response as unavailable_daily_response,
 )
 from app.services.retrieval_routing_research import (
@@ -125,14 +127,15 @@ def test_pre_surge_endpoint_passes_all_three_pins(monkeypatch):
     assert captured["universe_reader"] is Scope.universe_reader
 
 
-def test_escape_capability_keeps_minute_signals_unavailable(monkeypatch):
+def test_escape_capability_exposes_intraday_requirements(monkeypatch):
     response = client().get("/api/research/escape-risk")
     payload = response.json()
     assert payload["signals"]["s1"] == "available"
     assert payload["signals"]["s8"] == "available"
     assert payload["signals"]["s9"] == "available"
     for signal in ("s2", "s3", "s4", "s5", "s6", "s7", "s10"):
-        assert payload["signals"][signal] == "unavailable_insufficient_immutable_history"
+        assert payload["signals"][signal] == "available"
+    assert payload["runtime_requirements"]["s10"].endswith("pit_float_shares")
 
     canonical = object()
     monkeypatch.setattr(
@@ -151,6 +154,7 @@ def test_escape_capability_keeps_minute_signals_unavailable(monkeypatch):
             "symbols": ["000001.SZ"],
             "start": "2024-01-01",
             "end": "2024-12-31",
+            "oos_start": "2024-07-01",
         },
     )
     assert post.status_code == 200

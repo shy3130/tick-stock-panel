@@ -693,6 +693,129 @@ class PreSurgeStudyAggregator:
         return stats
 
 
+ANNUALIZATION_TRADING_DAYS: Final = 252
+
+# 风险/可达指标口径（随评测输出透出，禁止隐含假设）。
+RISK_METRIC_DEFINITIONS: Final[Mapping[str, str]] = {
+    "price_basis": "canonical_research_adjusted_close_open",
+    "entry": "next_trading_day_open_adj",
+    "exit": "horizon_last_day_close_adj",
+    "cost": "round_trip_net_after_cost_bps",
+    "portfolio": "equal_weight_by_entry_date_cumulative_nav",
+    "annualization": "sqrt(252)_per_event_day_observation",
+    "sortino_downside": "full_sample_root_mean_square_of_negative_day_returns",
+    "turnover": "mean_daily_entries_plus_exits_over_twice_open_positions",
+    "unreachable": "entry_pit_limit_up_or_exit_pit_limit_down_blocked",
+    "sample": "qualified_events_with_complete_horizon_only",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PreSurgeArmEventReturn:
+    """单个 qualified 事件的执行口径收益（风险指标账本输入）。"""
+
+    entry_date: date
+    exit_date: date
+    net_return: float | None
+    reachable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PreSurgeArmRiskMetrics:
+    """per-arm（per-variant）风险/可达指标。"""
+
+    events: int
+    unreachable_events: int
+    achievable_events: int
+    achievable_mean_return: float | None
+    max_drawdown: float | None
+    sharpe: float | None
+    sortino: float | None
+    turnover: float | None
+
+
+def _arm_risk_metrics(events: Sequence[PreSurgeArmEventReturn]) -> PreSurgeArmRiskMetrics:
+    """由事件收益序列计算风险指标；不可达事件只计数、不进入收益序列。"""
+    achievable = [
+        item for item in events if item.reachable and item.net_return is not None
+    ]
+    unreachable = len(events) - len(achievable)
+    if not achievable:
+        return PreSurgeArmRiskMetrics(
+            events=len(events),
+            unreachable_events=unreachable,
+            achievable_events=0,
+            achievable_mean_return=None,
+            max_drawdown=None,
+            sharpe=None,
+            sortino=None,
+            turnover=None,
+        )
+
+    returns = [item.net_return for item in achievable if item.net_return is not None]
+    by_day: dict[date, list[float]] = {}
+    for item in achievable:
+        if item.net_return is not None:
+            by_day.setdefault(item.entry_date, []).append(item.net_return)
+    day_returns = [sum(values) / len(values) for _, values in sorted(by_day.items())]
+
+    peak = nav = 1.0
+    max_drawdown = 0.0
+    for day_return in day_returns:
+        nav *= 1.0 + day_return
+        peak = max(peak, nav)
+        max_drawdown = max(max_drawdown, (peak - nav) / peak)
+
+    mean_day = sum(day_returns) / len(day_returns)
+    sharpe = None
+    if len(day_returns) >= 2:
+        variance = sum((value - mean_day) ** 2 for value in day_returns) / (len(day_returns) - 1)
+        std = math.sqrt(variance)
+        if std > 0.0:
+            sharpe = mean_day / std * math.sqrt(ANNUALIZATION_TRADING_DAYS)
+    downside = math.sqrt(sum(min(value, 0.0) ** 2 for value in day_returns) / len(day_returns))
+    sortino = (
+        mean_day / downside * math.sqrt(ANNUALIZATION_TRADING_DAYS)
+        if downside > 0.0
+        else None
+    )
+
+    grid = sorted({item.entry_date for item in achievable} | {item.exit_date for item in achievable})
+    daily_turnover: list[float] = []
+    for day in grid:
+        open_positions = sum(item.entry_date <= day <= item.exit_date for item in achievable)
+        if open_positions == 0:
+            continue
+        entries = sum(item.entry_date == day for item in achievable)
+        exits = sum(item.exit_date == day for item in achievable)
+        daily_turnover.append((entries + exits) / (2 * open_positions))
+    turnover = sum(daily_turnover) / len(daily_turnover) if daily_turnover else None
+
+    return PreSurgeArmRiskMetrics(
+        events=len(events),
+        unreachable_events=unreachable,
+        achievable_events=len(achievable),
+        achievable_mean_return=sum(returns) / len(returns),
+        max_drawdown=max_drawdown,
+        sharpe=sharpe,
+        sortino=sortino,
+        turnover=turnover,
+    )
+
+
+class PreSurgeArmRiskLedger:
+    """per-arm（per-variant）风险/可达指标账本，与 verdict 完全解耦。"""
+
+    def __init__(self) -> None:
+        self._events: dict[str, list[PreSurgeArmEventReturn]] = {}
+
+    def record(self, variant: str, event: PreSurgeArmEventReturn) -> None:
+        self._events.setdefault(variant, []).append(event)
+
+    def metrics(self) -> dict[str, PreSurgeArmRiskMetrics]:
+        return {variant: _arm_risk_metrics(events) for variant, events in self._events.items()}
+
+
 def _jsonify(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
@@ -725,10 +848,15 @@ def detection_payload(detection: Detection) -> dict[str, object]:
 
 __all__ = [
     "ALL_VARIANTS",
+    "ANNUALIZATION_TRADING_DAYS",
     "DEFAULT_PARAMS",
     "DETECTOR_ID",
     "FACTOR_VARIANTS",
     "HYPOTHESIS_LABEL",
+    "PreSurgeArmEventReturn",
+    "PreSurgeArmRiskLedger",
+    "PreSurgeArmRiskMetrics",
+    "RISK_METRIC_DEFINITIONS",
     "PreSurgeCensorReason",
     "PreSurgeDetector",
     "PreSurgeFactorStats",

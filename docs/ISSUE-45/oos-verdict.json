@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "issue": 45,
+  "status": "ok",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 200 只",
+    "symbol_count": 200,
+    "start": "2022-01-01",
+    "oos_start": "2025-01-01",
+    "end": "2026-08-28",
+    "horizon_days": 20,
+    "cost_bps": 10.0,
+    "execution": "signal_close_then_next_market_day_open",
+    "baseline": "same_detector_not_selected"
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "definition_version": "v1"
+  },
+  "variants": {
+    "ma_24_72": {
+      "parent_events": 47968,
+      "qualified_events": 14693,
+      "oos_qualified_events": 7585,
+      "oos_qualified_symbols": 186,
+      "oos_qualified_mean_return": -0.002323332239018677,
+      "oos_baseline_events": 13441,
+      "oos_baseline_mean_return": 0.012727982212301798,
+      "oos_mean_increment": -0.015051314451320475,
+      "oos_increment_ci95_lower": -0.01891422721328845,
+      "verdict": "rejected"
+    },
+    "ma_20_70": {
+      "parent_events": 49689,
+      "qualified_events": 15641,
+      "oos_qualified_events": 8069,
+      "oos_qualified_symbols": 184,
+      "oos_qualified_mean_return": -0.002966670882714298,
+      "oos_baseline_events": 13331,
+      "oos_baseline_mean_return": 0.01151599546126266,
+      "oos_mean_increment": -0.014482666343976958,
+      "oos_increment_ci95_lower": -0.018263879109241724,
+      "verdict": "rejected"
+    }
+  },
+  "promoted": false,
+  "conclusion": "24/72/200 与 20/70/200 两个预注册多头排列变体在冻结 200 标的 OOS 上均显著弱于同 detector 未选中基线，最终 rejected，不进入默认策略、Agent 排序或交易执行。"
+}

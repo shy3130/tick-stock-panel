@@ -31,7 +31,7 @@ class PublishedNShapeResearchReader:
         ).hexdigest()
 
     @classmethod
-    def from_repository(cls, repo: Any) -> "PublishedNShapeResearchReader | None":
+    def from_repository(cls, repo: Any) -> PublishedNShapeResearchReader | None:
         try:
             return cls(repo)
         except (OSError, RuntimeError, TypeError, ValueError):
@@ -66,6 +66,30 @@ class PublishedNShapeResearchReader:
 
     def daily_bars(self, symbol: str, start: date, end: date) -> pl.DataFrame:
         return self._canonical.daily_bars(symbol, start, end)
+
+    def daily_panel(
+        self,
+        start: date,
+        end: date,
+        *,
+        symbols: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """Read the canonical full-market OHLCV panel in one pinned scan."""
+        return self._canonical.daily_panel(start, end, symbols=symbols)
+
+    def preload_panel(
+        self,
+        start: date,
+        end: date,
+        *,
+        symbols: list[str],
+    ) -> int:
+        """Cache a single canonical scan for repeated per-symbol evaluation."""
+        return self._canonical.preload_panel(start, end, symbols=symbols)
+
+    def daily_closes(self, start: date, end: date) -> pl.DataFrame:
+        """Read the canonical full-market close panel in one pinned scan."""
+        return self._canonical.daily_closes(start, end)
 
     def limit_regime_facts(
         self, symbol: str, start: date, end: date

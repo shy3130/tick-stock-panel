@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import ENRICHED_STORAGE_COLS, compute_enriched
 from app.services.research_sealed_data import PublishedCanonicalDailyReader
@@ -40,25 +41,40 @@ class _Repo:
         return tuple(
             str(path / "*.parquet")
             for path in generation_dir.iterdir()
-            if path.is_dir() and path.name.startswith("date=")
+            if path.is_dir()
+            and path.name.startswith("date=")
             and start <= date.fromisoformat(path.name[5:]) <= end
         )
 
     def _scan_unique_enriched(self, source, *, start, end, columns, symbols, layout_cache_key):
         frame = pl.read_parquet(list(source), hive_partitioning=True)
-        return frame.filter(pl.col("symbol").is_in(symbols)).select(
-            [column for column in columns if column in frame.columns]
-        ).sort(["symbol", "date"])
+        return (
+            frame.filter(pl.col("symbol").is_in(symbols))
+            .select([column for column in columns if column in frame.columns])
+            .sort(["symbol", "date"])
+        )
 
 
 def _frame(day: date, close: float = 10.0) -> pl.DataFrame:
-    return pl.DataFrame({
-        "symbol": ["600000.SH"], "date": [day],
-        "open": [close], "high": [close + 1], "low": [close - 1], "close": [close],
-        "volume": [100.0], "amount": [1000.0],
-        "raw_open": [close], "raw_close": [close], "raw_high": [close + 1], "raw_low": [close - 1],
-        "turnover_rate": [1.0], "consecutive_limit_ups": [0], "consecutive_limit_downs": [0],
-    })
+    return pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "date": [day],
+            "open": [close],
+            "high": [close + 1],
+            "low": [close - 1],
+            "close": [close],
+            "volume": [100.0],
+            "amount": [1000.0],
+            "raw_open": [close],
+            "raw_close": [close],
+            "raw_high": [close + 1],
+            "raw_low": [close - 1],
+            "turnover_rate": [1.0],
+            "consecutive_limit_ups": [0],
+            "consecutive_limit_downs": [0],
+        }
+    )
 
 
 def test_reader_pins_generation_and_hashes_manifest_bytes(tmp_path):
@@ -72,7 +88,10 @@ def test_reader_pins_generation_and_hashes_manifest_bytes(tmp_path):
     assert reader.generation() == "20260827T010101-aaaaaaaa"
     assert reader.manifest_sha256() == expected
     assert reader.market_days(date(2026, 8, 1), date(2026, 8, 31)) == [date(2026, 8, 25)]
-    assert reader.daily_bars("600000.SH", date(2026, 8, 25), date(2026, 8, 25))["raw_close"].item() == 10.0
+    assert (
+        reader.daily_bars("600000.SH", date(2026, 8, 25), date(2026, 8, 25))["raw_close"].item()
+        == 10.0
+    )
 
 
 def test_old_generation_keeps_raw_open_missing(tmp_path):
@@ -81,21 +100,94 @@ def test_old_generation_keeps_raw_open_missing(tmp_path):
     reader = PublishedCanonicalDailyReader(_Repo(tmp_path))
 
     assert not reader.has_columns("raw_open")
-    assert "raw_open" not in reader.daily_bars("600000.SH", date(2026, 8, 25), date(2026, 8, 25)).columns
+    assert (
+        "raw_open"
+        not in reader.daily_bars("600000.SH", date(2026, 8, 25), date(2026, 8, 25)).columns
+    )
+
+
+def test_preload_panel_scans_once_then_serves_per_symbol_frames(tmp_path):
+    day = date(2026, 8, 25)
+    frame = pl.concat(
+        [
+            _frame(day, 10.0),
+            _frame(day, 20.0).with_columns(pl.lit("000001.SZ").alias("symbol")),
+        ]
+    )
+    _publish(tmp_path, "20260827T010101-aaaaaaaa", frame)
+
+    class CountingRepo(_Repo):
+        def __init__(self, root):
+            super().__init__(root)
+            self.scan_calls = 0
+
+        def _scan_unique_enriched(self, *args, **kwargs):
+            self.scan_calls += 1
+            return super()._scan_unique_enriched(*args, **kwargs)
+
+    repo = CountingRepo(tmp_path)
+    reader = PublishedCanonicalDailyReader(repo)
+
+    assert (
+        reader.preload_panel(
+            day,
+            day,
+            symbols=["600000.SH", "000001.SZ"],
+        )
+        == 2
+    )
+    assert repo.scan_calls == 1
+    assert reader._preloaded_panel is not None
+    assert reader._preloaded_panel.columns == list(reader.columns())
+    assert reader.daily_bars("600000.SH", day, day)["close"].item() == 10.0
+    assert reader.daily_bars("000001.SZ", day, day)["close"].item() == 20.0
+    assert reader.daily_bars("300001.SZ", day, day).is_empty()
+    assert repo.scan_calls == 1
+
+    assert (
+        reader.preload_panel(
+            day,
+            day,
+            symbols=["600000.SH", "000001.SZ"],
+            columns=["symbol", "date", "close"],
+        )
+        == 2
+    )
+    assert repo.scan_calls == 2
+    partial_cache_result = reader.daily_bars("600000.SH", day, day)
+    assert "raw_open" in partial_cache_result.columns
+    assert repo.scan_calls == 3
+
+    with pytest.raises(ValueError, match="key columns"):
+        reader.preload_panel(
+            day,
+            day,
+            symbols=["600000.SH"],
+            columns=["date", "close"],
+        )
+    assert repo.scan_calls == 3
 
 
 def test_compute_enriched_preserves_provider_raw_open_before_adjustment():
-    raw = pl.DataFrame({
-        "symbol": ["600000.SH", "600000.SH"],
-        "date": [date(2026, 8, 25), date(2026, 8, 26)],
-        "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0], "close": [10.5, 11.5],
-        "volume": [100.0, 120.0], "amount": [1000.0, 1200.0],
-    })
-    factors = pl.DataFrame({
-        "symbol": ["600000.SH"],
-        "trade_date": [date(2026, 8, 26)],
-        "ex_factor": [2.0],
-    })
+    raw = pl.DataFrame(
+        {
+            "symbol": ["600000.SH", "600000.SH"],
+            "date": [date(2026, 8, 25), date(2026, 8, 26)],
+            "open": [10.0, 11.0],
+            "high": [11.0, 12.0],
+            "low": [9.0, 10.0],
+            "close": [10.5, 11.5],
+            "volume": [100.0, 120.0],
+            "amount": [1000.0, 1200.0],
+        }
+    )
+    factors = pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 8, 26)],
+            "ex_factor": [2.0],
+        }
+    )
     enriched = compute_enriched(raw, factors=factors)
 
     assert "raw_open" in ENRICHED_STORAGE_COLS

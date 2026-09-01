@@ -1,21 +1,30 @@
-"""Pure daily-bar escape-risk detectors and per-signal research (Issue #48).
+"""Pure escape-risk detectors and per-signal research (Issue #48).
 
-S1/S8/S9 只读显式传入的内存日线 ``Bar`` 序列, 逐日只用截至当日的收盘前缀,
-无网络、无文件写入、无未来函数。分钟信号 S2-S7/S10 缺少不可变分钟历史,
-统一声明 ``unavailable_insufficient_immutable_history``, 模块不提供任何
-用日线 high/low 近似分钟路径的入口(fail-closed)。
+S1/S8/S9 consume sealed daily bars. S2-S7/S10 consume only an explicitly
+injected catalog-pinned intraday bundle; no detector performs I/O and no daily
+high/low approximation is accepted. Every signal reports auditable evidence,
+point-in-time censor reasons and an independent unavailable/accepted/rejected
+research verdict; none emits orders or trading instructions.
 
-研究聚合对每个信号独立出具 verdict; 卖飞率与规避深度按对称口径呈现,
-多信号只按同日触发计数分组, 不产生任何合并方向指令或订单/执行语义。
+Frozen OOS exit adjudication: when the caller passes an explicit ``oos_start``
+(the frozen IS/OOS boundary), the module builds exit baselines (random
+no-signal hold, MA20 exit, ATR chandelier exit) strictly from the same frozen
+bars, discloses sell-fly (premature exit) and avoided-drawdown symmetrically
+for signal and baseline arms, applies sample/coverage/bootstrap gates and
+emits one independent verdict per signal, per arm and per count bucket.
+Missing or insufficient OOS inputs stay explicitly unavailable (fail-closed);
+no arm is ever fabricated and no signal average masks another.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import random
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
-from enum import Enum
-from typing import Final, Mapping, Sequence
+from enum import StrEnum
+from typing import Final
 
 from app.services.hold_firm_patterns.models import Bar
 
@@ -24,13 +33,28 @@ from .models import CensorReason, Detection, DetectionEvidence
 DETECTOR_ID_S1: Final = "escape_s1"
 DETECTOR_ID_S8: Final = "escape_s8"
 DETECTOR_ID_S9: Final = "escape_s9"
+DETECTOR_ID_S2: Final = "escape_s2"
+DETECTOR_ID_S3: Final = "escape_s3"
+DETECTOR_ID_S4: Final = "escape_s4"
+DETECTOR_ID_S5: Final = "escape_s5"
+DETECTOR_ID_S6: Final = "escape_s6"
+DETECTOR_ID_S7: Final = "escape_s7"
+DETECTOR_ID_S10: Final = "escape_s10"
+INTRADAY_SIGNAL_VARIANT: Final = "intraday_v1"
 SIGNAL_VARIANT: Final = "daily_v1"
 HYPOTHESIS_LABEL: Final = "issue48_escape_risk_daily_v1"
 
 SIGNAL_ID_BY_DETECTOR: Final[dict[str, str]] = {
     DETECTOR_ID_S1: "s1",
+    DETECTOR_ID_S2: "s2",
+    DETECTOR_ID_S3: "s3",
+    DETECTOR_ID_S4: "s4",
+    DETECTOR_ID_S5: "s5",
+    DETECTOR_ID_S6: "s6",
+    DETECTOR_ID_S7: "s7",
     DETECTOR_ID_S8: "s8",
     DETECTOR_ID_S9: "s9",
+    DETECTOR_ID_S10: "s10",
 }
 DETECTOR_ID_BY_SIGNAL: Final[dict[str, str]] = {
     signal_id: detector_id for detector_id, signal_id in SIGNAL_ID_BY_DETECTOR.items()
@@ -38,21 +62,22 @@ DETECTOR_ID_BY_SIGNAL: Final[dict[str, str]] = {
 
 DAILY_SIGNAL_IDS: Final[tuple[str, ...]] = ("s1", "s8", "s9")
 MINUTE_SIGNAL_IDS: Final[tuple[str, ...]] = ("s2", "s3", "s4", "s5", "s6", "s7", "s10")
+ALL_SIGNAL_IDS: Final[tuple[str, ...]] = DAILY_SIGNAL_IDS + MINUTE_SIGNAL_IDS
 
 SIGNAL_CAPABILITY_AVAILABLE: Final = "available"
-SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE: Final = "unavailable_insufficient_immutable_history"
-
 SIGNAL_CAPABILITIES: Final[dict[str, str]] = {
-    **{signal_id: SIGNAL_CAPABILITY_AVAILABLE for signal_id in DAILY_SIGNAL_IDS},
-    **{signal_id: SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE for signal_id in MINUTE_SIGNAL_IDS},
+    signal_id: SIGNAL_CAPABILITY_AVAILABLE for signal_id in ALL_SIGNAL_IDS
 }
 
 
-class EscapeCensorReason(str, Enum):
+class EscapeCensorReason(StrEnum):
     """Issue #48 模块级 censor code; 窗口不足复用 models.CensorReason。"""
 
     BENCHMARK_MISSING = "censor_benchmark_missing"
     PIT_FACT_MISSING = "censor_pit_fact_missing"
+    INTRADAY_DATA_MISSING = "censor_intraday_data_missing"
+    INTRADAY_INTEGRITY = "censor_intraday_integrity"
+    HISTORY_INCOMPLETE = "censor_intraday_history_incomplete"
 
 
 NEW_HIGH_WINDOW_DAYS: Final = 60
@@ -77,6 +102,27 @@ BENCHMARK_STATUS_UNAVAILABLE: Final = "unavailable_no_benchmark"
 VERDICT_BASELINE_UNAVAILABLE: Final = "unavailable_no_frozen_oos_baseline"
 VERDICT_NO_EVENTS: Final = "unavailable_no_qualified_events"
 VERDICT_BENCHMARK_MISSING: Final = "unavailable_benchmark_missing"
+OOS_BASELINE_HOLD: Final = "no_signal_hold"
+OOS_BASELINE_MA20: Final = "ma20"
+OOS_BASELINE_ATR: Final = "atr"
+OOS_ARM_KINDS: Final = (OOS_BASELINE_HOLD, OOS_BASELINE_MA20, OOS_BASELINE_ATR)
+OOS_SIGNAL_ARM: Final = "signal_exit"
+MA20_WINDOW_DAYS: Final = 20
+ATR_WINDOW_DAYS: Final = 14
+CHANDELIER_ATR_MULT: Final = 3.0
+# Aligned with evaluation.py Issue #45 gates (MIN_OOS_EVENTS/MIN_OOS_SYMBOLS/CI_Z).
+MIN_OOS_EVENTS: Final = 30
+MIN_OOS_SYMBOLS: Final = 10
+OOS_CI_Z: Final = 1.96
+BOOTSTRAP_DRAWS: Final = 300
+BOOTSTRAP_SEED: Final = 48
+VERDICT_ACCEPTED: Final = "accepted"
+VERDICT_REJECTED: Final = "rejected"
+VERDICT_INSUFFICIENT: Final = "unavailable_insufficient_oos_samples"
+VERDICT_INDETERMINATE: Final = "unavailable_inconclusive_direction"
+GATE_BLOCK_SIGNAL_EVENTS: Final = "insufficient_signal_events"
+GATE_BLOCK_SIGNAL_SYMBOLS: Final = "insufficient_signal_symbols"
+GATE_BLOCK_BASELINE_EVENTS: Final = "insufficient_baseline_events"
 
 
 def capability_for(signal_id: str) -> str:
@@ -88,11 +134,11 @@ def capability_for(signal_id: str) -> str:
 
 
 def require_daily_signal(signal_id: str) -> None:
-    """fail-closed: 分钟信号与未知信号一律拒绝, 不接受日线近似路径。"""
-    capability = capability_for(signal_id)
-    if capability != SIGNAL_CAPABILITY_AVAILABLE:
+    """Reject minute identifiers on the daily-only detector path."""
+    capability_for(signal_id)
+    if signal_id not in DAILY_SIGNAL_IDS:
         raise ValueError(
-            f"{signal_id}: {capability} "
+            f"{signal_id}: catalog-pinned intraday reader required "
             "(daily high/low approximation of minute signals is not accepted)"
         )
 
@@ -326,11 +372,11 @@ class EscapeS8Detector:
 
 
 class EscapeS9Detector:
-    """S9: 当日开盘相对昨收低开 >= 5%; available_date 为当日(开盘时点可知)。
+    """S9: raw open is at least 5% below the prior raw close.
 
-    昨收 = 上一根日线原始收盘，开盘 = 当日原始开盘；序列首根或原始价格
-    非正/非有限时，以 ``censor_pit_fact_missing`` 显式 censor。该信号只对
-    已持仓者可执行：``existing_position_required=True``。
+    The first row and non-positive or non-finite raw prices are explicitly
+    censored as ``censor_pit_fact_missing``. This signal is executable only
+    for an existing position: ``existing_position_required=True``.
     """
 
     @property
@@ -435,6 +481,26 @@ class BaselineComparison:
 
 
 @dataclass(frozen=True, slots=True)
+class OosBaselineStats:
+    kind: str
+    events_by_horizon: Mapping[int, int]
+    net_return_mean_by_horizon: Mapping[int, float | None]
+    sell_fly_rate_by_horizon: Mapping[int, float | None]
+    avoided_drawdown_mean_by_horizon: Mapping[int, float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class OosSignalAdjudication:
+    oos_start: date
+    baselines: tuple[OosBaselineStats, ...]
+    verdict: str
+    reason: str
+    comparator: str | None = None
+    bootstrap_lower_by_horizon: Mapping[int, float | None] = field(default_factory=dict)
+    valid_replicates: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class SignalResearch:
     signal_id: str
     detector_id: str
@@ -443,6 +509,8 @@ class SignalResearch:
     censor_codes: tuple[str, ...]
     horizons: tuple[HorizonOutcomeStats, ...]
     baselines: tuple[BaselineComparison, ...]
+    censor_event_counts: Mapping[str, int] = field(default_factory=dict)
+    oos: OosSignalAdjudication | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +520,7 @@ class SignalCountBucket:
     signal_count: int
     events: int
     net_forward_return_mean_by_horizon: Mapping[int, float | None]
+    oos: OosSignalAdjudication | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,6 +531,7 @@ class EscapeRiskReport:
     signals: tuple[SignalResearch, ...]
     count_buckets: tuple[SignalCountBucket, ...]
     unevaluated_events: int
+    oos_start: date | None = None
 
 
 @dataclass(slots=True)
@@ -501,6 +571,192 @@ def _max_drawdown(
     return max_drawdown
 
 
+def _oos_adjudication(
+    outcomes: Sequence[_Outcome],
+    bars_by_symbol: Mapping[str, Sequence[Bar]],
+    horizons: Sequence[int],
+    round_trip_cost: float,
+    oos_start: date,
+) -> OosSignalAdjudication:
+    """Paired frozen-OOS exit adjudication for one signal.
+
+    Every qualified OOS event is evaluated as four holder strategies sharing
+    the same execution price: immediate ``signal_exit`` (one sell leg of cost),
+    ``no_signal_hold`` to the horizon end, and MA20 / ATR-chandelier rule exits
+    (close-confirmed trigger, executed at the next tradable open).  Per event
+    and horizon the paired delta is ``signal_exit_net - baseline_net``; a
+    positive delta means escaping beat that rule.  Sell-fly and avoided
+    drawdown are disclosed symmetrically per baseline arm.  Verdicts use a
+    symbol-cluster paired bootstrap against the strongest baseline only, and
+    stay unavailable when samples or clusters are insufficient (fail-closed).
+    """
+    oos = [item for item in outcomes if item.detection.signal_date >= oos_start]
+    exit_cost = round_trip_cost / ROUND_TRIP_LEGS
+    exit_net = -exit_cost
+    bars_cache: dict[str, tuple[Bar, ...]] = {}
+    closes_cache: dict[str, list[float]] = {}
+    highs_cache: dict[str, list[float]] = {}
+    for symbol, rows in bars_by_symbol.items():
+        bars_cache[symbol] = tuple(rows)
+        closes_cache[symbol] = [bar.research_close_adj for bar in bars_cache[symbol]]
+        highs_cache[symbol] = [bar.research_high_adj for bar in bars_cache[symbol]]
+
+    net_values: dict[str, dict[int, list[float]]] = {
+        kind: {h: [] for h in horizons} for kind in OOS_ARM_KINDS
+    }
+    fly_flags: dict[str, dict[int, list[float]]] = {
+        kind: {h: [] for h in horizons} for kind in OOS_ARM_KINDS
+    }
+    dd_values: dict[str, dict[int, list[float]]] = {
+        kind: {h: [] for h in horizons} for kind in OOS_ARM_KINDS
+    }
+    delta_clusters: dict[str, dict[int, dict[str, list[float]]]] = {
+        kind: {h: {} for h in horizons} for kind in OOS_ARM_KINDS
+    }
+
+    def _rule_exit_index(
+        kind: str,
+        symbol: str,
+        entry_index: int,
+        last: int,
+    ) -> tuple[int, bool]:
+        bars = bars_cache[symbol]
+        closes = closes_cache[symbol]
+        highs = highs_cache[symbol]
+        for t in range(entry_index, last + 1):
+            triggered = False
+            if kind == OOS_BASELINE_MA20:
+                if t >= MA20_WINDOW_DAYS - 1:
+                    window = closes[t - MA20_WINDOW_DAYS + 1 : t + 1]
+                    triggered = closes[t] < sum(window) / MA20_WINDOW_DAYS
+            elif t >= ATR_WINDOW_DAYS - 1:
+                true_range = [
+                    max(
+                        highs[j] - bars[j].research_low_adj,
+                        abs(highs[j] - closes[j - 1]) if j else 0.0,
+                        abs(bars[j].research_low_adj - closes[j - 1]) if j else 0.0,
+                    )
+                    for j in range(t - ATR_WINDOW_DAYS + 1, t + 1)
+                ]
+                atr = sum(true_range) / ATR_WINDOW_DAYS
+                ceiling = max(highs[entry_index : t + 1]) - CHANDELIER_ATR_MULT * atr
+                triggered = closes[t] < ceiling
+            if triggered and t + 1 <= last:
+                return t + 1, True
+        return last, False
+
+    for item in oos:
+        symbol = item.detection.symbol
+        bars = bars_cache.get(symbol)
+        closes = closes_cache.get(symbol)
+        if not bars or closes is None or item.index >= len(bars):
+            continue
+        for horizon in horizons:
+            last = item.index + horizon - 1
+            if last >= len(closes) or horizon not in item.forward:
+                continue
+            forward = item.forward[horizon]
+            if not math.isfinite(forward) or forward <= -1.0:
+                continue
+            # Invert forward = closes[last]/entry - 1; exact for every entry
+            # provenance (next-open daily and normalized same-day intraday).
+            entry = closes[last] / (1.0 + forward)
+            if not math.isfinite(entry) or entry <= 0:
+                continue
+            hold_net = forward - exit_cost
+            net_values[OOS_BASELINE_HOLD][horizon].append(hold_net)
+            fly_flags[OOS_BASELINE_HOLD][horizon].append(1.0 if hold_net > exit_net else 0.0)
+            dd_values[OOS_BASELINE_HOLD][horizon].append(0.0)
+            delta_clusters[OOS_BASELINE_HOLD][horizon].setdefault(symbol, []).append(
+                exit_net - hold_net
+            )
+            for kind in (OOS_BASELINE_MA20, OOS_BASELINE_ATR):
+                exit_index, execute_at_open = _rule_exit_index(
+                    kind,
+                    symbol,
+                    item.index,
+                    last,
+                )
+                price = (
+                    bars[exit_index].research_open_adj if execute_at_open else closes[exit_index]
+                )
+                if not math.isfinite(price) or price <= 0:
+                    continue
+                arm_net = price / entry - 1.0 - exit_cost
+                net_values[kind][horizon].append(arm_net)
+                fly_flags[kind][horizon].append(1.0 if arm_net > exit_net else 0.0)
+                peak_gap = 0.0
+                for index in range(exit_index, last + 1):
+                    peak_gap = max(peak_gap, (entry - closes[index]) / entry)
+                dd_values[kind][horizon].append(peak_gap)
+                delta_clusters[kind][horizon].setdefault(symbol, []).append(exit_net - arm_net)
+
+    stats: list[OosBaselineStats] = []
+    for kind in OOS_ARM_KINDS:
+        stats.append(
+            OosBaselineStats(
+                kind=kind,
+                events_by_horizon={h: len(net_values[kind][h]) for h in horizons},
+                net_return_mean_by_horizon={h: _mean(net_values[kind][h]) for h in horizons},
+                sell_fly_rate_by_horizon={h: _mean(fly_flags[kind][h]) for h in horizons},
+                avoided_drawdown_mean_by_horizon={h: _mean(dd_values[kind][h]) for h in horizons},
+            )
+        )
+    enough_events = all(
+        stat.events_by_horizon[h] >= MIN_OOS_EVENTS for stat in stats for h in horizons
+    )
+    baseline_score = {
+        stat.kind: _mean(
+            [value for value in stat.net_return_mean_by_horizon.values() if value is not None]
+        )
+        for stat in stats
+    }
+    comparator = (
+        max(
+            (kind for kind, score in baseline_score.items() if score is not None),
+            key=lambda kind: float(baseline_score[kind]),
+        )
+        if enough_events
+        else None
+    )
+    lower: dict[int, float | None] = {}
+    replicate_counts: list[int] = []
+    if comparator is not None:
+        for horizon in horizons:
+            clusters = delta_clusters[comparator][horizon]
+            if len(clusters) < MIN_OOS_SYMBOLS:
+                lower[horizon] = None
+                replicate_counts.append(0)
+                continue
+            cluster_ids = tuple(sorted(clusters))
+            rng = random.Random(BOOTSTRAP_SEED + horizon)
+            draws = []
+            for _ in range(BOOTSTRAP_DRAWS):
+                sampled = [cluster_ids[rng.randrange(len(cluster_ids))] for _ in cluster_ids]
+                draws.append(_mean([_mean(clusters[s]) or 0.0 for s in sampled]) or 0.0)
+            draws.sort()
+            replicate_counts.append(len(draws))
+            lower[horizon] = draws[max(0, int(0.025 * len(draws)) - 1)]
+    valid_replicates = min(replicate_counts, default=0)
+    eligible_symbols = {
+        item.detection.symbol for item in oos if any(h in item.forward for h in horizons)
+    }
+    bootstrap_incomplete = (
+        set(lower) != set(horizons)
+        or any(value is None for value in lower.values())
+        or valid_replicates < BOOTSTRAP_DRAWS
+    )
+    if comparator is None or len(eligible_symbols) < MIN_OOS_SYMBOLS or bootstrap_incomplete:
+        verdict, reason = VERDICT_INSUFFICIENT, "insufficient_oos_sample_or_baseline"
+    elif all(value > 0 for value in lower.values() if value is not None):
+        verdict, reason = VERDICT_ACCEPTED, "signal_exit_beats_strongest_baseline"
+    else:
+        verdict, reason = VERDICT_REJECTED, "signal_exit_does_not_beat_strongest_baseline"
+    return OosSignalAdjudication(
+        oos_start, tuple(stats), verdict, reason, comparator, lower, valid_replicates
+    )
+
+
 def aggregate_escape_signals(
     detections: Sequence[Detection],
     bars_by_symbol: Mapping[str, Sequence[Bar]],
@@ -509,21 +765,22 @@ def aggregate_escape_signals(
     cost_bps: float = COST_BPS_DEFAULT,
     baselines: Mapping[str, Mapping[str, BaselineSeries]] | None = None,
     benchmark: Mapping[str, Sequence[Bar]] | None = None,
+    oos_start: date | None = None,
     require_benchmark: bool = False,
     minute_approximation: bool = False,
+    external_censor_codes: Mapping[str, Sequence[str]] | None = None,
 ) -> EscapeRiskReport:
-    """对 S1/S8/S9 的 evidence 检测做逐信号独立研究聚合。
+    """Aggregate every Issue #48 signal with independent, symmetric outcomes.
 
-    - S1/S8 收盘确认后以下一交易日开盘为执行锚；S9 开盘确认且仅面向既有
-      持仓，以信号日开盘为执行锚。N=1 表示执行日收盘。
-    - 卖飞率 = 执行后 N 日收益为正的比例；规避深度 = 下跌事件的最大回撤
-      均值。两方向对称呈现，不合并成方向指令。
-    - 基线只接受显式 ``baselines``；缺失一律显式 unavailable。
-    - ``minute_approximation=True`` 一律 ValueError：分钟信号不可用日线近似。
+    Daily close-confirmed S1/S8 and intraday close-only S2/S4 execute at the
+    next trading-day open. S9 executes at the signal-day open. Other intraday
+    signals use their evidence ``execution_price`` and H=1 ends at the
+    signal-day close. Missing structured baselines remains explicitly
+    unavailable; an event mean never promotes a signal.
     """
     if minute_approximation:
         raise ValueError(
-            "minute signals are unavailable_insufficient_immutable_history; "
+            "minute signals require catalog-pinned engine minute/trans facts; "
             "daily high/low approximation is not accepted"
         )
     horizon_tuple = tuple(sorted({int(horizon) for horizon in horizons}))
@@ -545,7 +802,11 @@ def aggregate_escape_signals(
         benchmark_bars[symbol] = {bar.date: bar for bar in bench_rows}
 
     grouped: dict[str, list[Detection]] = {}
-    censor_codes: dict[str, set[str]] = {signal_id: set() for signal_id in DAILY_SIGNAL_IDS}
+    censor_codes: dict[str, set[str]] = {signal_id: set() for signal_id in ALL_SIGNAL_IDS}
+    for signal_id, codes in (external_censor_codes or {}).items():
+        if signal_id not in censor_codes:
+            raise ValueError(f"unknown escape signal id: {signal_id}")
+        censor_codes[signal_id].update(str(code) for code in codes)
     for detection in detections:
         signal_id = SIGNAL_ID_BY_DETECTOR.get(detection.detector_id)
         if signal_id is None:
@@ -574,14 +835,45 @@ def aggregate_escape_signals(
             if closes is None or bars is None or signal_index is None:
                 unevaluated_events += 1
                 continue
+            execution_session = str(detection.evidence.values.get("execution_session", ""))
             if signal_id == "s9":
                 execution_index = signal_index
+                entry = bars[execution_index].research_open_adj
+            elif execution_session == "same_day":
+                execution_index = signal_index
+                raw_entry = detection.evidence.values.get("execution_price")
+                try:
+                    raw_entry_price = float(raw_entry)
+                except (TypeError, ValueError):
+                    unevaluated_events += 1
+                    continue
+                signal_bar = bars[signal_index]
+                raw_close = signal_bar.quote_close_raw
+                adjusted_close = signal_bar.research_close_adj
+                if (
+                    not math.isfinite(raw_entry_price)
+                    or not math.isfinite(raw_close)
+                    or raw_close <= 0
+                    or not math.isfinite(adjusted_close)
+                    or adjusted_close <= 0
+                ):
+                    unevaluated_events += 1
+                    continue
+                # Intraday trans prices are raw while all forward closes are
+                # adjusted; normalize the same-day entry into that price space.
+                entry = raw_entry_price * adjusted_close / raw_close
+                if detection.evidence.values.get("execution_reachable") is False:
+                    unevaluated_events += 1
+                    continue
             else:
                 execution_index = signal_index + 1
+                if execution_index >= len(bars):
+                    unevaluated_events += 1
+                    continue
+                entry = bars[execution_index].research_open_adj
             if execution_index >= len(bars):
                 unevaluated_events += 1
                 continue
-            entry = bars[execution_index].research_open_adj
             if not math.isfinite(entry) or entry <= 0:
                 unevaluated_events += 1
                 continue
@@ -627,9 +919,19 @@ def aggregate_escape_signals(
                     )
             outcomes.append(outcome)
         outcomes_by_signal[signal_id] = outcomes
-
+    oos_adjudications = {
+        signal_id: _oos_adjudication(
+            outcomes_by_signal.get(signal_id, ()),
+            symbol_bars,
+            horizon_tuple,
+            round_trip_cost,
+            oos_start,
+        )
+        for signal_id in ALL_SIGNAL_IDS
+        if oos_start is not None and outcomes_by_signal.get(signal_id)
+    }
     signals: list[SignalResearch] = []
-    for signal_id in DAILY_SIGNAL_IDS:
+    for signal_id in ALL_SIGNAL_IDS:
         detector_id = DETECTOR_ID_BY_SIGNAL[signal_id]
         outcomes = outcomes_by_signal.get(signal_id, [])
         horizon_stats: list[HorizonOutcomeStats] = []
@@ -673,6 +975,9 @@ def aggregate_escape_signals(
             )
         verdict = VERDICT_BASELINE_UNAVAILABLE if outcomes else VERDICT_NO_EVENTS
         codes = set(censor_codes[signal_id])
+        oos = oos_adjudications.get(signal_id)
+        if oos is not None:
+            verdict = oos.verdict
         if (
             require_benchmark
             and outcomes
@@ -694,6 +999,7 @@ def aggregate_escape_signals(
                 censor_codes=tuple(sorted(codes)),
                 horizons=tuple(horizon_stats),
                 baselines=_baseline_comparisons(signal_id, horizon_stats, baselines),
+                oos=oos,
             )
         )
 
@@ -729,6 +1035,7 @@ def aggregate_escape_signals(
         signals=tuple(signals),
         count_buckets=tuple(buckets),
         unevaluated_events=unevaluated_events,
+        oos_start=oos_start,
     )
 
 
@@ -797,32 +1104,50 @@ def _baseline_comparisons(
 
 
 __all__ = [
+    "ALL_SIGNAL_IDS",
     "BASELINE_KINDS",
-    "BaselineComparison",
-    "BaselineSeries",
     "DAILY_SIGNAL_IDS",
     "DEFAULT_HORIZONS",
     "DETECTOR_ID_S1",
+    "DETECTOR_ID_S2",
+    "DETECTOR_ID_S3",
+    "DETECTOR_ID_S4",
+    "DETECTOR_ID_S5",
+    "DETECTOR_ID_S6",
+    "DETECTOR_ID_S7",
     "DETECTOR_ID_S8",
     "DETECTOR_ID_S9",
+    "DETECTOR_ID_S10",
+    "INTRADAY_SIGNAL_VARIANT",
+    "LOW_OPEN_MIN_PCT",
+    "MACD_HIST_SCALE",
+    "MACD_MIN_VALID_INDEX",
+    "MINUTE_SIGNAL_IDS",
+    "NEW_HIGH_WINDOW_DAYS",
+    "OOS_ARM_KINDS",
+    "OOS_BASELINE_ATR",
+    "OOS_BASELINE_HOLD",
+    "OOS_BASELINE_MA20",
+    "SIGNAL_CAPABILITIES",
+    "SIGNAL_CAPABILITY_AVAILABLE",
+    "SIGNAL_VARIANT",
+    "THREE_YIN_DAYS",
+    "VERDICT_ACCEPTED",
+    "VERDICT_INDETERMINATE",
+    "VERDICT_INSUFFICIENT",
+    "VERDICT_REJECTED",
+    "BaselineComparison",
+    "BaselineSeries",
     "EscapeCensorReason",
     "EscapeRiskReport",
     "EscapeS1Detector",
     "EscapeS8Detector",
     "EscapeS9Detector",
     "HorizonOutcomeStats",
-    "LOW_OPEN_MIN_PCT",
-    "MACD_HIST_SCALE",
-    "MACD_MIN_VALID_INDEX",
-    "MINUTE_SIGNAL_IDS",
-    "NEW_HIGH_WINDOW_DAYS",
-    "SIGNAL_CAPABILITIES",
-    "SIGNAL_CAPABILITY_AVAILABLE",
-    "SIGNAL_CAPABILITY_MINUTE_UNAVAILABLE",
-    "SIGNAL_VARIANT",
+    "OosBaselineStats",
+    "OosSignalAdjudication",
     "SignalCountBucket",
     "SignalResearch",
-    "THREE_YIN_DAYS",
     "aggregate_escape_signals",
     "capability_for",
     "macd_histogram",

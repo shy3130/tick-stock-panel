@@ -413,6 +413,34 @@ def resolve_route(route_key: str, market: str, trade_date: date | datetime | str
         )
         return _resolve_row(final_candidates[0], route_key, market, requested, historical=True)
 
+    # Historical immutable shards are exact date-span facts. They must win over
+    # a later preliminary current-year snapshot whose NULL span would otherwise
+    # match every older request and return an empty/wrong physical file.
+    immutable_candidates = []
+    for row in rows_by_key.get(route_key, []):
+        _validate_route_metadata(row)
+        if row.get("freshness_mode") != FRESHNESS_PINNED_IMMUTABLE:
+            continue
+        if _matches_span(row, requested):
+            immutable_candidates.append(row)
+    if immutable_candidates:
+        immutable_candidates.sort(
+            key=lambda item: (
+                -_priority(item),
+                str(item.get("root", "")),
+                str(item.get("generation", "")),
+                str(item.get("logical", "")),
+                str(item.get("file", "")),
+            )
+        )
+        return _resolve_row(
+            immutable_candidates[0],
+            route_key,
+            market,
+            requested,
+            historical=True,
+        )
+
     if preliminary_key:
         preliminary_candidates = []
         for row in rows_by_key.get(preliminary_key, []):

@@ -406,6 +406,23 @@ class KlineRepository:
             return PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
         except (OSError, RuntimeError, TypeError, ValueError):
             return None
+
+    @property
+    def index_daily_research_reader(self):
+        """Return index bars pinned by the active canonical source generations."""
+        from app.data_providers.fquant.index_daily_research import (
+            PublishedIndexDailyReader,
+        )
+
+        canonical = self.generation_pinned_daily_reader
+        if canonical is None:
+            return None
+        try:
+            return PublishedIndexDailyReader.from_canonical_manifest(
+                canonical.manifest()
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
     @property
     def versioned_exchange_calendar(self):
         """Expose the same immutable generation as the research calendar."""

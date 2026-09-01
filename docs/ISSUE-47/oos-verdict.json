@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "issue": 47,
+  "status": "ok",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 200 只",
+    "symbol_count": 200,
+    "start": "2023-01-01",
+    "oos_start": "2025-01-01",
+    "end": "2026-08-28",
+    "cost_bps": 10.0
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "universe_generation": "20260829T020332Z-6e648967c37e6739",
+    "universe_manifest_sha256": "2c407072371bc024de46fd2d5b1d282d964b478e94196da9fc575a0bac1781d4",
+    "universe_retrospective": true
+  },
+  "coverage": {
+    "calendar_days": 1153,
+    "evaluated_detections": 392355,
+    "qualified_events": 34103,
+    "censor_insufficient_window": 171,
+    "censor_warmup_insufficient": 1864
+  },
+  "factors": {
+    "f1_limit_up": {
+      "qualified": 10116,
+      "necessary_rate": 0.2637249871729092,
+      "sufficient_rate": 0.05081059707394227,
+      "baseline_rate": 0.025461481181496336,
+      "lift": 1.9955868518312256,
+      "increment_ci95_lower": 0.020926398420049966,
+      "verdict": "accepted"
+    },
+    "f2_gap_unfilled": {
+      "qualified": 1004,
+      "necessary_rate": 0.0323242688558235,
+      "sufficient_rate": 0.06274900398406374,
+      "baseline_rate": 0.025462479096989968,
+      "lift": 2.4643713499005515,
+      "increment_ci95_lower": 0.022244059414040694,
+      "verdict": "accepted"
+    },
+    "f3_relative_bullish": {
+      "qualified": 13536,
+      "necessary_rate": 0.22989690721649483,
+      "sufficient_rate": 0.03294917257683215,
+      "baseline_rate": 0.025368098961738632,
+      "lift": 1.2988427956910626,
+      "increment_ci95_lower": 0.0043740377172429255,
+      "verdict": "accepted"
+    },
+    "f4_volume_stack": {
+      "qualified": 7595,
+      "necessary_rate": 0.11283422459893049,
+      "sufficient_rate": 0.027781435154707042,
+      "baseline_rate": 0.024725311049701843,
+      "lift": 1.1236030599923252,
+      "increment_ci95_lower": -0.0008021771107045122,
+      "verdict": "rejected"
+    },
+    "combined_pre_surge": {
+      "qualified": 856,
+      "necessary_rate": 0.02459893048128342,
+      "sufficient_rate": 0.053738317757009345,
+      "baseline_rate": 0.024725311049701843,
+      "lift": 2.1734132140536757,
+      "increment_ci95_lower": 0.013865916754043792,
+      "verdict": "accepted"
+    }
+  },
+  "promoted": false,
+  "conclusion": "F1/F2/F3 与四特征交集在冻结 OOS 口径下 accepted，F4 rejected；accepted 仅表示研究条件概率增量通过冻结阈值，不自动进入默认策略、Agent 排序或交易执行。"
+}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import re
 from typing import Literal
 
@@ -21,6 +21,7 @@ from app.data_providers.fquant.daily_market_research import (
 
 from app.services.macd_stages import (
     MacdStagesRequest,
+    evaluate_macd_arms,
     evaluate_macd_stages,
     macd_stages_availability,
 )
@@ -47,7 +48,9 @@ from app.services.short_pool import (
 )
 from app.services.single_yang_no_break import (
     SINGLE_YANG_DEFINITION,
+    SingleYangCompositeReader,
     evaluate_single_yang,
+    evaluate_single_yang_increment,
     run_single_yang_research,
 )
 from app.services.single_yang_no_break import (
@@ -81,6 +84,17 @@ from app.services.hold_firm_patterns import (
     evaluate_hold_firm_patterns as evaluate_hold_firm_patterns_v1,
     production_reader_scope as hold_firm_reader_scope,
 )
+from app.services.chip_peak_patterns import ChipPeakRequest, ChipPeakResponse
+from app.services.doji_patterns import DojiPatternsRequest, DojiResponse
+from app.services.escape_windows import (
+    EscapeWindowsRequest,
+    EscapeWindowsResponse,
+)
+from app.services.weekly_flagpole import (
+    WeeklyFlagpoleRequest,
+    WeeklyFlagpoleResponse,
+)
+
 
 from app.services.daily_open_anchor_filter import (
     assess_daily_open_anchor_capability,
@@ -165,6 +179,7 @@ class EscapeRiskEvaluateIn(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=200)
     start: date
     end: date
+    oos_start: date
     cost_bps: float = Field(default=10.0, ge=0.0, le=1000.0)
 
     @field_validator("symbols")
@@ -176,6 +191,8 @@ class EscapeRiskEvaluateIn(BaseModel):
     def validate_dates(self):
         if self.start > self.end:
             raise ValueError("start must be <= end")
+        if not self.start <= self.oos_start <= self.end:
+            raise ValueError("oos_start must be within [start, end]")
         return self
 
 
@@ -836,19 +853,44 @@ def get_single_yang_no_break(request: Request):
 
 @router.post("/factors/single-yang-no-break/evaluate")
 def evaluate_single_yang_factor(body: SingleYangEvaluateIn, request: Request):
+    markets = None
     try:
-        return evaluate_single_yang(
-            reader=getattr(
-                getattr(request.app.state, "repo", None), "generation_pinned_daily_reader", None
-            ),
+        reader = getattr(
+            getattr(request.app.state, "repo", None),
+            "generation_pinned_daily_reader",
+            None,
+        )
+        response = evaluate_single_yang(
+            reader=reader,
             start=body.start,
             end=body.end,
             symbols=body.symbols,
             oos_start=body.oos_start,
             cost_bps=body.cost_bps,
         )
+        increment_reader = reader
+        manifest = getattr(reader, "manifest", None)
+        if callable(manifest):
+            try:
+                markets = PublishedDailyMarketFactsReader.from_canonical_manifest(manifest())
+                increment_reader = SingleYangCompositeReader(reader, markets)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                markets = None
+        response["increment_research"] = evaluate_single_yang_increment(
+            reader=increment_reader,
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+            cost_bps=body.cost_bps,
+        )
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(markets, "close", None)
+        if callable(close):
+            close()
 
 
 @router.get("/macd-stages")
@@ -862,13 +904,22 @@ def get_macd_stages(request: Request):
 @router.post("/factors/macd-stages/evaluate")
 def evaluate_macd_stages_factor(body: MacdStagesRequest, request: Request):
     try:
-        return evaluate_macd_stages(
-            resolve_macd_reader(getattr(request.app.state, "repo", None)),
+        reader = resolve_macd_reader(getattr(request.app.state, "repo", None))
+        response = evaluate_macd_stages(
+            reader,
             start=body.start,
             end=body.end,
             symbols=body.symbols,
             oos_start=body.oos_start,
         )
+        response["arms_research"] = evaluate_macd_arms(
+            reader,
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+        )
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -917,6 +968,173 @@ def evaluate_hold_firm_patterns_factor(body: HoldFirmPatternsRequest, request: R
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.get("/doji-patterns", response_model=CapabilityResult)
+def get_doji_patterns_capability(request: Request):
+    """Return immutable-source capability for D1-D4 doji research."""
+    from app.services.doji_patterns import (
+        assess_doji_capability,
+        production_reader_scope,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo) as scope:
+            return assess_doji_capability(
+                scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        detail = f"{exc.reason.value}: {exc.detail}" if exc.detail else exc.reason.value
+        return CapabilityResult(status=HoldFirmStatus.UNAVAILABLE, problems=(detail,))
+    except (AttributeError, TypeError, ValueError) as exc:
+        return CapabilityResult(
+            status=HoldFirmStatus.UNAVAILABLE,
+            problems=(f"unavailable_canonical_reader: {exc}",),
+        )
+
+
+@router.post("/factors/doji-patterns/evaluate", response_model=DojiResponse)
+def evaluate_doji_patterns_factor(body: DojiPatternsRequest, request: Request):
+    """Evaluate four doji hypotheses over one pinned three-source scope."""
+    from app.services.doji_patterns import (
+        DojiStatus,
+        evaluate_doji_patterns,
+        production_reader_scope,
+        UnavailabilityReason,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo) as scope:
+            return evaluate_doji_patterns(
+                body, scope.canonical, scope.market_facts, scope.universe_reader
+            )
+    except ProductionReaderScopeUnavailable as exc:
+        return DojiResponse(
+            status=DojiStatus.UNAVAILABLE,
+            unavailable_reason=exc.reason,
+        )
+    except AttributeError:
+        return DojiResponse(
+            status=DojiStatus.UNAVAILABLE,
+            unavailable_reason=UnavailabilityReason.CANONICAL_READER,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post(
+    "/factors/chip-peak-patterns/evaluate",
+    response_model=ChipPeakResponse,
+)
+def evaluate_chip_peak_patterns_factor(
+    body: ChipPeakRequest,
+    request: Request,
+):
+    """Evaluate C1-C5 using the frozen local turnover-decay model."""
+    from app.services.chip_peak_patterns import (
+        ChipPeakResponse,
+        ChipProductionScopeUnavailableError,
+        ChipStatus,
+        evaluate,
+        UnavailabilityReason,
+        production_reader_scope,
+    )
+
+    repo = getattr(request.app.state, "repo", None)
+    try:
+        with production_reader_scope(repo, body) as readers:
+            return evaluate(body, readers=readers)
+    except ChipProductionScopeUnavailableError as exc:
+        return ChipPeakResponse(
+            status=ChipStatus.UNAVAILABLE,
+            unavailable_reason=exc.reason,
+        )
+    except AttributeError:
+        return ChipPeakResponse(
+            status=ChipStatus.UNAVAILABLE,
+            unavailable_reason=UnavailabilityReason.CANONICAL_READER,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/weekly-flagpole")
+def get_weekly_flagpole_capability(request: Request):
+    """Expose sealed composite-reader capability for weekly flag research."""
+    from app.services.weekly_flagpole import assess_capability, resolve_reader
+
+    reader = resolve_reader(getattr(request.app.state, "repo", None))
+    try:
+        return assess_capability(reader)
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
+
+
+@router.post(
+    "/factors/weekly-flagpole/evaluate",
+    response_model=WeeklyFlagpoleResponse,
+)
+def evaluate_weekly_flagpole_factor(
+    body: WeeklyFlagpoleRequest,
+    request: Request,
+):
+    """Evaluate F0-F5 without falling back from the pinned composite reader."""
+    from app.services.weekly_flagpole import evaluate, resolve_reader
+
+    repo = getattr(request.app.state, "repo", None)
+    reader = resolve_reader(repo)
+    index_reader = getattr(repo, "index_daily_research_reader", None)
+    try:
+        return evaluate(body, reader, index_reader)
+    finally:
+        for active_reader in (reader, index_reader):
+            close = getattr(active_reader, "close", None)
+            if callable(close):
+                close()
+
+
+@router.get("/escape-windows")
+def get_escape_windows_capability(request: Request):
+    """Report the four sealed legs needed by the calendar-effect study."""
+    from app.services.escape_windows import assess_escape_windows_capability
+
+    return assess_escape_windows_capability(
+        getattr(request.app.state, "repo", None)
+    )
+
+
+@router.post(
+    "/escape-windows/evaluate",
+    response_model=EscapeWindowsResponse,
+)
+def evaluate_escape_windows_factor(
+    body: EscapeWindowsRequest,
+    request: Request,
+):
+    """Evaluate six calendar anchors with explicit per-leg coverage censors."""
+    from app.services.escape_windows import evaluate_escape_windows
+
+    repo = getattr(request.app.state, "repo", None)
+    canonical = getattr(repo, "generation_pinned_daily_reader", None)
+    calendar = getattr(repo, "versioned_exchange_calendar", None)
+    presence = getattr(repo, "pit_presence_universe", None)
+    index_reader = getattr(repo, "index_daily_research_reader", None)
+    try:
+        return evaluate_escape_windows(
+            body,
+            canonical_reader=canonical,
+            calendar=calendar,
+            presence_universe=presence,
+            index_reader=index_reader,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(index_reader, "close", None)
+        if callable(close):
+            close()
 
 
 @router.post(
@@ -974,17 +1192,21 @@ def evaluate_pre_surge_features_factor(body: PreSurgeEvaluateIn, request: Reques
 
 @router.get("/escape-risk")
 def get_escape_risk_capability():
-    """Expose the daily/minute capability boundary without approximations."""
+    """Expose implemented detectors separately from request-time data gates."""
     return {
         "status": "available",
         "signals": dict(SIGNAL_CAPABILITIES),
+        "runtime_requirements": {
+            "s2_s7": "catalog_pinned_minutes_trans",
+            "s10": "catalog_pinned_minutes_trans_and_pit_float_shares",
+        },
         "promoted": False,
     }
 
 
 @router.post("/factors/escape-risk/evaluate")
 def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
-    """Evaluate daily S1/S8/S9; minute-only signals remain unavailable."""
+    """Evaluate S1-S10; request-time route/PIT gaps remain explicit censors."""
     repo = getattr(request.app.state, "repo", None)
     canonical = PublishedCanonicalDailyReader.from_repository(repo)
     if canonical is None:
@@ -995,13 +1217,33 @@ def evaluate_escape_risk_factor(body: EscapeRiskEvaluateIn, request: Request):
             "capabilities": dict(SIGNAL_CAPABILITIES),
             "promoted": False,
         }
-    return evaluate_escape_risk_production(
-        symbols=body.symbols,
-        start=body.start,
-        end=body.end,
-        canonical_reader=canonical,
-        cost_bps=body.cost_bps,
-    )
+    intraday_reader = None
+    try:
+        try:
+            from app.data_providers.registry import get_active_provider_name, get_provider
+
+            provider = get_provider(get_active_provider_name(capability="minute"))
+            opener = getattr(provider, "open_escape_risk_intraday_reader", None)
+            if callable(opener):
+                market_days = canonical.market_days(
+                    body.start - timedelta(days=30), body.end
+                )
+                intraday_reader = opener(canonical.manifest(), tuple(market_days))
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            intraday_reader = None
+        return evaluate_escape_risk_production(
+            symbols=body.symbols,
+            start=body.start,
+            end=body.end,
+            oos_start=body.oos_start,
+            canonical_reader=canonical,
+            intraday_reader=intraday_reader,
+            cost_bps=body.cost_bps,
+        )
+    finally:
+        close = getattr(intraday_reader, "close", None)
+        if callable(close):
+            close()
 
 
 @router.post(

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "issue": 8,
+  "status": "ok",
+  "request": {
+    "cohort_rule": "2025-01-02 canonical symbol 升序前 200 只",
+    "symbol_count": 200,
+    "start": "2022-01-01",
+    "end": "2026-08-28",
+    "oos_split_date": "2025-07-01",
+    "cost_bps": 10.0,
+    "minimum_samples_per_horizon": 30
+  },
+  "provenance": {
+    "canonical_generation": "20260829T002957-4b1bfcad",
+    "canonical_manifest_sha256": "0d5b5a457e7fa8c25bb047005b20cc6ca06ed19092f7ce20ba65f4604dfdd372",
+    "markets_generation": "20260829T000704",
+    "markets_manifest_sha256": "a2a9d2b8208af33f4bcb66bcbe46a02ee836659c337deab4d0fd550ffead22a8",
+    "provider_id": "fquant.published_n_shape_research",
+    "factor_id": "n_shape_golden_phoenix_v1"
+  },
+  "coverage": {
+    "symbols_total": 200,
+    "first_board_baselines": 272,
+    "events": 11,
+    "is_events": 6,
+    "oos_events": 5,
+    "volume_breakout_events": 6,
+    "second_limit_up_events": 5,
+    "censored": 9284,
+    "dominant_censor_reason": {
+      "reason": "limit_regime_unknown",
+      "count": 8636
+    }
+  },
+  "verdict": "rejected",
+  "verdict_reasons": [
+    "is_sample_insufficient_1d",
+    "oos_sample_insufficient_1d",
+    "is_sample_insufficient_5d",
+    "oos_sample_insufficient_5d",
+    "is_sample_insufficient_10d",
+    "oos_sample_insufficient_10d",
+    "is_sample_insufficient_20d",
+    "oos_sample_insufficient_20d"
+  ],
+  "conclusion": "冻结 200 标的扩大样本只形成 11 个事件（OOS 5 个），所有预注册 horizon 均未达到 30 样本门槛，按 evaluator 契约最终 rejected；不进入短线池、Agent 排序或默认策略。"
+}
