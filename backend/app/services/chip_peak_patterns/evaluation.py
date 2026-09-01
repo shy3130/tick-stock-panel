@@ -61,7 +61,7 @@ from .models import (
     UnavailabilityReason,
 )
 
-PIT_TURNOVER_SOURCE = "pit_float_shares_notice_date"
+PIT_TURNOVER_SOURCE = "published_daily_markets_hslv_or_lagged_ltgb"
 PRIMARY_HORIZON = min(FORWARD_HORIZONS)
 
 
@@ -321,7 +321,7 @@ def _load_symbol(
         if (
             day is None
             or day.available_at is None
-            or day.float_shares is None
+            or (day.reported_turnover_pct is None and day.float_shares is None)
             or day.available_at > bar.date
         ):
             return "missing_pit_turnover", f"{bar.date} PIT observation unavailable", ()

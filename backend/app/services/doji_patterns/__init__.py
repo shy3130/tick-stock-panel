@@ -19,6 +19,7 @@ from .models import (
 )
 from .position_interaction import DojiPositionDetector
 from .t_bar import TBarDetector
+from .tail_session import TailSessionDetector, classify_tail_shape
 
 __all__ = [
     "DOJI_FACTOR_IDS",
@@ -32,8 +33,10 @@ __all__ = [
     "ProductionReaderScope",
     "ProductionReaderScopeUnavailable",
     "TBarDetector",
+    "TailSessionDetector",
     "UnavailabilityReason",
     "assess_doji_capability",
+    "classify_tail_shape",
     "evaluate_doji_patterns",
     "production_reader_scope",
 ]

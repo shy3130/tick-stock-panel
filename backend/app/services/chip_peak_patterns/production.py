@@ -72,7 +72,7 @@ class PinnedChipTurnover:
     def __init__(self, reader: PublishedDailyMarketFactsReader) -> None:
         self._reader = reader
         self._identity: Mapping[str, str] = {
-            "source": "pit_float_shares_notice_date",
+            "source": "published_daily_markets_hslv_or_lagged_ltgb",
             "generation": str(reader.generation()),
             "manifest_sha256": str(reader.manifest_sha256()),
         }
@@ -89,11 +89,22 @@ class PinnedChipTurnover:
         return None
 
     def turnover(self, symbol: str, day: date) -> TurnoverDay | None:
-        fact = self._reader.turnover_fact(symbol, day)
-        if fact is None:
+        reported = self._reader.daily_turnover_fact(symbol, day)
+        if reported is not None:
+            return TurnoverDay(
+                available_at=self._available_day(reported.available_at),
+                reported_turnover_pct=reported.reported_turnover_pct,
+                source_day=reported.source_day,
+                availability_basis=reported.availability_basis,
+            )
+        lagged = self._reader.intraday_float_shares_fact(symbol, day)
+        if lagged is None:
             return None
         return TurnoverDay(
-            available_at=self._available_day(fact.available_at), float_shares=fact.float_shares
+            available_at=self._available_day(lagged.available_at),
+            float_shares=lagged.float_shares,
+            source_day=lagged.source_day,
+            availability_basis=lagged.availability_basis,
         )
 
 

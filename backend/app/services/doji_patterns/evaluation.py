@@ -41,6 +41,7 @@ from .models import (
     DOJI_FACTOR_IDS,
     FORWARD_CHECKPOINT_DAYS,
     HORIZON_DAYS,
+    TAIL_DIRECTION_FLAT_BAND,
     DojiArm,
     DojiCensor,
     DojiDenominatorAuditEntry,
@@ -63,6 +64,7 @@ from .statistics import (
     selection_cluster_bootstrap,
 )
 from .t_bar import TBarDetector
+from .tail_session import TailSessionDetector
 
 _DETECTORS = (DojiPositionDetector, GravestoneDetector, TBarDetector, ConfirmationDetector)
 
@@ -255,7 +257,11 @@ def _simulate(
 
 
 def evaluate_doji_patterns(
-    request: DojiPatternsRequest, reader: object, market_facts: object, universe_reader: object
+    request: DojiPatternsRequest,
+    reader: object,
+    market_facts: object,
+    universe_reader: object,
+    intraday_bundle: object | None = None,
 ) -> DojiResponse:
     try:
         canonical = PinnedCanonicalDailyReader(reader)
@@ -283,6 +289,15 @@ def evaluate_doji_patterns(
         )
         for cls in _DETECTORS
     )
+    tail_detections = tuple(
+        d
+        for s in request.symbols
+        for d in TailSessionDetector(request.theta_body_ratio, intraday_bundle).detect(
+            s, tuple(bars[s].values()), facts, full
+        )
+        if request.start <= d.anchor_date <= request.end
+    )
+    detections = (*detections, tail_detections)
     try:
         universe = PinnedPresenceUniverseReader(
             universe_reader, tuple(sorted({_membership(d) for group in detections for d in group}))
@@ -393,6 +408,45 @@ def evaluate_doji_patterns(
                 out[event.symbol].append(segment.liquidation_cost_adjusted_terminal_return)
             return out
 
+        def direction_profile(items):
+            profile = {}
+            for _event, detection, segment in items:
+                shape = (
+                    detection.evidence.values.get("shape", "baseline")
+                    if detection.evidence is not None
+                    else "baseline"
+                )
+                target = profile.setdefault(
+                    str(shape),
+                    {
+                        str(checkpoint): {"up": 0, "flat": 0, "down": 0}
+                        for checkpoint in FORWARD_CHECKPOINT_DAYS
+                    },
+                )
+                for checkpoint in FORWARD_CHECKPOINT_DAYS:
+                    value = segment.checkpoint_returns.get(checkpoint)
+                    if value is None:
+                        continue
+                    bucket = (
+                        "up"
+                        if value > TAIL_DIRECTION_FLAT_BAND
+                        else "down"
+                        if value < -TAIL_DIRECTION_FLAT_BAND
+                        else "flat"
+                    )
+                    target[str(checkpoint)][bucket] += 1
+            return profile
+
+        def next_day_profile(items):
+            profile = {}
+            for _event, detection, _segment in items:
+                if detection.evidence is None:
+                    continue
+                direction = detection.evidence.values.get("next_day_direction")
+                if direction is not None:
+                    profile[str(direction)] = profile.get(str(direction), 0) + 1
+            return profile
+
         iq = [x for x in complete_q if x[0].anchor_date < request.oos_start]
         inn = [x for x in complete_n if x[0].anchor_date < request.oos_start]
         oq = [x for x in complete_q if x[0].anchor_date >= request.oos_start]
@@ -464,19 +518,49 @@ def evaluate_doji_patterns(
                 and gates(sum(len(v) for v in nmap.values()), len(nmap))
                 and _bootstrap_ready(stats)
             )
-            verdict = (
-                DojiVerdict.UNAVAILABLE
-                if not gate
-                else (
-                    DojiVerdict.ACCEPTED
-                    if (fid == "gravestone_high" and stats.upper is not None and stats.upper < 0)
-                    or (fid == "t_bar_low" and stats.lower is not None and stats.lower > 0)
-                    else DojiVerdict.REJECTED
+            if fid == "tail_session_doji":
+                verdict = (
+                    DojiVerdict.UNAVAILABLE
+                    if not gate
+                    else (
+                        DojiVerdict.ACCEPTED
+                        if (
+                            (stats.lower is not None and stats.lower > 0)
+                            or (stats.upper is not None and stats.upper < 0)
+                        )
+                        else DojiVerdict.REJECTED
+                    )
                 )
-            )
+            else:
+                verdict = (
+                    DojiVerdict.UNAVAILABLE
+                    if not gate
+                    else (
+                        DojiVerdict.ACCEPTED
+                        if (
+                            fid == "gravestone_high" and stats.upper is not None and stats.upper < 0
+                        )
+                        or (fid == "t_bar_low" and stats.lower is not None and stats.lower > 0)
+                        else DojiVerdict.REJECTED
+                    )
+                )
         qn = len(q)
         nn = len(n)
         parent = qn + nn + len(pit) + len(sc)
+        diagnostics = {
+            "censor_reasons": {
+                c.reason.value: sum(x.reason is c.reason for x in censors) for c in censors
+            },
+            "entry_price_degradation": [
+                x[3].entry_quote_raw - x[2].entry_quote_raw for x in oq if len(x) > 3
+            ],
+        }
+        if fid == "tail_session_doji":
+            diagnostics.update(
+                checkpoint_direction_distributions=direction_profile(oq + onn),
+                next_day_direction_distributions=next_day_profile(oq + onn),
+                minute_data="provided" if intraday_bundle is not None else "unavailable",
+            )
         factors.append(
             DojiFactorResult(
                 factor_id=fid,
@@ -500,14 +584,7 @@ def evaluate_doji_patterns(
                     "valid_replicates": getattr(stats, "valid_replicates", 0),
                     "mean_difference": getattr(stats, "mean_difference", None),
                 },
-                diagnostics={
-                    "censor_reasons": {
-                        c.reason.value: sum(x.reason is c.reason for x in censors) for c in censors
-                    },
-                    "entry_price_degradation": [
-                        x[3].entry_quote_raw - x[2].entry_quote_raw for x in oq if len(x) > 3
-                    ],
-                },
+                diagnostics=diagnostics,
                 verdict=verdict,
             )
         )

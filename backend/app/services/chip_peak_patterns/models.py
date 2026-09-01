@@ -174,10 +174,28 @@ class ChipBar:
 
 
 class TurnoverDay:
-    __slots__ = ("available_at", "float_shares")
+    __slots__ = (
+        "availability_basis",
+        "available_at",
+        "float_shares",
+        "reported_turnover_pct",
+        "source_day",
+    )
 
-    def __init__(self, *, available_at: date | None, float_shares: float | None) -> None:
-        self.available_at, self.float_shares = available_at, float_shares
+    def __init__(
+        self,
+        *,
+        available_at: date | None,
+        reported_turnover_pct: float | None = None,
+        float_shares: float | None = None,
+        source_day: date | None = None,
+        availability_basis: str | None = None,
+    ) -> None:
+        self.available_at = available_at
+        self.reported_turnover_pct = reported_turnover_pct
+        self.float_shares = float_shares
+        self.source_day = source_day
+        self.availability_basis = availability_basis
 
 
 class _Strict(BaseModel):
@@ -187,7 +205,7 @@ class _Strict(BaseModel):
 
 
 class ChipTurnoverIdentity(_Strict):
-    source: Literal["pit_float_shares_notice_date"]
+    source: Literal["published_daily_markets_hslv_or_lagged_ltgb"]
     rows: int = Field(ge=0)
     symbols: int = Field(ge=0)
 

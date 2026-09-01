@@ -27,6 +27,8 @@ HORIZON_DAYS_MAX = 60
 COST_BPS_DEFAULT = 10.0
 COST_BPS_MAX = 1000.0
 SYMBOLS_MAX = 200
+DUGU_ALIGNMENT_DAY_CHOICES = (10, 30, 50, 100)
+DUGU_ALIGNMENT_DAYS_DEFAULT = 30
 
 
 class DailyEventStatus(str, Enum):
@@ -115,12 +117,20 @@ class DailyEventRequest(_Strict):
     variant: DuguVariantId
     band_mode: BandMode = "fixed"
     require_m3: bool = False
+    alignment_days: int = DUGU_ALIGNMENT_DAYS_DEFAULT
     symbols: list[str] = Field(min_length=1, max_length=SYMBOLS_MAX)
     start: date
     oos_start: date
     end: date
     horizon_days: int = Field(default=HORIZON_DAYS_DEFAULT, ge=1, le=HORIZON_DAYS_MAX)
     cost_bps: float = Field(default=COST_BPS_DEFAULT, ge=0, le=COST_BPS_MAX)
+
+    @field_validator("alignment_days")
+    @classmethod
+    def validate_alignment_days(cls, value: int) -> int:
+        if value not in DUGU_ALIGNMENT_DAY_CHOICES:
+            raise ValueError("alignment_days must be one of the frozen scan values")
+        return value
 
     @field_validator("symbols")
     @classmethod

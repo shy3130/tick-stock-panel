@@ -517,6 +517,7 @@ def evaluate_single_yang_increment(
     columns = set(reader.columns())
     limit_fact_present = _LIMIT_FACT_COLUMN in columns
     volume_available = "raw_volume" in columns
+    baseline_fact_incomplete = not limit_fact_present
     pattern_events: list[dict[str, Any]] = []
     missing_adjusted = [column for column in ("open", "close") if column not in columns]
     if missing_adjusted:
@@ -584,6 +585,7 @@ def evaluate_single_yang_increment(
             isinstance(f, (int, float)) and math.isfinite(float(f)) and float(f) > 0 for f in facts
         )
         if limit_fact_present and not facts_valid:
+            baseline_fact_incomplete = True
             censored.append({"symbol": symbol, "code": "limit_fact_invalid"})
             facts = None
         volumes = (
@@ -806,7 +808,7 @@ def evaluate_single_yang_increment(
                     for h in horizons
                 },
             }
-    if not limit_fact_present:
+    if baseline_fact_incomplete:
         arms["baseline"]["status"] = "unavailable"
         arms["baseline"]["reasons"] = ["limit_up_price_fact_missing"]
         arms["baseline"]["events"] = []
@@ -818,7 +820,7 @@ def evaluate_single_yang_increment(
             left, right = returns["pattern"][segment][h], returns["baseline"][segment][h]
             boot = selection_cluster_bootstrap(left, right)
             reasons = []
-            if not limit_fact_present:
+            if baseline_fact_incomplete:
                 reasons.append("baseline_limit_up_price_fact_missing")
             if not gates(sum(map(len, left.values())), len(left)):
                 reasons.append("pattern_sample_below_gate")
@@ -843,7 +845,7 @@ def evaluate_single_yang_increment(
                 if gate and boot.lower is not None and boot.lower > 0
                 else ("rejected" if gate else "unavailable"),
             }
-    if not limit_fact_present:
+    if baseline_fact_incomplete:
         verdict = {"value": "unavailable", "reasons": ["baseline_limit_up_price_fact_missing"]}
     else:
         ungated = [

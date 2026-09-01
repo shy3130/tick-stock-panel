@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.data_providers.fquant.daily_market_research import TurnoverFact
+from app.data_providers.fquant.daily_market_research import IntradayFloatSharesFact
 from app.data_providers.fquant.escape_risk_intraday import (
     EscapeRiskIntradayBundle,
     IntradayDay,
@@ -24,9 +24,7 @@ def _timestamp(day, index):
     if index <= 119:
         clock = datetime.combine(day, time(9, 31), tzinfo=CST) + timedelta(minutes=index)
     else:
-        clock = datetime.combine(day, time(13, 1), tzinfo=CST) + timedelta(
-            minutes=index - 120
-        )
+        clock = datetime.combine(day, time(13, 1), tzinfo=CST) + timedelta(minutes=index - 120)
     return clock
 
 
@@ -43,6 +41,7 @@ def make_day(
     limit_up=110.0,
     limit_down=90.0,
     available_at=None,
+    source_day=None,
 ):
     prices = list(prices or [100.0] * 240)
     highs = list(highs or prices)
@@ -62,6 +61,16 @@ def make_day(
         )
         for index in range(240)
     )
+    source_day = source_day or day - timedelta(days=1)
+    turnover = (
+        None
+        if available_at is None
+        else IntradayFloatSharesFact(
+            float_shares=1_000_000,
+            available_at=available_at,
+            source_day=source_day,
+        )
+    )
     return IntradayDay(
         SYMBOL,
         day,
@@ -70,7 +79,7 @@ def make_day(
         pre_close,
         limit_up,
         limit_down,
-        TurnoverFact(1_000_000, None, available_at),
+        turnover,
     )
 
 
@@ -103,7 +112,9 @@ def history_before(day, *, volume=100, available=True):
                 value,
                 volumes=[volume] * 240,
                 available_at=(
-                    datetime.combine(value, time(8), tzinfo=CST) if available else None
+                    datetime.combine(value - timedelta(days=1), time(15), tzinfo=CST)
+                    if available
+                    else None
                 ),
             )
         )
@@ -219,20 +230,24 @@ def test_s5_never_reopened_is_not_marked_reachable():
     assert evidence.values["execution_reachable"] is False
 
 
-def test_s10_requires_float_share_fact_available_by_each_signal_time():
+def test_s10_requires_prior_close_float_share_fact_available_by_signal_time():
     day = date(2025, 8, 28)
     history = history_before(day, volume=100)
-    available = datetime.combine(day, time(8), tzinfo=CST)
+    source_day = day - timedelta(days=1)
+    available = datetime.combine(source_day, time(15), tzinfo=CST)
     current = make_day(
         day,
         prices=[101.0] * 240,
         volumes=[300] * 240,
         available_at=available,
+        source_day=source_day,
     )
     result = evaluate(current, history)
     evidence = evidence_by_signal(result)
     assert evidence["s10"].qualified is True
     assert evidence["s10"].values["turnover_ratio_vs_prev5_same_minute"] == pytest.approx(3)
+    assert evidence["s10"].values["float_shares_source_day"] == source_day.isoformat()
+    assert evidence["s10"].values["turnover_availability_basis"] == "previous_daily_market_close"
 
     post_close = make_day(
         day,
@@ -253,7 +268,7 @@ def test_s10_non_event_is_evidence_not_pit_censor():
             day,
             prices=[99.0] * 240,
             volumes=[100] * 240,
-            available_at=datetime.combine(day, time(8), tzinfo=CST),
+            available_at=datetime.combine(day - timedelta(days=1), time(15), tzinfo=CST),
         ),
         history,
     )

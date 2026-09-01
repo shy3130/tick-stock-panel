@@ -17,6 +17,9 @@ from app.services.hold_firm_patterns.statistics import selection_cluster_bootstr
 MACD_PARAMS = {"fast": 10, "slow": 20, "signal": 7}
 SCHEMA = "tickflow.research.macd-stages.v1"
 WARMUP_BARS = 26
+ANNUALIZATION_TRADING_DAYS = 252.0
+REGIME_INDEX_CODE = "000001"
+REGIME_MA_WINDOW = 60
 STATE_VALUES = (
     "initial",
     "below_shrink",
@@ -651,13 +654,87 @@ def _simulate_macd_arm(
     return {"trades": trades, "filtered": filtered}
 
 
+def _event_portfolio_metrics(closed: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Equal-weight event-batch portfolio diagnostics for closed trades.
+
+    Events sharing an execution date form one batch return (mean net return);
+    batches compound in date order. This is an event-study approximation of a
+    portfolio, not a continuously held fund -- the disclosed constants make the
+    aggregation explicit and auditable.
+    """
+    if not closed:
+        return {
+            "event_batch_days": 0,
+            "max_drawdown_event_equity": None,
+            "sharpe_event_batch": None,
+            "sortino_event_batch": None,
+            "events_per_symbol_per_year": None,
+        }
+    by_day: dict[date, list[float]] = {}
+    for trade in closed:
+        day = trade.get("entry_exec_date")
+        if isinstance(day, date):
+            by_day.setdefault(day, []).append(float(trade["net_return"]))
+    batch_returns = [sum(values) / len(values) for _, values in sorted(by_day.items())]
+    if not batch_returns:
+        return {
+            "event_batch_days": 0,
+            "max_drawdown_event_equity": None,
+            "sharpe_event_batch": None,
+            "sortino_event_batch": None,
+            "events_per_symbol_per_year": None,
+        }
+    equity = peak = 1.0
+    max_drawdown = 0.0
+    for batch in batch_returns:
+        equity *= 1.0 + batch
+        peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, 1.0 - equity / peak)
+    mean_return = sum(batch_returns) / len(batch_returns)
+    std = _sample_std(batch_returns)
+    downside = [value for value in batch_returns if value < 0]
+    downside_std = (
+        math.sqrt(sum(value * value for value in downside) / len(downside)) if downside else None
+    )
+    sharpe = mean_return / std * math.sqrt(ANNUALIZATION_TRADING_DAYS) if std and std > 0 else None
+    sortino = (
+        mean_return / downside_std * math.sqrt(ANNUALIZATION_TRADING_DAYS)
+        if downside_std and downside_std > 0
+        else None
+    )
+    entry_days = [
+        trade["entry_exec_date"]
+        for trade in closed
+        if isinstance(trade.get("entry_exec_date"), date)
+    ]
+    exit_days = [
+        day
+        for trade in closed
+        for day in (trade.get("exit_exec_date") or trade.get("entry_exec_date"),)
+        if isinstance(day, date)
+    ]
+    span_years = (
+        max((max(exit_days, default=min(entry_days)) - min(entry_days)).days, 1) / 365.25
+        if entry_days
+        else 1.0
+    )
+    symbols = {str(trade["symbol"]) for trade in closed}
+    return {
+        "event_batch_days": len(batch_returns),
+        "max_drawdown_event_equity": max_drawdown,
+        "sharpe_event_batch": sharpe,
+        "sortino_event_batch": sortino,
+        "events_per_symbol_per_year": len(closed) / len(symbols) / span_years,
+    }
+
+
 def _metrics(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     closed = [trade for trade in trades if trade.get("status") == "closed"]
     nets = [float(trade["net_return"]) for trade in closed]
     gross = [float(trade["gross_return"]) for trade in closed]
     wins = sum(value > 0 for value in nets)
     lower, upper = _wilson(wins, len(nets))
-    return {
+    metrics = {
         "n_events": len(trades),
         "n_trades_closed": len(closed),
         "n_trades_open": len(trades) - len(closed),
@@ -669,6 +746,86 @@ def _metrics(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "median_net_return": _median(nets),
         "sum_net_return": sum(nets) if nets else None,
         "mean_gross_return": sum(gross) / len(gross) if gross else None,
+    }
+    metrics.update(_event_portfolio_metrics(closed))
+    return metrics
+
+
+def _index_regime_by_day(index_reader: Any, start: date, end: date) -> dict[date, str] | None:
+    """Map each generation-pinned index day to bull/bear via close vs MA60."""
+    lookup_start = start - timedelta(days=REGIME_MA_WINDOW * 3)
+    rows: list[Mapping[str, Any]]
+    read_index_daily = getattr(index_reader, "read_index_daily", None)
+    if callable(read_index_daily):
+        try:
+            panel = read_index_daily(
+                {
+                    "codes": [REGIME_INDEX_CODE],
+                    "start": lookup_start,
+                    "end": end,
+                }
+            )
+            leg = next(
+                (
+                    item
+                    for item in getattr(panel, "legs", ())
+                    if item.code == REGIME_INDEX_CODE and item.status == "ok"
+                ),
+                None,
+            )
+            if leg is None:
+                return None
+            rows = [{"date": bar.date, "close": bar.close} for bar in getattr(leg, "bars", ())]
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return None
+    else:
+        daily_bars = getattr(index_reader, "daily_bars", None)
+        if not callable(daily_bars):
+            return None
+        try:
+            frame = daily_bars(REGIME_INDEX_CODE, lookup_start, end)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        rows = frame.to_dicts() if hasattr(frame, "to_dicts") else list(frame or [])
+    closes: dict[date, float] = {}
+    for row in rows:
+        day = row.get("date")
+        close = row.get("close")
+        if hasattr(day, "date") and not isinstance(day, date):
+            day = day.date()
+        if isinstance(day, date) and close is not None:
+            try:
+                value = float(close)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                closes[day] = value
+    if len(closes) < REGIME_MA_WINDOW:
+        return None
+    ordered = sorted(closes.items())
+    regime: dict[date, str] = {}
+    window_sum = 0.0
+    window: deque[float] = deque()
+    for day, close in ordered:
+        window.append(close)
+        window_sum += close
+        if len(window) > REGIME_MA_WINDOW:
+            window_sum -= window.popleft()
+        if len(window) == REGIME_MA_WINDOW:
+            regime[day] = "bull" if close >= window_sum / REGIME_MA_WINDOW else "bear"
+    return regime or None
+
+
+def _regime_breakdown(
+    trades: Sequence[Mapping[str, Any]],
+    regime: dict[date, str],
+) -> dict[str, Any]:
+    buckets: dict[str, list[dict[str, Any]]] = {"bull": [], "bear": [], "unknown": []}
+    for trade in trades:
+        buckets[regime.get(trade["entry_exec_date"], "unknown")].append(trade)
+    return {
+        "basis": f"{REGIME_INDEX_CODE} close vs MA{REGIME_MA_WINDOW}",
+        "buckets": {name: _metrics(bucket) for name, bucket in buckets.items()},
     }
 
 
@@ -692,6 +849,7 @@ def evaluate_macd_arms(
     end: date,
     symbols: list[str] | None = None,
     oos_start: date | None = None,
+    index_reader: Any | None = None,
 ) -> dict[str, Any]:
     try:
         request = MacdArmsRequest(start=start, end=end, symbols=symbols, oos_start=oos_start)
@@ -716,11 +874,29 @@ def evaluate_macd_arms(
         )
     else:
         symbols = sorted({symbol.strip() for symbol in request.symbols})
+    batch_bars: dict[str, pl.DataFrame] | None = None
+    daily_closes = getattr(reader, "daily_closes", None)
+    if callable(daily_closes):
+        try:
+            panel = daily_closes(lookup_start, request.end)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            panel = pl.DataFrame()
+        if not panel.is_empty() and {"symbol", "date", "close"} <= set(panel.columns):
+            wanted = panel.filter(pl.col("symbol").is_in(symbols))
+            batch_bars = {
+                str(key[0] if isinstance(key, tuple) else key): frame
+                for key, frame in wanted.partition_by("symbol", as_dict=True).items()
+            }
     all_trades: dict[str, dict[str, list[dict[str, Any]]]] = {arm.name: {} for arm in MACD_ARMS}
     all_filtered: dict[str, list[tuple[date, str]]] = {arm.name: [] for arm in MACD_ARMS}
     censored: list[dict[str, Any]] = []
     for symbol in symbols:
-        bars, censor = _arm_bars(reader.daily_bars(symbol, lookup_start, request.end), symbol)
+        frame = (
+            batch_bars.get(symbol, pl.DataFrame())
+            if batch_bars is not None
+            else reader.daily_bars(symbol, lookup_start, request.end)
+        )
+        bars, censor = _arm_bars(frame, symbol)
         if censor:
             censored.append(censor)
             continue
@@ -735,6 +911,11 @@ def evaluate_macd_arms(
                 trade["symbol"] = symbol
             all_trades[arm.name][symbol] = simulated["trades"]
             all_filtered[arm.name].extend(simulated["filtered"])
+    regime_by_day = (
+        _index_regime_by_day(index_reader, lookup_start, request.end)
+        if index_reader is not None
+        else None
+    )
 
     def segment_trades(name: str, segment: str) -> list[dict[str, Any]]:
         return [
@@ -794,6 +975,14 @@ def evaluate_macd_arms(
             "filtered_events": filtered_counts,
             "comparisons": comparisons,
             "verdict": verdict,
+            "regime_breakdown_oos": (
+                _regime_breakdown(segment_trades(arm.name, "oos"), regime_by_day)
+                if regime_by_day is not None
+                else {
+                    "status": "unavailable",
+                    "reason": "index_reader_missing_or_insufficient",
+                }
+            ),
         }
     increments = [
         {
@@ -806,11 +995,20 @@ def evaluate_macd_arms(
         }
         for source, target, label in MACD_INCREMENT_STEPS
     ]
+
+    def segment_coverage(days: list[date]) -> dict[str, Any]:
+        return {
+            "symbols": len(symbols),
+            "censored_symbols": len(censored),
+            "first_market_date": days[0] if days else None,
+            "last_market_date": days[-1] if days else None,
+        }
+
+    is_days = [day for day in calendar if request.start <= day < request.oos_start]
+    oos_days = [day for day in calendar if request.oos_start <= day <= request.end]
     coverage = {
-        "symbols": len(symbols),
-        "censored_symbols": len(censored),
-        "first_market_date": calendar[0] if calendar else None,
-        "last_market_date": calendar[-1] if calendar else None,
+        "is": segment_coverage(is_days),
+        "oos": segment_coverage(oos_days),
     }
     return {
         "schema": ARMS_SCHEMA,
@@ -836,8 +1034,8 @@ def evaluate_macd_arms(
             },
         },
         "segments": {
-            "is": {"coverage": coverage, "arms": segment_stats["is"]},
-            "oos": {"coverage": coverage, "arms": segment_stats["oos"]},
+            "is": {"coverage": coverage["is"], "arms": segment_stats["is"]},
+            "oos": {"coverage": coverage["oos"], "arms": segment_stats["oos"]},
         },
         "arms": arms_payload,
         "increments": increments,

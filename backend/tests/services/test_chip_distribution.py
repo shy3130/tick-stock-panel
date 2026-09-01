@@ -31,9 +31,13 @@ def bars(prices):
     )
 
 
-def turnover(n, shares=1000.0):
+def turnover(n, reported_pct=1.0):
     return tuple(
-        TurnoverDay(available_at=date(2025, 1, 1) + timedelta(days=i), float_shares=shares)
+        TurnoverDay(
+            available_at=date(2025, 1, 1) + timedelta(days=i),
+            reported_turnover_pct=reported_pct,
+            source_day=date(2025, 1, 1) + timedelta(days=i),
+        )
         for i in range(n)
     )
 
@@ -57,7 +61,7 @@ def test_zero_exchange_freezes_density_and_missing_fails_closed():
 
 def test_uniform_band_and_beta_arms_are_distinguishable():
     bs = bars([10, 20])
-    ts = turnover(2, 100.0)
+    ts = turnover(2, 10.0)
     main = build_chip_distribution(bs, ts, BetaArm.TURNOVER)
     fast = build_chip_distribution(bs, ts, BetaArm.TURNOVER_DOUBLE)
     assert not np.array_equal(main[-1].density, fast[-1].density)
@@ -66,9 +70,18 @@ def test_uniform_band_and_beta_arms_are_distinguishable():
     assert fast[-1].turnover == pytest.approx(0.20)
 
 
-def test_turnover_percent_and_decimal_inputs_are_unified():
+def test_reported_hslv_is_always_interpreted_as_percentage_points():
     bs = bars([10, 20])
-    decimal = build_chip_distribution(bs, turnover(2, 100.0), BetaArm.TURNOVER)
+    sub_one_percent = build_chip_distribution(bs, turnover(2, 0.47), BetaArm.TURNOVER)
+    assert sub_one_percent[-1].turnover == pytest.approx(0.0047)
+
+    ordinary = build_chip_distribution(bs, turnover(2, 3.2), BetaArm.TURNOVER)
+    assert ordinary[-1].turnover == pytest.approx(0.032)
+
+
+def test_untyped_turnover_percent_and_decimal_inputs_remain_supported():
+    bs = bars([10, 20])
+    decimal = build_chip_distribution(bs, (0.10, 0.10), BetaArm.TURNOVER)
     percent = build_chip_distribution(bs, (10.0, 10.0), BetaArm.TURNOVER)
     assert np.array_equal(decimal[-1].density, percent[-1].density)
     assert percent[-1].turnover == pytest.approx(0.10)
@@ -79,15 +92,31 @@ def test_turnover_percent_and_decimal_inputs_are_unified():
         build_chip_distribution(bs, (150.0, 150.0), BetaArm.TURNOVER)
 
 
-def test_pit_turnover_above_one_remains_a_decimal_fraction():
+def test_reported_turnover_beta_scaling_uses_decimal_fraction():
     bs = bars([10])
     snapshots = build_chip_distribution(
         bs,
-        turnover(1, shares=8.0),
+        turnover(1, reported_pct=3.2),
         BetaArm.TURNOVER_HALF,
     )
 
-    assert snapshots[0].turnover == pytest.approx(0.625)
+    assert snapshots[0].turnover == pytest.approx(0.016)
+
+
+def test_lagged_float_shares_fallback_uses_canonical_bar_volume():
+    bs = bars([10])
+    snapshots = build_chip_distribution(
+        bs,
+        (
+            TurnoverDay(
+                available_at=date(2024, 12, 31),
+                float_shares=100.0,
+                source_day=date(2024, 12, 31),
+                availability_basis="previous_daily_market_close",
+            ),
+        ),
+    )
+    assert snapshots[0].turnover == pytest.approx(0.10)
 
 
 def test_future_price_extremes_do_not_change_prior_snapshots():

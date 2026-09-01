@@ -92,14 +92,15 @@ class Turnover:
         self.stale = set(stale)
 
     def identity(self):
-        return {"source": "pit_float_shares_notice_date"}
+        return {"source": "published_daily_markets_hslv_or_lagged_ltgb"}
 
     def turnover(self, symbol, day):
         if day in self.missing:
             return None
         return TurnoverDay(
             available_at=day + timedelta(days=1) if day in self.stale else day,
-            float_shares=100_000_000.0,
+            reported_turnover_pct=1.0,
+            source_day=day,
         )
 
 
@@ -181,7 +182,8 @@ def test_complete_injected_reader_orchestrates_ok():
     assert response.arms_evaluated == BETA_ARMS
     assert (
         response.provenance is not None
-        and response.provenance.identities.turnover.source == "pit_float_shares_notice_date"
+        and response.provenance.identities.turnover.source
+        == "published_daily_markets_hslv_or_lagged_ltgb"
     )
     assert all(a.status == "ok" for a in response.symbol_audit)
     assert any(f.diagnostics["parent_events"] > 0 for f in response.factors)
@@ -329,16 +331,51 @@ def test_production_turnover_normalizes_available_at_to_date():
         def manifest_sha256(self):
             return "a" * 64
 
-        def turnover_fact(self, _symbol, day):
+        def daily_turnover_fact(self, _symbol, day):
             return SimpleNamespace(
                 available_at=datetime.combine(day, datetime.min.time()),
-                float_shares=100_000_000.0,
+                reported_turnover_pct=0.47,
+                source_day=day,
+                availability_basis="daily_market_close",
             )
 
     adapter = PinnedChipTurnover(FactReader())
     turnover = adapter.turnover("000001.SZ", date(2025, 1, 2))
     assert turnover.available_at == date(2025, 1, 2)
-    assert adapter.identity()["source"] == "pit_float_shares_notice_date"
+    assert turnover.reported_turnover_pct == 0.47
+    assert turnover.source_day == date(2025, 1, 2)
+    assert adapter.identity()["source"] == "published_daily_markets_hslv_or_lagged_ltgb"
+
+
+def test_production_turnover_falls_back_to_prior_close_float_shares():
+    from app.services.chip_peak_patterns.production import PinnedChipTurnover
+
+    day = date(2025, 1, 2)
+    source_day = date(2024, 12, 31)
+
+    class FactReader:
+        def generation(self):
+            return "markets-g1"
+
+        def manifest_sha256(self):
+            return "a" * 64
+
+        def daily_turnover_fact(self, _symbol, _day):
+            return None
+
+        def intraday_float_shares_fact(self, _symbol, _day):
+            return SimpleNamespace(
+                available_at=datetime.combine(source_day, datetime.min.time()),
+                float_shares=100_000_000.0,
+                source_day=source_day,
+                availability_basis="previous_daily_market_close",
+            )
+
+    turnover = PinnedChipTurnover(FactReader()).turnover("000001.SZ", day)
+    assert turnover.reported_turnover_pct is None
+    assert turnover.float_shares == 100_000_000.0
+    assert turnover.source_day == source_day
+    assert turnover.availability_basis == "previous_daily_market_close"
 
 
 def test_horizon_returns_use_adjusted_prices_across_corporate_action():

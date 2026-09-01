@@ -1,6 +1,20 @@
 from datetime import date, timedelta
 
-from app.services.daily_event_research.dugu_trend import DuguTrendConfig, DuguTrendDetector
+import pytest
+
+from app.services.daily_event_research.dugu_trend import (
+    DUGU_ALIGNMENT_DAY_CHOICES,
+    DUGU_ALIGNMENT_DAYS_DEFAULT,
+    DUGU_BAND_MODES,
+    DUGU_REQUIRE_M3_CHOICES,
+    DUGU_VARIANTS,
+    DuguTrendConfig,
+    DuguTrendDetector,
+    DUGU_SCAN_AXES,
+    dugu_scan_cell_id,
+    iter_dugu_scan_grid,
+    resolve_dugu_config,
+)
 from app.services.hold_firm_patterns.models import Bar
 from app.services.daily_event_research.models import CensorReason
 
@@ -90,3 +104,39 @@ def test_missing_calendar_day_is_not_filled():
     missing = bars[:219] + bars[220:]
     detections = run(missing)
     assert all(item.signal_date != bars[220].date for item in detections)
+def test_alignment_scan_grid_is_frozen_and_complete():
+    assert DUGU_ALIGNMENT_DAY_CHOICES == (10, 30, 50, 100)
+    assert DUGU_ALIGNMENT_DAYS_DEFAULT == 30
+    assert DUGU_SCAN_AXES["variant"] == tuple(DUGU_VARIANTS)
+    assert DUGU_SCAN_AXES["band_mode"] == DUGU_BAND_MODES
+    assert DUGU_SCAN_AXES["require_m3"] == DUGU_REQUIRE_M3_CHOICES
+
+    grid = iter_dugu_scan_grid()
+    expected_count = (
+        len(DUGU_ALIGNMENT_DAY_CHOICES)
+        * len(DUGU_VARIANTS)
+        * len(DUGU_BAND_MODES)
+        * len(DUGU_REQUIRE_M3_CHOICES)
+    )
+    assert len(grid) == expected_count
+    cells = {dugu_scan_cell_id(config) for config in grid}
+    assert len(cells) == expected_count
+    combinations = {
+        (config.alignment_days, config.variant, config.band_mode, config.require_m3)
+        for config in grid
+    }
+    assert len(combinations) == expected_count
+
+
+def test_alignment_days_are_grid_validated_and_disclosed():
+    with pytest.raises(ValueError, match="frozen scan"):
+        resolve_dugu_config(alignment_days=25)
+
+    detections = run(make_bars(), alignment_days=10)
+    evidenced = [item for item in detections if item.evidence is not None]
+    assert evidenced
+    for item in evidenced:
+        values = item.evidence.values
+        assert values["alignment_days"] == 10
+        assert values["alignment_hold_days"] >= 10
+        assert values["t1"] is (values["close"] > values["ma_fast"])

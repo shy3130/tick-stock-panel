@@ -1,4 +1,5 @@
 """Immutable adapters for auditable research over published canonical history."""
+
 from __future__ import annotations
 
 import hashlib
@@ -50,6 +51,10 @@ class PublishedCanonicalDailyReader:
         self._columns = tuple(columns)
         self._manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
         self._market_days = tuple(sorted(set(days)))
+        self._preloaded_panel: pl.DataFrame | None = None
+        self._preloaded_ranges: dict[str, tuple[int, int]] = {}
+        self._preloaded_start: date | None = None
+        self._preloaded_end: date | None = None
 
     @classmethod
     def from_repository(cls, repo: Any) -> PublishedCanonicalDailyReader | None:
@@ -84,6 +89,21 @@ class PublishedCanonicalDailyReader:
     def daily_bars(self, symbol: str, start: date, end: date) -> pl.DataFrame:
         if start > end:
             raise ValueError("start must be <= end")
+        normalized_symbol = symbol.strip().upper()
+        if (
+            self._preloaded_panel is not None
+            and set(self._columns).issubset(self._preloaded_panel.columns)
+            and self._preloaded_start is not None
+            and self._preloaded_end is not None
+            and self._preloaded_start <= start
+            and end <= self._preloaded_end
+        ):
+            location = self._preloaded_ranges.get(normalized_symbol)
+            if location is None:
+                return self._preloaded_panel.head(0)
+            offset, length = location
+            frame = self._preloaded_panel.slice(offset, length)
+            return frame.filter((pl.col("date") >= start) & (pl.col("date") <= end))
         sources = self._repo._external_partition_sources(
             self._generation_dir,
             start=start,
@@ -105,6 +125,77 @@ class PublishedCanonicalDailyReader:
             layout_cache_key=str(self._generation_dir),
         )
 
+    def daily_panel(
+        self,
+        start: date,
+        end: date,
+        *,
+        symbols: list[str] | None = None,
+        columns: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """Scan one pinned OHLCV panel once for offline full-market research."""
+        if start > end:
+            raise ValueError("start must be <= end")
+        selected_columns = list(self._columns) if columns is None else list(dict.fromkeys(columns))
+        missing = sorted(set(selected_columns) - set(self._columns))
+        if missing:
+            raise ValueError(f"canonical generation lacks requested columns: {missing}")
+        sources = self._repo._external_partition_sources(
+            self._generation_dir,
+            start=start,
+            end=end,
+        )
+        if sources == ():
+            return pl.DataFrame()
+        parquet_source: str | tuple[str, ...]
+        if sources is None:
+            parquet_source = str(self._generation_dir / "**" / "*.parquet")
+        else:
+            parquet_source = sources
+        normalized_symbols = (
+            sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+            if symbols is not None
+            else None
+        )
+        return self._repo._scan_unique_enriched(
+            parquet_source,
+            start=start,
+            end=end,
+            columns=selected_columns,
+            symbols=normalized_symbols,
+            layout_cache_key=str(self._generation_dir),
+        )
+
+    def preload_panel(
+        self,
+        start: date,
+        end: date,
+        *,
+        symbols: list[str],
+        columns: list[str] | None = None,
+    ) -> int:
+        """Materialize one column-pruned scan and zero-copy symbol ranges."""
+        selected_columns = set(self._columns if columns is None else columns)
+        missing_keys = sorted({"symbol", "date"} - selected_columns)
+        if missing_keys:
+            raise ValueError(f"preloaded canonical panel lacks key columns: {missing_keys}")
+        panel = self.daily_panel(start, end, symbols=symbols, columns=columns)
+        if not panel.is_empty() and "symbol" in panel.columns:
+            panel = panel.sort(["symbol", "date"])
+        ranges: dict[str, tuple[int, int]] = {}
+        offset = 0
+        if not panel.is_empty() and "symbol" in panel.columns:
+            for symbol, length in panel.group_by("symbol", maintain_order=True).len().iter_rows():
+                normalized = str(symbol).strip().upper()
+                count = int(length)
+                ranges[normalized] = (offset, count)
+                offset += count
+        self._preloaded_panel = panel
+        self._preloaded_ranges = ranges
+        self._preloaded_start = start
+        self._preloaded_end = end
+        return len(ranges)
+
     def daily_closes(self, start: date, end: date) -> pl.DataFrame:
         """Batch canonical close/volume panel over all symbols (exact-day research).
 
@@ -115,7 +206,9 @@ class PublishedCanonicalDailyReader:
         """
         if start > end:
             raise ValueError("start must be <= end")
-        wanted = [column for column in ("symbol", "date", "close", "volume") if column in self._columns]
+        wanted = [
+            column for column in ("symbol", "date", "close", "volume") if column in self._columns
+        ]
         if "symbol" not in wanted or "date" not in wanted or "close" not in wanted:
             raise ValueError("canonical generation lacks symbol/date/close columns")
         sources = self._repo._external_partition_sources(

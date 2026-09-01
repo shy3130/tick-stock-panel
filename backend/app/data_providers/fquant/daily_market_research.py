@@ -7,15 +7,19 @@ canonical history manifest (``source_generations["markets"]``) and, when the
 canonical manifest records a markets manifest hash, verifies the identity of
 the resolved generation against it (PIT source pin, fail closed).
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.data_providers.fquant.generation import current_path, root_for
 from app.data_providers.fquant.symbols import code_to_symbol, symbol_to_code
@@ -23,10 +27,10 @@ from app.storage.duckdb_runtime import connect_duckdb
 
 # Raw quote columns in daily_markets (direct columns or payload_json keys).
 _RAW_QUOTES = (
-    ("jrkpj", "Jrkpj"),   # raw open (今日开盘价)
-    ("zgj", "Zgj"),       # raw high (最高价)
-    ("zdj", "Zdj"),       # raw low (最低价)
-    ("price", "Price"),   # raw close (当日收盘价; 昨收为 zrspj/Zrspj)
+    ("jrkpj", "Jrkpj"),  # raw open (今日开盘价)
+    ("zgj", "Zgj"),  # raw high (最高价)
+    ("zdj", "Zdj"),  # raw low (最低价)
+    ("price", "Price"),  # raw close (当日收盘价; 昨收为 zrspj/Zrspj)
 )
 REGIME_PCT = {
     "main_10": 0.10,
@@ -35,6 +39,8 @@ REGIME_PCT = {
     "star_20": 0.20,
     "beijing_30": 0.30,
 }
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -63,17 +69,23 @@ class MarketFact:
 
 
 @dataclass(frozen=True)
-class TurnoverFact:
-    """Exact-day turnover inputs with independently proven availability.
+class DailyTurnoverFact:
+    """Exact-day reported turnover, semantically available after market close."""
 
-    ``available_at`` comes only from an ``ok`` exact-partition
-    ``migration_manifest.source_version``. Missing legacy manifest coverage is
-    represented by ``None`` and must be censored by point-in-time consumers.
-    """
+    reported_turnover_pct: float
+    available_at: datetime
+    source_day: date
+    availability_basis: str = "daily_market_close"
 
-    float_shares: float | None
-    reported_turnover_pct: float | None
-    available_at: datetime | None
+
+@dataclass(frozen=True)
+class IntradayFloatSharesFact:
+    """Lagged float shares known before the current trading session."""
+
+    float_shares: float
+    available_at: datetime
+    source_day: date
+    availability_basis: str = "previous_daily_market_close"
 
 
 @dataclass(frozen=True)
@@ -128,10 +140,8 @@ class PublishedDailyMarketFactsReader:
                     raise ValueError("published markets snapshot lacks daily_markets")
                 columns = self._conn.execute("PRAGMA table_info('daily_markets')").fetchall()
             names = {str(row[1]).lower() for row in columns}
-            self._has_migration_manifest = any(
-                str(row[0]) == "migration_manifest" for row in tables
-            )
-            self._has_turnover_fields = {"ltgb", "hslv"}.issubset(names)
+            self._has_float_shares = "ltgb" in names
+            self._has_reported_turnover = "hslv" in names
             self._column_names = names
             for required in ("code", "asset_type"):
                 if required not in names:
@@ -158,7 +168,7 @@ class PublishedDailyMarketFactsReader:
             raise
 
     @classmethod
-    def from_repository(cls, repo: Any) -> "PublishedDailyMarketFactsReader":
+    def from_repository(cls, repo: Any) -> PublishedDailyMarketFactsReader:
         path = current_path("markets")
         if not path:
             raise FileNotFoundError("no published markets snapshot")
@@ -187,7 +197,9 @@ class PublishedDailyMarketFactsReader:
         return cls(str(db), generation, manifest_bytes)
 
     @classmethod
-    def from_canonical_manifest(cls, canonical_manifest: Mapping[str, Any]) -> "PublishedDailyMarketFactsReader":
+    def from_canonical_manifest(
+        cls, canonical_manifest: Mapping[str, Any]
+    ) -> PublishedDailyMarketFactsReader:
         """Resolve the immutable markets generation recorded by canonical manifest.
 
         The pin is ``canonical_manifest["source_generations"]["markets"]``: a
@@ -239,7 +251,9 @@ class PublishedDailyMarketFactsReader:
         reader._pin_hash_expected = expected_hash if isinstance(expected_hash, str) else None
         reader._pin_hash_resolved = resolved_hash
         reader._pin_verified = expected_hash is not None and str(expected_hash) == resolved_hash
-        reader._pin_verification_mode = "manifest_sha256_match" if expected_hash is not None else "missing_expected_hash"
+        reader._pin_verification_mode = (
+            "manifest_sha256_match" if expected_hash is not None else "missing_expected_hash"
+        )
         return reader
 
     # ------------------------------------------------------------------
@@ -377,9 +391,7 @@ class PublishedDailyMarketFactsReader:
             }
         return result
 
-    def limit_band_facts(
-        self, symbol: str, start: date, end: date
-    ) -> dict[date, MarketFact]:
+    def limit_band_facts(self, symbol: str, start: date, end: date) -> dict[date, MarketFact]:
         """Raw quotes + published ztj + derived bands for one symbol.
 
         Bands need ``pre_close`` (zrspj, yesterday close) and a known regime;
@@ -395,9 +407,7 @@ class PublishedDailyMarketFactsReader:
         )
         rows = self._query(sql, [symbol_to_code(symbol), start, end])
         regime_by_day = {
-            day: self._regime(symbol, day)
-            for day, *_ in rows
-            if isinstance(day, date)
+            day: self._regime(symbol, day) for day, *_ in rows if isinstance(day, date)
         }
         result: dict[date, MarketFact] = {}
         for day, raw_open, raw_high, raw_low, raw_close, pre_close_raw, ztj, stock_name in rows:
@@ -409,8 +419,12 @@ class PublishedDailyMarketFactsReader:
             # bar or pre_close) would let consumers trade on guesses, so the
             # day is omitted entirely and ``get`` returns ``None``.
             if (
-                raw_open is None or raw_high is None or raw_low is None
-                or raw_close is None or pre_close_raw is None or ztj is None
+                raw_open is None
+                or raw_high is None
+                or raw_low is None
+                or raw_close is None
+                or pre_close_raw is None
+                or ztj is None
                 or base_regime is None
             ):
                 continue
@@ -422,20 +436,35 @@ class PublishedDailyMarketFactsReader:
             pre_close = float(pre_close_raw)
             upper = float(ztj)
             lower = round(pre_close * (1 - REGIME_PCT[regime]), 2)
-            signal_up = True if upper is not None and raw_high is not None and float(raw_high) >= upper - 0.005 else (False if upper is not None and raw_high is not None else None)
-            signal_down = True if lower is not None and raw_low is not None and float(raw_low) <= lower + 0.005 else (False if lower is not None and raw_low is not None else None)
+            signal_up = (
+                True
+                if upper is not None and raw_high is not None and float(raw_high) >= upper - 0.005
+                else (False if upper is not None and raw_high is not None else None)
+            )
+            signal_down = (
+                True
+                if lower is not None and raw_low is not None and float(raw_low) <= lower + 0.005
+                else (False if lower is not None and raw_low is not None else None)
+            )
             result[day] = MarketFact(
                 raw_open=float(raw_open) if raw_open is not None else None,
                 raw_high=float(raw_high) if raw_high is not None else None,
                 raw_low=float(raw_low) if raw_low is not None else None,
                 raw_close=float(raw_close) if raw_close is not None else None,
-                pre_close=pre_close, published_limit_up=upper, published_limit_down=lower,
-                regime=regime, is_st=is_st, name=text or None,
-                signal_limit_up=signal_up, signal_limit_down=signal_down,
+                pre_close=pre_close,
+                published_limit_up=upper,
+                published_limit_down=lower,
+                regime=regime,
+                is_st=is_st,
+                name=text or None,
+                signal_limit_up=signal_up,
+                signal_limit_down=signal_down,
             )
         return result
 
-    def limit_signals(self, symbol: str, start: date, end: date) -> dict[date, dict[str, bool | None]]:
+    def limit_signals(
+        self, symbol: str, start: date, end: date
+    ) -> dict[date, dict[str, bool | None]]:
         """Derived ``signal_limit_up``/``signal_limit_down`` per day."""
         facts = self.limit_band_facts(symbol, start, end)
         out: dict[date, dict[str, bool | None]] = {}
@@ -463,117 +492,99 @@ class PublishedDailyMarketFactsReader:
         return fact
 
     @staticmethod
-    def _available_at(value: object) -> datetime | None:
-        if not isinstance(value, str) or not value:
-            return None
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
+    def _market_close(day: date) -> datetime:
+        return datetime.combine(day, time(15, 0), tzinfo=_SHANGHAI)
 
-    def turnover_fact(self, symbol: str, day: date) -> TurnoverFact | None:
-        """Return exact-day float-share facts without a current-snapshot fallback.
+    def daily_turnover_fact(self, symbol: str, day: date) -> DailyTurnoverFact | None:
+        """Return exact-day ``hslv`` for close-confirmed, T+1 research.
 
-        The daily row may predate manifest coverage. In that case the numeric
-        values remain visible for diagnostics but ``available_at`` is ``None``;
-        intraday research must fail closed rather than infer point-in-time
-        availability from the row's date.
+        ``hslv`` is a percentage-point market fact: ``0.47`` means ``0.47%``.
+        The pinned daily row is therefore semantically available at that day's
+        close, independently of when the immutable snapshot was later built.
         """
-        code = symbol_to_code(symbol)
-        if not self._has_turnover_fields:
+        if not self._has_reported_turnover:
             return None
         rows = self._query(
-            f'SELECT TRY_CAST(ltgb AS DOUBLE), TRY_CAST(hslv AS DOUBLE) '
-            f'FROM daily_markets WHERE asset_type = 1 AND code = ? '
-            f'AND "{self._date_col}" = ? LIMIT 1',
-            [code, day],
+            f"SELECT TRY_CAST(hslv AS DOUBLE) FROM daily_markets "
+            f'WHERE asset_type = 1 AND code = ? AND "{self._date_col}" = ? LIMIT 1',
+            [symbol_to_code(symbol), day],
+        )
+        if not rows or rows[0][0] is None:
+            return None
+        value = float(rows[0][0])
+        if not math.isfinite(value) or value < 0.0 or value > 100.0:
+            return None
+        return DailyTurnoverFact(
+            reported_turnover_pct=value,
+            available_at=self._market_close(day),
+            source_day=day,
+        )
+
+    def intraday_float_shares_fact(self, symbol: str, day: date) -> IntradayFloatSharesFact | None:
+        """Return the latest strictly-prior daily ``ltgb`` observation.
+
+        Same-day ``daily_markets`` is a close-complete row and must never prove
+        intraday availability.  Lagging the denominator by one observed market
+        day makes every returned value available before the requested session.
+        """
+        if not self._has_float_shares:
+            return None
+        rows = self._query(
+            f'SELECT "{self._date_col}", TRY_CAST(ltgb AS DOUBLE) '
+            f"FROM daily_markets WHERE asset_type = 1 AND code = ? "
+            f'AND "{self._date_col}" < ? AND TRY_CAST(ltgb AS DOUBLE) > 0 '
+            f'ORDER BY "{self._date_col}" DESC LIMIT 1',
+            [symbol_to_code(symbol), day],
         )
         if not rows:
             return None
-        float_shares_raw, turnover_raw = rows[0]
-        available_at = None
-        if self._has_migration_manifest:
-            partition_key = (
-                "table=daily_markets:asset_type=1:"
-                f"code={code}:trade_date={day.isoformat()}"
-            )
-            manifest_rows = self._query(
-                "SELECT source_version FROM migration_manifest "
-                "WHERE source_table = 'daily_markets' "
-                "AND target_table = 'daily_markets' "
-                "AND partition_key = ? AND status = 'ok' "
-                "ORDER BY source_version DESC LIMIT 1",
-                [partition_key],
-            )
-            if manifest_rows:
-                available_at = self._available_at(manifest_rows[0][0])
-        return TurnoverFact(
-            float_shares=(
-                float(float_shares_raw)
-                if float_shares_raw is not None and float(float_shares_raw) > 0
-                else None
-            ),
-            reported_turnover_pct=(
-                float(turnover_raw) if turnover_raw is not None else None
-            ),
-            available_at=available_at,
+        source_day, raw_value = rows[0]
+        if not isinstance(source_day, date) or raw_value is None:
+            return None
+        value = float(raw_value)
+        if not math.isfinite(value) or value <= 0.0:
+            return None
+        return IntradayFloatSharesFact(
+            float_shares=value,
+            available_at=self._market_close(source_day),
+            source_day=source_day,
         )
 
     def escape_risk_facts(
         self, symbols: list[str] | tuple[str, ...], day: date
-    ) -> dict[str, tuple[MarketFact, TurnoverFact]]:
-        """Batch exact-day bands and turnover inputs for intraday research."""
+    ) -> dict[str, tuple[MarketFact, IntradayFloatSharesFact | None]]:
+        """Batch exact-day bands with strictly-prior float-share facts."""
         normalized = list(dict.fromkeys(symbol.upper() for symbol in symbols))
         if not normalized:
             return {}
         codes = [symbol_to_code(symbol) for symbol in normalized]
         placeholders = ",".join("?" for _ in codes)
         selects = ", ".join(self._quote_expr(lo, up) for lo, up in _RAW_QUOTES)
-        ltgb_expr = (
-            "TRY_CAST(ltgb AS DOUBLE)"
-            if self._has_turnover_fields
-            else "CAST(NULL AS DOUBLE)"
-        )
-        hslv_expr = (
-            "TRY_CAST(hslv AS DOUBLE)"
-            if self._has_turnover_fields
-            else "CAST(NULL AS DOUBLE)"
-        )
         rows = self._query(
             f"SELECT code, {selects}, {self._value_expr('zrspj')}, "
-            f"{self._ztj_expr()}, {self._name_expr()}, "
-            f"{ltgb_expr}, {hslv_expr} "
+            f"{self._ztj_expr()}, {self._name_expr()} "
             "FROM daily_markets WHERE asset_type = 1 "
             f'AND "{self._date_col}" = ? AND code IN ({placeholders})',
             [day, *codes],
         )
-        available_by_code: dict[str, datetime | None] = dict.fromkeys(codes)
-        if self._has_migration_manifest:
-            keys = {
-                code: (
-                    "table=daily_markets:asset_type=1:"
-                    f"code={code}:trade_date={day.isoformat()}"
-                )
-                for code in codes
-            }
-            manifest_placeholders = ",".join("?" for _ in keys)
-            manifest_rows = self._query(
-                "SELECT partition_key, MAX(source_version) "
-                "FROM migration_manifest WHERE source_table = 'daily_markets' "
-                "AND target_table = 'daily_markets' AND status = 'ok' "
-                f"AND partition_key IN ({manifest_placeholders}) GROUP BY partition_key",
-                list(keys.values()),
+        prior_by_code: dict[str, tuple[date, float]] = {}
+        if self._has_float_shares:
+            prior_rows = self._query(
+                f'SELECT code, "{self._date_col}", TRY_CAST(ltgb AS DOUBLE) '
+                "FROM daily_markets WHERE asset_type = 1 "
+                f'AND "{self._date_col}" < ? AND code IN ({placeholders}) '
+                "AND TRY_CAST(ltgb AS DOUBLE) > 0 "
+                f"QUALIFY ROW_NUMBER() OVER (PARTITION BY code "
+                f'ORDER BY "{self._date_col}" DESC) = 1',
+                [day, *codes],
             )
-            code_by_key = {value: key for key, value in keys.items()}
-            for partition_key, source_version in manifest_rows:
-                code = code_by_key.get(str(partition_key))
-                if code is not None:
-                    available_by_code[code] = self._available_at(source_version)
+            for code, source_day, raw_value in prior_rows:
+                if isinstance(source_day, date) and raw_value is not None:
+                    value = float(raw_value)
+                    if math.isfinite(value) and value > 0.0:
+                        prior_by_code[str(code)] = (source_day, value)
 
-        result: dict[str, tuple[MarketFact, TurnoverFact]] = {}
+        result: dict[str, tuple[MarketFact, IntradayFloatSharesFact | None]] = {}
         for (
             code,
             raw_open,
@@ -583,8 +594,6 @@ class PublishedDailyMarketFactsReader:
             pre_close_raw,
             ztj,
             stock_name,
-            float_shares_raw,
-            turnover_raw,
         ) in rows:
             symbol = code_to_symbol(str(code), 1)
             base_regime = self._regime(symbol, day)
@@ -620,16 +629,15 @@ class PublishedDailyMarketFactsReader:
                 signal_limit_up=float(raw_high) >= upper - 0.005,
                 signal_limit_down=float(raw_low) <= lower + 0.005,
             )
-            turnover = TurnoverFact(
-                float_shares=(
-                    float(float_shares_raw)
-                    if float_shares_raw is not None and float(float_shares_raw) > 0
-                    else None
-                ),
-                reported_turnover_pct=(
-                    float(turnover_raw) if turnover_raw is not None else None
-                ),
-                available_at=available_by_code.get(str(code)),
+            prior = prior_by_code.get(str(code))
+            turnover = (
+                IntradayFloatSharesFact(
+                    float_shares=prior[1],
+                    available_at=self._market_close(prior[0]),
+                    source_day=prior[0],
+                )
+                if prior is not None
+                else None
             )
             result[symbol] = (fact, turnover)
         return result

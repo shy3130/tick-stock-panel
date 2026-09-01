@@ -1083,13 +1083,16 @@ def evaluate_weekly_flagpole_factor(
     """Evaluate F0-F5 without falling back from the pinned composite reader."""
     from app.services.weekly_flagpole import evaluate, resolve_reader
 
-    reader = resolve_reader(getattr(request.app.state, "repo", None))
+    repo = getattr(request.app.state, "repo", None)
+    reader = resolve_reader(repo)
+    index_reader = getattr(repo, "index_daily_research_reader", None)
     try:
-        return evaluate(body, reader)
+        return evaluate(body, reader, index_reader)
     finally:
-        close = getattr(reader, "close", None)
-        if callable(close):
-            close()
+        for active_reader in (reader, index_reader):
+            close = getattr(active_reader, "close", None)
+            if callable(close):
+                close()
 
 
 @router.get("/escape-windows")

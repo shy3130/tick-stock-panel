@@ -79,6 +79,49 @@ def _stats(samples, calendar_index, benchmark, horizon, cost_bps):
     return result
 
 
+def _index_attribution(events, index_benchmark) -> dict:
+    if index_benchmark is None:
+        return {
+            "status": "unavailable",
+            "reason": "index_layer_not_sealed",
+            "horizons": {},
+        }
+    horizons = {}
+    for horizon in FORWARD_HORIZONS:
+        key = f"forward_{horizon}d_return"
+        per_event = []
+        for event in events:
+            raw = event.get("forward", {}).get(key)
+            if raw is None:
+                continue
+            index_return = index_benchmark.forward_return(event["confirm_date"], horizon)
+            if index_return is None:
+                continue
+            raw = float(raw)
+            per_event.append(
+                {
+                    "symbol": event["symbol"],
+                    "confirm_date": event["confirm_date"].isoformat(),
+                    "forward_return": raw,
+                    "index_return": index_return,
+                    "excess": raw - index_return,
+                }
+            )
+        values = [item["excess"] for item in per_event]
+        horizons[str(horizon)] = {
+            "n": len(per_event),
+            "events": len(events),
+            "mean": mean(values) if values else None,
+            "per_event": per_event,
+        }
+    return {
+        "status": "ok",
+        "code": index_benchmark.code,
+        "pin": index_benchmark.pin,
+        "horizons": horizons,
+    }
+
+
 def _bootstrap(values: dict[str, list[float]]) -> dict[str, object]:
     symbols = sorted(values)
     rounds = BOOTSTRAP_ROUNDS
@@ -404,6 +447,7 @@ def build_research_layer(
     cost_bps: float = COST_BPS,
     diagnostics: dict | None = None,
     source_provenance: dict | None = None,
+    index_benchmark=None,
 ) -> dict:
     index = {d: i for i, d in enumerate(calendar)}
     cells = {}
@@ -479,8 +523,9 @@ def build_research_layer(
             "trigger_rate_denominator": "pole_runs_total",
             "f3_caveat": "failure records without a complete 13-week window are conservatively counted as not re-established",
         },
-        "benchmark_layers": layer_status(),
-        "attribution_layers": attribution_layers(source_provenance or {}),
+        "benchmark_layers": layer_status(index_benchmark),
+        "attribution_layers": attribution_layers(source_provenance or {}, index_benchmark),
+        "market_index_attribution": _index_attribution(events, index_benchmark),
         "cells": cells,
         "factor_verdicts": _factor_verdicts(
             events,

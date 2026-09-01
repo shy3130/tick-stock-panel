@@ -5,6 +5,9 @@ import pytest
 from app.data_providers.fquant.daily_market_research import MarketFact
 from app.services.daily_event_research.models import Detection, DetectionEvidence
 from app.services.daily_event_research.pre_surge import (
+    ANNUALIZATION_TRADING_DAYS,
+    PreSurgeArmEventReturn,
+    PreSurgeArmRiskLedger,
     PreSurgeCensorReason,
     PreSurgeParams,
     PreSurgeStudyAggregator,
@@ -178,3 +181,73 @@ def test_detection_payload_is_json_safe():
     payload = detection_payload(detection(VARIANT_F4, True))
     assert payload["signal_date"] == START.isoformat()
     assert payload["evidence"]["qualified"] is True
+
+
+def _return_event(offset, *, exit_offset, net_return, reachable=True):
+    return PreSurgeArmEventReturn(
+        entry_date=START + timedelta(days=offset),
+        exit_date=START + timedelta(days=exit_offset),
+        net_return=net_return,
+        reachable=reachable,
+    )
+
+
+def test_risk_metrics_use_event_day_nav_and_explicit_annualization():
+    ledger = PreSurgeArmRiskLedger()
+    ledger.record(VARIANT_F1, _return_event(1, exit_offset=3, net_return=0.10))
+    ledger.record(VARIANT_F1, _return_event(2, exit_offset=4, net_return=-0.10))
+    ledger.record(VARIANT_F1, _return_event(2, exit_offset=4, net_return=-0.20))
+
+    result = ledger.metrics()[VARIANT_F1]
+    assert ANNUALIZATION_TRADING_DAYS == 252
+    assert result.events == 3
+    assert result.achievable_events == 3
+    assert result.turnover == pytest.approx(0.375)
+    assert result.max_drawdown == pytest.approx(0.15)
+    assert result.sharpe == pytest.approx(-2.244994432, rel=1e-8)
+    assert result.sortino == pytest.approx(-3.741657387, rel=1e-8)
+
+
+def test_unreachable_events_are_excluded_but_counted():
+    ledger = PreSurgeArmRiskLedger()
+    ledger.record(VARIANT_F1, _return_event(1, exit_offset=2, net_return=0.10))
+    ledger.record(
+        VARIANT_F1,
+        _return_event(2, exit_offset=3, net_return=None, reachable=False),
+    )
+    result = ledger.metrics()[VARIANT_F1]
+    assert result.events == 2
+    assert result.unreachable_events == 1
+    assert result.achievable_events == 1
+    assert result.achievable_mean_return == pytest.approx(0.10)
+    assert result.max_drawdown == pytest.approx(0.0)
+    assert result.sharpe is None
+    assert result.sortino is None
+
+
+def test_empty_and_all_unreachable_samples_have_none_risk_values():
+    assert PreSurgeArmRiskLedger().metrics() == {}
+    ledger = PreSurgeArmRiskLedger()
+    ledger.record(
+        VARIANT_F1,
+        _return_event(1, exit_offset=2, net_return=None, reachable=False),
+    )
+    result = ledger.metrics()[VARIANT_F1]
+    assert result.events == 1
+    assert result.unreachable_events == 1
+    assert result.achievable_events == 0
+    assert result.achievable_mean_return is None
+    assert result.max_drawdown is None
+    assert result.sharpe is None
+    assert result.sortino is None
+    assert result.turnover is None
+
+
+def test_flat_single_day_returns_have_zero_drawdown_and_undefined_ratios():
+    ledger = PreSurgeArmRiskLedger()
+    ledger.record(VARIANT_F1, _return_event(1, exit_offset=1, net_return=0.0))
+    ledger.record(VARIANT_F1, _return_event(2, exit_offset=2, net_return=0.0))
+    result = ledger.metrics()[VARIANT_F1]
+    assert result.max_drawdown == pytest.approx(0.0)
+    assert result.sharpe is None
+    assert result.sortino is None

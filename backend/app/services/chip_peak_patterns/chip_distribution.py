@@ -12,7 +12,7 @@ from .models import GEOMETRIC_BETA, MAX_GRID_CELLS, BetaArm, ChipBar, ChipModelP
 
 
 class MissingPitTurnoverError(ValueError):
-    """A bar lacks a PIT float-share/available-at observation."""
+    """A bar lacks reported turnover or a PIT-safe lagged float-share fallback."""
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,18 @@ def normalize_turnover(value: float | None) -> float:
         raise MissingPitTurnoverError("missing or invalid PIT turnover")
     t = float(value)
     return t / 100.0 if t > 1.0 else t
+
+
+def _reported_turnover_fraction(value: float | None) -> float:
+    """Convert fstore ``hslv`` percentage points to a decimal fraction."""
+    if (
+        value is None
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+        or float(value) > 100.0
+    ):
+        raise MissingPitTurnoverError("missing or invalid PIT reported turnover")
+    return float(value) / 100.0
 
 
 def _effective_exchange_fraction(turnover: float, arm: BetaArm | str) -> float:
@@ -149,11 +161,14 @@ def build_chip_distribution(
             max_cells=max_cells,
         )
         if isinstance(item, TurnoverDay):
-            if item.available_at is None or item.float_shares is None:
+            if item.available_at is None:
                 raise MissingPitTurnoverError(f"{bar.symbol} {bar.date}")
-            fraction = (
-                float(bar.volume) / float(item.float_shares) if item.float_shares > 0 else math.nan
-            )
+            if item.reported_turnover_pct is not None:
+                fraction = _reported_turnover_fraction(item.reported_turnover_pct)
+            elif item.float_shares is not None and item.float_shares > 0:
+                fraction = float(bar.volume) / float(item.float_shares)
+            else:
+                raise MissingPitTurnoverError(f"{bar.symbol} {bar.date}")
             e = _effective_exchange_fraction(fraction, arm)
         else:
             if item is None:

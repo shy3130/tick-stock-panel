@@ -30,9 +30,14 @@ DOJI_FACTOR_IDS = (
     "gravestone_high",
     "t_bar_low",
     "next_day_confirmation",
+    "tail_session_doji",
 )
 DojiFactorId = Literal[
-    "doji_position_interaction", "gravestone_high", "t_bar_low", "next_day_confirmation"
+    "doji_position_interaction",
+    "gravestone_high",
+    "t_bar_low",
+    "next_day_confirmation",
+    "tail_session_doji",
 ]
 HORIZON_DAYS = 10
 FORWARD_CHECKPOINT_DAYS = (1, 5, 10)
@@ -47,6 +52,13 @@ DOJI_PRIOR_MOVE_MIN_PCT = 0.10
 DOJI_VOLUME_REF_WINDOW = 20
 DOJI_VOLUME_SHRINK_MAX = 0.70
 DOJI_VOLUME_EXPAND_MIN = 1.50
+TAIL_OPEN_ANCHOR_MINUTE_INDEX = 209
+TAIL_WINDOW_MINUTE_INDICES = tuple(range(210, 240))
+TAIL_BARE_BODY_RATIO_MIN = 0.90
+TAIL_VOLUME_SHARE_SHRINK_MAX = 0.10
+TAIL_VOLUME_SHARE_EXPAND_MIN = 0.20
+TAIL_DIRECTION_FLAT_BAND = 0.001
+TAIL_SESSION_SHAPES = ("bare_yang", "bare_yin", "shrinking_doji")
 DOJI_OOS_START_DEFAULT = date(2025, 7, 1)
 SOURCE_EVIDENCE_PATHS = (
     DEFINITION_DOCUMENT,
@@ -229,9 +241,12 @@ class DojiResponse(_Strict):
     @model_validator(mode="after")
     def shape_valid(self) -> DojiResponse:
         if self.status is DojiStatus.OK and (
-            len(self.factors) != 4 or tuple(x.factor_id for x in self.factors) != DOJI_FACTOR_IDS
+            len(self.factors) != len(DOJI_FACTOR_IDS)
+            or tuple(item.factor_id for item in self.factors) != DOJI_FACTOR_IDS
+            or self.unavailable_reason is not None
+            or self.provenance is None
         ):
-            raise ValueError("ok response requires four ordered factors")
+            raise ValueError("ok response requires ordered factors and provenance")
         if self.status is DojiStatus.UNAVAILABLE and (
             self.factors or self.unavailable_reason is None or self.coverage
         ):
@@ -240,8 +255,11 @@ class DojiResponse(_Strict):
 
 
 def validate_doji_factor_coverage(factors: Sequence[DojiFactorResult]) -> None:
-    if len(factors) != 4 or tuple(item.factor_id for item in factors) != DOJI_FACTOR_IDS:
-        raise ValueError("factors must be exactly four ordered IDs")
+    if (
+        len(factors) != len(DOJI_FACTOR_IDS)
+        or tuple(item.factor_id for item in factors) != DOJI_FACTOR_IDS
+    ):
+        raise ValueError("factors must be exactly the ordered doji factor IDs")
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -7,6 +7,8 @@
 > 已收口：N 字金凤凰、15 分钟+5 分钟多周期状态、左一防守位；收口结论可以是保守驳回，但不存在未披露的必需验收缺口。
 > 保持 `[~]`：弱转强、量价序列、MACD、单阳不破、日线开盘价锚定、坚定持有四形态、独孤趋势、MERA、大涨前四特征、逃命信号、N 字回调分档、五类负面清单；各条目内已记录具体未满足项，不以部分 verdict 或扩大样本替代原验收线。
 > 本轮新增三项因子与“四大逃生窗口”复核均已落地可执行研究链，但全市场样本外裁决、PIT 换手来源或完整历史覆盖仍有缺口，故统一从 `[ ]` 转为 `[~]`，不提前标记收口。
+> 本轮统一新增 11 因子的 sealed 全市场审计入口；cohort 只冻结一次并记录 hash，adapter 必须校验 canonical/markets pin，`unavailable` 作为可审计结果原子落盘，禁止分批拼接 verdict。
+> 资源安全门禁：同一工作站只允许一个全市场研究进程，native 线程上限 2、默认 RSS 硬上限 3.0 GiB、250ms 采样、nice=10；超限只终止自身且不留下半成品。单阳不破两次受控终止（峰值 3.02/3.37 GiB），MACD 修正覆盖元数据后的 v2 复算也在 3.12 GiB 安全终止；均停止本机会话重试，不以放宽门禁换取结果。
 
 ## 短线候选池形态因子
 
@@ -220,7 +222,7 @@
 
 - [~] **验证并评估 `MACD(10,20,7) + 零轴回踩 + MA5/MA20` 多阶段趋势因子**
 
-  > 实施与复核状态（2026-08-31）：现有入口已追加固定 `(12,26,9)` / `(10,20,7)` 双基线，以及交叉→零轴突破→零轴回踩→MA5/MA20 风控五臂的逐阶段 OOS 裁决；统一使用 canonical 复权 `close`、次交易日收盘执行、往返成本、已平仓标的门禁与 symbol-cluster bootstrap，原六状态序列保持兼容。真实 `600519.SH` 2024-01-01..2026-08-28 接口烟测返回 `status=ok`，五臂在单标的样本均按门禁 `unavailable`。尚未完成全市场 walk-forward、行情/行业失败分层，以及最大回撤、Sharpe/Sortino、换手率等完整验收指标，故保持 `[~]`。
+  > 实施与复核状态（2026-08-31）：现有入口已追加固定 `(12,26,9)` / `(10,20,7)` 双基线，以及交叉→零轴突破→零轴回踩→MA5/MA20 风控五臂的逐阶段 OOS 裁决；统一使用 canonical 复权 `close`、次交易日收盘执行、往返成本、仅统计已平仓交易与 symbol-cluster bootstrap。sealed 全市场 v2 复算覆盖 5,901 标的（cohort hash=`28ebb2cddb4db880b19763ba6b67f52173112014db2808053353aacac3d0bbe8`，OOS 起点 2025-07-01），已在单实例锁、2 线程与 8 GiB RSS 门禁下完成并原子写入 `/tmp/macd-arms-full-market-v2.json`：IS coverage=`2024-01-02..2025-06-30`、OOS coverage=`2025-07-01..2026-08-28`，不再混入暖机期；`tuned_breakout=accepted`，其余四臂分别因 Wilson 下界或增量置信区间门禁 `rejected`，五臂均输出事件批次最大回撤、Sharpe/Sortino、换手率以及上证指数牛/熊分层。原验收仍缺 sealed PIT 历史行业映射，保持 `[~]`。
 
   **定位**
 
@@ -272,7 +274,7 @@
 
 - [~] **独立复现“单阳不破（首板涨停后缩量回调）”形态因子**
 
-  > 实施与复核状态（2026-08-31）：现有入口已追加 1/2/3/5/10/20/60 日长周期、全部 exact first-board 基线、T+1 次日 canonical 复权开盘执行、成本后增量与 symbol-cluster bootstrap；涨停制度来自同一 canonical manifest pin 的 markets `published_limit_up`，缺 PIT 事实即 fail-closed，不再按代码前缀近似。真实 `600519.SH` 2024-01-01..2026-08-28 得到 25 个形态事件、0 个首板基线事件，主 horizon 因样本不足保持 `unavailable`。尚需全市场冻结 OOS 裁决与完整失败分层，故保持 `[~]`。
+  > 实施与复核状态（2026-08-31）：现有入口已追加 1/2/3/5/10/20/60 日长周期、全部 exact first-board 基线、T+1 次日 canonical 复权开盘执行、成本后增量与 symbol-cluster bootstrap；涨停制度来自同一 canonical manifest pin 的 markets `published_limit_up`，缺失或逐行无效均 fail-closed，不再按代码前缀近似。真实 `600519.SH` 有界复算得到 25 个形态事件、0 个首板基线事件，主 horizon 因样本不足保持 `unavailable`。全市场进程已有跨进程单例锁、原生线程≤2、`nice(10)` 与原子输出；工作站物理内存 36 GiB 后默认 RSS 门禁从 3 GiB 调整为 8 GiB。2015-01-01..2026-08-28 的 5,901 标的单实例复算已证明不再触发内存门禁（观测 RSS 约 4.3 GiB），但连续运行超过 5 小时仍未完成，已受控取消且没有半成品输出；当前阻塞已从内存改为 5,000 轮 symbol-cluster bootstrap 等统计热路径的计算效率，必须在保持冻结随机种子与统计契约下优化后再复算，故本条保持 `[~]`。
 
   **定位**
 
@@ -479,7 +481,7 @@
 
 - [~] **评估“独孤板总趋势选股公式”因子组（多头排列状态/回调接近/再启动事件）**
 
-  > 复核状态（2026-08-29）：`docs/ISSUE-45/oos-verdict.json` 的 200 标的 coverage-extension audit 证明 24/72/200 与 20/70/200 两个默认变体均 `rejected`；但尚未完成冻结的 N/Y、band、M3 开关参数-结果全量披露和 T3 相对 T1/T2 的独立归因。扩大样本不作为 pristine OOS 晋级证据，整条验收未满足，故保持 `[~]`。
+  > 复核状态（2026-08-31）：`docs/ISSUE-45/oos-verdict.json` 的 200 标的 coverage-extension audit 证明 24/72/200 与 20/70/200 两个默认变体均 `rejected`。本轮已冻结并实现 N=`{10,30,50,100}` × 两个均线变体 × 固定百分比/ATR band × M3 开关的全部 32 格，稳定披露 cell id、参数与 T1/T2/T3 独立归因，不再只运行两个默认格。但既有 200 标的是结果后扩大样本，新的完整网格全市场复算受 3 GiB 工作站资源门禁约束；未取得 pristine OOS verdict 前保持 `[~]`。
 
   **定位**
 
@@ -575,7 +577,7 @@
 
 - [~] **评估“大涨前四特征”因子组（涨停资格/有效缺口/相对连阳/持续堆量）**
 
-  > 复核状态（2026-08-29）：`docs/ISSUE-47/oos-verdict.json` 的 200 标的 coverage-extension audit 中，条件概率研究 F1/F2/F3 与交集 `accepted`、F4 `rejected`；但尚未交付验收口径中的成交可达收益、最大回撤，且 universe 明示 `retrospective=true`。扩大样本不是 pristine OOS，不足以升级整条 TODO，保持 `[~]` 且 `promoted=false`。
+  > 复核状态（2026-08-31）：`docs/ISSUE-47/oos-verdict.json` 的 200 标的 coverage-extension audit 中，条件概率研究 F1/F2/F3 与交集 `accepted`、F4 `rejected`。本轮已补齐每臂事件日等权 NAV 最大回撤、Sharpe/Sortino、换手率、可达收益与不可达计数，消除“只报条件概率”的工程缺口；但 universe 仍明示 `retrospective=true`，扩大样本也不是 pristine OOS，故保持 `[~]` 且 `promoted=false`。
 
   **定位**
 
@@ -623,7 +625,7 @@
 
 - [~] **评估“10个盘中逃命信号”风险信号组（S1-S10 卖出侧事件因子）**
 
-  > 实施与复核状态（2026-08-31）：S1-S10 检测及 catalog-pinned minutes/trans composite reader保持不变；production 请求现强制显式 `oos_start`，并新增同一信号事件配对的立即退出、无信号持有、MA20、ATR 吊灯三基线，按 T+1/同日执行、退出成本、卖飞率、规避回撤和 symbol-cluster paired bootstrap 相对最强基线独立裁决。真实 `600519.SH` 2025-07-01..08-29 接口烟测中 intraday reader=`available`，S8/S7 因单标的样本不足显式 `unavailable`，S10 继续单独 `censor_pit_fact_missing`，没有降级当前快照。仍缺全市场 coverage 与 S1-S10 各自达到门禁后的最终 verdict，故保持 `[~]`、不得 promoted。
+  > 实施与复核状态（2026-08-31）：S1-S10 检测及 catalog-pinned minutes/trans composite reader保持不变；production 请求强制显式 `oos_start`，并以立即退出、无信号持有、MA20、ATR 吊灯三基线做配对裁决。本轮把 fstore-markets 已有事实按可执行时点拆开：S10 的 day D 分母只取同一 pinned markets generation 中严格早于 D 的最近 `daily_markets.ltgb`，可见时点固定为来源日收盘，不读取 D 的完整日换手。真实 `600519.SH` 2025-07-01..08-29 接口烟测中 intraday reader=`available`，S10 不再出现 `censor_pit_fact_missing`，形成 5 个事件并因独立 OOS 样本不足保持 `unavailable_insufficient_oos_samples`。仍缺全市场 coverage 与 S1-S10 各自达到门禁后的最终 verdict，故保持 `[~]`、不得 promoted。
 
   **定位**
 
@@ -648,7 +650,7 @@
   - **核心指标=信号后 N 日收益分布（含继续上涨=卖飞成本）**，不是只有下跌案例。
   - T+1 约束：当日买入者无法当日执行盘中信号；回测仅计持仓者情景。
   - “有效跌破”必须量化（时间或幅度+不收回），分时噪声大。
-  - 分钟级信号已接入 engine catalog-routed minutes/trans，并在 provider research reader 内固定 route/manifest、批量读取、校验 240 桶与全日成交量；任一 symbol/day 失败显式 censor。S10 另以 exact-date `daily_markets.ltgb` 的 manifest `source_version` 做分钟级 PIT 门禁，早期历史无法证明时只删失 S10，不使用日线 high/low 或当前股本近似。
+  - 分钟级信号已接入 engine catalog-routed minutes/trans，并在 provider research reader 内固定 route/manifest、批量读取、校验 240 桶与全日成交量；任一 symbol/day 失败显式 censor。S10 不使用当日收盘后的 `hslv`，而以同一 pinned generation 中上一可用交易日 `daily_markets.ltgb` 作为盘前已知分母，evidence 固化 `source_day`、`available_at=source_day 15:00 Asia/Shanghai` 与 `availability_basis=previous_daily_market_close`；无前序正股本仍只删失 S10。
 
   **强制实施顺序：先回测，再适度调整**
 
@@ -727,7 +729,7 @@
 
 - [~] **评估“五类坚决不碰”负面清单排除器（V1-V5 风险过滤因子组）**
 
-  > 复核状态（2026-08-29）：`docs/ISSUE-50/oos-verdict.json` 固化 200 标的、7,827 observations 的扩大 OOS；V2/V4 与可用类组合均 `rejected`，V5 仅 4 个 active days 而 `unavailable_insufficient_samples`；V1 定义未核实、V3 无 PIT 公告源，故整项继续按能力阻塞标 `[~]`。
+  > 复核状态（2026-08-31）：`docs/ISSUE-50/oos-verdict.json` 固化 200 标的、7,827 observations 的扩大 OOS；V2/V4 与可用类组合均 `rejected`，V5 仅 4 个 active days 而 `unavailable_insufficient_samples`。本轮实测 fstore-extended 仅有财报、业绩预告/快报、分红及机构调研的专项 `notice_date`/内容，没有立案告知书或通用交易所公告实体；把“未命中专项表”当成“无立案公告”会产生错误阴性，故 V3 继续 `unavailable_no_pit_announcement_source`。V1 定义仍未核实，整项保持 `[~]`。
 
   **定位**
 
@@ -758,7 +760,7 @@
   **回测与数据约束**
 
   - 排除器评估=组合级对照，非事件研究；每类单独可开关。
-  - V3 依赖公告数据（立案告知书）point-in-time 时间戳；公告滞后必须建模，不得用公告前数据“预知”立案。
+  - V3 依赖“立案告知书”公告本身的 point-in-time 时间戳；现有财报、业绩预告、分红、机构调研表不能作为代理，更不能把未命中解释为无公告。公告滞后必须建模，不得用公告前数据“预知”立案。
   - V5 三条件缺一不可（作者原意），同时做单条件消融看作者组合是否真有增量。
 
   **验收标准**
@@ -776,9 +778,9 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已冻结 D0-D4、位置/影线/量能/次日确认口径，并实现 sealed canonical + markets + presence、T+1、不可达与重叠 censor、D1 交互 bootstrap、D4 确认对照及确认价格劣化披露；入口为 `POST /api/research/factors/doji-patterns/evaluate`。
-  - 真实 `600519.SH`（2024-01-02 至 2026-08-28，OOS 起点 2025-07-01）返回 `status=ok`：644 个父事件日，D1 34 个合格事件；D1-D4 在该单标的有界样本均保持 `unavailable`，没有把低功效样本伪装成结论。
-  - 尚缺全市场独立 OOS 裁决、D2/D3 文献基线及 D5 尾盘扩展，因此保持 `[~]`。
+  - 已冻结 D0-D4、位置/影线/量能/次日确认口径，并实现 sealed canonical + markets + presence、T+1、不可达与重叠 censor、D1 交互 bootstrap、D4 确认对照及确认价格劣化披露；D5 尾盘 30 分钟光头阳/光头阴/缩量十字星三分型及次日方向分布也已落地，入口为 `POST /api/research/factors/doji-patterns/evaluate`。
+  - 真实 `600519.SH`（2024-01-02 至 2026-08-28，OOS 起点 2025-07-01）返回 `status=ok`：644 个父事件日，D1 34 个合格事件；D1-D4 在该单标的有界样本均保持 `unavailable`。另有非 mock 的真实 evaluator OK 路径覆盖零父事件 D5，不再存在漏导入/漏结果字段。
+  - 尚缺全市场独立 OOS 裁决及 D2/D3 冻结文献基线；全市场读取当前会触发 3 GiB 工作站安全门禁，不能放宽资源上限换取结论，因此保持 `[~]`。
 
   **定位**
 
@@ -832,9 +834,9 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已实现本地换手衰减 C0、确定性价格网格与峰检测、β 敏感性、质量守恒，以及 C1-C5 独立事件/对照/verdict；运行时只读 pinned canonical/markets/presence/PIT turnover，信号统一 T+1，入口为 `POST /api/research/factors/chip-peak-patterns/evaluate`。
-  - 真实 `600519.SH` 有界复核 fail-closed 为 `unavailable_pit_turnover_provenance`，审计定位到预热窗口 `2022-12-21` 的 PIT `available_at` 无法证明；没有用当前换手率或不透明 `tdx_chip` 代替。
-  - 尚需补齐可证明的历史 PIT 换手来源并跑全市场 OOS；C5 组合级第二阶段仍明确为 `phase2_pending`，因此保持 `[~]`。
+  - 已实现本地换手衰减 C0、确定性价格网格与峰检测、β 敏感性、质量守恒，以及 C1-C5 独立事件/对照/verdict；运行时只读 pinned canonical/markets/presence。C0 优先直接读取 exact-day `daily_markets.hslv`（百分比点始终除以 100，`0.47` 即 `0.47%`），按当日收盘可见、T+1 执行；当日 `hslv` 缺失或无效（包括整条 markets 行缺失）时，以同一 pinned generation 的上一交易日 `ltgb` 配合 canonical 当日成交量作 PIT-safe fallback，不读当前 `base_infos`。
+  - 真实 `600519.SH`、2023-06-01..2026-08-28 有界接口复核返回 `status=ok`：换手来源=`published_daily_markets_hslv_or_lagged_ltgb`，1,038 个输入日、symbol audit=`ok`，原 `unavailable_pit_turnover_provenance` 阻塞已解除。
+  - 尚需跑全市场 OOS；C5 组合级第二阶段仍明确为 `phase2_pending`，因此保持 `[~]`。
 
   **定位**
 
@@ -902,8 +904,8 @@
   **实施与复核状态（2026-08-31）**
 
   - 已实现确定性日转周、仅使用已确认摆动点的 streaming zigzag、F1 旗杆/旗面总体臂、F2 三种介入口径、F3 失败后 13 周重立、F4 同参数严格含涨停 vs 宽松消融，以及 sealed 全 A 等权基准；形态/涨停使用 raw OHLC，21/63/126 日收益与基准强制使用 canonical 复权 `close`，入口为 `POST /api/research/factors/weekly-flagpole/evaluate`。
-  - 真实 `600519.SH` 2022-01-01..2026-08-28 接口烟测返回 `status=ok`：295 个完整周、6 个事件；F1、F2 三臂、F3、F4 三臂均因单标的样本不足按门禁 `unavailable`，未把稀疏事件伪装成结论。
-  - F5 行业动量与市场指数归因仍按缺少 sealed PIT 映射/序列分别显式 `unavailable`，且尚未完成全市场 walk-forward 裁决，因此保持 `[~]`。
+  - F5 市场腿现读取与研究 pin 对齐的 `000300` sealed 指数日线并输出市场状态归因；历史 sealed PIT 行业映射仍不存在，行业腿继续 fail-closed 为 `unavailable`，不允许用当前行业回填。
+  - 真实 `600519.SH` 2022-01-01..2026-08-28 接口烟测返回 `status=ok`：295 个完整周、6 个事件；F1、F2 三臂、F3、F4 三臂均因单标的样本不足按门禁 `unavailable`。全市场 walk-forward 复算受 3 GiB 工作站安全门禁约束，故保持 `[~]`。
 
   来源：作手安神 2026-08-28 视频（`clipper/2026-08-30-zuoshou-anshen-weekly-flagpole.md`，视频 7679022123452615963）。
   定义：周线 2-4 根连续阳线拉起旗杆（累计涨幅<=θ 扫参，“不能拉得特别高”）-> 回踩形成旗面低点 ->

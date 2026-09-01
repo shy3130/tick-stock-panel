@@ -12,7 +12,15 @@ from app.services.hold_firm_patterns.adapters import (
 )
 from app.services.hold_firm_patterns.models import Bar, MarketFactsRow
 
-from .dugu_trend import DUGU_VARIANTS, DuguTrendDetector, resolve_dugu_config
+from .dugu_trend import (
+    DUGU_ALIGNMENT_DAY_CHOICES,
+    DUGU_SCAN_AXES,
+    DUGU_SCAN_SCHEMA,
+    DUGU_VARIANTS,
+    DuguTrendDetector,
+    dugu_scan_cell_id,
+    resolve_dugu_config,
+)
 from .models import (
     CensorReason,
     DailyEventCoverage,
@@ -189,11 +197,13 @@ def evaluate_daily_events(
             return unavailable_response(request, UnavailabilityReason.MARKET_FACTS)
     except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         return unavailable_response(request, UnavailabilityReason.MARKET_FACTS)
+    alignment_days = getattr(request, "alignment_days", 30)
     detector = DuguTrendDetector(
         resolve_dugu_config(
             request.variant,
             request.band_mode,
             request.require_m3,
+            alignment_days,
         )
     )
 
@@ -363,11 +373,21 @@ def evaluate_daily_events(
             if isinstance(lower, float) and lower > 0
             else DailyEventVerdict.REJECTED
         )
-
+    detector_config = getattr(detector, "config", None)
+    scan_cell_id = (
+        dugu_scan_cell_id(detector_config)
+        if detector_config is not None
+        else "unknown"
+    )
     provenance_params = {
         "variant": request.variant,
         "band_mode": request.band_mode,
         "require_m3": request.require_m3,
+        "alignment_days": alignment_days,
+        "alignment_day_choices": list(DUGU_ALIGNMENT_DAY_CHOICES),
+        "scan_grid_schema": DUGU_SCAN_SCHEMA,
+        "scan_grid_cell_id": scan_cell_id,
+        "scan_grid_axes": {key: list(values) for key, values in DUGU_SCAN_AXES.items()},
         "ma_windows": list(DUGU_VARIANTS[request.variant]),
         "reclaim_ma_days": 5,
         "pullback_lookback_days": 10,

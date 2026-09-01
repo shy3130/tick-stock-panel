@@ -6,7 +6,7 @@ import math
 from datetime import date, timedelta
 from typing import Any
 
-from .benchmark import EqualWeightBenchmark
+from .benchmark import EqualWeightBenchmark, IndexBenchmarkLeg
 from .detector import detect_symbol_events
 from .evaluation import build_research_layer
 from .models import (
@@ -99,7 +99,45 @@ def _canonical_closes(rows, symbol):
     return series, None
 
 
-def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpoleResponse:
+MARKET_INDEX_CODE = "000300"
+
+
+def _build_index_leg(index_reader: Any | None, calendar: list[date]):
+    if index_reader is None:
+        return None, "index_reader_missing"
+    read = getattr(index_reader, "read_index_daily", None)
+    if not callable(read):
+        return None, "index_reader_missing"
+    try:
+        panel = read({"codes": [MARKET_INDEX_CODE], "start": calendar[0], "end": calendar[-1]})
+        leg = next(
+            (
+                item
+                for item in getattr(panel, "legs", [])
+                if item.code == MARKET_INDEX_CODE and item.status == "ok"
+            ),
+            None,
+        )
+        if leg is None:
+            unavailable = next(
+                (
+                    item
+                    for item in getattr(panel, "legs", [])
+                    if item.code == MARKET_INDEX_CODE
+                ),
+                None,
+            )
+            return None, getattr(unavailable, "reason_code", None) or "index_layer_not_sealed"
+        pin = panel.pin.model_dump() if hasattr(panel.pin, "model_dump") else dict(panel.pin)
+        closes = {bar.date: bar.close for bar in leg.bars}
+        if not closes:
+            return None, "index_layer_not_sealed"
+        return IndexBenchmarkLeg(MARKET_INDEX_CODE, closes, calendar, pin), None
+    except Exception:
+        return None, "index_layer_not_sealed"
+
+
+def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None, index_reader: Any | None = None) -> WeeklyFlagpoleResponse:
     caps = assess_capability(reader)
     if reader is None or not caps.methods_complete or not caps.provenance_valid:
         return _unavailable(request, caps, caps.problems or ["reader_unavailable"])
@@ -149,6 +187,8 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
     diagnostics["re_establishment_rate"] = (
         diagnostics["re_established"] / diagnostics["failures"] if diagnostics["failures"] else None
     )
+    index_leg, index_reason = _build_index_leg(index_reader, calendar)
+    diagnostics["market_index_reason"] = index_reason
     benchmark = EqualWeightBenchmark(panel, calendar)
     research = build_research_layer(
         events,
@@ -158,6 +198,7 @@ def evaluate(request: WeeklyFlagpoleRequest, reader: Any | None) -> WeeklyFlagpo
         cost_bps=request.cost_bps,
         diagnostics=diagnostics,
         source_provenance=reader.source_provenance(),
+        index_benchmark=index_leg,
     )
     coverage = {
         "symbols_total": len(symbols),

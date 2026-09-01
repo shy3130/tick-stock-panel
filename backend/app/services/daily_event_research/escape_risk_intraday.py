@@ -1,11 +1,12 @@
 """Pure S2-S7/S10 detectors over catalog-pinned intraday facts."""
+
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from types import MappingProxyType
-from typing import Mapping, Sequence
 
 from app.data_providers.fquant.escape_risk_intraday import (
     EscapeRiskIntradayBundle,
@@ -14,13 +15,13 @@ from app.data_providers.fquant.escape_risk_intraday import (
 )
 
 from .escape_risk import (
-    DETECTOR_ID_S10,
     DETECTOR_ID_S2,
     DETECTOR_ID_S3,
     DETECTOR_ID_S4,
     DETECTOR_ID_S5,
     DETECTOR_ID_S6,
     DETECTOR_ID_S7,
+    DETECTOR_ID_S10,
     INTRADAY_SIGNAL_VARIANT,
     EscapeCensorReason,
 )
@@ -106,15 +107,15 @@ def _tail_dive(day: IntradayDay) -> Detection:
     tail_drop = max(0.0, anchor.close / close_bar.close - 1)
     tail_minutes = max(1, close_bar.minute_index - anchor.minute_index)
     tail_speed = tail_drop / tail_minutes
-    speed_ratio = math.inf if pre_speed == 0 and tail_drop > 0 else (
-        tail_speed / pre_speed if pre_speed > 0 else 0.0
+    speed_ratio = (
+        math.inf
+        if pre_speed == 0 and tail_drop > 0
+        else (tail_speed / pre_speed if pre_speed > 0 else 0.0)
     )
     day_high = max(bar.high for bar in bars)
     day_low = min(bar.low for bar in bars)
     close_location = (
-        (close_bar.close - day_low) / (day_high - day_low)
-        if day_high > day_low
-        else 1.0
+        (close_bar.close - day_low) / (day_high - day_low) if day_high > day_low else 1.0
     )
     qualified = (
         tail_drop >= TAIL_DROP_MIN
@@ -221,8 +222,7 @@ def _touched_limit_down(day: IntradayDay) -> Detection:
         (
             index
             for index in range(first_touch, len(day.minutes))
-            if day.minutes[index].close > threshold
-            and day.minutes[index].volume_shares > 0
+            if day.minutes[index].close > threshold and day.minutes[index].volume_shares > 0
         ),
         None,
     )
@@ -254,12 +254,8 @@ def _touched_limit_down(day: IntradayDay) -> Detection:
             values={
                 "limit_down": day.published_limit_down,
                 "branch": branch,
-                "touch_at": day.minutes[first_touch].timestamp.isoformat()
-                if qualified
-                else None,
-                "reopened_at": execution.timestamp.isoformat()
-                if reopened is not None
-                else None,
+                "touch_at": day.minutes[first_touch].timestamp.isoformat() if qualified else None,
+                "reopened_at": execution.timestamp.isoformat() if reopened is not None else None,
             },
         ),
     )
@@ -304,10 +300,7 @@ def _early_stall(day: IntradayDay) -> Detection:
     signal = day.minutes[EARLY_SIGNAL_INDEX]
     first_high = max(bar.high for bar in first)
     later_high = max(bar.high for bar in second)
-    qualified = (
-        later_high <= first_high + PRICE_TOLERANCE
-        and signal.close < signal.cumulative_vwap
-    )
+    qualified = later_high <= first_high + PRICE_TOLERANCE and signal.close < signal.cumulative_vwap
     return _detection(
         DETECTOR_ID_S7,
         day,
@@ -416,7 +409,9 @@ def _turnover_detection(
                 "current_turnover": current_turnover,
                 "historical_turnover_mean": mean_history,
                 "float_shares": day.turnover.float_shares,
+                "float_shares_source_day": day.turnover.source_day.isoformat(),
                 "turnover_available_at": day.turnover.available_at.isoformat(),
+                "turnover_availability_basis": day.turnover.availability_basis,
             },
         ),
     )

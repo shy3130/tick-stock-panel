@@ -6,22 +6,23 @@ resolved immutable DuckDB files, and never falls back to raw storage.  Minute
 transaction ``amount / volume`` after strict minute-vs-transaction volume
 reconciliation.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from app.data_providers.fquant import catalog_resolver
 from app.data_providers.fquant.daily_market_research import (
+    IntradayFloatSharesFact,
     PublishedDailyMarketFactsReader,
-    TurnoverFact,
 )
 from app.data_providers.fquant.lease import ConnectionSet
 from app.data_providers.fquant.symbols import split_symbol
@@ -56,7 +57,7 @@ class IntradayDay:
     pre_close: float
     published_limit_up: float
     published_limit_down: float
-    turnover: TurnoverFact | None
+    turnover: IntradayFloatSharesFact | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,12 +141,8 @@ class CatalogPinnedEscapeRiskIntradayReader:
     ) -> None:
         self._days = tuple(sorted(set(days)))
         self._markets = markets_reader
-        self._minutes_connections = ConnectionSet(
-            lambda path: connect_duckdb(path, read_only=True)
-        )
-        self._trans_connections = ConnectionSet(
-            lambda path: connect_duckdb(path, read_only=True)
-        )
+        self._minutes_connections = ConnectionSet(lambda path: connect_duckdb(path, read_only=True))
+        self._trans_connections = ConnectionSet(lambda path: connect_duckdb(path, read_only=True))
         self._routes: dict[date, _RoutePair] = {}
         self._route_failures: dict[date, str] = {}
         self._identities: dict[str, dict[str, object]] = {}
@@ -167,8 +164,7 @@ class CatalogPinnedEscapeRiskIntradayReader:
     def run_manifest(self) -> dict[str, object]:
         self._ensure_open()
         file_keys = {
-            path: f"file-{index}"
-            for index, path in enumerate(sorted(self._identities), start=1)
+            path: f"file-{index}" for index, path in enumerate(sorted(self._identities), start=1)
         }
         return {
             "provider": "fquant.catalog_pinned_escape_risk_intraday",
@@ -177,9 +173,7 @@ class CatalogPinnedEscapeRiskIntradayReader:
                 "manifest_sha256": self._markets.manifest_sha256(),
                 "pin_verified": self._markets.pin_identity_verified(),
             },
-            "files": {
-                file_keys[path]: identity for path, identity in self._identities.items()
-            },
+            "files": {file_keys[path]: identity for path, identity in self._identities.items()},
             "routes": {
                 day.isoformat(): {
                     "minutes": file_keys[pair.minutes_path],
@@ -237,16 +231,12 @@ class CatalogPinnedEscapeRiskIntradayReader:
         pre_close: float,
         limit_up: float,
         limit_down: float,
-        turnover: TurnoverFact | None,
+        turnover: IntradayFloatSharesFact | None,
     ) -> IntradayDay:
         indices = tuple(int(row[0]) for row in minute_rows)
         if indices != _EXPECTED_MINUTE_INDICES:
-            raise EscapeRiskIntradayIntegrityError(
-                f"minute_coverage_incomplete:{len(indices)}"
-            )
-        expected_total_shares = sum(
-            int(row[2]) * 100 for row in minute_rows if row[2] is not None
-        )
+            raise EscapeRiskIntradayIntegrityError(f"minute_coverage_incomplete:{len(indices)}")
+        expected_total_shares = sum(int(row[2]) * 100 for row in minute_rows if row[2] is not None)
         trans_by_time = {
             str(clock): (low, high, volume, amount)
             for clock, low, high, volume, amount in trans_rows
@@ -311,13 +301,10 @@ class CatalogPinnedEscapeRiskIntradayReader:
             )
         for clock, (_, _, volume_raw, amount_raw) in trans_by_time.items():
             if clock not in consumed and (int(volume_raw or 0) != 0 or float(amount_raw or 0) != 0):
-                raise EscapeRiskIntradayIntegrityError(
-                    f"transaction_time_unmapped:{clock}"
-                )
+                raise EscapeRiskIntradayIntegrityError(f"transaction_time_unmapped:{clock}")
         if cumulative_volume != expected_total_shares:
             raise EscapeRiskIntradayIntegrityError(
-                "volume_mismatch:"
-                f"minute={expected_total_shares}:trans={cumulative_volume}"
+                f"volume_mismatch:minute={expected_total_shares}:trans={cumulative_volume}"
             )
         if not all(
             math.isfinite(value) and value > 0
@@ -350,9 +337,7 @@ class CatalogPinnedEscapeRiskIntradayReader:
                 continue
             pair = self._routes[day]
             try:
-                minutes_by_code, trans_by_code = self._query_day(
-                    pair, tuple(symbol_by_tdx), day
-                )
+                minutes_by_code, trans_by_code = self._query_day(pair, tuple(symbol_by_tdx), day)
                 facts = self._markets.escape_risk_facts(normalized, day)
             except Exception as exc:  # query failure is data unavailability, never fallback
                 for symbol in normalized:
@@ -384,7 +369,12 @@ class CatalogPinnedEscapeRiskIntradayReader:
                         market_fact.published_limit_down,
                         turnover,
                     )
-                except (AssertionError, EscapeRiskIntradayIntegrityError, TypeError, ValueError) as exc:
+                except (
+                    AssertionError,
+                    EscapeRiskIntradayIntegrityError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
                     unavailable[(symbol, day)] = f"intraday_integrity:{exc}"
         return EscapeRiskIntradayBundle(
             rows=MappingProxyType(rows),
@@ -406,5 +396,4 @@ __all__ = [
     "EscapeRiskIntradayIntegrityError",
     "IntradayDay",
     "IntradayMinute",
-    "TurnoverFact",
 ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Any
 
@@ -27,11 +27,13 @@ from .escape_risk import (
 from .escape_risk_intraday import detect_intraday_escape_signals
 from .pre_surge import (
     ALL_VARIANTS,
+    RISK_METRIC_DEFINITIONS,
+    PreSurgeArmEventReturn,
+    PreSurgeArmRiskLedger,
     PreSurgeDetector,
     PreSurgeStudyAggregator,
     detection_payload,
 )
-
 PRE_SURGE_SCHEMA = "daily_event_research/pre_surge/v1"
 ESCAPE_SCHEMA = "daily_event_research/escape_risk/v1"
 PRE_SURGE_WARMUP_CALENDAR_DAYS = 400
@@ -65,7 +67,17 @@ def _one_price_at(value: float, bar: Bar) -> bool:
     )
 
 
-def _future_surge_label(
+@dataclass(frozen=True, slots=True)
+class _SurgeOutcome:
+    label: bool | None
+    net_return: float | None
+    reachable: bool
+    complete: bool
+    entry_date: date | None = None
+    exit_date: date | None = None
+
+
+def _surge_outcome(
     *,
     detection_date: date,
     calendar: Sequence[date],
@@ -75,15 +87,15 @@ def _future_surge_label(
     horizon_days: int,
     surge_threshold: float,
     cost_bps: float,
-) -> bool | None:
+) -> _SurgeOutcome:
     positions = {day: index for index, day in enumerate(calendar)}
     signal_index = positions.get(detection_date)
     if signal_index is None:
-        return None
+        return _SurgeOutcome(None, None, False, False)
     entry_index = signal_index + 1
     exit_index = entry_index + horizon_days - 1
     if entry_index >= len(calendar) or exit_index >= len(calendar):
-        return None
+        return _SurgeOutcome(None, None, False, False)
     entry_date = calendar[entry_index]
     exit_date = calendar[exit_index]
     entry_bar = bars_by_date.get(entry_date)
@@ -91,17 +103,17 @@ def _future_surge_label(
     entry_fact: MarketFactsRow | None = facts.row(symbol, entry_date)
     exit_fact: MarketFactsRow | None = facts.row(symbol, exit_date)
     if entry_bar is None or exit_bar is None or entry_fact is None or exit_fact is None:
-        return None
+        return _SurgeOutcome(None, None, False, False, entry_date, exit_date)
     if entry_bar.research_open_adj <= 0:
-        return None
+        return _SurgeOutcome(None, None, False, False, entry_date, exit_date)
     if _one_price_at(entry_fact.published_limit_up, entry_bar):
-        return None
+        return _SurgeOutcome(None, None, False, True, entry_date, exit_date)
     if _one_price_at(exit_fact.published_limit_down, exit_bar):
-        return None
+        return _SurgeOutcome(None, None, False, True, entry_date, exit_date)
     gross = exit_bar.research_close_adj / entry_bar.research_open_adj - 1.0
     one_way_cost = cost_bps / 10_000.0
     net = (1.0 + gross) * (1.0 - one_way_cost) ** 2 - 1.0
-    return net >= surge_threshold
+    return _SurgeOutcome(net >= surge_threshold, net, True, True, entry_date, exit_date)
 
 
 def evaluate_pre_surge_production(
@@ -150,6 +162,7 @@ def evaluate_pre_surge_production(
         }
 
     aggregator = PreSurgeStudyAggregator()
+    risk_ledger = PreSurgeArmRiskLedger()
     detector = PreSurgeDetector()
     pending: list[tuple[str, dict[date, Bar], Any]] = []
     qualified_events: list[dict[str, object]] = []
@@ -193,7 +206,7 @@ def evaluate_pre_surge_production(
         except (KeyError, OSError, RuntimeError, TypeError, ValueError):
             pit_universe_ineligible += 1
             continue
-        future_surge = _future_surge_label(
+        outcome = _surge_outcome(
             detection_date=detection.signal_date,
             calendar=calendar,
             bars_by_date=by_date,
@@ -203,7 +216,7 @@ def evaluate_pre_surge_production(
             surge_threshold=surge_threshold,
             cost_bps=cost_bps,
         )
-        aggregator.record(detection, future_surge)
+        aggregator.record(detection, outcome.label)
         if detection.censor is not None:
             code = detection.censor.value
             censored[code] = censored.get(code, 0) + 1
@@ -211,7 +224,22 @@ def evaluate_pre_surge_production(
             evaluated += 1
             if detection.evidence.qualified:
                 qualified_events.append(detection_payload(detection))
+                if (
+                    outcome.complete
+                    and outcome.entry_date is not None
+                    and outcome.exit_date is not None
+                ):
+                    risk_ledger.record(
+                        detection.variant,
+                        PreSurgeArmEventReturn(
+                            entry_date=outcome.entry_date,
+                            exit_date=outcome.exit_date,
+                            net_return=outcome.net_return,
+                            reachable=outcome.reachable,
+                        ),
+                    )
     stats = aggregator.summarize()
+    risk_metrics = risk_ledger.metrics()
     canonical_identity = canonical.identity().model_dump(mode="json")
     market_identity = facts.identity().model_dump(mode="json")
     return {
@@ -243,6 +271,11 @@ def evaluate_pre_surge_production(
         },
         "factors": {
             variant: asdict(stats[variant]) if variant in stats else None
+            for variant in ALL_VARIANTS
+        },
+        "risk_metric_definitions": dict(RISK_METRIC_DEFINITIONS),
+        "risk_metrics": {
+            variant: asdict(risk_metrics[variant]) if variant in risk_metrics else None
             for variant in ALL_VARIANTS
         },
         "events": qualified_events,

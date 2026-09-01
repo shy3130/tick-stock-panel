@@ -32,15 +32,55 @@ class EqualWeightBenchmark:
         return value
 
 
-def layer_status() -> dict[str, dict[str, str]]:
-    return {
+class IndexBenchmarkLeg:
+    """Generation-pinned market-index forward returns on the research calendar."""
+
+    def __init__(
+        self,
+        code: str,
+        closes: Mapping[date, float],
+        calendar: list[date],
+        pin: Mapping[str, object] | None = None,
+    ):
+        self.code = str(code)
+        self.closes = {d: float(v) for d, v in closes.items() if v is not None and float(v) > 0}
+        self.calendar = list(calendar)
+        self.index = {d: i for i, d in enumerate(self.calendar)}
+        self.pin = dict(pin or {})
+
+    def forward_return(self, anchor: date, horizon: int) -> float | None:
+        idx = self.index.get(anchor)
+        if idx is None or idx + horizon >= len(self.calendar):
+            return None
+        end = self.calendar[idx + horizon]
+        start_close = self.closes.get(anchor)
+        end_close = self.closes.get(end)
+        if not start_close or not end_close:
+            return None
+        return end_close / start_close - 1
+
+    def status(self) -> dict[str, str]:
+        return {"status": "ok", "source": "published_index_daily", "code": self.code}
+
+
+def layer_status(
+    index_benchmark: IndexBenchmarkLeg | None = None,
+) -> dict[str, dict[str, str]]:
+    layers = {
         "equal_weight_universe": {"status": "ok", "source": "sealed_universe"},
         "industry_momentum": {"status": "unavailable", "reason": "industry_layer_not_sealed"},
-        "market_index": {"status": "unavailable", "reason": "index_layer_not_sealed"},
     }
+    layers["market_index"] = (
+        index_benchmark.status()
+        if index_benchmark is not None
+        else {"status": "unavailable", "reason": "index_layer_not_sealed"}
+    )
+    return layers
 
 
-def attribution_layers(provenance: object) -> dict[str, dict[str, str]]:
+def attribution_layers(
+    provenance: object, index_benchmark: IndexBenchmarkLeg | None = None
+) -> dict[str, dict[str, str]]:
     """Expose F5 layers only when sealed/PIT provenance is explicit."""
     if not isinstance(provenance, dict):
         return {
@@ -55,6 +95,9 @@ def attribution_layers(provenance: object) -> dict[str, dict[str, str]]:
         }
     out = {}
     for name, label in (("industry_momentum", "industry"), ("market_index", "market")):
+        if name == "market_index" and index_benchmark is not None:
+            out[name] = index_benchmark.status()
+            continue
         fact = provenance.get(label)
         valid = (
             isinstance(fact, dict)

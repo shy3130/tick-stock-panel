@@ -9,12 +9,29 @@ from typing import Final
 
 from app.services.hold_firm_patterns.models import Bar
 
-from .models import BandMode, CensorReason, Detection, DetectionEvidence, DuguVariantId
+from .models import (
+    BandMode,
+    CensorReason,
+    Detection,
+    DetectionEvidence,
+    DUGU_ALIGNMENT_DAY_CHOICES,
+    DUGU_ALIGNMENT_DAYS_DEFAULT,
+    DuguVariantId,
+)
 
 DETECTOR_ID: Final = "dugu_trend"
 DUGU_VARIANTS: Final[dict[str, tuple[int, int, int]]] = {
     "ma_24_72": (24, 72, 200),
     "ma_20_70": (20, 70, 200),
+}
+DUGU_BAND_MODES: Final[tuple[BandMode, ...]] = ("fixed", "atr")
+DUGU_REQUIRE_M3_CHOICES: Final[tuple[bool, ...]] = (False, True)
+DUGU_SCAN_SCHEMA: Final = "dugu_scan_grid/v1"
+DUGU_SCAN_AXES: Final[dict[str, tuple[object, ...]]] = {
+    "alignment_days": DUGU_ALIGNMENT_DAY_CHOICES,
+    "variant": tuple(DUGU_VARIANTS),
+    "band_mode": DUGU_BAND_MODES,
+    "require_m3": DUGU_REQUIRE_M3_CHOICES,
 }
 RECLAIM_MA_DAYS: Final = 5
 PULLBACK_LOOKBACK_DAYS: Final = 10
@@ -31,6 +48,7 @@ class DuguTrendConfig:
     variant: DuguVariantId = "ma_24_72"
     band_mode: BandMode = "fixed"
     require_m3: bool = False
+    alignment_days: int = DUGU_ALIGNMENT_DAYS_DEFAULT
 
     @property
     def windows(self) -> tuple[int, int, int]:
@@ -41,12 +59,45 @@ def resolve_dugu_config(
     variant: DuguVariantId = "ma_24_72",
     band_mode: BandMode = "fixed",
     require_m3: bool = False,
+    alignment_days: int = DUGU_ALIGNMENT_DAYS_DEFAULT,
 ) -> DuguTrendConfig:
     if variant not in DUGU_VARIANTS:
         raise ValueError(f"unknown Dugu variant: {variant}")
-    if band_mode not in ("fixed", "atr"):
+    if band_mode not in DUGU_BAND_MODES:
         raise ValueError(f"unknown band mode: {band_mode}")
-    return DuguTrendConfig(variant=variant, band_mode=band_mode, require_m3=require_m3)
+    if alignment_days not in DUGU_ALIGNMENT_DAY_CHOICES:
+        raise ValueError(
+            "alignment_days must be in frozen scan grid "
+            f"{DUGU_ALIGNMENT_DAY_CHOICES}"
+        )
+    return DuguTrendConfig(
+        variant=variant,
+        band_mode=band_mode,
+        require_m3=require_m3,
+        alignment_days=alignment_days,
+    )
+
+
+def iter_dugu_scan_grid() -> tuple[DuguTrendConfig, ...]:
+    return tuple(
+        DuguTrendConfig(
+            variant=variant,
+            band_mode=band_mode,
+            require_m3=require_m3,
+            alignment_days=alignment_days,
+        )
+        for alignment_days in DUGU_ALIGNMENT_DAY_CHOICES
+        for variant in DUGU_VARIANTS
+        for band_mode in DUGU_BAND_MODES
+        for require_m3 in DUGU_REQUIRE_M3_CHOICES
+    )
+
+
+def dugu_scan_cell_id(config: DuguTrendConfig) -> str:
+    return (
+        f"n{config.alignment_days}|{config.variant}|{config.band_mode}|"
+        f"m3_{int(config.require_m3)}"
+    )
 
 
 def _mean(values: list[float] | tuple[float, ...]) -> float | None:
@@ -173,7 +224,21 @@ class DuguTrendDetector:
             fast = ma[fast_window][index]
             mid = ma[mid_window][index]
             long = ma[long_window][index]
-            if fast is None or mid is None or long is None:
+            alignment_hold_days = 0
+            alignment_warmup_incomplete = False
+            position = index
+            while position >= 0:
+                fast_value = ma[fast_window][position]
+                mid_value = ma[mid_window][position]
+                long_value = ma[long_window][position]
+                if fast_value is None or mid_value is None or long_value is None:
+                    alignment_warmup_incomplete = alignment_hold_days < self.config.alignment_days
+                    break
+                if not fast_value > mid_value > long_value:
+                    break
+                alignment_hold_days += 1
+                position -= 1
+            if fast is None or mid is None or long is None or alignment_warmup_incomplete:
                 detections.append(
                     Detection(
                         DETECTOR_ID,
@@ -184,7 +249,7 @@ class DuguTrendDetector:
                     )
                 )
                 continue
-            t1 = fast > mid > long and anchor_close > fast
+            t1 = alignment_hold_days >= self.config.alignment_days and anchor_close > fast
             m3_max: float | None = None
             m3_pass = True
             if self.config.require_m3:
@@ -219,6 +284,8 @@ class DuguTrendDetector:
                 "t1": t1,
                 "t2": t2,
                 "t3": t3,
+                "alignment_days": self.config.alignment_days,
+                "alignment_hold_days": alignment_hold_days,
                 "m3_required": self.config.require_m3,
                 "m3_pass": m3_pass,
                 "m3_max_return": M3_MAX_RETURN,
@@ -256,6 +323,12 @@ __all__ = [
     "ATR_BAND_MULT",
     "ATR_WINDOW_DAYS",
     "DETECTOR_ID",
+    "DUGU_ALIGNMENT_DAY_CHOICES",
+    "DUGU_ALIGNMENT_DAYS_DEFAULT",
+    "DUGU_BAND_MODES",
+    "DUGU_REQUIRE_M3_CHOICES",
+    "DUGU_SCAN_AXES",
+    "DUGU_SCAN_SCHEMA",
     "DUGU_VARIANTS",
     "FIXED_BAND_PCT",
     "DuguTrendConfig",
@@ -263,5 +336,7 @@ __all__ = [
     "M3_WINDOW_DAYS",
     "PULLBACK_LOOKBACK_DAYS",
     "RECLAIM_MA_DAYS",
+    "dugu_scan_cell_id",
+    "iter_dugu_scan_grid",
     "resolve_dugu_config",
 ]

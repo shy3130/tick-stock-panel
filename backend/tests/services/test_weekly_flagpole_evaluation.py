@@ -4,6 +4,7 @@ import pytest
 
 from app.services.weekly_flagpole.benchmark import (
     EqualWeightBenchmark,
+    IndexBenchmarkLeg,
     attribution_layers,
     layer_status,
 )
@@ -38,6 +39,64 @@ def test_sealed_equal_weight_excess_and_unavailable_layers():
         layers["industry_momentum"]["status"] == "unavailable"
         and layers["market_index"]["status"] == "unavailable"
     )
+
+
+def test_published_index_leg_excess_is_disclosed_per_event_and_aggregated():
+    from app.services.weekly_flagpole.evaluation import build_research_layer
+
+    days = [date(2026, 1, 1) + timedelta(days=i) for i in range(22)]
+    event = {
+        "symbol": "a",
+        "confirm_date": days[0],
+        "variants": ["weekly_reclaim"],
+        "cum_gain": 0.1,
+        "flag_depth": 0.1,
+        "strict_limit_up": True,
+        "forward": {"forward_21d_return": 0.05},
+    }
+    benchmark = EqualWeightBenchmark({"a": {days[0]: 10, days[1]: 11}}, days)
+    index_leg = IndexBenchmarkLeg(
+        "000300", {days[0]: 3000, days[21]: 3045}, days
+    )
+    research = build_research_layer([event], days, benchmark, index_benchmark=index_leg)
+    horizon = research["market_index_attribution"]["horizons"]["21"]
+    assert horizon["n"] == 1
+    assert horizon["mean"] == pytest.approx(0.05 - 0.015)
+    assert horizon["per_event"][0]["excess"] == pytest.approx(0.035)
+    assert research["benchmark_layers"]["market_index"]["status"] == "ok"
+
+def test_market_index_attribution_fails_closed_without_reader():
+    from app.services.weekly_flagpole.evaluation import build_research_layer
+
+    day = date(2026, 1, 1)
+    benchmark = EqualWeightBenchmark({"a": {day: 10}}, [day])
+    research = build_research_layer([], [day], benchmark)
+    assert research["market_index_attribution"] == {
+        "status": "unavailable",
+        "reason": "index_layer_not_sealed",
+        "horizons": {},
+    }
+    assert research["benchmark_layers"]["market_index"]["reason"] == "index_layer_not_sealed"
+
+
+def test_index_reader_coverage_builds_generation_pinned_leg():
+    from types import SimpleNamespace
+
+    from app.services.weekly_flagpole.service import _build_index_leg
+
+    days = [date(2026, 1, 1), date(2026, 1, 2)]
+    bars = [SimpleNamespace(date=days[0], close=3000), SimpleNamespace(date=days[1], close=3045)]
+    panel = SimpleNamespace(
+        legs=[SimpleNamespace(code="000300", status="ok", bars=bars)],
+        pin=SimpleNamespace(model_dump=lambda: {"klines_generation": "g"}),
+    )
+    reader = SimpleNamespace(read_index_daily=lambda request: panel)
+    leg, reason = _build_index_leg(reader, days)
+    assert reason is None
+    assert leg.forward_return(days[0], 1) == pytest.approx(0.015)
+
+    missing, reason = _build_index_leg(None, days)
+    assert missing is None and reason == "index_reader_missing"
 
 
 def test_request_rejects_invalid_range_and_extra_fields():

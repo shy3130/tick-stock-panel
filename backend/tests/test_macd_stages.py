@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -150,6 +151,19 @@ class _MultiReader(_Reader):
         )
 
 
+class _BatchMultiReader(_MultiReader):
+    def __init__(self, series: dict[str, list[float]]):
+        super().__init__(series)
+        self.batch_calls = 0
+
+    def daily_closes(self, start, end):
+        self.batch_calls += 1
+        return self.frame.filter((pl.col("date") >= start) & (pl.col("date") <= end))
+
+    def daily_bars(self, symbol, start, end):
+        raise AssertionError("per-symbol fallback must not run when daily_closes is available")
+
+
 def _step_series() -> list[float]:
     return (
         [10.0] * 40
@@ -177,6 +191,44 @@ def test_macd_arms_keep_fair_frozen_baselines_and_costed_metrics():
     tuned = result["segments"]["oos"]["arms"]["tuned_cross"]
     assert {"n_trades_closed", "n_trades_open", "mean_net_return", "wilson_lower"} <= set(tuned)
     assert tuned["n_trades_closed"] == 1
+
+
+def test_macd_arms_use_single_full_market_close_scan_when_available():
+    closes = _step_series()
+    reader = _BatchMultiReader({"600000.SH": closes, "000001.SZ": closes})
+    days = reader.days
+    result = evaluate_macd_arms(
+        reader,
+        days[0],
+        days[-1],
+        ["600000.SH", "000001.SZ"],
+        days[0],
+    )
+    assert result["status"] == "ok"
+    assert result["segments"]["oos"]["coverage"]["symbols"] == 2
+    assert reader.batch_calls == 1
+
+
+def test_macd_arms_coverage_dates_are_segment_specific():
+    closes = _step_series()
+    reader = _MultiReader({"600000.SH": closes})
+    days = reader.days
+    oos_start = days[60]
+
+    result = evaluate_macd_arms(
+        reader,
+        days[0],
+        days[-1],
+        ["600000.SH"],
+        oos_start,
+    )
+
+    is_coverage = result["segments"]["is"]["coverage"]
+    oos_coverage = result["segments"]["oos"]["coverage"]
+    assert is_coverage["first_market_date"] == days[0]
+    assert is_coverage["last_market_date"] == days[59]
+    assert oos_coverage["first_market_date"] == oos_start
+    assert oos_coverage["last_market_date"] == days[-1]
 
 
 def test_macd_arms_stage_filters_and_low_sample_verdict_fail_closed():
@@ -302,3 +354,107 @@ def test_metrics_symbol_gate_counts_closed_trades_only():
     )
     assert metrics["n_trades_closed"] == 1
     assert metrics["n_symbols_traded"] == 1
+
+
+def test_metrics_include_event_portfolio_diagnostics():
+    metrics = _metrics(
+        [
+            {
+                "status": "closed",
+                "symbol": "600000.SH",
+                "entry_exec_date": date(2026, 1, 5),
+                "exit_exec_date": date(2026, 1, 20),
+                "net_return": 0.10,
+                "gross_return": 0.12,
+            },
+            {
+                "status": "closed",
+                "symbol": "000001.SZ",
+                "entry_exec_date": date(2026, 1, 5),
+                "exit_exec_date": date(2026, 1, 21),
+                "net_return": -0.20,
+                "gross_return": -0.18,
+            },
+            {
+                "status": "closed",
+                "symbol": "600000.SH",
+                "entry_exec_date": date(2026, 2, 2),
+                "exit_exec_date": date(2026, 2, 10),
+                "net_return": 0.02,
+                "gross_return": 0.03,
+            },
+        ]
+    )
+    # Batch returns: 2026-01-05 -> mean(0.10, -0.20) = -0.05; 2026-02-02 -> 0.02.
+    # Equity: 1.0 -> 0.95 -> 0.969 -> max drawdown = 1 - 0.95 = 0.05.
+    assert metrics["event_batch_days"] == 2
+    assert metrics["max_drawdown_event_equity"] == pytest.approx(0.05)
+    assert metrics["sharpe_event_batch"] is not None
+    assert metrics["sortino_event_batch"] is not None
+    assert metrics["events_per_symbol_per_year"] > 0
+
+
+def test_metrics_empty_trades_report_null_diagnostics():
+    metrics = _metrics([])
+    assert metrics["event_batch_days"] == 0
+    assert metrics["max_drawdown_event_equity"] is None
+    assert metrics["sharpe_event_batch"] is None
+    assert metrics["sortino_event_batch"] is None
+    assert metrics["events_per_symbol_per_year"] is None
+
+
+class _IndexReader:
+    def __init__(self, closes: list[float]):
+        self.days = [date(2026, 1, 1) + timedelta(days=index) for index in range(len(closes))]
+        self.frame = pl.DataFrame({"date": self.days, "close": closes})
+        self.requests = []
+
+    def read_index_daily(self, request):
+        self.requests.append(request)
+        rows = self.frame.filter(
+            (pl.col("date") >= request["start"]) & (pl.col("date") <= request["end"])
+        ).to_dicts()
+        return SimpleNamespace(
+            legs=[
+                SimpleNamespace(
+                    code="000001",
+                    status="ok",
+                    bars=[SimpleNamespace(**row) for row in rows],
+                )
+            ]
+        )
+
+
+def test_regime_breakdown_buckets_oos_trades_by_index_ma60():
+    # 80 flat closes then a strong up-leg: after MA60 warms, regime is bull.
+    index_reader = _IndexReader([100.0] * 80 + [100.0 + index * 0.5 for index in range(20)])
+    result = evaluate_macd_arms(
+        _MultiReader({"600000.SH": _step_series()}),
+        date(2026, 1, 1),
+        date(2026, 4, 10),
+        ["600000.SH"],
+        date(2026, 3, 1),
+        index_reader=index_reader,
+    )
+    for name, payload in result["arms"].items():
+        breakdown = payload["regime_breakdown_oos"]
+        assert breakdown["basis"] == "000001 close vs MA60"
+        assert set(breakdown["buckets"]) == {"bull", "bear", "unknown"}
+        total = sum(bucket["n_events"] for bucket in breakdown["buckets"].values())
+        assert total == result["segments"]["oos"]["arms"][name]["n_events"]
+    assert index_reader.requests[0]["codes"] == ["000001"]
+
+
+def test_regime_breakdown_unavailable_without_index_reader():
+    result = evaluate_macd_arms(
+        _MultiReader({"600000.SH": _step_series()}),
+        date(2026, 1, 1),
+        date(2026, 4, 10),
+        ["600000.SH"],
+        date(2026, 3, 1),
+    )
+    for payload in result["arms"].values():
+        assert payload["regime_breakdown_oos"] == {
+            "status": "unavailable",
+            "reason": "index_reader_missing_or_insufficient",
+        }

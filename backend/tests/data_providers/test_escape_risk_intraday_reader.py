@@ -1,9 +1,10 @@
-from datetime import date
 import json
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.data_providers.fquant.daily_market_research import TurnoverFact
+from app.data_providers.fquant.daily_market_research import IntradayFloatSharesFact
 from app.data_providers.fquant.escape_risk_intraday import (
     CatalogPinnedEscapeRiskIntradayReader,
     EscapeRiskIntradayIntegrityError,
@@ -99,7 +100,11 @@ def test_minute_timestamps_use_sealed_bar_close_not_transaction_bucket():
 
 def test_build_day_reconciles_hands_to_shares_and_uses_trans_amount():
     minute_rows, trans_rows = _complete_rows()
-    turnover = TurnoverFact(1_000_000, 2.4, None)
+    turnover = IntradayFloatSharesFact(
+        float_shares=1_000_000,
+        available_at=datetime(2025, 8, 27, 15, tzinfo=ZoneInfo("Asia/Shanghai")),
+        source_day=date(2025, 8, 27),
+    )
     built = CatalogPinnedEscapeRiskIntradayReader._build_day(
         "600519.SH",
         date(2025, 8, 28),
