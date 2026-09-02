@@ -45,7 +45,21 @@ def test_build_request_keeps_complete_cohort_and_frozen_protocol():
 
 def test_evaluate_passes_complete_cohort_to_panel_and_evaluator_once(monkeypatch):
     adapter = MeraAdapter()
-    request = _request()
+    request = adapter.build_request(
+        START,
+        END,
+        COHORT,
+        oos_start=None,
+        cost_bps=None,
+        parameters={
+            "start": START,
+            "end": END,
+            "label_horizon": 1,
+            "cost_bps": 12.5,
+            "placebo_rounds": 200,
+            "feature_names": ["alpha101_004"],
+        },
+    )
     panel = object()
     expected = object()
     panel_calls = []
@@ -75,6 +89,7 @@ def test_evaluate_passes_complete_cohort_to_panel_and_evaluator_once(monkeypatch
     assert panel_calls[0][0] is reader
     assert tuple(panel_calls[0][1]) == tuple(COHORT)
     assert panel_calls[0][2:4] == (START, END)
+    assert panel_calls[0][4] == ["alpha101_004"]
     assert len(evaluator_calls) == 1
     assert evaluator_calls == [(panel, request.routing)]
 
@@ -279,3 +294,25 @@ def test_serialization_preserves_separate_claims_and_placebo_diagnostics():
         "random_label",
     }
     assert MeraAdapter().extract_coverage(serialized)["symbols"] == len(COHORT)
+
+
+def test_build_request_consumes_mera_parameters():
+    request = MeraAdapter().build_request(
+        START,
+        END,
+        COHORT,
+        oos_start=None,
+        cost_bps=None,
+        parameters={
+            "start": START,
+            "end": END,
+            "label_horizon": 3,
+            "cost_bps": 17.0,
+            "placebo_rounds": 77,
+            "feature_names": ["x", "y"],
+        },
+    )
+    assert request.routing.label_horizon == 3
+    assert request.routing.cost_bps == 17.0
+    assert request.routing.placebo_rounds == 77
+    assert request.routing.feature_names == ["x", "y"]

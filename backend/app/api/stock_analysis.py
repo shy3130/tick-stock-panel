@@ -19,12 +19,16 @@ from datetime import date, timedelta
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.indicators.levels import compute_levels, summarize_levels
+from app.services import stock_reports
+from app.services.agent_reach_research import (
+    AgentReachChannel,
+    get_agent_reach_research_adapter,
+)
 from app.services.ai_attempts import get_registry
 from app.services.ai_structured import CancellationToken, new_attempt_id
-from app.services import stock_reports
 from app.services.stock_analyzer import analyze_stock_stream
 
 logger = logging.getLogger(__name__)
@@ -150,9 +154,25 @@ def get_levels(
 class AnalyzeRequest(BaseModel):
     """AI 个股分析请求。"""
     symbol: str
+    name: str = Field(default="", max_length=40)
     focus: str = ""  # 可选:用户追加的分析关注点
     document_text: str = ""
     profile_id: str | None = None
+    public_research_enabled: bool = False
+    public_research_channels: tuple[AgentReachChannel, ...] = (
+        AgentReachChannel.TWITTER,
+    )
+
+
+@router.get("/public-research/health")
+def stock_analysis_public_research_health(request: Request) -> dict:
+    """Return sanitized source health without running a symbol search."""
+    adapter = get_agent_reach_research_adapter(request.app.state)
+    return {
+        "default_enabled": False,
+        "supported_channels": [channel.value for channel in AgentReachChannel],
+        "health": adapter.health(),
+    }
 
 
 @router.post("/analyze")
@@ -185,6 +205,10 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
                 req.profile_id,
                 cancel_token=token,
                 attempt_id=attempt_id,
+                name=req.name,
+                public_research_enabled=req.public_research_enabled,
+                public_research_channels=req.public_research_channels,
+                research_adapter=get_agent_reach_research_adapter(request.app.state),
             ):
                 yield chunk + "\n"
         finally:

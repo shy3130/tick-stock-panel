@@ -8,7 +8,8 @@
 > 保持 `[~]`：弱转强、量价序列、MACD、单阳不破、日线开盘价锚定、坚定持有四形态、独孤趋势、MERA、大涨前四特征、逃命信号、N 字回调分档、五类负面清单；各条目内已记录具体未满足项，不以部分 verdict 或扩大样本替代原验收线。
 > 本轮新增三项因子与“四大逃生窗口”复核均已落地可执行研究链，但全市场样本外裁决、PIT 换手来源或完整历史覆盖仍有缺口，故统一从 `[ ]` 转为 `[~]`，不提前标记收口。
 > 本轮统一新增 11 因子的 sealed 全市场审计入口；cohort 只冻结一次并记录 hash，adapter 必须校验 canonical/markets pin，`unavailable` 作为可审计结果原子落盘，禁止分批拼接 verdict。
-> 资源安全门禁：同一工作站只允许一个全市场研究进程，native 线程上限 2、默认 RSS 硬上限 3.0 GiB、250ms 采样、nice=10；超限只终止自身且不留下半成品。单阳不破两次受控终止（峰值 3.02/3.37 GiB），MACD 修正覆盖元数据后的 v2 复算也在 3.12 GiB 安全终止；均停止本机会话重试，不以放宽门禁换取结果。
+> 资源安全门禁：Research Workbench V2 独立 full-market worker 单实例、native 线程上限 2、默认 RSS 硬上限 8.0 GiB、250ms 采样、nice=10；超限只终止自身且不留下半成品。早期因子收口复算仍保留其 3.0 GiB 门禁证据：单阳不破两次受控终止（峰值 3.02/3.37 GiB），MACD v2 在 3.12 GiB 安全终止；不以提高 Workbench worker 上限追认这些未完成裁决。
+> Research Workbench V2 已把 19 项公开因子统一接入 Factor Catalog、preflight、Durable Run、immutable artifact 与证据/定时治理；这只表示研究工程入口收敛，不改变下列 `[x]/[~]` 裁决，也不自动晋级任何因子。
 
 ## 短线候选池形态因子
 
@@ -778,7 +779,7 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已冻结 D0-D4、位置/影线/量能/次日确认口径，并实现 sealed canonical + markets + presence、T+1、不可达与重叠 censor、D1 交互 bootstrap、D4 确认对照及确认价格劣化披露；D5 尾盘 30 分钟光头阳/光头阴/缩量十字星三分型及次日方向分布也已落地，入口为 `POST /api/research/factors/doji-patterns/evaluate`。
+  - 已冻结 D0-D4、位置/影线/量能/次日确认口径，并实现 sealed canonical + markets + presence、T+1、不可达与重叠 censor、D1 交互 bootstrap、D4 确认对照及确认价格劣化披露；D5 尾盘 30 分钟光头阳/光头阴/缩量十字星三分型及次日方向分布也已落地，现统一由 Research Workbench factor `doji-patterns` 经 preflight 创建 Durable Run。
   - 真实 `600519.SH`（2024-01-02 至 2026-08-28，OOS 起点 2025-07-01）返回 `status=ok`：644 个父事件日，D1 34 个合格事件；D1-D4 在该单标的有界样本均保持 `unavailable`。另有非 mock 的真实 evaluator OK 路径覆盖零父事件 D5，不再存在漏导入/漏结果字段。
   - 尚缺全市场独立 OOS 裁决及 D2/D3 冻结文献基线；全市场读取当前会触发 3 GiB 工作站安全门禁，不能放宽资源上限换取结论，因此保持 `[~]`。
 
@@ -903,7 +904,7 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已实现确定性日转周、仅使用已确认摆动点的 streaming zigzag、F1 旗杆/旗面总体臂、F2 三种介入口径、F3 失败后 13 周重立、F4 同参数严格含涨停 vs 宽松消融，以及 sealed 全 A 等权基准；形态/涨停使用 raw OHLC，21/63/126 日收益与基准强制使用 canonical 复权 `close`，入口为 `POST /api/research/factors/weekly-flagpole/evaluate`。
+  - 已实现确定性日转周、仅使用已确认摆动点的 streaming zigzag、F1 旗杆/旗面总体臂、F2 三种介入口径、F3 失败后 13 周重立、F4 同参数严格含涨停 vs 宽松消融，以及 sealed 全 A 等权基准；形态/涨停使用 raw OHLC，21/63/126 日收益与基准强制使用 canonical 复权 `close`，现统一由 Research Workbench factor `weekly-flagpole` 经 preflight 创建 Durable Run。
   - F5 市场腿现读取与研究 pin 对齐的 `000300` sealed 指数日线并输出市场状态归因；历史 sealed PIT 行业映射仍不存在，行业腿继续 fail-closed 为 `unavailable`，不允许用当前行业回填。
   - 真实 `600519.SH` 2022-01-01..2026-08-28 接口烟测返回 `status=ok`：295 个完整周、6 个事件；F1、F2 三臂、F3、F4 三臂均因单标的样本不足按门禁 `unavailable`。全市场 walk-forward 复算受 3 GiB 工作站安全门禁约束，故保持 `[~]`。
 
@@ -940,7 +941,7 @@
 
   **实施与复核状态（2026-08-31）**
 
-  - 已实现 canonical-manifest pin 的三指数 reader、版本化交易日、全 A presence 审计等权收益，以及六窗口 × 1/5/10/20 日、±5 日敏感性、年代分层、精确二项/符号翻转置换/bootstrap、Holm/BH 校正；入口为 `POST /api/research/escape-windows/evaluate`。
+  - 已实现 canonical-manifest pin 的三指数 reader、版本化交易日、全 A presence 审计等权收益，以及六窗口 × 1/5/10/20 日、±5 日敏感性、年代分层、精确二项/符号翻转置换/bootstrap、Holm/BH 校正；现统一由 Research Workbench factor `escape-windows` 经 preflight 创建 Durable Run。
   - 真实 2007-01-01 至 2026-08-28 复算返回 `status=ok`：4,797 个交易日，全 A 扫描 14,597,621 行（14,545,476 个收益贡献行），四条市场腿各 24 个主单元、1,056 个敏感性单元；主窗口与敏感性窗口严格剔除缺失交易日后显式记录 763 个 censor。
   - 全 A 覆盖 2007-2026，但三指数 pinned 日线仅覆盖 2013-2026；当前研究结论保持 `no_effect_concluded / descriptive replication pending independent comparison`，尚不能完成与作者全期口径的独立对拍，因此保持 `[~]`，不进入因子库。
 

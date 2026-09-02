@@ -14,12 +14,12 @@ import {
 import { EmptyState } from '@/components/EmptyState'
 import { InstrumentSearchInput } from '@/components/instruments/InstrumentSearchInput'
 import {
-  api,
+  getResearchSymbolAnalysis,
   type ResearchSymbolAnalysisAvailableResponse,
   type ResearchSymbolAnalysisResponse,
-} from '@/lib/api'
+} from '@/features/research/api/analysis'
 import { cn } from '@/lib/cn'
-import { QK } from '@/lib/queryKeys'
+import { researchKeys } from '@/features/research/queryKeys'
 
 const INPUT = 'control w-full text-xs'
 const BTN_PRIMARY = 'btn-primary text-xs'
@@ -90,8 +90,8 @@ export function AnalysisPanel() {
   const [request, setRequest] = useState<AnalysisRequest | null>(null)
 
   const analysisQuery = useQuery({
-    queryKey: QK.researchSymbolAnalysis(request?.symbol ?? '', request?.range.start ?? '', request?.range.end ?? ''),
-    queryFn: () => api.researchSymbolAnalysis(request!.symbol, request!.range),
+    queryKey: researchKeys.symbolAnalysis(request?.symbol ?? '', request?.range.start ?? '', request?.range.end ?? ''),
+    queryFn: () => getResearchSymbolAnalysis(request!.symbol, request!.range),
     enabled: request !== null,
     retry: false,
   })

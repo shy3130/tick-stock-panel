@@ -203,3 +203,15 @@ def test_extract_coverage_reads_segment_coverage_from_arms_verdict():
     coverage = adapter.extract_coverage(verdict)
 
     assert coverage == {"is": {"symbols": 3}, "oos": {"symbols": 3}}
+
+
+def test_build_request_consumes_validated_parameters():
+    request = MacdArmsAdapter().build_request(
+        START,
+        END,
+        ["600000.SH"],
+        oos_start=None,
+        cost_bps=None,
+        parameters={"start": START, "end": END, "oos_start": date(2024, 6, 1)},
+    )
+    assert request.oos_start == date(2024, 6, 1)

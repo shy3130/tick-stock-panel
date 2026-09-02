@@ -17,7 +17,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.full_market_adapters.pinning import production_scope_matches
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.hold_firm_patterns import (
     HoldFirmResponse,
     HoldFirmStatus,
@@ -82,7 +82,12 @@ class HoldFirmAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> HoldFirmFullMarketRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(parameters, {"start", "end", "oos_start", "cost_bps"})
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
         # The FULL cohort is embedded in a single uncapped request; the
         # evaluator is invoked exactly once — no batching, no verdict
         # stitching, no cohort thinning that would bias the survivorship

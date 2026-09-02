@@ -82,6 +82,18 @@
 | `services/depth_service.py` | +20 / -0 | 能力检查模式：fquant 直接降级返回空 |
 | `services/n_shape_research_data.py` | — | N 字研究 composite reader：绑定 canonical raw OHLCV 与 markets PIT facts 两份 generation/manifest；任一来源缺失即 unavailable，构造后不跟随 `current` |
 
+### 研究控制面（`backend/app/research/` + `frontend/src/features/research/`）
+
+|文件|作用|红线|
+|---|---|---|
+|`app/research/catalog.py` / `contracts.py`|19 项公开 factor 的唯一注册表、Pydantic 参数 schema、scope、数据依赖与五类结果 profile|工程/数据/verdict/promotion 四套状态独立；不得新增第二注册表或因子专用协议|
+|`app/research/preflight.py` / `control.py` / `adapters.py`|统一预检、创建入口与既有 evaluator 适配|运行前冻结 request；领域 unavailable 正常收口，程序错误不得伪装 unavailable；不得改变 evaluator|
+|`app/research/job_store.py` / `run_store.py` / `runner.py`|持久化 Job、不可变 Run artifact、interactive worker 与 SSE|summary JSON + events/series Parquet；取消/恢复必须终态落盘；前端不得重算指标|
+|`app/research/worker.py` / `services/full_market_adapters/`|11 项全市场研究的单实例受控子进程|API 只传白名单 run_id；完整参数经统一 registry 验证；资源超限和锁冲突必须落明确终态|
+|`app/api/research_runs.py`|factor catalog/detail、preflight、runs/events/series/SSE、证据关联统一接口|旧 19 个 factor POST 与 capability GET 已删除，不得恢复|
+|`features/research/`|Overview、Catalog、Workbench、Run Center/Detail、Evidence、Data、Automation、Analytics|七类受控参数控件；loading/empty/error/unavailable 分离；旧 `pages/Research.tsx` 和旧 research client 已删除|
+|`docs/RESEARCH_WORKBENCH_V2_DESIGN.md`|Research Workbench V2 权威契约与完成定义|Run 不自动进入策略池、Agent 候选或交易执行；factor Run 不冒充 recap run-card|
+
 ### 回测域（`backend/app/backtest/` + `backend/app/api/backtest*.py`）
 
 | 文件 | 作用 | 红线 |
@@ -355,6 +367,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-27（canonical history schema v2 与 Issue #8 N 字 PIT 研究；Issue #10 新增 ordered-trans dedicated generation、sparse true-trade 1m→48×5m→16×15m 生产链，真实三标的 OOS verdict 为 rejected。）
+**最后更新**：2026-08-31（Research Workbench V2 完成 19 因子统一目录、preflight、Durable Run、11 项独立 full-market worker、不可变 artifact、证据关联与定时治理；不改变因子裁决且不自动进入策略池、Agent 或交易执行。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

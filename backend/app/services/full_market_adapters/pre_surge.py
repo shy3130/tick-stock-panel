@@ -21,7 +21,7 @@ from app.services.daily_event_research.production import (
     evaluate_pre_surge_production,
 )
 from app.services.full_market_adapters.pinning import production_scope_matches
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.hold_firm_patterns.adapters import (
     ProductionReaderScopeUnavailable,
     production_reader_scope,
@@ -72,7 +72,16 @@ class PreSurgeAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> PreSurgeFullMarketRequest:
+        benchmark_symbol = BENCHMARK_SYMBOL
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters, {"start", "oos_start", "end", "benchmark_symbol", "cost_bps"}
+            )
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
+            benchmark_symbol = parameters["benchmark_symbol"]
         # The frozen IS/OOS boundary is part of the pre-registered study design:
         # it must be supplied explicitly, never fabricated from a default.
         if oos_start is None:
@@ -82,7 +91,7 @@ class PreSurgeAdapter:
             start=start,
             oos_start=oos_start,
             end=end,
-            benchmark_symbol=BENCHMARK_SYMBOL,
+            benchmark_symbol=benchmark_symbol,
             cost_bps=cost_bps if cost_bps is not None else DEFAULT_COST_BPS,
         )
 

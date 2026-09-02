@@ -66,15 +66,15 @@ class RunnerContext:
 
     repo: Any
     reader: Any
+    parameters: dict[str, Any] | None = None
 
 
 @runtime_checkable
 class FactorAdapter(Protocol):
     """Narrow adapter seam between the runner and one factor evaluator.
 
-    ``build_request`` receives the FULL cohort; ``evaluate`` is invoked exactly
-    once with that request. Extensions register a new adapter via
-    :func:`register_adapter` — no runner changes required.
+    Adapters are resolved from the single public Factor Registry; this module
+    intentionally owns no adapter registry or registration API.
     """
 
     name: str
@@ -87,6 +87,7 @@ class FactorAdapter(Protocol):
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> Any: ...
 
     def evaluate(self, context: RunnerContext, request: Any) -> Any: ...
@@ -95,60 +96,8 @@ class FactorAdapter(Protocol):
 
     def extract_coverage(self, verdict: dict[str, Any]) -> dict[str, Any] | None: ...
 
-
-ADAPTERS: dict[str, FactorAdapter] = {}
-
-
-def register_adapter(adapter: FactorAdapter, *, overwrite: bool = False) -> None:
-    """Register a factor adapter; duplicate names fail loudly unless overwritten."""
-    if not getattr(adapter, "name", None):
-        raise FullMarketRunnerError("adapter_name_required")
-    if adapter.name in ADAPTERS and not overwrite:
-        raise FullMarketRunnerError(f"adapter_already_registered: {adapter.name}")
-    ADAPTERS[adapter.name] = adapter
-
-
-def register_builtin_adapters() -> None:
-    """Import shipped adapters lazily and fill only missing registry entries.
-
-    Adapter modules import :class:`RunnerContext` from this module, so imports
-    remain deferred until the runner surface is fully defined. Existing
-    entries are preserved so tests and explicit extensions may override a
-    builtin with :func:`register_adapter(overwrite=True)`.
-    """
-    from app.services.full_market_adapters.doji import DojiPatternsFullMarketAdapter
-    from app.services.full_market_adapters.dugu import DuguTrendAdapter
-    from app.services.full_market_adapters.escape_risk import EscapeRiskAdapter
-    from app.services.full_market_adapters.hold_firm import HoldFirmAdapter
-    from app.services.full_market_adapters.macd import MacdArmsAdapter
-    from app.services.full_market_adapters.mera import MeraAdapter
-    from app.services.full_market_adapters.n_depth import NDepthAdapter
-    from app.services.full_market_adapters.negative_v5 import NegativeV5Adapter
-    from app.services.full_market_adapters.pre_surge import PreSurgeAdapter
-    from app.services.full_market_adapters.single_yang import SingleYangFullMarketAdapter
-    from app.services.full_market_adapters.weekly_flagpole import WeeklyFlagpoleAdapter
-
-    for adapter in (
-        MacdArmsAdapter(),
-        WeeklyFlagpoleAdapter(),
-        SingleYangFullMarketAdapter(),
-        DuguTrendAdapter(),
-        PreSurgeAdapter(),
-        HoldFirmAdapter(),
-        MeraAdapter(),
-        NDepthAdapter(),
-        NegativeV5Adapter(),
-        EscapeRiskAdapter(),
-        DojiPatternsFullMarketAdapter(),
-    ):
-        if adapter.name not in ADAPTERS:
-            register_adapter(adapter)
-
-
-def registered_factor_names() -> list[str]:
-    """All registered factor names with builtins ensured, sorted for CLI choices."""
-    register_builtin_adapters()
-    return sorted(ADAPTERS)
+    # Adapter resolution lives in app.research.catalog.  There is deliberately
+    # no second process-global registry here.
 
 
 def resolve_pinned_reader(repo: Any) -> Any:
@@ -247,6 +196,91 @@ def _request_echo(request: Any) -> dict[str, Any]:
     raise FullMarketRunnerError("request_echo_unserializable")
 
 
+def normalize_full_market_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap and retain the complete nested verdict for an auditable Run."""
+    normalized = dict(payload)
+    nested = normalized.get("result")
+    verdict_source = nested.get("verdict") if isinstance(nested, dict) else None
+    verdict = verdict_source if isinstance(verdict_source, dict) else normalized.get("verdict")
+    verdict = dict(verdict) if isinstance(verdict, dict) else {}
+    for key in ("arms", "events", "series", "status", "unavailable_reasons"):
+        if key not in verdict:
+            if isinstance(nested, dict) and key in nested:
+                verdict[key] = nested[key]
+            elif key in normalized:
+                verdict[key] = normalized[key]
+    provenance: dict[str, Any] = {}
+    for source in (
+        normalized.get("provenance"),
+        nested.get("provenance") if isinstance(nested, dict) else None,
+        verdict.get("provenance"),
+    ):
+        if isinstance(source, dict):
+            provenance.update(source)
+    pinned = provenance.get("pinned_reader")
+    if isinstance(pinned, dict):
+        for key in ("generation", "manifest", "manifest_sha256", "cohort", "data_availability"):
+            if key in pinned:
+                provenance.setdefault(key, pinned[key])
+    if isinstance(normalized.get("cohort"), dict):
+        provenance.setdefault("cohort", normalized["cohort"])
+    if provenance:
+        verdict["provenance"] = provenance
+        for key in ("generation", "manifest", "manifest_sha256", "cohort", "data_availability"):
+            if key in provenance:
+                verdict[key] = provenance[key]
+    normalized["verdict"] = verdict
+    return normalized
+
+
+def _build_request(
+    adapter: FactorAdapter,
+    start: date,
+    end: date,
+    cohort: list[str],
+    *,
+    oos_start: date | None,
+    cost_bps: float | None,
+    parameters: dict[str, Any] | None,
+) -> Any:
+    if parameters is None:
+        return adapter.build_request(start, end, cohort, oos_start=oos_start, cost_bps=cost_bps)
+    try:
+        return adapter.build_request(
+            start,
+            end,
+            cohort,
+            oos_start=oos_start,
+            cost_bps=cost_bps,
+            parameters=dict(parameters),
+        )
+    except TypeError as exc:
+        raise FullMarketRunnerError("executor_does_not_accept_full_parameters") from exc
+
+
+def _ensure_parameters_consumed(parameters: dict[str, Any], request: Any) -> None:
+    """Reject validated factor fields an executor would otherwise drop."""
+    dumped = (
+        request.model_dump(mode="python")
+        if callable(getattr(request, "model_dump", None))
+        else request
+    )
+    if not isinstance(dumped, dict):
+        return
+    ignored = sorted(set(parameters) - set(dumped) - {"symbols"})
+    if ignored:
+        raise FullMarketRunnerError("executor_unsupported_parameters:" + ",".join(ignored))
+
+
+def reject_unsupported_parameters(
+    parameters: dict[str, Any], supported: set[str] | frozenset[str]
+) -> None:
+    """Fail closed when an adapter cannot consume a validated field."""
+    unsupported = sorted(set(parameters) - set(supported))
+    if unsupported:
+        raise FullMarketRunnerError("executor_unsupported_parameters:" + ",".join(unsupported))
+
+
 def run_full_market_research(
     factor: str,
     repo: Any,
@@ -255,15 +289,14 @@ def run_full_market_research(
     *,
     oos_start: date | None = None,
     cost_bps: float | None = None,
+    parameters: dict[str, Any] | None = None,
+    adapter: FactorAdapter | None = None,
 ) -> dict[str, Any]:
-    """Run one factor over the full pinned-market cohort in a single verdict pass.
+    """Run one factor over the full pinned-market cohort in a single verdict pass."""
+    if adapter is None:
+        from app.research.catalog import resolve_full_market_executor
 
-    Opens the pinned reader and closes it again on success and failure alike.
-    An evaluator ``status="unavailable"`` verdict is an auditable research
-    outcome and is returned with its reasons, never raised.
-    """
-    register_builtin_adapters()
-    adapter = ADAPTERS.get(factor)
+        adapter = resolve_full_market_executor(factor)
     if adapter is None:
         raise FullMarketRunnerError(f"unknown_factor: {factor}")
     reader = resolve_pinned_reader(repo)
@@ -273,15 +306,25 @@ def run_full_market_research(
         provenance = reader_provenance(reader)
         cohort = collect_cohort(reader, start, end)
         cohort_hash = cohort_digest(cohort)
-        request = adapter.build_request(start, end, cohort, oos_start=oos_start, cost_bps=cost_bps)
-        context = RunnerContext(repo=repo, reader=reader)
+        request = _build_request(
+            adapter,
+            start,
+            end,
+            cohort,
+            oos_start=oos_start,
+            cost_bps=cost_bps,
+            parameters=parameters,
+        )
+        if parameters is not None:
+            _ensure_parameters_consumed(parameters, request)
+        context = RunnerContext(repo=repo, reader=reader, parameters=parameters)
         verdict = adapter.serialize_verdict(adapter.evaluate(context, request))
         if not isinstance(verdict, dict):
             raise FullMarketRunnerError("verdict_not_serializable")
         request_echo = verdict.get("request")
         if not isinstance(request_echo, dict):
             request_echo = _request_echo(request)
-        return {
+        result = {
             "schema": RUNNER_SCHEMA,
             "research_id": _research_id(factor, request_echo, cohort_hash),
             "request": request_echo,
@@ -290,6 +333,7 @@ def run_full_market_research(
             "coverage": adapter.extract_coverage(verdict),
             "verdict": verdict,
         }
+        return normalize_full_market_result(result)
     finally:
         _close_reader(reader)
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.weekly_flagpole import service as weekly_flagpole_service
 from app.services.weekly_flagpole.models import COST_BPS, OOS_START, WeeklyFlagpoleRequest
 
@@ -31,7 +31,12 @@ class WeeklyFlagpoleAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> WeeklyFlagpoleRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(parameters, {"start", "end", "oos_start", "cost_bps"})
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
         # The FULL cohort is embedded in a single request; the evaluator is
         # invoked exactly once — no batching, no verdict stitching.
         return WeeklyFlagpoleRequest(

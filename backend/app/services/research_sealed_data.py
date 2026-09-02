@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -24,8 +25,16 @@ class PublishedCanonicalDailyReader:
         if published is None:
             raise RuntimeError("canonical_history_not_published")
         manifest, generation_dir = published
-        manifest_path = generation_dir / "manifest.json"
-        manifest_bytes = manifest_path.read_bytes()
+        manifest_bytes = (generation_dir / "manifest.json").read_bytes()
+        self._initialize(repo, manifest, generation_dir, manifest_bytes)
+
+    def _initialize(
+        self,
+        repo: Any,
+        manifest: dict[str, Any],
+        generation_dir: Path,
+        manifest_bytes: bytes,
+    ) -> None:
         generation = manifest.get("generation")
         columns = manifest.get("columns")
         if not isinstance(generation, str) or not generation:
@@ -57,8 +66,58 @@ class PublishedCanonicalDailyReader:
         self._preloaded_end: date | None = None
 
     @classmethod
+    def from_pin(
+        cls,
+        repo: Any,
+        generation: str,
+        manifest_sha256: str,
+    ) -> PublishedCanonicalDailyReader:
+        """Open an exact immutable generation without consulting ``current.json``."""
+        if (
+            not isinstance(generation, str)
+            or not generation
+            or "/" in generation
+            or generation in {".", ".."}
+        ):
+            raise ValueError("canonical generation pin is invalid")
+        if (
+            not isinstance(manifest_sha256, str)
+            or len(manifest_sha256) != 64
+            or any(value not in "0123456789abcdef" for value in manifest_sha256.lower())
+        ):
+            raise ValueError("canonical manifest pin is invalid")
+        root = Path(repo._external_enriched_root)
+        candidate = root / "generations" / generation
+        manifest_path = candidate / "manifest.json"
+        if candidate.is_symlink() or manifest_path.is_symlink():
+            raise ValueError("canonical generation pin must not use symlinks")
+        resolved_root = root.resolve()
+        generation_dir = candidate.resolve()
+        if resolved_root not in generation_dir.parents or not generation_dir.is_dir():
+            raise FileNotFoundError("pinned canonical generation unavailable")
+        manifest_bytes = manifest_path.read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256.lower():
+            raise ValueError("canonical manifest identity mismatch")
+        try:
+            manifest = json.loads(manifest_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("pinned canonical manifest is invalid") from exc
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("generation") != generation
+            or manifest.get("path") != f"generations/{generation}"
+        ):
+            raise ValueError("pinned canonical manifest generation mismatch")
+        reader = cls.__new__(cls)
+        reader._initialize(repo, manifest, generation_dir, manifest_bytes)
+        return reader
+
+    @classmethod
     def from_repository(cls, repo: Any) -> PublishedCanonicalDailyReader | None:
         try:
+            pinned_opener = getattr(repo, "_open_research_canonical_pin", None)
+            if callable(pinned_opener):
+                return pinned_opener()
             return cls(repo)
         except (OSError, RuntimeError, TypeError, ValueError):
             return None

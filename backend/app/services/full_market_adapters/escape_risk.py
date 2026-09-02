@@ -26,7 +26,7 @@ from app.services.daily_event_research.production import (
     evaluate_escape_risk_production,
 )
 from app.services.full_market_adapters.pinning import source_reader_matches
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.research_sealed_data import PublishedCanonicalDailyReader
 from app.services.volume_breakout import DEFAULT_OOS_START
 
@@ -46,7 +46,7 @@ class EscapeRiskFullMarketRequest:
 
     start: date
     end: date
-    symbols: tuple[str, ...]
+    symbols: list[str]
     oos_start: date
     cost_bps: float
 
@@ -73,13 +73,17 @@ class EscapeRiskAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> EscapeRiskFullMarketRequest:
+        if parameters is not None:
+            reject_unsupported_parameters(parameters, {"start", "end", "oos_start", "cost_bps"})
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
         # The FULL cohort is embedded in a single request; the evaluator is
-        # invoked exactly once — no batching, no verdict stitching.
         return EscapeRiskFullMarketRequest(
             start=start,
             end=end,
-            symbols=tuple(cohort),
+            symbols=list(cohort),
             oos_start=oos_start or DEFAULT_OOS_START,
             cost_bps=cost_bps if cost_bps is not None else COST_BPS_DEFAULT,
         )
@@ -113,7 +117,7 @@ class EscapeRiskAdapter:
                 envelope = self._unavailable(request, [REASON_PRELOAD_FAILED])
                 envelope["preload_error"] = str(exc)
                 return envelope
-        intraday_reader = self._open_intraday_reader(canonical, request)
+        intraday_reader = self._open_intraday_reader(context.repo, canonical, request)
         if intraday_reader is None:
             return self._unavailable(request, ["unavailable_intraday_reader"])
         try:
@@ -127,9 +131,11 @@ class EscapeRiskAdapter:
                 cost_bps=request.cost_bps,
             )
         finally:
-            # The adapter opened the intraday reader, so the adapter closes it;
-            # the runner-owned composite reader is never touched here.
-            intraday_reader.close()
+            # Only the adapter-owned intraday reader is closed here; the
+            # runner-owned composite reader remains owned by the runner.
+            close = getattr(intraday_reader, "close", None)
+            if callable(close):
+                close()
         runtime = self._intraday_runtime_status(verdict)
         if runtime != "available":
             return self._unavailable(
@@ -163,25 +169,27 @@ class EscapeRiskAdapter:
 
     @staticmethod
     def _open_intraday_reader(
+        repo: Any,
         canonical: PublishedCanonicalDailyReader,
         request: EscapeRiskFullMarketRequest,
     ) -> Any | None:
-        """Open the catalog-pinned minutes/trans reader; ``None`` fails closed.
-
-        The markets generation is bound to the canonical manifest; minutes and
-        transactions are resolved once per requested day through the staged
-        catalog. Query failures never fall back to raw storage.
-        """
+        """Open exact preflight routes; only unpinned interactive fallback uses provider current."""
+        pinned_opener = getattr(repo, "open_escape_risk_intraday_reader", None)
+        market_days = canonical.market_days(
+            request.start - timedelta(days=INTRADAY_LOOKBACK_CALENDAR_DAYS),
+            request.end,
+        )
+        if callable(pinned_opener):
+            try:
+                return pinned_opener(canonical.manifest(), tuple(market_days))
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                return None
         try:
             provider_name = get_active_provider_name(capability="minute")
             provider = get_provider(provider_name)
             opener = getattr(provider, "open_escape_risk_intraday_reader", None)
             if not callable(opener):
                 return None
-            market_days = canonical.market_days(
-                request.start - timedelta(days=INTRADAY_LOOKBACK_CALENDAR_DAYS),
-                request.end,
-            )
             return opener(canonical.manifest(), tuple(market_days))
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None

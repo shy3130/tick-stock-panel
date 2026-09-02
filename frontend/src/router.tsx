@@ -34,9 +34,18 @@ const Optimizer = lazy(() => import('./pages/Optimizer').then((m) => ({ default:
 const Agent = lazy(() => import('./pages/Agent').then((m) => ({ default: m.Agent })))
 const Dev = lazy(() => import('./pages/Dev').then((m) => ({ default: m.Dev })))
 const FeatureGuide = lazy(() => import('./pages/FeatureGuide').then((m) => ({ default: m.FeatureGuide })))
-const Research = lazy(() => import('./pages/Research').then((m) => ({ default: m.Research })))
-const SignalScorecard = lazy(() => import('./pages/SignalScorecard').then((m) => ({ default: m.SignalScorecard })))
-const CrossSection = lazy(() => import('./pages/CrossSection').then((m) => ({ default: m.CrossSection })))
+const ResearchLayout = lazy(() => import('./features/research/routes').then((m) => ({ default: m.ResearchLayout })))
+const ResearchOverview = lazy(() => import('./features/research/routes').then((m) => ({ default: m.ResearchOverview })))
+const FactorCatalogPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.FactorCatalogPage })))
+const FactorWorkbenchPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.FactorWorkbenchPage })))
+const RunCenterPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.RunCenterPage })))
+const RunDetailPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.RunDetailPage })))
+const EvidencePage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.EvidencePage })))
+const DataLineagePage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.DataLineagePage })))
+const AutomationPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.AutomationPage })))
+const AnalyticsSymbolPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.AnalyticsSymbolPage })))
+const AnalyticsSignalsPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.AnalyticsSignalsPage })))
+const AnalyticsCrossSectionPage = lazy(() => import('./features/research/routes').then((m) => ({ default: m.AnalyticsCrossSectionPage })))
 const Trading = lazy(() => import('./pages/Trading').then((m) => ({ default: m.Trading })))
 
 
@@ -150,9 +159,26 @@ export const router = createBrowserRouter([
       { path: 'abnormal-moves', element: <AbnormalMoves /> },
       { path: 'trading', element: lazyPage(<Trading />) },
       { path: 'journal', element: <TradeJournal /> },
-      { path: 'research', element: lazyPage(<Research />) },
-      { path: 'signal-scorecard', element: lazyPage(<SignalScorecard />) },
-      { path: 'cross-section', element: lazyPage(<CrossSection />) },
+      {
+        path: 'research',
+        element: lazyPage(<ResearchLayout />),
+        children: [
+          { index: true, element: <Navigate to="overview" replace /> },
+          { path: 'overview', element: <ResearchOverview /> },
+          { path: 'factors', element: <FactorCatalogPage /> },
+          { path: 'factors/:factorId', element: <FactorWorkbenchPage /> },
+          { path: 'runs', element: <RunCenterPage /> },
+          { path: 'runs/:runId', element: <RunDetailPage /> },
+          { path: 'evidence', element: <EvidencePage /> },
+          { path: 'data', element: <DataLineagePage /> },
+          { path: 'automation', element: <AutomationPage /> },
+          { path: 'analytics/symbol', element: <AnalyticsSymbolPage /> },
+          { path: 'analytics/signals', element: <AnalyticsSignalsPage /> },
+          { path: 'analytics/cross-section', element: <AnalyticsCrossSectionPage /> },
+        ],
+      },
+      { path: 'signal-scorecard', element: <Navigate to="/research/analytics/signals" replace /> },
+      { path: 'cross-section', element: <Navigate to="/research/analytics/cross-section" replace /> },
 
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },

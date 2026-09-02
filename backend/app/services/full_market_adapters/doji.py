@@ -4,8 +4,8 @@ Single-shot contract: the complete PIT cohort is handed to
 :func:`evaluate_doji_patterns` exactly once — no batching, no verdict splicing.
 D5 (``tail_session_doji``) opens a catalog-pinned intraday minutes bundle from
 repo/provider readers; minute-data absence degrades D5 only and never blocks
-the D1-D4 daily factors.  This module never self-registers: the runner owner
-integrates it via :func:`app.services.full_market_research.register_adapter`.
+the D1-D4 daily factors.  Its class is instantiated by the controlled
+executor factory in ``app.research.catalog``; there is no local registry.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.services.doji_patterns.models import (
     DojiStatus,
 )
 from app.services.full_market_adapters.pinning import production_scope_matches
-from app.services.full_market_research import RunnerContext
+from app.services.full_market_research import RunnerContext, reject_unsupported_parameters
 from app.services.hold_firm_patterns.adapters import (
     FORWARD_CALENDAR_DAYS,
     LOOKBACK_CALENDAR_DAYS,
@@ -57,7 +57,7 @@ class DojiFullMarketRequest:
     interactive transport constraint, not an evaluator one.
     """
 
-    symbols: tuple[str, ...]
+    symbols: list[str]
     start: date
     end: date
     oos_start: date
@@ -98,8 +98,17 @@ class DojiPatternsFullMarketAdapter:
         *,
         oos_start: date | None,
         cost_bps: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> DojiFullMarketRequest:
-        symbols = tuple(symbol.strip().upper() for symbol in cohort)
+        theta_body_ratio = DOJI_BODY_RATIO_MAX
+        if parameters is not None:
+            reject_unsupported_parameters(
+                parameters, {"start", "oos_start", "end", "theta_body_ratio", "cost_bps"}
+            )
+            start, end = parameters["start"], parameters["end"]
+            oos_start, cost_bps = parameters["oos_start"], parameters["cost_bps"]
+            theta_body_ratio = parameters["theta_body_ratio"]
+        symbols = [symbol.strip().upper() for symbol in cohort]
         if not symbols:
             raise ValueError("doji full-market request requires a non-empty cohort")
         if any(re.fullmatch(SYMBOL_PATTERN, symbol) is None for symbol in symbols):
@@ -117,7 +126,7 @@ class DojiPatternsFullMarketAdapter:
             start=start,
             end=end,
             oos_start=resolved_oos,
-            theta_body_ratio=DOJI_BODY_RATIO_MAX,
+            theta_body_ratio=theta_body_ratio,
             cost_bps=resolved_cost,
         )
 
@@ -175,16 +184,18 @@ class DojiPatternsFullMarketAdapter:
     def _open_intraday_bundle(
         self, scope: ProductionReaderScope, request: DojiFullMarketRequest
     ) -> tuple[object | None, dict[str, Any], Callable[[], None]]:
-        """Open the D5 catalog-pinned minutes bundle from the pinned scope.
-
-        The bundle is request-owned: per-day catalog routes are pinned at
-        construction and the returned ``close`` must run after evaluation.
-        Any intraday failure degrades to ``bundle=None`` — D5 then evaluates
-        as unavailable/censored while D1-D4 keep their complete evaluation.
-        """
+        """Open D5 routes from the preflight pin when available."""
         try:
             days = scope.canonical.market_days(request.start, request.end)
-            reader = CatalogPinnedEscapeRiskIntradayReader(days, scope.market_facts)
+            pinned_opener = getattr(
+                getattr(scope, "repo", None), "open_escape_risk_intraday_reader", None
+            )
+            if callable(pinned_opener):
+                reader = pinned_opener(scope.canonical.manifest(), tuple(days))
+            else:
+                reader = CatalogPinnedEscapeRiskIntradayReader(days, scope.market_facts)
+            if reader is None:
+                return None, {"provided": False, "unavailable_symbol_days": None}, _noop
         except Exception:
             return None, {"provided": False, "unavailable_symbol_days": None}, _noop
         try:

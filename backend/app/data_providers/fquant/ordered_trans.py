@@ -469,26 +469,42 @@ def publish_staged_generation(root: str | os.PathLike[str], built: BuiltGenerati
 class PublishedOrderedTransMinuteReader:
     """Pinned published generation reader; never scans or opens raw CSV."""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        generation: str | None = None,
+        manifest_sha256: str | None = None,
+    ) -> None:
         self._root = os.path.realpath(os.fspath(root))
-        current = read_current_bytes(self._root)
-        if current is None:
-            raise OrderedTransIntegrityError("ordered-trans current.json unavailable")
-        try:
-            pointer = json.loads(current)
-            generation = pointer["generation"]
-        except (ValueError, KeyError, TypeError) as exc:
-            raise OrderedTransIntegrityError("invalid current.json") from exc
+        if generation is None:
+            current = read_current_bytes(self._root)
+            if current is None:
+                raise OrderedTransIntegrityError("ordered-trans current.json unavailable")
+            try:
+                pointer = json.loads(current)
+                generation = pointer["generation"]
+            except (ValueError, KeyError, TypeError) as exc:
+                raise OrderedTransIntegrityError("invalid current.json") from exc
         if not isinstance(generation, str) or not _GENERATION_RE.match(generation):
             raise OrderedTransIntegrityError("invalid ordered-trans generation")
         manifest_bytes = _read_relative_nofollow(self._root, f"{generation}/manifest.json")
+        if manifest_sha256 is not None:
+            if not isinstance(manifest_sha256, str) or not _HEX64_RE.match(
+                manifest_sha256.lower()
+            ):
+                raise OrderedTransIntegrityError("invalid ordered-trans manifest pin")
+            if sha256_hex(manifest_bytes) != manifest_sha256.lower():
+                raise OrderedTransIntegrityError("ordered-trans manifest identity mismatch")
         try:
             manifest = json.loads(manifest_bytes)
         except ValueError as exc:
             raise OrderedTransIntegrityError("invalid manifest JSON") from exc
         if not isinstance(manifest, dict) or canonical_json_bytes(manifest) != manifest_bytes:
             raise OrderedTransIntegrityError("manifest must be canonical JSON")
-        if manifest.get("generation") != generation or not isinstance(manifest.get("entries"), list):
+        if manifest.get("generation") != generation or not isinstance(
+            manifest.get("entries"), list
+        ):
             raise OrderedTransIntegrityError("manifest generation mismatch")
         manifest_core = dict(manifest)
         manifest_core.pop("generation")

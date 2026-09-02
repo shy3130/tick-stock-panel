@@ -1,18 +1,16 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
   Activity,
   AlertCircle,
-  BarChart3,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
-  Database,
   FileSearch,
   FlaskConical,
   Loader2,
   Pencil,
-  ScanSearch,
   Play,
   Plus,
   RefreshCw,
@@ -22,22 +20,45 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
-import { AnalysisPanel } from '@/components/research/AnalysisPanel'
-import { MarketDataPanel } from '@/components/research/MarketDataPanel'
-import { PageHeader } from '@/components/PageHeader'
-import { TSuitabilityPanel } from '@/components/research/TSuitabilityPanel'
 import { toast } from '@/components/Toast'
+import { cn } from '@/lib/cn'
 import {
-  api,
+  addEvidence,
+  createHypothesis,
+  createSchedule,
+  deleteSchedule,
+  getHypothesis,
+  getRunCard,
+  listHypotheses,
+  listSchedules,
+  runScheduleNow,
+  updateHypothesis,
+  updateSchedule,
+} from '../api/evidence'
+import { ParameterForm } from './ParameterForm'
+import { ScopeEditor } from './ScopeEditor'
+import { useFactorCatalog, useFactorDetail } from '../hooks/useResearchQueries'
+import {
+  extractScheduledRunId,
+  factorRunScheduleParams,
+  isRecapScheduleTemplate,
+  parseFactorRunScheduleParams,
+  type AddEvidenceBody,
+  type CreateHypothesisBody,
+  type CreateScheduleBody,
+  type RecapScheduleTemplate,
   type ResearchEvidenceKind,
   type ResearchHypothesis,
   type ResearchHypothesisStatus,
   type ResearchRunCard,
   type ResearchSchedule,
-  type ResearchScheduleTemplate,
-} from '@/lib/api'
-import { cn } from '@/lib/cn'
-import { QK } from '@/lib/queryKeys'
+  type UpdateHypothesisBody,
+  type UpdateScheduleBody,
+} from '../model/notebook'
+import { buildParameterForm, defaultParameters, structurallyValid } from '../model/schema'
+import type { RunScope } from '../model/status'
+import { scopeLabel } from '../model/status'
+import { researchKeys } from '../queryKeys'
 
 const INPUT = 'control w-full text-xs'
 const BTN_PRIMARY = 'btn-primary text-xs'
@@ -57,15 +78,17 @@ const EVIDENCE_KINDS: { value: ResearchEvidenceKind; label: string }[] = [
   { value: 'backtest', label: '回测' },
   { value: 'note', label: '笔记' },
   { value: 'observation', label: '观察' },
+  { value: 'factor_run', label: '因子运行' },
 ]
 
-const SCHEDULE_TEMPLATES: { value: ResearchScheduleTemplate; label: string; hint: string }[] = [
+const APPENDABLE_EVIDENCE_KINDS = EVIDENCE_KINDS.filter((item) => item.value !== 'factor_run')
+
+const RECAP_TEMPLATES: { value: RecapScheduleTemplate; label: string; hint: string }[] = [
   { value: 'market_recap_daily', label: '大盘日复盘', hint: '基于本地市场概览生成事实摘要' },
   { value: 'watchlist_recap_daily', label: '自选日复盘', hint: '汇总自选覆盖、行情与增强数据' },
   { value: 'strategy_pool_weekly', label: '策略池周报', hint: '统计策略池与既有 Run Card' },
 ]
 
-type ResearchTab = 'hypotheses' | 'schedules' | 'market-data' | 'analysis' | 't-suitability'
 
 type HypothesisDraft = {
   title: string
@@ -76,7 +99,7 @@ type HypothesisDraft = {
 
 type ScheduleDraft = {
   name: string
-  template: ResearchScheduleTemplate
+  template: RecapScheduleTemplate
   cron: string
   enabled: boolean
   params: string
@@ -99,7 +122,7 @@ function emptyScheduleDraft(): ScheduleDraft {
 function toScheduleDraft(item: ResearchSchedule): ScheduleDraft {
   return {
     name: item.name,
-    template: isScheduleTemplate(item.template) ? item.template : 'market_recap_daily',
+    template: isRecapScheduleTemplate(item.template) ? item.template : 'market_recap_daily',
     cron: item.cron,
     enabled: item.enabled,
     params: stringifyJson(item.params),
@@ -108,10 +131,6 @@ function toScheduleDraft(item: ResearchSchedule): ScheduleDraft {
 
 function isHypothesisStatus(value: string): value is ResearchHypothesisStatus {
   return HYPOTHESIS_STATUSES.some((item) => item.value === value)
-}
-
-function isScheduleTemplate(value: string): value is ResearchScheduleTemplate {
-  return SCHEDULE_TEMPLATES.some((item) => item.value === value)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -147,72 +166,11 @@ function statusMeta(status: string): { label: string; badge: string; icon: Lucid
 }
 
 function scheduleTemplateLabel(template: string): string {
-  return SCHEDULE_TEMPLATES.find((item) => item.value === template)?.label ?? template
+  if (template === 'factor_run') return '因子运行'
+  return RECAP_TEMPLATES.find((item) => item.value === template)?.label ?? template
 }
 
-export function Research() {
-  const [tab, setTab] = useState<ResearchTab>('hypotheses')
-
-  return (
-    <div className="workspace-page h-full">
-      <PageHeader title="研究中心" subtitle="假设、证据与定时研究均留存为可复核事实" />
-      <div className="workspace-toolbar overflow-x-auto border-b border-border px-3 pt-2 pb-2 sm:px-4">
-        <TabButton active={tab === 'hypotheses'} icon={FlaskConical} onClick={() => setTab('hypotheses')}>
-          研究假设
-        </TabButton>
-        <TabButton active={tab === 'schedules'} icon={Activity} onClick={() => setTab('schedules')}>
-          定时研究
-        </TabButton>
-        <TabButton active={tab === 'market-data'} icon={Database} onClick={() => setTab('market-data')}>
-          市场数据
-        </TabButton>
-        <TabButton active={tab === 'analysis'} icon={BarChart3} onClick={() => setTab('analysis')}>
-          分析计算
-        </TabButton>
-        <TabButton active={tab === 't-suitability'} icon={ScanSearch} onClick={() => setTab('t-suitability')}>
-          做T适用性
-        </TabButton>
-      </div>
-      <main className="workspace-content min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto max-w-6xl">
-          {tab === 'hypotheses'
-            ? <HypothesesPanel />
-            : tab === 'schedules'
-              ? <SchedulesPanel />
-              : tab === 'market-data'
-                ? <MarketDataPanel />
-                : tab === 'analysis'
-                  ? <AnalysisPanel />
-                  : <TSuitabilityPanel />}
-        </div>
-      </main>
-    </div>
-  )
-}
-
-function TabButton({ active, icon: Icon, children, onClick }: {
-  active: boolean
-  icon: LucideIcon
-  children: ReactNode
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-btn px-3 py-1.5 text-xs font-medium transition-colors',
-        active ? 'bg-accent/15 text-accent' : 'text-secondary hover:bg-elevated/60 hover:text-foreground',
-      )}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {children}
-    </button>
-  )
-}
-
-function HypothesesPanel() {
+export function HypothesesPanel() {
   const qc = useQueryClient()
   const [status, setStatus] = useState<string>('')
   const [search, setSearch] = useState('')
@@ -220,17 +178,17 @@ function HypothesesPanel() {
   const [draft, setDraft] = useState<HypothesisDraft>(emptyHypothesisDraft)
 
   const hypothesesQuery = useQuery({
-    queryKey: QK.researchHypotheses(status || undefined, search || undefined),
-    queryFn: () => api.researchListHypotheses({ status: status || undefined, query: search.trim() || undefined }),
+    queryKey: researchKeys.hypotheses(status || undefined, search || undefined),
+    queryFn: () => listHypotheses({ status: status || undefined, query: search.trim() || undefined }),
   })
 
   const invalidateHypotheses = (id?: string) => {
-    void qc.invalidateQueries({ queryKey: QK.researchHypothesesRoot })
-    if (id) void qc.invalidateQueries({ queryKey: QK.researchHypothesis(id) })
+    void qc.invalidateQueries({ queryKey: researchKeys.hypothesesRoot })
+    if (id) void qc.invalidateQueries({ queryKey: researchKeys.hypothesis(id) })
   }
 
   const createMutation = useMutation({
-    mutationFn: (body: Parameters<typeof api.researchCreateHypothesis>[0]) => api.researchCreateHypothesis(body),
+    mutationFn: (body: CreateHypothesisBody) => createHypothesis(body),
     onSuccess: () => {
       invalidateHypotheses()
       setCreateOpen(false)
@@ -240,8 +198,8 @@ function HypothesesPanel() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof api.researchUpdateHypothesis>[1] }) =>
-      api.researchUpdateHypothesis(id, body),
+    mutationFn: ({ id, body }: { id: string; body: UpdateHypothesisBody }) =>
+      updateHypothesis(id, body),
     onSuccess: (_, variables) => {
       invalidateHypotheses(variables.id)
       toast('假设状态已更新', 'success')
@@ -249,8 +207,8 @@ function HypothesesPanel() {
   })
 
   const evidenceMutation = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof api.researchAddEvidence>[1] }) =>
-      api.researchAddEvidence(id, body),
+    mutationFn: ({ id, body }: { id: string; body: AddEvidenceBody }) =>
+      addEvidence(id, body),
     onSuccess: (_, variables) => {
       invalidateHypotheses(variables.id)
       toast('证据已追加', 'success')
@@ -438,11 +396,18 @@ function HypothesisCard({ item, updatePending, evidencePending, onStatusChange, 
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-[10px] font-medium text-accent">{EVIDENCE_KINDS.find((option) => option.value === evidence.kind)?.label ?? evidence.kind}</span>
                   <span className="font-mono text-[10px] text-muted">{fmtTime(evidence.ts)}</span>
-                  {evidence.ref && (
-                    <button type="button" onClick={() => setRunCardId(evidence.ref)} className="text-[10px] text-secondary underline decoration-border underline-offset-2 hover:text-accent">
+                  {evidence.ref && evidence.kind === 'factor_run' ? (
+                    <Link
+                      to={`/research/runs/${encodeURIComponent(evidence.ref)}`}
+                      className="break-all text-[10px] text-secondary underline decoration-border underline-offset-2 hover:text-accent"
+                    >
+                      查看因子运行 · {evidence.ref}
+                    </Link>
+                  ) : evidence.ref ? (
+                    <button type="button" onClick={() => setRunCardId(evidence.ref)} className="break-all text-[10px] text-secondary underline decoration-border underline-offset-2 hover:text-accent">
                       查看 Run Card · {evidence.ref}
                     </button>
-                  )}
+                  ) : null}
                 </div>
                 <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-secondary">{evidence.summary}</p>
               </li>
@@ -454,7 +419,7 @@ function HypothesisCard({ item, updatePending, evidencePending, onStatusChange, 
             <label className="grid gap-1 text-[10px] text-muted">
               证据类别
               <select value={kind} onChange={(event) => setKind(event.target.value as ResearchEvidenceKind)} className={INPUT}>
-                {EVIDENCE_KINDS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {APPENDABLE_EVIDENCE_KINDS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
             <label className="grid gap-1 text-[10px] text-muted">
@@ -482,8 +447,8 @@ function HypothesisCard({ item, updatePending, evidencePending, onStatusChange, 
 
 function HypothesisDetailInline({ id, onClose }: { id: string; onClose: () => void }) {
   const detailQuery = useQuery({
-    queryKey: QK.researchHypothesis(id),
-    queryFn: () => api.researchGetHypothesis(id),
+    queryKey: researchKeys.hypothesis(id),
+    queryFn: () => getHypothesis(id),
   })
 
   return (
@@ -510,8 +475,8 @@ function HypothesisDetailInline({ id, onClose }: { id: string; onClose: () => vo
 
 function RunCardInline({ runId, onClose }: { runId: string; onClose: () => void }) {
   const runCardQuery = useQuery({
-    queryKey: QK.researchRunCard(runId),
-    queryFn: () => api.researchGetRunCard(runId),
+    queryKey: researchKeys.runCard(runId),
+    queryFn: () => getRunCard(runId),
   })
 
   return (
@@ -560,86 +525,120 @@ function JsonDetails({ title, value }: { title: string; value: Record<string, un
   )
 }
 
-function SchedulesPanel() {
+export function SchedulesPanel({ kind }: { kind: 'recap' | 'factor_run' }) {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [draft, setDraft] = useState<ScheduleDraft>(emptyScheduleDraft)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [deleteCandidate, setDeleteCandidate] = useState<ResearchSchedule | null>(null)
+  const factorRun = kind === 'factor_run'
 
-  const schedulesQuery = useQuery({ queryKey: QK.researchSchedules, queryFn: api.researchListSchedules })
-  const invalidateSchedules = () => void qc.invalidateQueries({ queryKey: QK.researchSchedules })
+  const schedulesQuery = useQuery({ queryKey: researchKeys.schedules, queryFn: listSchedules })
+  const invalidateSchedules = () => void qc.invalidateQueries({ queryKey: researchKeys.schedules })
+  const items = (schedulesQuery.data?.items ?? []).filter((item) =>
+    factorRun ? item.template === 'factor_run' : item.template !== 'factor_run',
+  )
 
   const createMutation = useMutation({
-    mutationFn: (body: Parameters<typeof api.researchCreateSchedule>[0]) => api.researchCreateSchedule(body),
+    mutationFn: (body: CreateScheduleBody) => createSchedule(body),
     onSuccess: () => {
       invalidateSchedules()
       setCreateOpen(false)
       setDraft(emptyScheduleDraft())
-      toast('定时研究已创建', 'success')
+      toast(factorRun ? '因子运行任务已创建' : '定时复盘已创建', 'success')
     },
   })
   const patchMutation = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof api.researchUpdateSchedule>[1] }) => api.researchUpdateSchedule(id, body),
+    mutationFn: ({ id, body }: { id: string; body: UpdateScheduleBody }) => updateSchedule(id, body),
     onSuccess: () => { invalidateSchedules(); setEditingId(null); toast('定时研究已更新', 'success') },
   })
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.researchDeleteSchedule(id),
+    mutationFn: (id: string) => deleteSchedule(id),
     onSuccess: () => { invalidateSchedules(); setDeleteCandidate(null); toast('定时研究已删除', 'success') },
   })
   const runMutation = useMutation({
-    mutationFn: (id: string) => api.researchRunScheduleNow(id),
-    onSuccess: () => { invalidateSchedules(); toast('研究任务已运行，状态已刷新', 'success') },
+    mutationFn: (id: string) => runScheduleNow(id),
+    onSuccess: (response) => {
+      invalidateSchedules()
+      const runId = extractScheduledRunId(response.result)
+      toast(runId ? `已创建运行 ${runId}` : '研究任务已运行，状态已刷新', 'success')
+    },
   })
 
-  const submitCreate = (payload: Parameters<typeof api.researchCreateSchedule>[0]) => createMutation.mutate(payload)
-  const submitEdit = (id: string, payload: Parameters<typeof api.researchUpdateSchedule>[1]) => patchMutation.mutate({ id, body: payload })
-
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <section className={cn(CARD)}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">定时研究</h2>
-            <p className="mt-1 text-xs text-muted">仅运行本地研究模板；运行结果会留下最近状态与可追溯 Run Card。</p>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-foreground">{factorRun ? '因子运行' : '三类复盘'}</h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              {factorRun
+                ? '冻结 factor_id、scope 与完整 parameters；按 Cron 创建 Durable Run，不写入旧 Run Card。'
+                : '大盘日复盘、自选日复盘、策略池周报继续生成并关联既有 Run Card。'}
+            </p>
           </div>
-          <button type="button" onClick={() => setCreateOpen((open) => !open)} className={BTN_PRIMARY} aria-expanded={createOpen}>
-            <Plus className="h-3.5 w-3.5" />新建定时研究
+          <button type="button" onClick={() => setCreateOpen((open) => !open)} className={cn(BTN_PRIMARY, 'min-h-11 shrink-0')} aria-expanded={createOpen}>
+            <Plus className="h-3.5 w-3.5" />{factorRun ? '新建因子运行' : '新建复盘'}
           </button>
         </div>
         {createMutation.isError && <InlineError message={messageOf(createMutation.error)} />}
       </section>
 
-      {createOpen && (
+      {createOpen && (factorRun ? (
+        <FactorRunScheduleForm
+          title="新建因子运行"
+          pending={createMutation.isPending}
+          submitLabel="创建任务"
+          onCancel={() => setCreateOpen(false)}
+          onSubmit={(body) => createMutation.mutate(body)}
+        />
+      ) : (
         <ScheduleForm
-          title="新建定时研究"
+          title="新建定时复盘"
           draft={draft}
           pending={createMutation.isPending}
           submitLabel="创建任务"
           onChange={setDraft}
           onCancel={() => { setCreateOpen(false); setDraft(emptyScheduleDraft()) }}
-          onSubmit={submitCreate}
+          onSubmit={(body) => createMutation.mutate(body)}
         />
-      )}
+      ))}
 
-      {schedulesQuery.isPending && <LoadingState label="正在读取定时研究" />}
-      {schedulesQuery.isError && <QueryError onRetry={() => void schedulesQuery.refetch()} message={messageOf(schedulesQuery.error)} />}
-      {schedulesQuery.data?.items.length === 0 && (
-        <EmptyState icon={Activity} title="尚未设置定时研究" hint="创建任务后，可按 Cron 周期生成大盘、自选或策略池的本地事实摘要。" />
-      )}
-      <div className="grid gap-3 lg:grid-cols-2">
-        {schedulesQuery.data?.items.map((item) => (
+      {schedulesQuery.isPending ? <LoadingState label="正在读取定时研究" /> : null}
+      {schedulesQuery.isError ? <QueryError onRetry={() => void schedulesQuery.refetch()} message={messageOf(schedulesQuery.error)} /> : null}
+      {schedulesQuery.data && items.length === 0 ? (
+        <EmptyState
+          icon={Activity}
+          title={factorRun ? '尚未设置因子运行' : '尚未设置定时复盘'}
+          hint={factorRun ? '选择因子并冻结范围与参数后，可按 Cron 创建 Durable Run。' : '创建任务后，可按 Cron 生成大盘、自选或策略池的本地事实摘要。'}
+        />
+      ) : null}
+      <div className="grid min-w-0 gap-3">
+        {items.map((item) => (
           editingId === item.id ? (
-            <ScheduleForm
-              key={item.id}
-              title={`编辑：${item.name}`}
-              draft={toScheduleDraft(item)}
-              pending={patchMutation.isPending && patchMutation.variables?.id === item.id}
-              submitLabel="保存修改"
-              error={patchMutation.isError && patchMutation.variables?.id === item.id ? messageOf(patchMutation.error) : undefined}
-              onCancel={() => setEditingId(null)}
-              onSubmit={(body) => submitEdit(item.id, body)}
-            />
+            factorRun ? (
+              <FactorRunScheduleForm
+                key={item.id}
+                title={`编辑：${item.name}`}
+                initial={item}
+                pending={patchMutation.isPending && patchMutation.variables?.id === item.id}
+                submitLabel="保存修改"
+                error={patchMutation.isError && patchMutation.variables?.id === item.id ? messageOf(patchMutation.error) : undefined}
+                onCancel={() => setEditingId(null)}
+                onSubmit={(body) => patchMutation.mutate({ id: item.id, body })}
+              />
+            ) : (
+              <ScheduleForm
+                key={item.id}
+                title={`编辑：${item.name}`}
+                draft={toScheduleDraft(item)}
+                pending={patchMutation.isPending && patchMutation.variables?.id === item.id}
+                submitLabel="保存修改"
+                error={patchMutation.isError && patchMutation.variables?.id === item.id ? messageOf(patchMutation.error) : undefined}
+                onCancel={() => setEditingId(null)}
+                onSubmit={(body) => patchMutation.mutate({ id: item.id, body })}
+              />
+            )
           ) : (
             <ScheduleCard
               key={item.id}
@@ -655,10 +654,12 @@ function SchedulesPanel() {
           )
         ))}
       </div>
-      {deleteCandidate && (
+      {deleteCandidate ? (
         <section className="rounded-card border border-danger/40 bg-danger/5 p-4" aria-label="确认删除定时研究">
           <p className="text-sm font-medium text-foreground">删除「{deleteCandidate.name}」？</p>
-          <p className="mt-1 text-xs text-secondary">将移除该任务及其调度配置，既有 Run Card 不会被删除。</p>
+          <p className="mt-1 text-xs text-secondary">
+            {factorRun ? '将移除该调度；已生成的因子 Run 不会被删除。' : '将移除该任务及其调度配置，既有 Run Card 不会被删除。'}
+          </p>
           {deleteMutation.isError && <InlineError message={messageOf(deleteMutation.error)} />}
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setDeleteCandidate(null)} className={BTN_GHOST}>取消</button>
@@ -667,7 +668,7 @@ function SchedulesPanel() {
             </button>
           </div>
         </section>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -687,9 +688,10 @@ function ScheduleCard({ item, togglePending, runPending, runError, onToggle, onE
     : item.last_status === 'failed'
       ? { label: '最近失败', cls: 'text-danger' }
       : { label: '尚未运行', cls: 'text-muted' }
+  const factorParams = item.template === 'factor_run' ? parseFactorRunScheduleParams(item.params) : null
 
   return (
-    <article className={cn(CARD)}>
+    <article className={cn(CARD, 'min-w-0 overflow-hidden')}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -701,23 +703,37 @@ function ScheduleCard({ item, togglePending, runPending, runError, onToggle, onE
           <p className="mt-1 text-xs text-secondary">{scheduleTemplateLabel(item.template)}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <button type="button" onClick={onEdit} className="inline-flex h-7 w-7 items-center justify-center rounded-btn text-muted hover:bg-elevated hover:text-foreground" aria-label={`编辑 ${item.name}`}><Pencil className="h-3.5 w-3.5" /></button>
-          <button type="button" onClick={onDelete} className="inline-flex h-7 w-7 items-center justify-center rounded-btn text-muted hover:bg-danger/10 hover:text-danger" aria-label={`删除 ${item.name}`}><Trash2 className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={onEdit} className="inline-flex h-11 w-11 items-center justify-center rounded-btn text-muted hover:bg-elevated hover:text-foreground" aria-label={`编辑 ${item.name}`}><Pencil className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={onDelete} className="inline-flex h-11 w-11 items-center justify-center rounded-btn text-muted hover:bg-danger/10 hover:text-danger" aria-label={`删除 ${item.name}`}><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-y border-border/60 py-3 text-xs">
+      <div className="mt-4 grid grid-cols-1 gap-x-3 gap-y-2 border-y border-border/60 py-3 text-xs sm:grid-cols-2">
         <MetaRow label="Cron" value={item.cron} mono />
         <MetaRow label="最近运行" value={fmtTime(item.last_run_at)} />
         <MetaRow label="状态" value={lastState.label} />
         <MetaRow label="更新于" value={fmtTime(item.updated_at)} />
+        {factorParams ? (
+          <>
+            <MetaRow label="因子" value={factorParams.factor_id} mono />
+            <MetaRow label="范围" value={scopeLabel(factorParams.scope)} />
+          </>
+        ) : null}
       </div>
-      {item.last_error && <p className="mt-3 rounded-btn bg-danger/10 px-2.5 py-2 text-xs leading-relaxed text-danger">最近错误：{item.last_error}</p>}
+      {item.template === 'factor_run' && factorParams ? (
+        <Link
+          to={`/research/factors/${encodeURIComponent(factorParams.factor_id)}`}
+          className="mt-3 inline-block break-all text-[11px] text-accent hover:underline"
+        >
+          打开因子工作台
+        </Link>
+      ) : null}
+      {item.last_error && <p className="mt-3 break-words rounded-btn bg-danger/10 px-2.5 py-2 text-xs leading-relaxed text-danger">最近错误：{item.last_error}</p>}
       {runError && <InlineError message={runError} />}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <button type="button" role="switch" aria-checked={item.enabled} disabled={togglePending} onClick={() => onToggle(!item.enabled)} className={cn(BTN_GHOST, 'px-2 py-1', item.enabled && 'border-success/30 text-success')}>
+        <button type="button" role="switch" aria-checked={item.enabled} disabled={togglePending} onClick={() => onToggle(!item.enabled)} className={cn(BTN_GHOST, 'min-h-11 px-2 py-1', item.enabled && 'border-success/30 text-success')}>
           {togglePending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Activity className="h-3 w-3" />}{item.enabled ? '停用任务' : '启用任务'}
         </button>
-        <button type="button" onClick={onRun} disabled={runPending} className={cn(BTN_PRIMARY, 'px-2 py-1')}>
+        <button type="button" onClick={onRun} disabled={runPending} className={cn(BTN_PRIMARY, 'min-h-11 px-2 py-1')}>
           {runPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}立即运行
         </button>
       </div>
@@ -733,7 +749,7 @@ function ScheduleForm({ title, draft: initialDraft, pending, submitLabel, error,
   error?: string
   onChange?: (draft: ScheduleDraft) => void
   onCancel: () => void
-  onSubmit: (body: Parameters<typeof api.researchCreateSchedule>[0]) => void
+  onSubmit: (body: CreateScheduleBody) => void
 }) {
   const [draft, setDraft] = useState(initialDraft)
   const [paramsError, setParamsError] = useState<string | null>(null)
@@ -759,7 +775,7 @@ function ScheduleForm({ title, draft: initialDraft, pending, submitLabel, error,
   }
 
   return (
-    <section className={cn(CARD)}>
+    <section className={cn(CARD, 'min-w-0')}>
       <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       <form onSubmit={submit} className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="grid gap-1.5 text-xs text-secondary">
@@ -768,10 +784,10 @@ function ScheduleForm({ title, draft: initialDraft, pending, submitLabel, error,
         </label>
         <label className="grid gap-1.5 text-xs text-secondary">
           研究模板
-          <select value={draft.template} onChange={(event) => update({ ...draft, template: event.target.value as ResearchScheduleTemplate })} className={INPUT}>
-            {SCHEDULE_TEMPLATES.map((template) => <option key={template.value} value={template.value}>{template.label}</option>)}
+          <select value={draft.template} onChange={(event) => update({ ...draft, template: event.target.value as RecapScheduleTemplate })} className={INPUT}>
+            {RECAP_TEMPLATES.map((template) => <option key={template.value} value={template.value}>{template.label}</option>)}
           </select>
-          <span className="text-[10px] text-muted">{SCHEDULE_TEMPLATES.find((item) => item.value === draft.template)?.hint}</span>
+          <span className="text-[10px] text-muted">{RECAP_TEMPLATES.find((item) => item.value === draft.template)?.hint}</span>
         </label>
         <label className="grid gap-1.5 text-xs text-secondary">
           Cron 表达式
@@ -791,6 +807,140 @@ function ScheduleForm({ title, draft: initialDraft, pending, submitLabel, error,
         <div className="flex justify-end gap-2 md:col-span-2">
           <button type="button" onClick={onCancel} className={BTN_GHOST}>取消</button>
           <button type="submit" disabled={pending || !draft.name.trim() || !draft.cron.trim()} className={BTN_PRIMARY}>
+            {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{submitLabel}
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+function FactorRunScheduleForm({
+  title,
+  initial,
+  pending,
+  submitLabel,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  title: string
+  initial?: ResearchSchedule
+  pending: boolean
+  submitLabel: string
+  error?: string
+  onCancel: () => void
+  onSubmit: (body: CreateScheduleBody) => void
+}) {
+  const parsed = initial ? parseFactorRunScheduleParams(initial.params) : null
+  const [name, setName] = useState(initial?.name ?? '')
+  const [cron, setCron] = useState(initial?.cron ?? '0 19 * * 1-5')
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true)
+  const [factorId, setFactorId] = useState(parsed?.factor_id ?? '')
+  const [scope, setScope] = useState<RunScope>(parsed?.scope ?? { type: 'symbols', symbols: [] })
+  const [parameters, setParameters] = useState<Record<string, unknown>>(parsed?.parameters ?? {})
+  const [formError, setFormError] = useState<string | null>(null)
+  const [hydratedFor, setHydratedFor] = useState<string | null>(parsed?.factor_id ?? null)
+
+  const catalog = useFactorCatalog({})
+  const detailQuery = useFactorDetail(factorId || undefined)
+  const detail = detailQuery.data
+  const form = useMemo(
+    () => buildParameterForm(detail?.parameter_schema ?? null, detail?.ui_groups),
+    [detail],
+  )
+
+  useEffect(() => {
+    if (!detail || hydratedFor === detail.id) return
+    if (parsed?.factor_id === detail.id) {
+      setHydratedFor(detail.id)
+      return
+    }
+    setScope(detail.supported_scopes.includes('symbols') ? { type: 'symbols', symbols: [] } : { type: 'full_market' })
+    setParameters(defaultParameters(form))
+    setHydratedFor(detail.id)
+  }, [detail, form, hydratedFor, parsed?.factor_id])
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!factorId) {
+      setFormError('请选择因子。')
+      return
+    }
+    const structureError = structurallyValid(form, parameters, scope)
+    if (structureError) {
+      setFormError(structureError)
+      return
+    }
+    setFormError(null)
+    onSubmit({
+      name: name.trim(),
+      template: 'factor_run',
+      cron: cron.trim(),
+      enabled,
+      params: factorRunScheduleParams({ factor_id: factorId, scope, parameters }),
+    })
+  }
+
+  return (
+    <section className={cn(CARD, 'min-w-0')}>
+      <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+      <form onSubmit={submit} className="mt-4 grid min-w-0 gap-3">
+        <label className="grid gap-1.5 text-xs text-secondary">
+          名称
+          <input value={name} onChange={(event) => setName(event.target.value)} className={INPUT} required maxLength={120} placeholder="例如：MACD 全市场周跑" />
+        </label>
+        <label className="grid gap-1.5 text-xs text-secondary">
+          因子
+          <select
+            value={factorId}
+            onChange={(event) => {
+              const next = event.target.value
+              setFactorId(next)
+              if (parsed && parsed.factor_id === next) {
+                setScope(parsed.scope)
+                setParameters(parsed.parameters)
+                setHydratedFor(next)
+                return
+              }
+              setHydratedFor(null)
+            }}
+            className={INPUT}
+            required
+          >
+            <option value="">{catalog.isPending ? '读取因子目录…' : '选择因子'}</option>
+            {(catalog.data?.items ?? []).map((item) => (
+              <option key={item.id} value={item.id}>{item.title} · {item.id}</option>
+            ))}
+          </select>
+        </label>
+        {catalog.data && catalog.data.items.length === 0 ? (
+          <p className="text-xs text-muted">因子目录为空，无法创建 factor_run。</p>
+        ) : null}
+        {catalog.isError ? <InlineError message={messageOf(catalog.error)} /> : null}
+        {detailQuery.isError ? <InlineError message={messageOf(detailQuery.error)} /> : null}
+        {detail ? <ScopeEditor detail={detail} scope={scope} onChange={setScope} /> : null}
+        {detail ? (
+          <ParameterForm
+            form={form}
+            values={parameters}
+            onChange={(field, value) => setParameters((current) => ({ ...current, [field]: value }))}
+          />
+        ) : null}
+        <label className="grid gap-1.5 text-xs text-secondary">
+          Cron 表达式
+          <input value={cron} onChange={(event) => setCron(event.target.value)} className={cn(INPUT, 'font-mono')} required placeholder="0 19 * * 1-5" />
+          <span className="text-[10px] text-muted">分 时 日 月 周，共五段；服务端会校验段数。</span>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-secondary">
+          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} className="h-3.5 w-3.5 accent-accent" />
+          创建后立即启用
+        </label>
+        {formError ? <InlineError message={formError} /> : null}
+        {error ? <InlineError message={error} /> : null}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className={BTN_GHOST}>取消</button>
+          <button type="submit" disabled={pending || !name.trim() || !cron.trim() || !factorId} className={BTN_PRIMARY}>
             {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{submitLabel}
           </button>
         </div>

@@ -25,6 +25,7 @@ import { toast } from '@/components/Toast'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
 import { DecisionTrace } from '@/components/analysis/DecisionTrace'
+import { PositionAnalysisAgentPanel } from '@/components/trading/PositionAnalysisAgentPanel'
 import { resolveEntryProfile } from '@/lib/aiProfile'
 import { cn } from '@/lib/cn'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
@@ -331,6 +332,11 @@ function PositionsPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void
         <div className="panel px-5 py-8 text-center text-sm text-muted">组合快照不可用。</div>
       )}
 
+      <PositionAnalysisAgentPanel
+        snapshotReady={Boolean(pf)}
+        fholdAvailable={Boolean(pf?.fhold.available)}
+        positionCount={pf?.fhold.positions.length ?? 0}
+      />
       <PortfolioRiskPanel />
 
       {/* fhold 真实券商持仓 */}

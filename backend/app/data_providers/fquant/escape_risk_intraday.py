@@ -125,6 +125,7 @@ def _manifest_identity(path: str) -> dict[str, object]:
     ):
         raise ValueError(f"catalog route manifest does not pin file: {db}")
     return {
+        "path": str(db),
         "generation": generation,
         "file": db.name,
         "manifest_sha256": hashlib.sha256(payload).hexdigest(),
@@ -138,15 +139,24 @@ class CatalogPinnedEscapeRiskIntradayReader:
         self,
         days: Sequence[date],
         markets_reader: PublishedDailyMarketFactsReader,
+        *,
+        route_pins: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
     ) -> None:
         self._days = tuple(sorted(set(days)))
         self._markets = markets_reader
-        self._minutes_connections = ConnectionSet(lambda path: connect_duckdb(path, read_only=True))
-        self._trans_connections = ConnectionSet(lambda path: connect_duckdb(path, read_only=True))
+        self._minutes_connections = ConnectionSet(
+            lambda path: connect_duckdb(path, read_only=True)
+        )
+        self._trans_connections = ConnectionSet(
+            lambda path: connect_duckdb(path, read_only=True)
+        )
         self._routes: dict[date, _RoutePair] = {}
         self._route_failures: dict[date, str] = {}
         self._identities: dict[str, dict[str, object]] = {}
         self._closed = False
+        if route_pins is not None:
+            self._load_pinned_routes(route_pins)
+            return
         for day in self._days:
             try:
                 minutes_path = catalog_resolver.resolve_route("tdx_minutes", "a", day)
@@ -156,6 +166,33 @@ class CatalogPinnedEscapeRiskIntradayReader:
                 self._routes[day] = _RoutePair(minutes_path, trans_path)
             except (catalog_resolver.CatalogError, OSError, TypeError, ValueError) as exc:
                 self._route_failures[day] = f"catalog_route_unavailable:{exc}"
+
+    def _load_pinned_routes(
+        self, route_pins: Mapping[str, Mapping[str, Mapping[str, object]]]
+    ) -> None:
+        for day in self._days:
+            raw = route_pins.get(day.isoformat())
+            if not isinstance(raw, Mapping):
+                self._route_failures[day] = "pinned_route_missing"
+                continue
+            try:
+                paths: dict[str, str] = {}
+                for kind in ("minutes", "trans"):
+                    identity = raw.get(kind)
+                    if not isinstance(identity, Mapping):
+                        raise ValueError(f"{kind} route pin missing")
+                    path = identity.get("path")
+                    if not isinstance(path, str) or not path:
+                        raise ValueError(f"{kind} route path missing")
+                    resolved = _manifest_identity(path)
+                    for field in ("generation", "manifest_sha256", "file"):
+                        if resolved.get(field) != identity.get(field):
+                            raise ValueError(f"{kind} route identity mismatch")
+                    paths[kind] = path
+                    self._identities.setdefault(path, resolved)
+                self._routes[day] = _RoutePair(paths["minutes"], paths["trans"])
+            except (OSError, TypeError, ValueError) as exc:
+                self._route_failures[day] = f"pinned_route_unavailable:{exc}"
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -199,6 +236,38 @@ class CatalogPinnedEscapeRiskIntradayReader:
         for row in rows:
             grouped.setdefault(str(row[0]), []).append(row[1:])
         return grouped
+
+    def route_pins(self) -> dict[str, dict[str, dict[str, object]]]:
+        """Return the exact route paths and manifest identities for persistence."""
+        return {
+            day.isoformat(): {
+                "minutes": dict(self._identities[pair.minutes_path]),
+                "trans": dict(self._identities[pair.trans_path]),
+            }
+            for day, pair in self._routes.items()
+        }
+
+    def identity(self) -> dict[str, str]:
+        payload = json.dumps(
+            self.route_pins(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        return {
+            "generation": f"catalog-routes:{digest[:16]}",
+            "manifest_sha256": digest,
+        }
+
+    @classmethod
+    def from_pin(
+        cls,
+        days: Sequence[date],
+        markets_reader: PublishedDailyMarketFactsReader,
+        route_pins: Mapping[str, Mapping[str, Mapping[str, object]]],
+    ) -> CatalogPinnedEscapeRiskIntradayReader:
+        return cls(days, markets_reader, route_pins=route_pins)
 
     def _query_day(
         self, pair: _RoutePair, codes: Sequence[str], day: date

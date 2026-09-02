@@ -101,14 +101,17 @@ class RaisingAdapter(UnavailableAdapter):
 def recording():
     adapter = RecordingAdapter()
     adapter.calls = []
-    runner.register_adapter(adapter, overwrite=True)
     return adapter
 
 
 def test_empty_universe_fails_closed(recording):
     with pytest.raises(runner.FullMarketRunnerError, match="universe_empty"):
         runner.run_full_market_research(
-            "test-recording", Repo(Reader(())), date(2025, 1, 1), date(2025, 1, 2)
+            "test-recording",
+            Repo(Reader(())),
+            date(2025, 1, 1),
+            date(2025, 1, 2),
+            adapter=recording,
         )
     assert recording.calls == []
 
@@ -116,14 +119,22 @@ def test_empty_universe_fails_closed(recording):
 def test_missing_provenance_fails_closed(recording):
     with pytest.raises(runner.FullMarketRunnerError, match="provenance"):
         runner.run_full_market_research(
-            "test-recording", Repo(Reader(("A",), "bad")), date(2025, 1, 1), date(2025, 1, 2)
+            "test-recording",
+            Repo(Reader(("A",), "bad")),
+            date(2025, 1, 1),
+            date(2025, 1, 2),
+            adapter=recording,
         )
     assert recording.calls == []
 
 
 def test_complete_cohort_passed_once(recording):
     payload = runner.run_full_market_research(
-        "test-recording", Repo(Reader((" b ", "A", "b", "c"))), date(2025, 1, 1), date(2025, 1, 2)
+        "test-recording",
+        Repo(Reader((" b ", "A", "b", "c"))),
+        date(2025, 1, 1),
+        date(2025, 1, 2),
+        adapter=recording,
     )
     assert len(recording.calls) == 1
     assert isinstance(recording.calls[0][0], runner.RunnerContext)
@@ -135,7 +146,7 @@ def test_complete_cohort_passed_once(recording):
 def test_no_output_path_writes_nothing(tmp_path, recording, monkeypatch):
     monkeypatch.chdir(tmp_path)
     payload = runner.run_full_market_research(
-        "test-recording", Repo(Reader()), date(2025, 1, 1), date(2025, 1, 2)
+        "test-recording", Repo(Reader()), date(2025, 1, 1), date(2025, 1, 2), adapter=recording
     )
     assert payload["research_id"].startswith("fm-")
     assert list(tmp_path.iterdir()) == []
@@ -143,7 +154,7 @@ def test_no_output_path_writes_nothing(tmp_path, recording, monkeypatch):
 
 def test_output_is_atomic(tmp_path, recording, monkeypatch):
     payload = runner.run_full_market_research(
-        "test-recording", Repo(Reader()), date(2025, 1, 1), date(2025, 1, 2)
+        "test-recording", Repo(Reader()), date(2025, 1, 1), date(2025, 1, 2), adapter=recording
     )
     output = tmp_path / "result.json"
     replacements = []
@@ -164,32 +175,20 @@ def test_output_is_atomic(tmp_path, recording, monkeypatch):
 
 
 def test_builtin_registry_contains_all_full_market_factors():
-    assert set(runner.registered_factor_names()) >= {
-        "macd-arms",
-        "weekly-flagpole",
-        "single-yang-no-break",
-        "dugu-trend",
-        "pre-surge",
-        "hold-firm",
-        "mera",
-        "n-depth",
-        "negative-v5",
-        "escape-risk",
-        "doji-patterns",
-    }
-    assert "macd-stages" not in runner.registered_factor_names()
+    from app.research.catalog import FULL_MARKET_MAPPINGS, full_market_factor_ids
+
+    assert len(FULL_MARKET_MAPPINGS) == 11
+    assert set(full_market_factor_ids()) == set(FULL_MARKET_MAPPINGS)
+    assert FULL_MARKET_MAPPINGS["negative-exclusion"] == "negative-v5"
+    assert "macd-stages" not in full_market_factor_ids()
 
 
 def test_unavailable_verdict_is_auditable_payload_and_reader_closes(tmp_path):
-    runner.register_adapter(UnavailableAdapter(), overwrite=True)
+    adapter = UnavailableAdapter()
     reader = Reader()
     payload = runner.run_full_market_research(
-        "test-unavailable",
-        Repo(reader),
-        date(2025, 1, 1),
-        date(2025, 1, 2),
+        "test-unavailable", Repo(reader), date(2025, 1, 1), date(2025, 1, 2), adapter=adapter
     )
-
     assert payload["verdict"]["status"] == "unavailable"
     assert payload["verdict"]["unavailable_reasons"] == ["sealed_input_missing"]
     assert payload["request"]["symbols"] == ["600000.SH"]
@@ -200,15 +199,41 @@ def test_unavailable_verdict_is_auditable_payload_and_reader_closes(tmp_path):
 
 
 def test_reader_closes_when_evaluator_raises():
-    runner.register_adapter(RaisingAdapter(), overwrite=True)
+    adapter = RaisingAdapter()
     reader = Reader()
-
     with pytest.raises(RuntimeError, match="evaluator failed"):
         runner.run_full_market_research(
-            "test-raising",
-            Repo(reader),
-            date(2025, 1, 1),
-            date(2025, 1, 2),
+            "test-raising", Repo(reader), date(2025, 1, 1), date(2025, 1, 2), adapter=adapter
         )
-
     assert reader.close_calls == 1
+
+
+def test_normalizer_unwraps_nested_verdict_and_flattens_reader_provenance():
+    payload = runner.normalize_full_market_result(
+        {
+            "provenance": {
+                "pinned_reader": {
+                    "generation": "canonical:g1|markets:m1",
+                    "manifest_sha256": "a" * 64,
+                    "data_availability": {"start": "2025-01-01"},
+                }
+            },
+            "result": {
+                "verdict": {
+                    "status": "unavailable",
+                    "arms": [{"id": "none"}],
+                    "events": [{"code": "gap"}],
+                    "series": {"equity": []},
+                    "unavailable_reasons": ["reader_gap"],
+                }
+            },
+        }
+    )
+    verdict = payload["verdict"]
+    assert verdict["status"] == "unavailable"
+    assert verdict["arms"] == [{"id": "none"}]
+    assert verdict["events"] == [{"code": "gap"}]
+    assert verdict["series"] == {"equity": []}
+    assert verdict["unavailable_reasons"] == ["reader_gap"]
+    assert verdict["generation"] == "canonical:g1|markets:m1"
+    assert verdict["manifest_sha256"] == "a" * 64

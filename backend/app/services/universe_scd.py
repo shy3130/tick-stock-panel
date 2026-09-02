@@ -691,6 +691,7 @@ def _load_generation_state(root: str, current_bytes: bytes) -> dict[str, Any]:
     return {
         "generation": generation,
         "manifest": manifest,
+        "manifest_sha256": sha256_hex(manifest_bytes),
         "intervals": intervals,
         "symbols_by_hash": symbols_by_hash,
     }
@@ -705,23 +706,50 @@ class PublishedUniverseScdReader:
     unavailable instead of a partial or fabricated universe.
     """
 
-    def __init__(self, root: str | os.PathLike[str], *, data_dir: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        data_dir: str | os.PathLike[str] | None = None,
+        generation: str | None = None,
+        manifest_sha256: str | None = None,
+    ) -> None:
         self._root = os.path.realpath(os.fspath(root))
         if data_dir is not None:
             validate_root_outside_data_dir(self._root, data_dir)
-        try:
-            current_bytes = _read_current(self._root)
-        except OSError as exc:
-            raise UniverseScdIntegrityError("universe current.json is unreadable") from exc
-        if current_bytes is None:
-            raise UniverseScdNotPublished(
-                "universe SCD is not published yet; no snapshot exists before the first real collection"
-            )
+        if generation is None:
+            try:
+                current_bytes = _read_current(self._root)
+            except OSError as exc:
+                raise UniverseScdIntegrityError("universe current.json is unreadable") from exc
+            if current_bytes is None:
+                raise UniverseScdNotPublished(
+                    "universe SCD is not published yet; no snapshot exists before the first real collection"
+                )
+        else:
+            if not isinstance(generation, str) or not _GENERATION_RE.fullmatch(generation):
+                raise UniverseScdIntegrityError("invalid pinned universe generation")
+            current_bytes = canonical_json_bytes({"generation": generation})
         state = _load_generation_state(self._root, current_bytes)
+        resolved_manifest_sha256 = state["manifest_sha256"]
+        if manifest_sha256 is not None:
+            if not isinstance(manifest_sha256, str) or not _HEX64_RE.fullmatch(
+                manifest_sha256.lower()
+            ):
+                raise UniverseScdIntegrityError("invalid universe manifest pin")
+            if resolved_manifest_sha256 != manifest_sha256.lower():
+                raise UniverseScdIntegrityError("universe manifest identity mismatch")
         self._generation = state["generation"]
+        self._manifest_sha256 = resolved_manifest_sha256
         self._manifest = state["manifest"]
         self._intervals = state["intervals"]
         self._symbols_by_hash = state["symbols_by_hash"]
+
+    def identity(self) -> dict[str, str]:
+        return {
+            "generation": self._generation,
+            "manifest_sha256": self._manifest_sha256,
+        }
 
     def source_manifest(self) -> dict[str, Any]:
         manifest = self._manifest

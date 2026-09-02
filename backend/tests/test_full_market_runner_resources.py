@@ -68,7 +68,7 @@ def test_main_keeps_guards_active_through_output(monkeypatch):
     monkeypatch.setattr(cli, "_build_repo", lambda _path: object())
     monkeypatch.setattr(cli, "run_full_market_research", fake_run)
     monkeypatch.setattr(cli, "_emit_payload", fake_emit)
-    monkeypatch.setattr(cli, "registered_factor_names", lambda: ("macd-arms",))
+    monkeypatch.setattr(cli, "full_market_factor_ids", lambda: ("macd-arms",))
 
     assert (
         cli.main(

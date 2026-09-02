@@ -20,6 +20,7 @@ function assert(condition: unknown, message: string): asserts condition {
 type Chunk = Record<string, unknown>
 
 let queue: Chunk[] = []
+let lastResearch: Parameters<typeof api.stockAnalyzeStream>[4]
 
 /** 轮询直到任务进入终态(事件循环驱动,不猜测固定时长) */
 async function waitForTerminal(id?: string): Promise<void> {
@@ -41,7 +42,14 @@ const origCancel = api.cancelAgentAttempt
 const origSave = api.stockAnalysisReportSave
 const origList = api.stockAnalysisReportsList
 
-api.stockAnalyzeStream = async function* (_symbol: string) {
+api.stockAnalyzeStream = async function* (
+  _symbol: string,
+  _focus?: string,
+  _profileId?: string,
+  _signal?: AbortSignal,
+  research?: Parameters<typeof api.stockAnalyzeStream>[4],
+) {
+  lastResearch = research
   for (const c of queue) {
     await Promise.resolve()
     yield c as never
@@ -60,12 +68,27 @@ try {
         type: 'meta', summary: '当前价 8.5', close: 8.5,
         data_as_of: '2026-08-20', source: 'local_duckdb', adjustment: '前复权',
         degraded: true, warnings: ['msg_missing: 无消息面', 'fin_stale: 财报滞后'],
+        public_research: {
+          status: 'available',
+          scope: 'single_stock_analysis',
+          subject_symbol: '600000.SH',
+          channels_requested: ['twitter'],
+          channels_used: ['twitter'],
+          evidence: [],
+          warnings: [],
+        },
       },
       { type: 'delta', content: '# 标题\n' },
       { type: 'delta', content: '正文' },
       { type: 'done' },
     ]
-    const { id } = await store.startAnalysis('600000.SH', '浦发银行', '', undefined)
+    const { id } = await store.startAnalysis(
+      '600000.SH',
+      '浦发银行',
+      '',
+      undefined,
+      { enabled: true, channels: ['twitter'] },
+    )
     await waitForTerminal(id)
     await new Promise(r => setTimeout(r, 5))
     const t = find(id)
@@ -79,6 +102,10 @@ try {
     assert(dm?.adjustment === '前复权', `adjustment 应落库,实际 ${dm?.adjustment}`)
     assert(dm?.degraded === true, `degraded 应落库,实际 ${dm?.degraded}`)
     assert(dm?.warnings?.length === 2, `warnings 应 2 条,实际 ${dm?.warnings?.length}`)
+    assert(dm?.public_research?.status === 'available', '公开消息状态应落入 dataMeta')
+    assert(lastResearch?.name === '浦发银行', '个股名称应传给公开消息搜索')
+    assert(lastResearch?.enabled === true, '公开消息开关应传给流请求')
+    assert(lastResearch?.channels?.[0] === 'twitter', '公开消息渠道应传给流请求')
   }
 
   // ---- 场景 2: cancelled 终态不被迟到 chunk 覆盖 ----

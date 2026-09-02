@@ -37,7 +37,6 @@ from app.services.universe_presence_history import (
     PresenceHistoryError,
     PresenceStatus,
     PublishedPresenceUniverseReader,
-    universe_presence_root,
 )
 from app.services.universe_scd import canonical_json_bytes, sha256_hex
 
@@ -69,6 +68,7 @@ class ProductionReaderScope:
     canonical: PublishedCanonicalDailyReader
     market_facts: PublishedDailyMarketFactsReader
     universe_reader: PublishedPresenceUniverseReader
+    repo: Any | None = None
 
     def close(self) -> None:
         close = getattr(self.market_facts, "close", None)
@@ -112,11 +112,10 @@ def production_reader_scope(repo: Any) -> Iterator[ProductionReaderScope]:
             UnavailabilityReason.MARKET_FACTS_INCOMPLETE,
             f"pinned markets generation unavailable: {exc}",
         ) from exc
-    data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
     try:
-        universe_reader = PublishedPresenceUniverseReader(
-            universe_presence_root(), data_dir=data_dir
-        )
+        universe_reader = getattr(repo, "pit_presence_universe", None)
+        if universe_reader is None:
+            raise RuntimeError("pinned universe presence reader unavailable")
     except (OSError, PresenceHistoryError, RuntimeError, ValueError) as exc:
         facts_reader.close()
         raise ProductionReaderScopeUnavailable(
@@ -127,6 +126,7 @@ def production_reader_scope(repo: Any) -> Iterator[ProductionReaderScope]:
         canonical=canonical_reader,
         market_facts=facts_reader,
         universe_reader=universe_reader,
+        repo=repo,
     )
     try:
         yield scope

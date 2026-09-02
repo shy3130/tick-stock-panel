@@ -269,6 +269,102 @@ export interface AiStockReport {
   created_at: string
 }
 
+export type PublicResearchChannel = 'twitter'
+
+export interface PublicResearchEvidence {
+  platform: PublicResearchChannel
+  source: string
+  url: string
+  author?: string | null
+  excerpt: string
+  published_at?: string | null
+  retrieved_at: string
+  evidence_grade: 'C'
+  unverified: true
+}
+
+export interface PublicResearchBundle {
+  status: 'disabled' | 'available' | 'partial' | 'unavailable'
+  scope: 'primary_position_only' | 'single_stock_analysis'
+  subject_symbol?: string | null
+  channels_requested: string[]
+  channels_used: string[]
+  evidence: PublicResearchEvidence[]
+  warnings: string[]
+  retrieved_at?: string | null
+}
+
+export interface PublicResearchHealth {
+  default_enabled: false
+  supported_channels: PublicResearchChannel[]
+  health: Record<PublicResearchChannel, {
+    status?: string | null
+    active_backend?: string | null
+    runtime_state?: string | null
+  }>
+}
+
+export interface StockAnalysisResearchConfig {
+  name?: string
+  enabled?: boolean
+  channels?: PublicResearchChannel[]
+}
+
+export interface PositionAnalysisRequest {
+  profile_id?: string
+  l2_rules: []
+  index_rebalance_tail_window: boolean
+  public_research_enabled: boolean
+  public_research_channels: PublicResearchChannel[]
+}
+
+export type PositionAnalysisEvent =
+  | { type: 'delta'; content: string }
+  | { type: 'done'; elapsed_ms?: number }
+  | { type: 'error'; message: string; elapsed_ms?: number }
+
+const POSITION_ANALYSIS_HTTP_ERROR_LIMIT = 240
+
+function boundedPositionAnalysisHttpError(status: number, statusText: string, bodyText: string): string {
+  const clipped = bodyText.slice(0, 1024)
+  let detail = ''
+  try {
+    const parsed: unknown = JSON.parse(clipped)
+    if (parsed && typeof parsed === 'object') {
+      const rec = parsed as Record<string, unknown>
+      const raw = rec.detail ?? rec.message
+      if (typeof raw === 'string') detail = raw
+      else if (raw != null) detail = JSON.stringify(raw)
+    }
+  } catch {
+    /* HTML / proxy bodies stay as status text */
+  }
+  const msg = (detail || `${status} ${statusText}`).replace(/\s+/g, ' ').trim()
+  return msg.length > POSITION_ANALYSIS_HTTP_ERROR_LIMIT
+    ? `${msg.slice(0, POSITION_ANALYSIS_HTTP_ERROR_LIMIT - 3)}...`
+    : msg
+}
+
+function parsePositionAnalysisEvent(raw: unknown): PositionAnalysisEvent | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as Record<string, unknown>
+  if (rec.type === 'delta' && typeof rec.content === 'string') {
+    return { type: 'delta', content: rec.content }
+  }
+  if (rec.type === 'done') {
+    return typeof rec.elapsed_ms === 'number'
+      ? { type: 'done', elapsed_ms: rec.elapsed_ms }
+      : { type: 'done' }
+  }
+  if (rec.type === 'error' && typeof rec.message === 'string') {
+    return typeof rec.elapsed_ms === 'number'
+      ? { type: 'error', message: rec.message, elapsed_ms: rec.elapsed_ms }
+      : { type: 'error', message: rec.message }
+  }
+  return null
+}
+
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string | null
@@ -2779,169 +2875,6 @@ export interface MarketDataTransactionsRequest {
   limit?: number
 }
 
-// ===== Research analysis（canonical enriched 日 K，只读） =====
-
-export interface ResearchAnalysisRiskResult {
-  status: string
-  observations: number
-  minSamples: number
-  descriptive: {
-    mean: number | null
-    std: number | null
-    annualizedVolatility: number | null
-    skewness: number | null
-    excessKurtosis: number | null
-    min: number | null
-    max: number | null
-  }
-  historicalVar: number | null
-  historicalCvar: number | null
-  parametricVar: number | null
-}
-
-export interface ResearchAnalysisPerformanceResult {
-  status: string
-  sortino?: number | null
-  omega?: number | null
-  max_drawdown?: number | null
-  calmar?: number | null
-  ulcer_index?: number | null
-}
-
-export interface ResearchAnalysisAdfResult {
-  status: string
-  adf_statistic?: number | null
-  p_value?: number | null
-  lags_used?: number | null
-  is_stationary?: boolean | null
-  observations?: number | null
-}
-
-export interface ResearchAnalysisGarchResult {
-  status: string
-  current_volatility?: number | null
-  long_run_volatility?: number | null
-  persistence?: number | null
-  observations?: number | null
-}
-
-export interface ResearchSymbolAnalysisResult {
-  risk: ResearchAnalysisRiskResult
-  performance: ResearchAnalysisPerformanceResult
-  statistics: {
-    adf: ResearchAnalysisAdfResult
-    garch: ResearchAnalysisGarchResult
-  }
-}
-
-export interface ResearchSymbolAnalysisAvailableResponse {
-  available: true
-  source: string
-  symbol: string
-  start: string
-  end: string
-  data_as_of: string | null
-  observations: number
-  result: ResearchSymbolAnalysisResult
-  warnings: string[]
-  reason: null
-}
-
-export interface ResearchSymbolAnalysisUnavailableResponse {
-  available: false
-  source: null
-  symbol: string
-  start: null
-  end: null
-  data_as_of: null
-  observations: 0
-  result: null
-  warnings: string[]
-  reason: string
-}
-
-export type ResearchSymbolAnalysisResponse =
-  | ResearchSymbolAnalysisAvailableResponse
-  | ResearchSymbolAnalysisUnavailableResponse
-
-export interface ResearchSymbolAnalysisRequest {
-  start?: string
-  end?: string
-}
-
-// ===== Research (假设注册 + 定时研究) =====
-// 后端: api/research.py + services/research_registry.py + scheduled_research.py
-// 假设状态机与证据 kind 以后端 STATUSES / EVIDENCE_KINDS 为准。
-
-export type ResearchHypothesisStatus =
-  | 'exploring'
-  | 'testing'
-  | 'validated'
-  | 'rejected'
-  | 'monitoring'
-
-export type ResearchEvidenceKind = 'backtest' | 'note' | 'observation'
-
-export type ResearchScheduleTemplate =
-  | 'market_recap_daily'
-  | 'watchlist_recap_daily'
-  | 'strategy_pool_weekly'
-
-export interface ResearchEvidence {
-  ts: string
-  kind: ResearchEvidenceKind | string
-  ref: string
-  summary: string
-}
-
-export interface ResearchHypothesis {
-  id: string
-  title: string
-  thesis: string
-  status: ResearchHypothesisStatus | string
-  tags: string[]
-  evidence: ResearchEvidence[]
-  created_at: string
-  updated_at: string
-}
-
-export interface ResearchRunCard {
-  run_id: string
-  kind: string
-  config: Record<string, unknown>
-  config_hash: string
-  strategy_hash: string
-  stats: Record<string, unknown>
-  created_at: string
-}
-
-export interface ResearchSchedule {
-  id: string
-  name: string
-  template: ResearchScheduleTemplate | string
-  cron: string
-  enabled: boolean
-  params: Record<string, unknown>
-  created_at: string
-  updated_at: string
-  last_run_at: string | null
-  last_status: string | null
-  last_error: string | null
-}
-
-export interface ResearchScheduleRunResult {
-  title?: string
-  summary?: string
-  artifacts?: unknown[]
-  warnings?: string[]
-  [key: string]: unknown
-}
-
-export interface ResearchScheduleRunNowResponse {
-  schedule: ResearchSchedule
-  result: ResearchScheduleRunResult
-}
-
 
 // ===== API surface =====
 export const api = {
@@ -3076,6 +3009,64 @@ export const api = {
     request<{ cancelled: boolean }>(`/api/agent/attempts/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' }),
   agentRuntime: () =>
     request<{ runtime: 'python' | 'pi'; switchable: boolean }>('/api/agent/runtime'),
+  positionAnalysisPublicResearchHealth: () =>
+    request<PublicResearchHealth>('/api/agent/position-analysis/public-research/health'),
+
+  async *positionAnalysisStream(
+    payload: PositionAnalysisRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<PositionAnalysisEvent> {
+    const res = await fetch('/api/agent/position-analysis/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+    if (!res.ok) {
+      let bodyText = ''
+      try {
+        bodyText = await res.text()
+      } catch {
+        bodyText = ''
+      }
+      throw new Error(boundedPositionAnalysisHttpError(res.status, res.statusText, bodyText))
+    }
+    if (!res.body) throw new Error('持仓分析响应无流数据')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(s)
+        } catch {
+          continue
+        }
+        const event = parsePositionAnalysisEvent(parsed)
+        if (event) yield event
+      }
+    }
+    if (buf.trim()) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(buf.trim())
+      } catch {
+        return
+      }
+      const event = parsePositionAnalysisEvent(parsed)
+      if (event) yield event
+    }
+  },
+
 
   readDocument: (file: File) => {
     const fd = new FormData()
@@ -4084,6 +4075,9 @@ export const api = {
   // ===== 个股分析 =====
   stockAnalysisLevels: (symbol: string, days = 120) =>
     request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+  stockAnalysisPublicResearchHealth: () =>
+    request<PublicResearchHealth>('/api/stock-analysis/public-research/health'),
+
 
   stockAnalysisReportsList: () =>
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),
@@ -4104,7 +4098,13 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+  async *stockAnalyzeStream(
+    symbol: string,
+    focus?: string,
+    profileId?: string,
+    signal?: AbortSignal,
+    research?: StockAnalysisResearchConfig,
+  ): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done' | 'attempt' | 'summary'
     symbol?: string
     summary?: string
@@ -4123,11 +4123,19 @@ export const api = {
     struct_summary?: { trend: string; key_levels: string[]; data_gaps: string[] }
     /** P3: meta chunk 可带执行元信息;流式 provider 不上报 usage 时缺失,不得展示伪数据 */
     ai_meta?: AiExecutionMeta | null
+    public_research?: PublicResearchBundle
   }> {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      body: JSON.stringify({
+        symbol,
+        name: research?.name ?? '',
+        focus: focus ?? '',
+        ...(profileId ? { profile_id: profileId } : {}),
+        public_research_enabled: research?.enabled ?? false,
+        public_research_channels: research?.channels ?? ['twitter'],
+      }),
       signal,
     })
     if (!res.ok) {
@@ -4519,123 +4527,6 @@ export const api = {
     )
   },
 
-  // ===== Research analysis（canonical enriched 日 K，只读） =====
-  researchSymbolAnalysis: (symbol: string, params: ResearchSymbolAnalysisRequest = {}) => {
-    const qs = new URLSearchParams()
-    if (params.start) qs.set('start', params.start)
-    if (params.end) qs.set('end', params.end)
-    const query = qs.toString()
-    return request<ResearchSymbolAnalysisResponse>(
-      `/api/research/analysis/symbol/${encodeURIComponent(symbol)}${query ? `?${query}` : ''}`,
-      undefined,
-      { acceptUnavailable: true },
-    )
-  },
-
-  // ===== Research (假设注册 + 定时研究) =====
-  researchListHypotheses: (params?: { status?: string; query?: string }) => {
-    const qs = new URLSearchParams()
-    if (params?.status) qs.set('status', params.status)
-    if (params?.query) qs.set('query', params.query)
-    const q = qs.toString()
-    return request<{ items: ResearchHypothesis[] }>(`/api/research/hypotheses${q ? `?${q}` : ''}`)
-  },
-
-  researchGetHypothesis: (id: string) =>
-    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`),
-
-  researchCreateHypothesis: (body: {
-    title: string
-    thesis: string
-    status?: ResearchHypothesisStatus | string
-    tags?: string[]
-  }) =>
-    request<ResearchHypothesis>('/api/research/hypotheses', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  researchConfirmTSuitabilityHypothesis: (body: {
-    pool_id: string
-    as_of: string
-    limit: number
-  }) =>
-    request<ResearchHypothesis>('/api/research/t-suitability/hypotheses', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  researchUpdateHypothesis: (
-    id: string,
-    body: {
-      title?: string
-      thesis?: string
-      status?: ResearchHypothesisStatus | string
-      tags?: string[]
-    },
-  ) =>
-    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
-
-  researchAddEvidence: (
-    id: string,
-    body: { kind: ResearchEvidenceKind | string; ref?: string; summary: string },
-  ) =>
-    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}/evidence`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  /** 404 → null(中性"未找到"语义,不弹 toast) */
-  researchGetRunCard: (runId: string) =>
-    request<ResearchRunCard | null>(
-      `/api/research/run-cards/${encodeURIComponent(runId)}`,
-      undefined,
-      { silent404: true },
-    ),
-
-  researchListSchedules: () =>
-    request<{ items: ResearchSchedule[] }>('/api/research/schedules'),
-
-  researchCreateSchedule: (body: {
-    name: string
-    template: ResearchScheduleTemplate | string
-    cron: string
-    enabled?: boolean
-    params?: Record<string, unknown>
-  }) =>
-    request<ResearchSchedule>('/api/research/schedules', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  researchUpdateSchedule: (
-    id: string,
-    body: {
-      name?: string
-      template?: ResearchScheduleTemplate | string
-      cron?: string
-      enabled?: boolean
-      params?: Record<string, unknown>
-    },
-  ) =>
-    request<ResearchSchedule>(`/api/research/schedules/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
-
-  researchDeleteSchedule: (id: string) =>
-    request<{ ok: boolean }>(`/api/research/schedules/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    }),
-
-  researchRunScheduleNow: (id: string) =>
-    request<ResearchScheduleRunNowResponse>(
-      `/api/research/schedules/${encodeURIComponent(id)}/run-now`,
-      { method: 'POST' },
-    ),
 
 
 }

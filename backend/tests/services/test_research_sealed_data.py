@@ -93,6 +93,25 @@ def test_reader_pins_generation_and_hashes_manifest_bytes(tmp_path):
         == 10.0
     )
 
+def test_reader_reopens_exact_generation_after_current_advances(tmp_path):
+    generation = "20260827T010101-aaaaaaaa"
+    first_dir = _publish(tmp_path, generation, _frame(date(2026, 8, 25), 10.0))
+    expected = hashlib.sha256((first_dir / "manifest.json").read_bytes()).hexdigest()
+    repo = _Repo(tmp_path)
+    _publish(tmp_path, "20260827T020202-bbbbbbbb", _frame(date(2026, 8, 26), 20.0))
+
+    reader = PublishedCanonicalDailyReader.from_pin(repo, generation, expected)
+
+    assert reader.generation() == generation
+    assert (
+        reader.daily_bars("600000.SH", date(2026, 8, 25), date(2026, 8, 25))[
+            "raw_close"
+        ].item()
+        == 10.0
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        PublishedCanonicalDailyReader.from_pin(repo, generation, "f" * 64)
+
 
 def test_old_generation_keeps_raw_open_missing(tmp_path):
     frame = _frame(date(2026, 8, 25)).drop("raw_open")

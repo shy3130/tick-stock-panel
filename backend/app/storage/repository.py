@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager, suppress
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -396,20 +397,27 @@ class KlineRepository:
 
     @property
     def generation_pinned_market_facts_reader(self):
-        """Return markets facts pinned by canonical source_generations."""
+        """Markets facts pinned by canonical source_generations; caller owns close()."""
         from app.data_providers.fquant.daily_market_research import PublishedDailyMarketFactsReader
 
         canonical = self.generation_pinned_daily_reader
         if canonical is None:
             return None
         try:
-            return PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
+            try:
+                manifest = canonical.manifest()
+            finally:
+                close = getattr(canonical, "close", None)
+                if callable(close):
+                    with suppress(Exception):
+                        close()
+            return PublishedDailyMarketFactsReader.from_canonical_manifest(manifest)
         except (OSError, RuntimeError, TypeError, ValueError):
             return None
 
     @property
     def index_daily_research_reader(self):
-        """Return index bars pinned by the active canonical source generations."""
+        """Index reader pinned to canonical source generations; caller owns close()."""
         from app.data_providers.fquant.index_daily_research import (
             PublishedIndexDailyReader,
         )
@@ -418,11 +426,39 @@ class KlineRepository:
         if canonical is None:
             return None
         try:
-            return PublishedIndexDailyReader.from_canonical_manifest(
-                canonical.manifest()
-            )
+            try:
+                manifest = canonical.manifest()
+            finally:
+                close = getattr(canonical, "close", None)
+                if callable(close):
+                    with suppress(Exception):
+                        close()
+            return PublishedIndexDailyReader.from_canonical_manifest(manifest)
         except (OSError, RuntimeError, TypeError, ValueError):
             return None
+
+    @contextmanager
+    def open_pinned_market_facts(self):
+        """Open request-scoped markets reader and always close its connection."""
+        reader = self.generation_pinned_market_facts_reader
+        try:
+            yield reader
+        finally:
+            close = getattr(reader, "close", None)
+            if callable(close):
+                close()
+
+    @contextmanager
+    def open_index_daily_research_reader(self):
+        """Open request-scoped index reader and always close its connection."""
+        reader = self.index_daily_research_reader
+        try:
+            yield reader
+        finally:
+            close = getattr(reader, "close", None)
+            if callable(close):
+                close()
+
     @property
     def versioned_exchange_calendar(self):
         """Expose the same immutable generation as the research calendar."""
