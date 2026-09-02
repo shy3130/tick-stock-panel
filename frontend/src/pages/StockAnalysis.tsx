@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, GitCompare, X } from 'lucide-react'
+import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, GitCompare, X, Search } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
@@ -20,6 +20,10 @@ import {
   deleteReport, openHistoryReport, type HistoryReport,
 } from '@/lib/stockAnalysisStore'
 
+type ResearchView = 'structure' | 'history'
+const RESEARCH_VIEWS: ResearchView[] = ['structure', 'history']
+
+
 /**
  * 个股分析页 —— 日 K + 关键价位(压力/支撑/密集区/枢轴/前高前低)+ AI 四维结构诊断。
  *
@@ -33,7 +37,7 @@ export function StockAnalysis() {
   const [name, setName] = useState<string>('')
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
+  const [view, setView] = useState<ResearchView>('structure')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [profileId, setProfileId] = useState<string>()
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
@@ -42,7 +46,7 @@ export function StockAnalysis() {
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
     setName(nm)
-    setShowHistory(false)
+    setView('structure')
     setConfirmReport(null)
     rememberStock(sym, nm)
   }
@@ -71,6 +75,41 @@ export function StockAnalysis() {
     if (r.error) toast(r.error, 'error')
   }
 
+  const panelId = 'stock-analysis-panel'
+  const structureTabId = 'stock-analysis-tab-structure'
+  const historyTabId = 'stock-analysis-tab-history'
+  const selectView = (nextView: ResearchView, moveFocus = false) => {
+    setView(nextView)
+    if (moveFocus) {
+      requestAnimationFrame(() => {
+        document.getElementById(
+          nextView === 'structure' ? structureTabId : historyTabId,
+        )?.focus()
+      })
+    }
+  }
+
+  const onViewKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentView: ResearchView,
+  ) => {
+    const currentIndex = RESEARCH_VIEWS.indexOf(currentView)
+    let nextIndex = -1
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % RESEARCH_VIEWS.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (currentIndex - 1 + RESEARCH_VIEWS.length) % RESEARCH_VIEWS.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = RESEARCH_VIEWS.length - 1
+    }
+    if (nextIndex < 0) return
+    event.preventDefault()
+    selectView(RESEARCH_VIEWS[nextIndex], true)
+  }
+
+
   return (
     <div className="workspace-page">
       <PageHeader
@@ -81,69 +120,103 @@ export function StockAnalysis() {
           </span>
         }
         subtitle="日 K · 关键价位 · AI 四维诊断（解释行情，不给交易指令）"
-        right={
-          <div className="workspace-toolbar">
-            <LastStockChip stock={lastStock} onSelect={onSelect} />
-            {symbol && (
-              <button
-                onClick={() => setShowHistory(v => !v)}
-                className="btn-secondary text-xs"
-              >
-                <HistoryIcon className="h-3.5 w-3.5" />
-                历史报告
-              </button>
-            )}
-          </div>
-        }
       />
 
       <div className="workspace-content mx-auto max-w-7xl gap-3">
-        {/* 搜索栏 */}
-        <div className="workspace-toolbar">
-          <div className="w-[36rem] max-w-full shrink-0">
+        <div className="workspace-toolbar min-w-0" role="group" aria-label="个股研究命令">
+          <div className="w-[36rem] max-w-full min-w-0 shrink">
             <StockFinancialSearch onSelect={onSelect} />
           </div>
+          <LastStockChip stock={lastStock} onSelect={onSelect} />
+
           {symbol && (
             <>
               <button
+                type="button"
                 onClick={() => setPreviewSymbol(symbol)}
                 title="查看个股日 K 详情"
                 aria-label={`查看 ${name || symbol} ${symbol} 的日 K 详情`}
-                className="group flex items-center gap-2 text-sm rounded-md px-2 py-1 -mx-1.5 border border-sky-500/20 bg-sky-500/5 hover:bg-elevated hover:border-sky-500/35 transition-colors"
+                className="group flex min-h-9 min-w-0 items-center gap-2 rounded-btn border border-border bg-elevated px-2.5 py-1 text-sm hover:border-border hover:bg-surface"
               >
-                <span className="text-foreground font-medium group-hover:text-sky-300 transition-colors">{name || symbol}</span>
-                <span className="text-[10px] font-mono text-muted">{symbol}</span>
-                <span className="text-[11px] text-sky-300/90 whitespace-nowrap">日 K 详情</span>
-                <ExternalLink className="h-3 w-3 text-sky-300/80" aria-hidden="true" />
+                <span className="truncate font-medium text-foreground">{name || symbol}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted">{symbol}</span>
+                <span className="hidden shrink-0 text-[11px] text-secondary sm:inline">日 K 详情</span>
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
               </button>
-              <button
-                onClick={handleAnalyze}
-                disabled={checking}
-                className="btn-primary text-xs"
+
+              <div
+                className="flex min-h-9 min-w-0 items-stretch rounded-btn border border-border bg-elevated p-0.5"
+                role="tablist"
+                aria-label="个股研究视图"
               >
-                {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                AI 个股分析
-              </button>
-              <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
+                <button
+                  type="button"
+                  id={structureTabId}
+                  role="tab"
+                  aria-selected={view === 'structure'}
+                  aria-controls={panelId}
+                  tabIndex={view === 'structure' ? 0 : -1}
+                  onClick={() => selectView('structure')}
+                  onKeyDown={event => onViewKeyDown(event, 'structure')}
+                  className={`inline-flex min-h-8 min-w-0 items-center gap-1 rounded-[4px] px-2.5 text-xs font-medium ${
+                    view === 'structure' ? 'bg-surface text-foreground' : 'text-muted hover:text-secondary'
+                  }`}
+                >
+                  <LineChart className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  行情研判
+                </button>
+                <button
+                  type="button"
+                  id={historyTabId}
+                  role="tab"
+                  aria-selected={view === 'history'}
+                  aria-controls={panelId}
+                  tabIndex={view === 'history' ? 0 : -1}
+                  onClick={() => selectView('history')}
+                  onKeyDown={event => onViewKeyDown(event, 'history')}
+                  className={`inline-flex min-h-8 min-w-0 items-center gap-1 rounded-[4px] px-2.5 text-xs font-medium ${
+                    view === 'history' ? 'bg-surface text-foreground' : 'text-muted hover:text-secondary'
+                  }`}
+                >
+                  <HistoryIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  历史报告
+                </button>
+              </div>
+
+              <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
+                <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
+                <button
+                  type="button"
+                  onClick={handleAnalyze}
+                  disabled={checking}
+                  className="btn-primary min-h-9 text-xs"
+                >
+                  {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
+                  AI 个股分析
+                </button>
+              </div>
             </>
           )}
         </div>
 
-        {/* 主体 */}
         {!symbol ? (
-          <EmptyState
-            icon={LineChart}
-            title="选择一只股票开始分析"
-            hint="搜索代码或名称,查看日 K 与关键价位,并可让 AI 进行技术面 / 基本面 / 财务面 / 消息面四维综合分析。"
-          />
-        ) : showHistory ? (
-          <HistoryList symbol={symbol} />
+          <EmptyGuide />
         ) : (
-          <StockAnalysisBoard symbol={symbol} />
+          <div
+            id={panelId}
+            role="tabpanel"
+            aria-labelledby={view === 'history' ? historyTabId : structureTabId}
+            className="min-w-0"
+          >
+            {view === 'history' ? (
+              <HistoryList symbol={symbol} />
+            ) : (
+              <StockAnalysisBoard symbol={symbol} />
+            )}
+          </div>
         )}
       </div>
 
-      {/* 二次确认:已有历史报告 */}
       {confirmReport && (
         <ConfirmModal
           report={confirmReport}
@@ -153,13 +226,50 @@ export function StockAnalysis() {
         />
       )}
 
-      {/* 个股日 K 详情对话框(点击名称/代码打开) */}
       <StockPreviewDialog
         symbol={previewSymbol}
         name={previewSymbol === symbol ? name : undefined}
         triggerInfo={null}
         onClose={() => setPreviewSymbol(null)}
       />
+    </div>
+  )
+}
+
+function EmptyGuide() {
+  return (
+    <div className="grid min-w-0 place-items-center px-3 py-12 sm:px-8 sm:py-16">
+      <div className="w-full max-w-lg min-w-0">
+        <EmptyState
+          icon={LineChart}
+          title="搜索标的开始研究"
+          hint="不造假数据。选股后查看日 K 结构，再生成四维诊断。"
+          className="h-auto px-0 py-0"
+        />
+        <ol className="mt-6 grid min-w-0 gap-2 sm:grid-cols-3">
+          <li className="min-w-0 border-l-2 border-border pl-3">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+              <Search className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+              1. 搜索标的
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-secondary">输入代码或名称</p>
+          </li>
+          <li className="min-w-0 border-l-2 border-border pl-3">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+              <LineChart className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+              2. 查看结构
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-secondary">日 K 与关键价位</p>
+          </li>
+          <li className="min-w-0 border-l-2 border-border pl-3">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+              3. 生成诊断
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-secondary">AI 四维结构，无交易指令</p>
+          </li>
+        </ol>
+      </div>
     </div>
   )
 }
@@ -184,7 +294,11 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
   useEffect(() => { setSelectedDate(null) }, [symbol])
 
   if (kline.isLoading) {
-    return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
+    return (
+      <div className="flex items-center justify-center py-20" role="status" aria-label="正在加载日 K">
+        <Loader2 className="h-5 w-5 animate-spin text-muted" aria-hidden="true" />
+      </div>
+    )
   }
 
   const rows = kline.data?.rows ?? []
@@ -208,51 +322,52 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
   const adjustmentLabel = kline.data?.adjustment ? ` · ${kline.data.adjustment}` : ''
 
   return (
-    <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
-      <div className="px-4 py-3 border-b border-border/40">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
-            <span className="text-sm font-medium text-foreground">关键价位分析</span>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-0.5">
-            <span className="text-[10px] text-muted">
-              {rows.length} 个交易日 · 截至 {last.date} · {sourceLabel}{adjustmentLabel}
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className="text-[10px] text-muted">当前价</span>
-              <span className={`text-base font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
-                {curClose?.toFixed(2) ?? '—'}
-              </span>
-            </div>
-          </div>
+    <div className="min-w-0 space-y-3">
+      <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-end sm:gap-x-6">
+        <div className="min-w-0">
+          <dt className="text-[10px] text-muted">当前价</dt>
+          <dd className={`font-mono text-lg font-semibold leading-tight ${isUp ? 'text-bull' : 'text-bear'}`}>
+            {curClose?.toFixed(2) ?? '—'}
+          </dd>
         </div>
-      </div>
-      <div className="p-3">
-        {selectedDate && (
-          <div className="mb-3 rounded-lg border border-border/50 bg-base/30 p-2">
-            <div className="mb-1 flex items-center justify-between px-1">
-              <span className="text-[11px] font-mono text-muted">分时</span>
-              <span className="text-[11px] font-mono text-secondary">{selectedDate}</span>
-            </div>
-            <StockIntradayChart
-              symbol={symbol}
-              date={selectedDate}
-              height={260}
-              prevClose={prevClose}
-            />
+        <div className="min-w-0">
+          <dt className="text-[10px] text-muted">数据截止</dt>
+          <dd className="font-mono text-sm text-foreground">{last.date}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[10px] text-muted">来源</dt>
+          <dd className="truncate text-sm text-foreground">{sourceLabel}{adjustmentLabel}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[10px] text-muted">样本</dt>
+          <dd className="text-sm text-foreground">{rows.length} 个交易日</dd>
+        </div>
+      </dl>
+
+      {selectedDate && (
+        <div className="min-w-0">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted">分时</span>
+            <span className="font-mono text-[11px] text-secondary">{selectedDate}</span>
           </div>
-        )}
-        <AnalysisKChart
-          rows={rows}
-          levels={levels}
-          series={levelsQ.data?.series}
-          seriesDates={levelsQ.data?.dates}
-          defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
-          height={480}
-          onDateClick={setSelectedDate}
-        />
-      </div>
+          <StockIntradayChart
+            symbol={symbol}
+            date={selectedDate}
+            height={260}
+            prevClose={prevClose}
+          />
+        </div>
+      )}
+
+      <AnalysisKChart
+        rows={rows}
+        levels={levels}
+        series={levelsQ.data?.series}
+        seriesDates={levelsQ.data?.dates}
+        defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
+        height={480}
+        onDateClick={setSelectedDate}
+      />
     </div>
   )
 }
@@ -274,7 +389,11 @@ function HistoryList({ symbol }: { symbol: string }) {
   }
 
   if (!loaded) {
-    return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
+    return (
+      <div className="flex items-center justify-center py-20" role="status" aria-label="正在加载历史报告">
+        <Loader2 className="h-5 w-5 animate-spin text-muted" aria-hidden="true" />
+      </div>
+    )
   }
   if (mine.length === 0) {
     return <EmptyState icon={HistoryIcon} title="暂无历史报告" hint={`还没有 ${symbol} 的个股分析报告,点击「AI 个股分析」生成第一份。`} />
@@ -285,44 +404,47 @@ function HistoryList({ symbol }: { symbol: string }) {
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
+    <div className="min-w-0 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-[11px] text-muted">
           {canCompare ? '已选 2 份，可开始对比' : `勾选 2 份同标的报告可对比（已选 ${selectedIds.length}/2）`}
         </span>
         <button
+          type="button"
           onClick={() => setComparing(true)}
           disabled={!canCompare}
-          className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg border border-border text-xs text-secondary hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="btn-secondary min-h-9 text-xs"
         >
-          <GitCompare className="h-3.5 w-3.5" />
+          <GitCompare className="h-3.5 w-3.5" aria-hidden="true" />
           对比
         </button>
       </div>
       {mine.map(r => (
-        <div key={r.id} className="rounded-card border border-border/60 bg-surface/40 p-3 hover:border-border transition-colors">
+        <div key={r.id} className="min-w-0 border-b border-border/60 py-3 last:border-b-0">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-start gap-2 flex-1 min-w-0">
+            <div className="flex min-w-0 flex-1 items-start gap-2">
               <input
                 type="checkbox"
                 checked={selectedIds.includes(r.id)}
                 onChange={() => toggle(r.id)}
                 disabled={!selectedIds.includes(r.id) && selectedIds.length >= 2}
                 aria-label={`选择 ${fmtRelative(r.created_at)} 的报告用于对比`}
-                className="mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                className="mt-1 h-3.5 w-3.5 shrink-0 cursor-pointer accent-sky-400 disabled:cursor-not-allowed disabled:opacity-40"
               />
-              <button onClick={() => openHistoryReport(r.id)} className="flex-1 text-left min-w-0">
-                <div className="flex items-center gap-2">
+              <button type="button" onClick={() => openHistoryReport(r.id)} className="min-w-0 flex-1 text-left">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-secondary">{fmtRelative(r.created_at)}</span>
-                  {r.close && <span className="text-[10px] font-mono text-muted">价 {r.close.toFixed(2)}</span>}
-                  {r.focus && <span className="text-[10px] text-sky-300/70 truncate">关注: {r.focus}</span>}
+                  {r.close && <span className="font-mono text-[10px] text-muted">价 {r.close.toFixed(2)}</span>}
+                  {r.focus && <span className="truncate text-[10px] text-sky-300/70">关注: {r.focus}</span>}
                 </div>
-                <div className="mt-1 text-xs text-muted truncate">{r.summary || '点击查看完整报告'}</div>
+                <div className="mt-1 truncate text-xs text-muted">{r.summary || '点击查看完整报告'}</div>
               </button>
             </div>
             <button
+              type="button"
               onClick={() => { deleteReport(r.id); toast('已删除', 'success') }}
-              className="shrink-0 text-[10px] text-muted hover:text-danger transition-colors px-2 py-1"
+              aria-label={`删除 ${fmtRelative(r.created_at)} 的报告`}
+              className="min-h-9 shrink-0 px-2 py-1 text-[10px] text-muted hover:text-danger"
             >
               删除
             </button>
@@ -345,26 +467,36 @@ function CompareReportsModal({ reports, onClose }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-6xl max-h-[88vh] bg-surface border border-border/60 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        className="flex max-h-[88vh] w-full max-w-6xl min-w-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-2xl"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="compare-reports-title"
       >
-        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border/50 shrink-0">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/50 px-5 py-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground truncate">报告对比 · {older.symbol}</div>
+            <div id="compare-reports-title" className="truncate text-sm font-semibold text-foreground">报告对比 · {older.symbol}</div>
             <div className="mt-0.5 text-[11px] text-muted">显式对比，不是续写 — 两份独立报告并列阅读，左旧右新</div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated"><X className="h-4 w-4 text-muted" /></button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭对比"
+            className="btn-ghost min-h-9 min-w-9 p-1.5"
+          >
+            <X className="h-4 w-4 text-muted" aria-hidden="true" />
+          </button>
         </div>
-        <div className="flex-1 min-h-0 grid md:grid-cols-2 md:divide-x md:divide-border/40">
+        <div className="grid min-h-0 flex-1 md:grid-cols-2 md:divide-x md:divide-border/40">
           {[older, newer].map((r, i) => (
-            <div key={r.id} className="flex flex-col min-h-0">
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-border/30 bg-elevated/30 shrink-0">
+            <div key={r.id} className="flex min-h-0 min-w-0 flex-col">
+              <div className="flex shrink-0 items-center gap-2 border-b border-border/30 bg-elevated/30 px-4 py-2">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">{i === 0 ? '旧' : '新'}</span>
                 <span className="text-xs text-secondary">{fmtRelative(r.created_at)}</span>
-                {r.close != null && <span className="text-[10px] font-mono text-muted">价 {r.close.toFixed(2)}</span>}
-                {r.focus && <span className="text-[10px] text-sky-300/70 truncate">关注: {r.focus}</span>}
+                {r.close != null && <span className="font-mono text-[10px] text-muted">价 {r.close.toFixed(2)}</span>}
+                {r.focus && <span className="truncate text-[10px] text-sky-300/70">关注: {r.focus}</span>}
               </div>
-              <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
                 <MarkdownRenderer content={r.content || '（无正文）'} />
               </div>
             </div>
@@ -387,23 +519,32 @@ function ConfirmModal({ report, onView, onRedo, onClose }: {
       <div
         className="panel w-full max-w-sm bg-surface p-5"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-today-title"
       >
-        <div className="flex items-center gap-2 mb-2">
-          <HistoryIcon className="h-4 w-4 text-sky-400" />
-          <span className="text-sm font-medium text-foreground">该个股已有分析报告</span>
+        <div className="mb-2 flex items-center gap-2">
+          <HistoryIcon className="h-4 w-4 text-sky-400" aria-hidden="true" />
+          <span id="confirm-today-title" className="text-sm font-medium text-foreground">该个股已有分析报告</span>
         </div>
-        <p className="text-xs text-secondary leading-relaxed mb-1">
+        <p className="mb-1 text-xs leading-relaxed text-secondary">
           最近一次报告生成于 <span className="text-foreground">{fmtRelative(report.created_at)}</span>。
         </p>
-        {report.focus && <p className="text-xs text-muted mb-1">关注点: {report.focus}</p>}
-        <p className="text-xs text-muted mb-4">可直接查看历史,或重新生成一份新报告。</p>
+        {report.focus && <p className="mb-1 text-xs text-muted">关注点: {report.focus}</p>}
+        <p className="mb-4 text-xs text-muted">可直接查看历史,或重新生成一份新报告。</p>
         <div className="flex gap-2">
-          <button onClick={onView}
-            className="flex-1 h-8 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
+          <button
+            type="button"
+            onClick={onView}
+            className="h-9 min-h-9 flex-1 rounded-lg border border-border bg-elevated text-xs text-secondary hover:text-foreground"
+          >
             查看历史
           </button>
-          <button onClick={onRedo}
-            className="btn-primary flex-1 h-8 text-xs transition-all">
+          <button
+            type="button"
+            onClick={onRedo}
+            className="btn-primary h-9 min-h-9 flex-1 text-xs"
+          >
             重新分析
           </button>
         </div>
