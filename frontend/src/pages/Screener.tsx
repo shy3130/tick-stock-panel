@@ -528,70 +528,100 @@ export function Screener() {
     <div className="workspace-page">
       <PageHeader
         title="策略选股"
-        subtitle="基于本地 enriched 表 · 与监控/回测同一套策略过滤"
-        right={
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => reloadStrategies.mutate()}
-              disabled={reloadStrategies.isPending}
-              title="重新加载策略并运行全部策略，刷新当前符合条件的个股"
-              className="btn-secondary disabled:opacity-50 disabled:cursor-wait"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${reloadStrategies.isPending ? 'animate-spin' : ''}`} />
-              重载
-            </button>
-            {asOf && (
-              <DatePicker
-                value={asOf}
-                onChange={handleDateChange}
-                min={minDate}
-                max={maxDate}
-              />
-            )}
-            <button
-              onClick={() => setShowAll(v => { if (!v) setActiveStrategy(null); return !v })}
-              title="显示全部策略个股"
-              className={`btn-ghost !px-2 ${showAll ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
-            >
-              <Network className="h-3.5 w-3.5" />
-            </button>
-            <div className="flex items-center h-8 rounded-btn border border-border overflow-hidden">
-              {(['hidden', 'mini', 'normal', 'large'] as const).map(sz => (
-                <button
-                  key={sz}
-                  onClick={() => { setCardSize(sz); storage.screenerCardSize.set(sz) }}
-                  className={`h-full px-2 text-[10px] font-medium transition-colors cursor-pointer
-                    ${cardSize === sz
-                      ? 'bg-accent/10 text-accent'
-                      : 'text-muted hover:text-secondary hover:bg-elevated'
-                    }`}
-                >
-                  {sz === 'hidden' ? '隐藏' : sz === 'mini' ? '紧凑' : sz === 'normal' ? '标准' : '详细'}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setShowPoolDialog(true)}
-              className="btn-secondary"
-            >
-              <Layers className="h-3.5 w-3.5" />
-              策略池
-              <span className="ml-0.5 min-w-[28px] h-4 flex items-center justify-center rounded-full bg-accent/15 text-accent text-[10px] font-bold num">
-                {visiblePool.length}/{strategies.data?.presets?.length ?? 0}
-              </span>
-            </button>
-            <button
-              onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
-              className="btn-secondary"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              创建策略 · AI
-            </button>
-          </div>
-        }
+        subtitle="选择策略、运行扫描，再把命中结果送入自选或回测"
       />
 
       <div className="workspace-content space-y-3">
+        <section className="panel" aria-labelledby="screener-command-title">
+          <div className="flex min-w-0 flex-col gap-3 p-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0 space-y-2">
+              <div>
+                <h2 id="screener-command-title" className="text-sm font-semibold text-foreground">
+                  扫描控制
+                </h2>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  数据基于本地 enriched 表，与监控和回测使用同一套策略口径
+                </p>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {asOf && (
+                  <DatePicker
+                    value={asOf}
+                    onChange={handleDateChange}
+                    min={minDate}
+                    max={maxDate}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => reloadStrategies.mutate()}
+                  disabled={reloadStrategies.isPending}
+                  title="重新加载策略并运行全部策略，刷新当前符合条件的个股"
+                  className="btn-primary min-h-9 disabled:cursor-wait disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${reloadStrategies.isPending ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  {reloadStrategies.isPending ? '运行中' : '运行全部策略'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAll(v => { if (!v) setActiveStrategy(null); return !v })}
+                  aria-pressed={showAll}
+                  className={`btn-secondary min-h-9 ${showAll ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
+                >
+                  <Network className="h-3.5 w-3.5" aria-hidden="true" />
+                  全部结果
+                </button>
+              </div>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-2 lg:items-end">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPoolDialog(true)}
+                  className="btn-secondary min-h-9"
+                >
+                  <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                  策略池
+                  <span className="ml-0.5 flex h-4 min-w-[28px] items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent num">
+                    {visiblePool.length}/{strategies.data?.presets?.length ?? 0}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
+                  className="btn-secondary min-h-9"
+                >
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  创建策略 · AI
+                </button>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="text-[10px] font-medium text-muted">策略卡片</span>
+                <div className="flex min-h-9 items-center overflow-hidden rounded-btn border border-border" role="group" aria-label="策略卡片密度">
+                  {(['hidden', 'mini', 'normal', 'large'] as const).map(sz => (
+                    <button
+                      key={sz}
+                      type="button"
+                      aria-pressed={cardSize === sz}
+                      onClick={() => { setCardSize(sz); storage.screenerCardSize.set(sz) }}
+                      className={`h-8 px-2.5 text-[10px] font-medium transition-colors ${
+                        cardSize === sz
+                          ? 'bg-accent/10 text-accent'
+                          : 'text-muted hover:bg-elevated hover:text-secondary'
+                      }`}
+                    >
+                      {sz === 'hidden' ? '隐藏' : sz === 'mini' ? '紧凑' : sz === 'normal' ? '标准' : '详细'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
         {cachedQuery.data?.discarded_as_of && (
           <div className="flex items-center gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
             <Clock className="h-3.5 w-3.5 shrink-0" />
@@ -602,47 +632,52 @@ export function Screener() {
           </div>
         )}
         {cardSize !== 'hidden' && (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <div className="section-kicker">Strategies</div>
-              <h2 className="section-title">策略池卡片</h2>
+          <section className="panel" aria-labelledby="strategy-pool-title">
+            <div className="panel-header flex-col !items-start sm:flex-row sm:!items-center">
+              <div className="min-w-0">
+                <h2 id="strategy-pool-title" className="section-title">选择与运行策略</h2>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  点击策略卡片运行单项扫描；设置与监控入口保留在卡片内
+                </p>
+              </div>
+              <span className="shrink-0 text-[11px] text-muted num">{visiblePool.length} 个策略</span>
             </div>
-            <span className="text-[11px] text-muted num">{visiblePool.length} 策略</span>
-          </div>
-          <div className="panel-body">
-          {strategies.isLoading && <div className="text-sm text-muted">加载中…</div>}
-          {!strategies.isLoading && visiblePool.length === 0 && (
-            <div className="text-sm text-muted py-4 text-center border border-dashed border-border rounded-btn">
-              策略池为空，点击右上角「策略池」按钮添加策略
+            <div className="panel-body">
+              {strategies.isLoading && (
+                <div className="text-sm text-muted" role="status">正在加载策略…</div>
+              )}
+              {!strategies.isLoading && visiblePool.length === 0 && (
+                <div className="rounded-btn border border-dashed border-border py-5 text-center">
+                  <p className="text-sm text-secondary">策略池为空</p>
+                  <p className="mt-1 text-[11px] text-muted">使用上方「策略池」添加已有策略，或创建新策略</p>
+                </div>
+              )}
+              <div className={cardWrapCls(cardSize)}>
+                {visiblePool.map(id => {
+                  const s = strategyMap.get(id)
+                  if (!s) return null
+                  return (
+                    <StrategyCard
+                      key={s.id}
+                      name={s.name}
+                      description={s.description}
+                      source={s.source}
+                      active={activeStrategy === s.id}
+                      count={hitCounts[id]}
+                      expiredCount={expiredCounts[id]}
+                      loading={runAll.isPending && hitCounts[id] == null}
+                      cardSize={cardSize}
+                      onRun={() => handleRun(s)}
+                      disabled={run.isPending && activeStrategy === s.id}
+                      onSettings={() => setSettingsStrategyId(s.id)}
+                      monitored={strategyMonitorMap.has(s.id)}
+                      onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
+                    />
+                  )
+                })}
+              </div>
             </div>
-          )}
-          <div className={cardWrapCls(cardSize)}>
-            {visiblePool.map(id => {
-              const s = strategyMap.get(id)
-              if (!s) return null
-              return (
-                <StrategyCard
-                  key={s.id}
-                  name={s.name}
-                  description={s.description}
-                  source={s.source}
-                  active={activeStrategy === s.id}
-                  count={hitCounts[id]}
-                  expiredCount={expiredCounts[id]}
-                  loading={runAll.isPending && hitCounts[id] == null}
-                  cardSize={cardSize}
-                  onRun={() => handleRun(s)}
-                  disabled={run.isPending && activeStrategy === s.id}
-                  onSettings={() => setSettingsStrategyId(s.id)}
-                  monitored={strategyMonitorMap.has(s.id)}
-                  onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
-                />
-              )
-            })}
-          </div>
-          </div>
-        </section>
+          </section>
         )}
 
         {runAll.isError && (
@@ -661,71 +696,92 @@ export function Screener() {
           </div>
         ) : null}
 
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <div className="section-kicker">Results</div>
-              <h2 className="section-title flex flex-wrap items-center gap-2">
-                {!showAll && activeStrategy && (
-                  <span className="text-secondary font-normal">{strategyIdToName[activeStrategy] ?? ''}</span>
-                )}
-                <TrendingUp className="h-3.5 w-3.5 text-accent" />
-                {showAll ? '全部' : ''}命中{' '}
-                <span className="text-accent num">
+        <section className="panel" aria-labelledby="screener-results-title">
+          <div className="flex min-w-0 flex-col gap-3 border-b border-border px-3 py-2.5 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <TrendingUp className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+                <h2 id="screener-results-title" className="section-title">选股结果</h2>
+                <span className="rounded-btn bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent num">
                   {(showAll ? allRows.length > 0 : !!result) ? displayRows.length : '—'}
                 </span>
                 {(showAll ? allRows.length > 0 : !!result) && filterActive(filter) && displayRows.length !== (showAll ? allRows.length : result!.total) && (
-                  <span className="text-muted text-xs font-normal">/ {showAll ? allRows.length : result!.total}</span>
+                  <span className="text-[11px] text-muted">
+                    原始 {showAll ? allRows.length : result!.total} 只
+                  </span>
                 )}
-                <span className="text-[11px] text-muted font-normal">
-                  · {visiblePool.length} 策略
-                  {!showAll && visiblePool.length > 0 && (
-                    <> · 共 {visiblePool.reduce((sum, id) => sum + (hitCounts[id] ?? 0), 0)} 只</>
-                  )}
-                </span>
                 {runAll.isPending && (
-                  <span className="text-[11px] text-muted animate-pulse font-normal">扫描中…</span>
+                  <span className="text-[11px] text-muted animate-pulse" role="status">扫描中…</span>
                 )}
-              </h2>
+              </div>
+              <p className="mt-1 text-[11px] text-muted">
+                {showAll
+                  ? `汇总 ${visiblePool.length} 个策略`
+                  : activeStrategy
+                    ? `${strategyIdToName[activeStrategy] ?? activeStrategy} · 当前策略`
+                    : '先选择策略运行，或切换到全部结果'}
+                {!showAll && visiblePool.length > 0 && (
+                  <> · 策略池累计命中 {visiblePool.reduce((sum, id) => sum + (hitCounts[id] ?? 0), 0)} 只</>
+                )}
+              </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {(showAll ? allRows.length > 0 : !!result) && displayRows.length > 0 && (
-                <>
+
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-btn border border-border bg-elevated p-0.5" role="group" aria-label="结果列表工具">
+                {(showAll ? allRows.length > 0 : !!result) && displayRows.length > 0 && (
                   <button
+                    type="button"
                     onClick={() => setShowFilter(v => !v)}
-                    className={`btn-secondary ${filterActive(filter) ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
+                    aria-pressed={showFilter}
+                    className={`btn-ghost !h-8 min-h-8 ${filterActive(filter) ? '!bg-accent/10 !text-accent' : ''}`}
                   >
-                    <Filter className="h-3 w-3" />
+                    <Filter className="h-3 w-3" aria-hidden="true" />
                     筛选
                     {filterActive(filter) && (
-                      <span className="bg-accent text-base rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
                         {countActiveFilters(filter)}
                       </span>
                     )}
                   </button>
-                  {filterActive(filter) && (
-                    <button
-                      onClick={() => {
-                        setFilter(defaultFilter)
-                        if (activeStrategy) filterMap.current.delete(activeStrategy)
-                      }}
-                      className="btn-ghost text-muted hover:text-danger"
-                    >
-                      重置
-                    </button>
-                  )}
+                )}
+                {filterActive(filter) && (
                   <button
+                    type="button"
+                    onClick={() => {
+                      setFilter(defaultFilter)
+                      if (activeStrategy) filterMap.current.delete(activeStrategy)
+                    }}
+                    className="btn-ghost !h-8 min-h-8 text-muted hover:text-danger"
+                  >
+                    重置
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setCustomizerOpen(true)}
+                  aria-label="配置结果列表列"
+                  title="列表配置"
+                  className={`btn-ghost !h-8 min-h-8 !px-2 ${customizerOpen ? '!bg-accent/10 !text-accent' : ''}`}
+                >
+                  <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+
+              {(showAll ? allRows.length > 0 : !!result) && displayRows.length > 0 && (
+                <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-btn border border-border bg-elevated p-0.5" role="group" aria-label="结果后续操作">
+                  <button
+                    type="button"
                     onClick={handleBatchAdd}
                     disabled={batchAdd.isPending}
-                    className="btn-secondary !border-accent/40 !bg-accent/10 !text-accent disabled:opacity-50"
+                    className="btn-ghost !h-8 min-h-8 !text-accent disabled:opacity-50"
                   >
-                    <Star className="h-3 w-3" />
-                    {batchAdd.isPending ? '添加中…' : '批量加自选'}
+                    <Star className="h-3 w-3" aria-hidden="true" />
+                    {batchAdd.isPending ? '添加中…' : '加自选'}
                   </button>
                   <button
                     type="button"
                     onClick={() => sendToBacktest('strategy')}
-                    className="btn-secondary h-8 px-2.5 text-xs"
+                    className="btn-ghost !h-8 min-h-8"
                     title="以当前选股结果作为股票池进入策略回测"
                   >
                     <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
@@ -734,27 +790,18 @@ export function Screener() {
                   <button
                     type="button"
                     onClick={() => sendToBacktest('factor')}
-                    className="btn-secondary h-8 px-2.5 text-xs"
+                    className="btn-ghost !h-8 min-h-8"
                     title="以当前选股结果作为股票池进入因子回测"
                   >
                     <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
                     因子回测
                   </button>
-                </>
+                </div>
               )}
-              <button
-                onClick={() => setCustomizerOpen(true)}
-                title="列表配置"
-                className={`btn-ghost !px-2 ${customizerOpen ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
-              >
-                <Settings2 className="h-3 w-3" />
-              </button>
-              {batchMsg && (
-                <span className="text-xs text-accent animate-pulse">{batchMsg}</span>
-              )}
+              {batchMsg && <span className="text-xs text-accent animate-pulse" role="status">{batchMsg}</span>}
               {!showAll && result && result.elapsed_ms > 0 && (
-                <div className="flex items-center gap-2 text-xs text-muted">
-                  <Clock className="h-3 w-3" />
+                <div className="flex items-center gap-1.5 text-xs text-muted">
+                  <Clock className="h-3 w-3" aria-hidden="true" />
                   <span className="num">{result.elapsed_ms.toFixed(1)} ms</span>
                 </div>
               )}
@@ -824,7 +871,7 @@ export function Screener() {
                 <ScanSearch className="h-6 w-6 text-muted" />
               </div>
               <div className="flex flex-col items-center gap-1.5">
-                <span className="text-sm text-secondary">可先在右上角切换日期，再点击策略卡片查看选股结果</span>
+                <span className="text-sm text-secondary">可先在上方扫描控制里切换日期，再点击策略卡片查看选股结果</span>
                 <span className="text-[11px] text-muted">若提示 enriched 表无数据，请先运行盘后管道</span>
               </div>
             </div>

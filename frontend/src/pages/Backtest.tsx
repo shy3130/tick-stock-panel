@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react'
 import { storage } from '@/lib/storage'
 import {
   clearScreenerBacktestHandoff,
@@ -60,6 +60,12 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   },
 }
 
+const MODE_GROUPS: { id: string; label: string; tabs: Tab[] }[] = [
+  { id: 'verify', label: '验证', tabs: ['factor', 'strategy', 'composite'] },
+  { id: 'experiment', label: '实验', tabs: ['grid', 'search'] },
+  { id: 'asset', label: '资产', tabs: ['history'] },
+]
+
 export function Backtest() {
   const [screenerHandoff, setScreenerHandoff] = useState<ScreenerBacktestHandoff | null>(
     () => peekScreenerBacktestHandoff(),
@@ -100,45 +106,76 @@ export function Backtest() {
   }, [])
   const clearParameterBackfill = useCallback(() => setParameterBackfill(null), [])
 
-  const modeSwitch = (
-    <div className="workspace-toolbar !border-0 !bg-transparent !px-0 !py-0 !mb-0" role="group" aria-label="回测模式">
-      <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5">
-        {TABS.map(tab => {
-          const Icon = TAB_ICONS[tab]
-          const active = activeTab === tab
-          return (
-            <button
-              key={tab}
-              type="button"
-              aria-pressed={active}
-              onClick={() => selectTab(tab)}
-              className={`inline-flex items-center gap-1.5 rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors duration-150 cursor-pointer ${
-                active
-                  ? 'bg-accent text-white shadow-sm'
-                  : 'text-secondary hover:bg-surface hover:text-foreground'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {MODES[tab].title}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
+  const mode = MODES[activeTab]
+
+  const onModeKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: Tab) => {
+    const index = TABS.indexOf(tab)
+    let nextIndex = -1
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % TABS.length
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + TABS.length) % TABS.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = TABS.length - 1
+    if (nextIndex < 0) return
+    event.preventDefault()
+    const next = TABS[nextIndex]
+    selectTab(next)
+    requestAnimationFrame(() => {
+      document.getElementById(`backtest-mode-${next}`)?.focus()
+    })
+  }
 
   return (
-    <div className="workspace-page">
+    <div className="workspace-page overflow-x-hidden">
       <PageHeader
         title="回测工作台"
-        subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].subtitle}`}
-        titleExtra={
-          <span className="hidden sm:inline text-[11px] text-muted font-normal max-w-md truncate">
-            {MODES[activeTab].hint}
-          </span>
-        }
-        right={modeSwitch}
+        subtitle={`${mode.title} · ${mode.subtitle}`}
       />
+
+      <div className="min-w-0 border-b border-border bg-surface px-3 py-1.5 sm:px-4">
+        <div
+          role="tablist"
+          aria-label="回测模式"
+          className="flex min-w-0 items-center gap-2 overflow-x-auto"
+        >
+          {MODE_GROUPS.map((group, groupIndex) => (
+            <div
+              key={group.id}
+              role="presentation"
+              className="flex shrink-0 items-center gap-1.5"
+            >
+              {groupIndex > 0 ? (
+                <span className="mr-1 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+              ) : null}
+              <span className="shrink-0 text-[10px] font-medium text-muted" aria-hidden="true">
+                {group.label}
+              </span>
+              {group.tabs.map(tab => {
+                const Icon = TAB_ICONS[tab]
+                const active = activeTab === tab
+                return (
+                  <button
+                    key={tab}
+                    id={`backtest-mode-${tab}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    tabIndex={active ? 0 : -1}
+                    onClick={() => selectTab(tab)}
+                    onKeyDown={event => onModeKeyDown(event, tab)}
+                    className={`${active ? 'btn-primary' : 'btn-ghost'} !h-9 min-h-9 px-2.5 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`}
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    {MODES[tab].title}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+        <p className="mt-1.5 min-w-0 text-[11px] leading-snug text-muted">
+          {mode.hint}
+        </p>
+      </div>
 
       <div className="workspace-content !pt-0 min-h-0 flex-1 flex flex-col">
         <div className="flex-1 min-h-0 min-w-0">
