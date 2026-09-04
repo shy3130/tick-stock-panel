@@ -45,6 +45,7 @@ from app.data_providers.fquant.adj_factor import (
     compute_ex_factor_from_xdxr,
 )
 from app.data_providers.fquant.dataquery_client import (
+    MAX_DATAQUERY_ROWS,
     MAX_POINT_SYMBOLS,
     DataQueryBlockedError,
     DataQueryClient,
@@ -61,6 +62,7 @@ from app.data_providers.fquant.mapping import (
     klines_rows_to_daily,
     minutes_rows_to_minute_df,
     moneyflow_daily_to_df,
+    moneyflow_daily_v2_to_df,
     moneyflow_minute_to_df,
     moneyflow_minute_v2_to_df,
     trans_rows_to_df,
@@ -850,7 +852,11 @@ class FQuantProvider:
 
     def _get_adj_events_from_engine(self, symbol: str, code: str) -> list[dict]:
         """Read A-share corporate actions through dataquery v2."""
-        if getattr(self, "_dataquery", None) is not None and self._is_v2_series_symbol(symbol):
+        if (
+            getattr(self, "_dataquery", None) is not None
+            and self._is_v2_series_symbol(symbol)
+            and not is_etf_symbol(symbol)
+        ):
             rows = self._query_series("xdxr", symbol, limit=2500)
         else:
             rows = self._engine.get_xdxr(code)
@@ -1768,9 +1774,11 @@ class FQuantProvider:
         start: datetime,
         end: datetime,
     ) -> pl.DataFrame:
-        """Return the existing daily money-flow range contract used by K-line APIs."""
-        if getattr(self, "_dataquery", None) is not None:
-            raise DataQueryBlockedError("moneyflow range query", dataset="tdx_moneyflow/a")
+        """Return the existing daily money-flow range contract used by K-line APIs.
+
+        Unsupported range reads are explicitly routed to the legacy chain before
+        any v2 request (capability routing, not post-failure fallback).
+        """
         return self._engine.get_fund_range(
             symbol_to_code(symbol), start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
         )
@@ -1778,35 +1786,22 @@ class FQuantProvider:
     def get_moneyflow_stock(self, symbol: str, start: datetime, end: datetime,
                             freq: str = "daily") -> pl.DataFrame:
         """查询已发布快照中的个股日/分钟资金流。"""
-        if getattr(self, "_dataquery", None) is not None:
-            if start.date() != end.date():
-                raise DataQueryBlockedError(
-                    "moneyflow range query",
-                    dataset="tdx_moneyflow_minute/a" if freq == "minute" else "tdx_moneyflow/a",
-                )
-            cache_id = self._cache_id(symbol)
-            result = (
-                self._dataquery.minute_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
-                if freq == "minute"
-                else self._dataquery.daily_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
+        if getattr(self, "_dataquery", None) is None or start.date() != end.date():
+            return self._engine.get_moneyflow_stock(
+                symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), freq=freq,
             )
-            if freq == "minute":
-                return moneyflow_minute_v2_to_df(
-                    list(result.rows), symbol, start.strftime("%Y-%m-%d"), source=self.name
-                )
-            total = dict(result.rows[0]) if result.rows else None
-            if total is None:
-                return pl.DataFrame()
-            return moneyflow_daily_to_df(
-                {symbol_to_code(symbol): {
-                    "total_net": total.get("net_amount"),
-                    "total_inflow": total.get("inflow_amount"),
-                    "total_outflow": total.get("outflow_amount"),
-                }},
-                {symbol_to_code(symbol): symbol}, start.strftime("%Y-%m-%d"), source=self.name,
+        cache_id = self._cache_id(symbol)
+        result = (
+            self._dataquery.minute_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
+            if freq == "minute"
+            else self._dataquery.daily_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
+        )
+        if freq == "minute":
+            return moneyflow_minute_v2_to_df(
+                list(result.rows), symbol, start.strftime("%Y-%m-%d"), source=self.name
             )
-        return self._engine.get_moneyflow_stock(
-            symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), freq=freq,
+        return moneyflow_daily_v2_to_df(
+            list(result.rows), symbol, start.strftime("%Y-%m-%d"), source=self.name
         )
 
     def get_moneyflow_blocks(self, trade_date: datetime, freq: str = "daily",
@@ -2005,12 +2000,17 @@ class FQuantProvider:
         code = symbol_to_code(symbol)
         date_str = date.strftime("%Y%m%d")
         _, suffix = split_symbol(symbol)
-        if getattr(self, "_dataquery", None) is not None and self._is_v2_series_symbol(symbol):
-            if limit > 2500:
-                raise DataQueryBlockedError("transaction read above the v2 row cap", dataset="tdx_trans/a")
+        if (
+            getattr(self, "_dataquery", None) is not None
+            and limit <= MAX_DATAQUERY_ROWS
+            and self._is_v2_series_symbol(symbol)
+        ):
             rows = self._query_series("trans", symbol, trade_date=date, limit=limit)
         else:
-            rows = self._engine.get_trans(code, date_str, limit=limit, asset_type="hk" if suffix == "HK" else None)
+            # Limits above the v2 cap route to legacy before any v2 request.
+            rows = self._engine.get_trans(
+                code, date_str, limit=limit, asset_type="hk" if suffix == "HK" else None
+            )
         return trans_rows_to_df(rows, symbol, date_str, source=self.name) if rows else pl.DataFrame()
 
     def get_call_auction(self, symbol: str, trade_date: datetime, session: str | None = None, limit: int = 5000) -> pl.DataFrame:

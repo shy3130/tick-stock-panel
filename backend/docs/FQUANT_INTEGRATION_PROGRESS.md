@@ -2,8 +2,8 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-09-03（Issue #56 dataquery v2 cutover）
-> 状态：A 股点查/窄区间行情已切换 engine dataquery v2 HTTP（`FQUANT_DATAQUERY_ENABLED` 默认开，关=0 整链回退 legacy DuckDB）；本地 DuckDB provider 仍是其余全部数据面；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
+> 最后更新：2026-09-04（Issue #56 dataquery v2 cutover review）
+> 状态：A 股 stock 点查/窄区间行情已切换 engine dataquery v2 HTTP（`FQUANT_DATAQUERY_ENABLED` 默认开，关=0 整链回退 legacy DuckDB）；unsupported broad reads 仍按能力在调用 v2 前显式走 legacy，本阶段不宣称已完全切断 engine DuckDB；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
@@ -24,12 +24,12 @@
 - **范围**：A 股 stock 的点查/窄区间行情读切换到 engine dataquery v2 HTTP（`backend/app/data_providers/fquant/dataquery_client.py`）：series `day|wide|minutes|trans|xdxr`（cache_id 规则 `^(sh|sz|bj)\d{6}$`，6/5→sh、4/8/9→bj、其余→sz，见 `symbols.symbol_to_cache_id`）+ moneyflow daily/minute 点查（批量 ≤16 标的，`MAX_POINT_SYMBOLS`）。
 - **契约**：7 码 typed error 信封（`invalid_query`/`not_found`/`schema_mismatch`/`version_pinned_unavailable`/`stale`/`incomplete`/`unavailable`），`DataVersion` fail-closed 解析（schema_version 必须匹配 dataset：series=`legacy_csv/v1`、moneyflow=`tdx_moneyflow[_minute]/v1`）；`main.py` 全局 handler 把 `DataQueryError` 转 `{code,dataset,detail,retryable}` + `Retry-After`；`/api/kline/minute` 与 `/api/market-data/status`（`dataquery_versions`）透传版本元数据。
 - **语义对齐**：v2 series rows 是紧凑 `YYYYMMDD` 日期 + 升序返回，`_query_series` 出口统一 `_v2_date_to_iso` 归一为 ISO，legacy DuckDB 链路输出形状不变；wide 路径保留 `_get_raw_oracle_rows` + `reconstruct_raw_rows` 前复权 raw 重建；`get_daily_freshness` 改读 v2 status 的 `tdx_day/a` coverage。
-- **诚实映射**：v2 moneyflow daily 只有 total 四字段——`total_net/total_inflow/total_outflow` 如实映射，`main_*` 显式 None，不用 total 冒充 main；minute moneyflow 走专用 snake_case mapper `moneyflow_minute_v2_to_df`，`main_traditional_net/main_broad_net/neutral_amount` 无 v2 来源置 None。
-- **显式 blocked（等 engine #9/#11 pinned Parquet bundle）**：全市场/批量扫描一律 `DataQueryBlockedError`（`version_pinned_unavailable` 语义，fail-loud 不静默回退）：`get_daily`/`get_minute` A 股 symbols>16、单标的区间>2500 行（wide/trans）、minutes 跨>31 日、moneyflow 任意 range/多日查询；v2 series 返回 `truncated=true` 时客户端直接抛 typed `incomplete`（503, retryable），绝不把截断序列当完整结果。bulk 的正式归宿是 pinned bundle（Issue #56 验收「生产路径不再打开 engine DuckDB」以 engine #11 交付为前提），期间夜管道/canonical history 需 `FQUANT_DATAQUERY_ENABLED=0` 运行或接受显式 blocked。
-- **不迁移（本轮显式留在本地链）**：chips（v2 无路由）、HK/ETF/index daily 与 minutes、call auction、板块/截面 moneyflow 快照（`get_moneyflow_daily_snapshot` 等 engine-owned bulk 读）、fstore 域（instruments/realtime/financial/LHB/margin/universes）维持只读本地 DuckDB——它们迁往 pinned Parquet bundle 的批次等 engine #9/#11。
+- **诚实映射**：v2 daily moneyflow 保持 stock moneyflow 旧响应 schema，至少保留 `trade_date/total_amount/net_amount/inflow_amount/outflow_amount`；split 字段仅在 v2 无来源时为 `None`，不伪造主力拆分；minute moneyflow 走专用 snake_case mapper `moneyflow_minute_v2_to_df`，`main_traditional_net/main_broad_net/neutral_amount` 无 v2 来源置 None。
+- **显式能力路由（等 engine #9/#11 pinned Parquet bundle）**：v2 仅承接点查/窄区间；全市场/批量扫描仍按既有 `DataQueryBlockedError` fail-closed。stock moneyflow range/多日查询、trans `limit>2500`（保留 5000/20000 UI 语义）及 ETF xdxr 在调用 v2 前明确走既有 legacy 本地链，绝不先调 v2 再 fallback。上述 unsupported broad reads 在 pinned bundle 可用前继续访问 engine 发布 DuckDB；本阶段不宣称生产路径已完全切断 engine DuckDB。
+- **不迁移（本轮显式留在本地链）**：chips（v2 无路由）、HK/ETF/index daily 与 minutes、ETF xdxr、call auction、板块/截面 moneyflow 快照（`get_moneyflow_daily_snapshot` 等 engine-owned bulk 读）、fstore 域（instruments/realtime/financial/LHB/margin/universes）维持只读本地 DuckDB——它们迁往 pinned Parquet bundle 的批次等 engine #9/#11。
 - **上线前置**：(1) engine 必须先在 `:8099` 部署 v2 再启用本 cutover，否则点查路径全部 `unavailable`（错误信息带 `FQUANT_DATAQUERY_ENABLED=0` 回退指引）；(2) 启用前抽标的做一次 v2 legacy-CSV 缓存 vs 本地 `tdx.duckdb` 的内容 parity 核验（点查/窄区间覆盖面），结论记录进本文件。
 - **回退**：`FQUANT_DATAQUERY_ENABLED=0` 恢复整条 legacy DuckDB 链（wide/xdxr/minutes/trans/moneyflow/freshness 全部回退），生产 ：8099 未部署 v2 前可用此开关。
-- **验证**：`tests/data_providers` + `tests/api/test_market_data.py` + `tests/api/test_kline_minute_source.py` 共 346 passed（新增 `test_dataquery_client.py` 52 项契约测试 + `test_provider_dataquery_v2.py` 27 项 wiring/blocked/语义测试，含 httpx.MockTransport 线格式端到端 smoke：成功 + 409 + 404 + version 透传）；零网络、零生产依赖。
+- **验证范围**：`tests/data_providers/test_provider_dataquery_v2.py` 覆盖 range/trans capability routing、daily moneyflow schema、ETF xdxr exclusion 与点查 v2；`tests/api/test_kline_minute_source.py` 覆盖 `DataQueryError` 透传至全局 handler。具体通过数量以主 agent 集成后的统一验证为准。
 
 下文第 1～7 节记录 2026-07-02 前后的迁移过程。涉及 PG、HTTP、未提交状态或旧单文件 minutes/trans 的描述，以本节和仓库当前代码为准。
 

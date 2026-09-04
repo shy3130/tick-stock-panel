@@ -281,16 +281,9 @@ def get_minute(
 
     try:
         df = provider.get_minute([symbol], start, end, asset_type, freq="1m")
-    except DataQueryError as e:
-        raise HTTPException(
-            status_code=e.http_status,
-            detail={
-                "code": e.code,
-                "dataset": e.dataset or None,
-                "message": e.message,
-                "retryable": e.retryable,
-            },
-        ) from e
+    except DataQueryError:
+        # Let the global handler preserve the typed envelope and Retry-After.
+        raise
     except Exception as e:  # noqa: BLE001
         _map_catalog_to_http(e)
         logger.exception("minute provider failed %s %s", symbol, trade_date)

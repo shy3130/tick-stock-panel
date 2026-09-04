@@ -5,6 +5,7 @@ selection, legacy chain preservation when the client is disabled, blocked
 bulk/range paths (engine #9/#11), moneyflow point mapping honesty, and
 freshness via v2 status coverage.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -59,6 +60,7 @@ class FakeDataQuery:
             "tdx_moneyflow/a",
             (
                 {
+                    "trade_date": date_str,
                     "total_amount": 100.0,
                     "inflow_amount": 70.0,
                     "outflow_amount": 30.0,
@@ -88,6 +90,33 @@ def provider_with(fake: FakeDataQuery) -> FQuantProvider:
     provider = object.__new__(FQuantProvider)
     provider.name = "fquant"
     provider._dataquery = fake
+    return provider
+
+
+class FakeEngine:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def get_fund_range(self, code, start, end):
+        self.calls.append(("fund_range", (code, start, end), {}))
+        return pl.DataFrame({"date": [start], "main_net_inflow": [1.0]})
+
+    def get_moneyflow_stock(self, symbol, start, end, freq="daily"):
+        self.calls.append(("moneyflow_stock", (symbol, start, end), {"freq": freq}))
+        return pl.DataFrame({"symbol": [symbol], "trade_date": [start]})
+
+    def get_trans(self, code, date_str, limit=5000, asset_type=None):
+        self.calls.append(("trans", (code, date_str, limit), {"asset_type": asset_type}))
+        return [{"time": "09:30:03", "price": 10.0, "volume": 1, "amount": 10}]
+
+    def get_xdxr(self, code, limit=100, asset_type=None):
+        self.calls.append(("xdxr", (code,), {"limit": limit, "asset_type": asset_type}))
+        return [{"date": "2024-06-18", "fenhong": 1.0}]
+
+
+def provider_with_engine(fake: FakeDataQuery, engine: FakeEngine) -> FQuantProvider:
+    provider = provider_with(fake)
+    provider._engine = engine
     return provider
 
 
@@ -178,9 +207,7 @@ def _bare(provider: FQuantProvider) -> None:
         (),
         {
             "get_xdxr": staticmethod(lambda *a, **k: []),
-            "get_wide": staticmethod(
-                lambda *a, **k: []
-            ),
+            "get_wide": staticmethod(lambda *a, **k: []),
         },
     )()
 
@@ -247,6 +274,15 @@ def test_adj_events_use_v2_xdxr_for_a_share():
     assert events and events[0]["trade_date"] == "2024-06-18"
 
 
+def test_adj_events_route_etf_to_legacy_xdxr():
+    fake = FakeDataQuery()
+    engine = FakeEngine()
+    provider = provider_with_engine(fake, engine)
+    events = provider._get_adj_events_from_engine("510300.SH", "510300")
+    assert events and engine.calls[-1][0] == "xdxr"
+    assert fake.calls == []
+
+
 # --- minutes / trans ------------------------------------------------------
 
 
@@ -281,7 +317,7 @@ def test_get_minute_unbounded_request_rejected():
     assert provider.get_minute(["600519.SH"], None, None, "stock", "1m").is_empty()
 
 
-def test_get_transactions_point_uses_v2_and_caps_block():
+def test_get_transactions_point_uses_v2_and_large_limits_use_legacy():
     fake = FakeDataQuery()
     fake.rows_by_dataset["trans"] = [
         {"time": "09:30:03", "price": 10.01, "volume": 120, "amount": 120120, "direction": 1}
@@ -291,8 +327,12 @@ def test_get_transactions_point_uses_v2_and_caps_block():
     assert df.height == 1
     assert fake.calls[0][1]["cache_id"] == "sh600519"
 
-    with pytest.raises(DataQueryBlockedError):
-        provider.get_transactions("600519.SH", datetime(2026, 9, 1), limit=5000)
+    engine = FakeEngine()
+    provider = provider_with_engine(FakeDataQuery(), engine)
+    provider.get_transactions("600519.SH", datetime(2026, 9, 1), limit=5000)
+    assert engine.calls[-1][0] == "trans"
+    assert engine.calls[-1][1][2] == 5000
+    assert provider._dataquery.calls == []
 
 
 # --- moneyflow ------------------------------------------------------------
@@ -315,28 +355,44 @@ def test_moneyflow_daily_over_16_symbols_is_blocked():
         provider.get_moneyflow_daily(symbols, datetime(2026, 9, 1))
 
 
-def test_moneyflow_range_blocked():
-    provider = provider_with(FakeDataQuery())
-    with pytest.raises(DataQueryBlockedError):
-        provider.get_moneyflow_range("600519.SH", datetime(2026, 8, 1), datetime(2026, 9, 1))
+def test_moneyflow_range_routes_to_legacy_before_v2():
+    fake = FakeDataQuery()
+    engine = FakeEngine()
+    provider = provider_with_engine(fake, engine)
+    provider.get_moneyflow_range("600519.SH", datetime(2026, 8, 1), datetime(2026, 9, 1))
+    assert engine.calls[-1] == ("fund_range", ("600519", "2026-08-01", "2026-09-01"), {})
+    assert fake.calls == []
 
 
-def test_moneyflow_stock_same_day_point_and_range_block():
-    provider = provider_with(FakeDataQuery())
+def test_moneyflow_stock_point_schema_and_multi_day_legacy_route():
+    fake = FakeDataQuery()
+    engine = FakeEngine()
+    provider = provider_with_engine(fake, engine)
     day = datetime(2026, 9, 1)
     daily = provider.get_moneyflow_stock("600519.SH", day, day, freq="daily")
-    assert not daily.is_empty()
+    row = daily.to_dicts()[0]
+    for field in ("trade_date", "total_amount", "net_amount", "inflow_amount", "outflow_amount"):
+        assert field in daily.columns
+    assert row["trade_date"] == "2026-09-01"
+    assert row["total_amount"] == 100.0
+    assert row["net_amount"] == 40.0
+    assert row["inflow_amount"] == 70.0
+    assert row["outflow_amount"] == 30.0
+    assert row["main_traditional_net"] is None
+
+    provider.get_moneyflow_stock("600519.SH", datetime(2026, 8, 31), day, freq="daily")
+    assert engine.calls[-1][0] == "moneyflow_stock"
+    assert fake.calls == [("moneyflow:daily", {"cache_id": "sh600519", "date": "20260901"})]
+
+
+def test_moneyflow_stock_same_day_minute_point_uses_v2():
+    provider = provider_with(FakeDataQuery())
+    day = datetime(2026, 9, 1)
     minute = provider.get_moneyflow_stock("600519.SH", day, day, freq="minute")
-    assert not minute.is_empty()
     row = minute.to_dicts()[0]
     assert row["bucket_time"] == "09:31"
     assert row["net_amount"] == 1.0
-    assert row["main_traditional_net"] is None  # v2 has no such split
-
-    with pytest.raises(DataQueryBlockedError):
-        provider.get_moneyflow_stock(
-            "600519.SH", datetime(2026, 8, 31), day, freq="daily"
-        )
+    assert row["main_traditional_net"] is None
 
 
 # --- legacy chain preserved -----------------------------------------------
@@ -347,9 +403,7 @@ def test_legacy_chain_unchanged_when_client_disabled():
     provider._engine = type(
         "Engine", (), {"get_xdxr": staticmethod(lambda *a, **k: [{"date": "2024-06-18"}])}
     )()
-    provider._fstore = type(
-        "FStore", (), {"query": staticmethod(lambda sql, params=None: [])}
-    )()
+    provider._fstore = type("FStore", (), {"query": staticmethod(lambda sql, params=None: [])})()
     events = provider._get_adj_events_from_engine("600519.SH", "600519")
     assert events and events[0]["trade_date"] == "2024-06-18"  # legacy ISO shape
 

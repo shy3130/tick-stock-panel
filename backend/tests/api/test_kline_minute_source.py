@@ -10,6 +10,7 @@ from app.data_providers.fquant.catalog_resolver import (
     RouteNotFoundError,
     StaleCatalogError,
 )
+from app.data_providers.fquant.dataquery_client import DataQueryError
 
 from app.services.external_fallback.adapter import ChartFallbackResult
 
@@ -131,6 +132,22 @@ def test_minute_catalog_errors_map_to_503(monkeypatch):
             kline.get_minute(request(), "600519.SH", date(2026, 7, 2))
         assert exc.value.status_code == 503
         assert "Retry-After" in exc.value.headers
+
+
+def test_minute_dataquery_error_reaches_global_handler(monkeypatch):
+    class BadProvider:
+        def get_minute(self, *args, **kwargs):
+            raise DataQueryError("stale", dataset="tdx_minutes/a", message="stale")
+
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name", lambda scope: "fquant_local"
+    )
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: BadProvider())
+
+    with pytest.raises(DataQueryError) as exc:
+        kline.get_minute(request(), "600519.SH", date(2026, 7, 2))
+    assert exc.value.http_status == 503
+    assert exc.value.retryable is True
 
 
 def test_minute_catalog_errors_never_invoke_chart_live_fallback(monkeypatch):

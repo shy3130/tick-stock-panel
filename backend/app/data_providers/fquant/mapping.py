@@ -407,6 +407,51 @@ def moneyflow_daily_to_df(
     return pl.DataFrame(out) if out else pl.DataFrame()
 
 
+def moneyflow_daily_v2_to_df(
+    records: list[dict], symbol: str, date_iso: str, source: str = "fquant",
+) -> pl.DataFrame:
+    """Map a v2 daily point to the legacy stock moneyflow schema."""
+    if not records:
+        return pl.DataFrame()
+    columns = [
+        "symbol",
+        "trade_date",
+        "bucket_time",
+        "total_amount",
+        "inflow_amount",
+        "outflow_amount",
+        "net_amount",
+        "super_large_net",
+        "large_net",
+        "medium_net",
+        "small_net",
+        "main_traditional_net",
+        "main_broad_net",
+        "retail_net",
+        "neutral_net",
+        "unknown_net",
+        "valid_count",
+        "invalid_count",
+        "unknown_count",
+        "source",
+    ]
+    out: list[dict] = []
+    for rec in records:
+        trade_date = str(rec.get("trade_date") or date_iso)
+        if len(trade_date) == 8 and trade_date.isdigit():
+            trade_date = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+        item: dict = {
+            "symbol": symbol,
+            "trade_date": trade_date,
+            "bucket_time": None,
+            "source": f"{source}:tdx_moneyflow:daily",
+        }
+        for field in columns[3:-1]:
+            item[field] = finite_float_or_none(rec.get(field))
+        out.append(item)
+    return pl.DataFrame(out, schema=columns)
+
+
 def moneyflow_minute_to_df(
     records: list[dict], symbol: str, date_iso: str, source: str = "fquant",
 ) -> pl.DataFrame:
