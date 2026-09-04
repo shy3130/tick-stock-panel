@@ -15,6 +15,7 @@ from app.data_providers.fquant.catalog_resolver import (
     RouteNotFoundError,
     StaleCatalogError,
 )
+from app.data_providers.fquant.dataquery_client import DataQueryError
 from app.db_safe import is_valid_ext_ident, quote_ident
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync
@@ -280,6 +281,16 @@ def get_minute(
 
     try:
         df = provider.get_minute([symbol], start, end, asset_type, freq="1m")
+    except DataQueryError as e:
+        raise HTTPException(
+            status_code=e.http_status,
+            detail={
+                "code": e.code,
+                "dataset": e.dataset or None,
+                "message": e.message,
+                "retryable": e.retryable,
+            },
+        ) from e
     except Exception as e:  # noqa: BLE001
         _map_catalog_to_http(e)
         logger.exception("minute provider failed %s %s", symbol, trade_date)

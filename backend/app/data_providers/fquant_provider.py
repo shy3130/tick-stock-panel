@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
@@ -43,6 +44,12 @@ from app.data_providers.fquant.adj_factor import (
     build_ex_factor_df,
     compute_ex_factor_from_xdxr,
 )
+from app.data_providers.fquant.dataquery_client import (
+    MAX_POINT_SYMBOLS,
+    DataQueryBlockedError,
+    DataQueryClient,
+    DataQueryError,
+)
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 from app.data_providers.fquant import generation
 from app.data_providers.fquant.ordered_trans import PublishedOrderedTransMinuteReader
@@ -54,12 +61,15 @@ from app.data_providers.fquant.mapping import (
     klines_rows_to_daily,
     minutes_rows_to_minute_df,
     moneyflow_daily_to_df,
+    moneyflow_minute_to_df,
+    moneyflow_minute_v2_to_df,
     trans_rows_to_df,
     wide_rows_to_daily,
     xdxr_rows_to_events,
 )
 from app.data_providers.fquant.raw_reconstruct import reconstruct_raw_rows
 from app.data_providers.fquant.symbols import (
+    symbol_to_cache_id,
     asset_type_str_to_nums,
     code_to_symbol,
     is_etf_symbol,
@@ -75,6 +85,15 @@ from app.data_providers.normalizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _v2_date_to_iso(row: dict) -> dict:
+    """Normalize compact v2 YYYYMMDD date/trade_date values to ISO in place."""
+    for key in ("date", "trade_date"):
+        value = row.get(key)
+        if isinstance(value, str) and len(value) == 8 and value.isdigit():
+            row[key] = f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    return row
+
 
 # fstore financial_report_* 表名映射（§5.6 / §4.8）
 _FINANCIAL_TABLE_MAP: dict[str, str] = {
@@ -207,6 +226,11 @@ class FQuantProvider:
         # 独立 markets 客户端：realtime/daily_markets 查询走自己的连接与锁，
         # 不与 _fstore 上的财务/K线/管道查询共享客户端锁而互相阻塞。
         self._fstore_markets = FStoreDuckDBClient(**fstore_kwargs)
+        self._dataquery = (
+            DataQueryClient()
+            if os.getenv("FQUANT_DATAQUERY_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+            else None
+        )
         self._engine = TdxDuckDBClient(
             tdx_path=pinned.get("tdx"),
             pin_paths=bool(snapshot_paths),
@@ -234,6 +258,10 @@ class FQuantProvider:
             self._engine.close()
         except Exception:  # noqa: BLE001
             logger.warning("FQuantProvider: 关闭 TDX 连接失败", exc_info=True)
+        try:
+            self._dataquery.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 dataquery client 失败", exc_info=True)
 
     def open_ordered_trans_reader(self) -> PublishedOrderedTransMinuteReader | None:
         """Open the current immutable ordered-trans research generation."""
@@ -317,6 +345,51 @@ class FQuantProvider:
         self._reference_flags_cache = None
         self._reference_flags_cache_ts = None
 
+    @staticmethod
+    def _is_v2_series_symbol(symbol: str) -> bool:
+        """v2 series routes serve canonical A-share stock cache ids only."""
+        return symbol_to_cache_id(symbol) is not None and not symbol.upper().endswith(".HK")
+
+    def _cache_id(self, symbol: str) -> str:
+        cache_id = symbol_to_cache_id(symbol)
+        if cache_id is None:
+            raise DataQueryError(
+                "invalid_query",
+                message=f"symbol {symbol!r} has no canonical A-share cache id",
+                retryable=False,
+            )
+        return cache_id
+
+    def _query_series(
+        self,
+        dataset: str,
+        symbol: str,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        *,
+        trade_date: datetime | None = None,
+        limit: int = 2500,
+    ) -> list[dict]:
+        """Read one bounded A-share series through the public v2 client."""
+        client = getattr(self, "_dataquery", None)
+        if client is None:
+            raise DataQueryError("unavailable", dataset=f"tdx_{dataset}/a", message="dataquery client is not configured")
+        result = client.series(
+            dataset, self._cache_id(symbol),
+            date=trade_date.strftime("%Y%m%d") if trade_date else None,
+            start=start_time.strftime("%Y%m%d") if start_time else None,
+            end=end_time.strftime("%Y%m%d") if end_time else None,
+            limit=min(limit, 2500), tail=False,
+        )
+        # v2 series rows carry compact YYYYMMDD dates (legacy CSV shape) while
+        # the legacy DuckDB chain and every mapping/downstream filter compare
+        # ISO YYYY-MM-DD strings — normalize once here so both chains agree.
+        return [_v2_date_to_iso(row) for row in result.rows]
+
+    def get_dataquery_versions(self) -> dict[str, dict]:
+        client = getattr(self, "_dataquery", None)
+        return client.observed_versions() if client is not None else {}
+
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
     # ------------------------------------------------------------------ #
@@ -380,6 +453,23 @@ class FQuantProvider:
     # get_daily — §4.4 双源融合（engine-data wide 主 + fstore day_klines 备）
     def get_daily_freshness(self) -> date | None:
         """返回 ``get_daily`` 主源与 fallback 合并后的最新可用交易日。"""
+        if getattr(self, "_dataquery", None) is not None:
+            try:
+                routes = {
+                    route.get("dataset"): route
+                    for route in self._dataquery.status()["routes"]
+                    if isinstance(route, dict)
+                }
+                coverage = str(
+                    (routes.get("tdx_day/a") or {}).get("coverage")
+                    or (routes.get("tdx_wide/a") or {}).get("coverage")
+                    or ""
+                )[:10]
+                if coverage:
+                    return date.fromisoformat(coverage)
+            except (DataQueryError, ValueError):
+                logger.debug("dataquery status coverage unavailable", exc_info=True)
+            return None
         candidates: list[date] = []
         engine_date = self._engine.freshness()
         if isinstance(engine_date, date):
@@ -420,6 +510,16 @@ class FQuantProvider:
         if not symbols:
             return pl.DataFrame()
 
+        if (
+            getattr(self, "_dataquery", None) is not None
+            and asset_type == "stock"
+            and len(symbols) > MAX_POINT_SYMBOLS
+            and all(self._is_v2_series_symbol(s) for s in symbols)
+        ):
+            # Full-market daily sync/canonical-history batches must stay on the
+            # pinned local bundle (engine #9/#11) instead of N v2 HTTP reads.
+            raise DataQueryBlockedError("daily multi-symbol query", dataset="tdx_wide/a")
+
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
@@ -452,7 +552,8 @@ class FQuantProvider:
                     self._get_daily_from_fstore_klines(
                         sym, code, start_time, end_time, asset_type
                     )
-                    if not rows or start_time is not None or end_time is not None
+                    if getattr(self, "_dataquery", None) is None
+                    and (not rows or start_time is not None or end_time is not None)
                     else []
                 )
                 by_date = {
@@ -482,7 +583,18 @@ class FQuantProvider:
         start_time: datetime | None, end_time: datetime | None,
         asset_type: AssetType = "stock",
     ) -> list[dict]:
-        """主源 engine-data ``wide``（§4.4 / §5.2）。"""
+        """Read bounded A-share wide data through dataquery v2."""
+        if getattr(self, "_dataquery", None) is not None and asset_type == "stock" and self._is_v2_series_symbol(symbol):
+            requested = max(250, (end_time - start_time).days + 10) if (start_time and end_time) else 250
+            if requested > 2500:
+                raise DataQueryBlockedError("daily range above the v2 row cap", dataset="tdx_wide/a")
+            rows = self._query_series("wide", symbol, start_time, end_time, limit=max(requested, 250))
+            oracle_rows = self._get_raw_oracle_rows(code, rows)
+            events = self._query_series("xdxr", symbol, limit=2500)
+            rows = reconstruct_raw_rows(rows, events, oracle_rows)
+            return self._filter_daily_rows(
+                wide_rows_to_daily(rows, symbol, source=self.name), start_time, end_time
+            )
         if start_time and end_time:
             limit = max(250, (end_time - start_time).days + 10)
         else:
@@ -711,8 +823,8 @@ class FQuantProvider:
 
             # 主源 xdxr
             events = self._get_adj_events_from_engine(sym, code)
-            if not events:
-                # L2 降级：fstore chuquan_chuxi
+            if not events and getattr(self, "_dataquery", None) is None:
+                # Legacy test/provider seam only; production v2 never falls back.
                 events = self._get_adj_events_from_fstore(sym, code, start_time, end_time)
             if not events:
                 continue
@@ -737,8 +849,11 @@ class FQuantProvider:
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     def _get_adj_events_from_engine(self, symbol: str, code: str) -> list[dict]:
-        """主源 engine-data ``xdxr`` → 归一事件行（§5.3）。"""
-        rows = self._engine.get_xdxr(code)
+        """Read A-share corporate actions through dataquery v2."""
+        if getattr(self, "_dataquery", None) is not None and self._is_v2_series_symbol(symbol):
+            rows = self._query_series("xdxr", symbol, limit=2500)
+        else:
+            rows = self._engine.get_xdxr(code)
         if rows:
             logger.debug("tdx xdxr %s: %d 行", code, len(rows))
         return xdxr_rows_to_events(rows, symbol) if rows else []
@@ -824,6 +939,36 @@ class FQuantProvider:
         """
         if not symbols:
             return pl.DataFrame()
+
+        if getattr(self, "_dataquery", None) is not None and asset_type == "stock" and all(self._is_v2_series_symbol(s) for s in symbols):
+            if len(symbols) > MAX_POINT_SYMBOLS:
+                raise DataQueryBlockedError(
+                    "minute multi-symbol query", dataset="tdx_minutes/a"
+                )
+            if start_time is None and end_time is None:
+                return pl.DataFrame()
+            first = (start_time or end_time).date()
+            last = (end_time or start_time).date()
+            if (last - first).days > 31:
+                raise DataQueryBlockedError(
+                    "minute multi-day query", dataset="tdx_minutes/a"
+                )
+            frames: list[pl.DataFrame] = []
+            current = first
+            while current <= last:
+                for sym in symbols:
+                    ticks = self._query_series(
+                        "minutes", sym, trade_date=datetime.combine(current, datetime.min.time()), limit=2500
+                    )
+                    if ticks:
+                        frame = minutes_rows_to_minute_df(
+                            ticks, sym, asset_type, current.strftime("%Y%m%d"), source=self.name, freq="1m"
+                        )
+                        if not frame.is_empty():
+                            frames.append(frame)
+                current += timedelta(days=1)
+            df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+            return _aggregate_minute_df(df, freq)
 
         if (
             asset_type == "stock"
@@ -1592,10 +1737,25 @@ class FQuantProvider:
         code_to_sym = {symbol_to_code(s): s for s in symbols}
 
         disk_data: dict[str, dict] = {}
-        for code in codes:
-            total = self._engine.get_fund_daily(code, date_iso)
-            if total:
-                disk_data[code] = total
+        if getattr(self, "_dataquery", None) is not None:
+            if len(codes) > 16:
+                raise DataQueryBlockedError("multi-symbol moneyflow point query", dataset="tdx_moneyflow/a")
+            for code, sym in zip(codes, symbols):
+                result = self._dataquery.daily_moneyflow_point(self._cache_id(sym), date_iso)
+                if result.rows:
+                    total = dict(result.rows[0])
+                    # v2 exposes only the four total flows; main-vs-total split is
+                    # unavailable, so main_* stays None rather than aliasing total.
+                    disk_data[code] = {
+                        "total_net": total.get("net_amount"),
+                        "total_inflow": total.get("inflow_amount"),
+                        "total_outflow": total.get("outflow_amount"),
+                    }
+        else:
+            for code in codes:
+                total = self._engine.get_fund_daily(code, date_iso)
+                if total:
+                    disk_data[code] = total
 
         if not disk_data:
             return pl.DataFrame()
@@ -1609,15 +1769,42 @@ class FQuantProvider:
         end: datetime,
     ) -> pl.DataFrame:
         """Return the existing daily money-flow range contract used by K-line APIs."""
+        if getattr(self, "_dataquery", None) is not None:
+            raise DataQueryBlockedError("moneyflow range query", dataset="tdx_moneyflow/a")
         return self._engine.get_fund_range(
-            symbol_to_code(symbol),
-            start.strftime("%Y-%m-%d"),
-            end.strftime("%Y-%m-%d"),
+            symbol_to_code(symbol), start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
         )
 
     def get_moneyflow_stock(self, symbol: str, start: datetime, end: datetime,
                             freq: str = "daily") -> pl.DataFrame:
         """查询已发布快照中的个股日/分钟资金流。"""
+        if getattr(self, "_dataquery", None) is not None:
+            if start.date() != end.date():
+                raise DataQueryBlockedError(
+                    "moneyflow range query",
+                    dataset="tdx_moneyflow_minute/a" if freq == "minute" else "tdx_moneyflow/a",
+                )
+            cache_id = self._cache_id(symbol)
+            result = (
+                self._dataquery.minute_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
+                if freq == "minute"
+                else self._dataquery.daily_moneyflow_point(cache_id, start.strftime("%Y%m%d"))
+            )
+            if freq == "minute":
+                return moneyflow_minute_v2_to_df(
+                    list(result.rows), symbol, start.strftime("%Y-%m-%d"), source=self.name
+                )
+            total = dict(result.rows[0]) if result.rows else None
+            if total is None:
+                return pl.DataFrame()
+            return moneyflow_daily_to_df(
+                {symbol_to_code(symbol): {
+                    "total_net": total.get("net_amount"),
+                    "total_inflow": total.get("inflow_amount"),
+                    "total_outflow": total.get("outflow_amount"),
+                }},
+                {symbol_to_code(symbol): symbol}, start.strftime("%Y-%m-%d"), source=self.name,
+            )
         return self._engine.get_moneyflow_stock(
             symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), freq=freq,
         )
@@ -1818,7 +2005,12 @@ class FQuantProvider:
         code = symbol_to_code(symbol)
         date_str = date.strftime("%Y%m%d")
         _, suffix = split_symbol(symbol)
-        rows = self._engine.get_trans(code, date_str, limit=limit, asset_type="hk" if suffix == "HK" else None)
+        if getattr(self, "_dataquery", None) is not None and self._is_v2_series_symbol(symbol):
+            if limit > 2500:
+                raise DataQueryBlockedError("transaction read above the v2 row cap", dataset="tdx_trans/a")
+            rows = self._query_series("trans", symbol, trade_date=date, limit=limit)
+        else:
+            rows = self._engine.get_trans(code, date_str, limit=limit, asset_type="hk" if suffix == "HK" else None)
         return trans_rows_to_df(rows, symbol, date_str, source=self.name) if rows else pl.DataFrame()
 
     def get_call_auction(self, symbol: str, trade_date: datetime, session: str | None = None, limit: int = 5000) -> pl.DataFrame:

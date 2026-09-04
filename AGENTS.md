@@ -27,7 +27,7 @@
 
 | Provider | 数据来源 | capabilities | 默认 | 切换方式 |
 |----------|---------|--------------|------|----------|
-| `fquant_local` | 本地 DuckDB（默认 raw 路径，经 `snapshot_or_raw` 解析为 `snapshots/<root>/<gen>/` 只读 generation 快照；快照未发布时回退 raw 只读）：`fstore.duckdb` / `fstore-markets.duckdb` / `fstore-klines.duckdb` / `fstore-minutes.duckdb` + `tdx.duckdb` / `tdx-hk.duckdb` / `tdx-hkminutes.duckdb` / `tdx-hktrans.duckdb` | 日 K / 分钟 / 复权 / 财务 / realtime 快照 / universes；扩展逐笔/日级资金流；港股 K/minutes/trans；**stock raw mirror 禁写**；**depth 缺口** | ✅ 默认 | `DATA_PROVIDER=fquant_local` 或 settings API |
+| `fquant_local` | A 股点查/窄区间行情（wide/xdxr/minutes/trans/moneyflow 点查）走 engine dataquery v2 HTTP（`FQUANT_DATAQUERY_ENABLED`，默认开；0=整链回退 legacy DuckDB）；其余全部本地 DuckDB（默认 raw 路径，经 `snapshot_or_raw` 解析为 `snapshots/<root>/<gen>/` 只读 generation 快照；快照未发布时回退 raw 只读）：`fstore.duckdb` / `fstore-markets.duckdb` / `fstore-klines.duckdb` / `fstore-minutes.duckdb` + `tdx.duckdb` / `tdx-hk.duckdb` / `tdx-hkminutes.duckdb` / `tdx-hktrans.duckdb` | 日 K / 分钟 / 复权 / 财务 / realtime 快照 / universes；扩展逐笔/日级资金流；港股 K/minutes/trans；**stock raw mirror 禁写**；**depth 缺口**；**批量/长扫描在 v2 路径显式 blocked（等 engine #9/#11）** | ✅ 默认 | `DATA_PROVIDER=fquant_local` 或 settings API |
 | `fquant` | 同一 DuckDB 实现，保留 provider 名称兼容 | 同上；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
 
 **fquant 本地源**：
@@ -39,6 +39,7 @@
 | fstore klines DuckDB | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
 | fstore extended DuckDB | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
 | TDX DuckDB | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
+| engine dataquery v2 | HTTP（httpx，无重试，typed error） | A 股 stock 点查/窄区间：series `day\|wide\|minutes\|trans\|xdxr`（cache_id `^(sh\|sz\|bj)\d{6}$`）+ moneyflow daily/minute 点查（≤16 标的）；版本元数据 fail-closed；批量/区间超界一律 `DataQueryBlockedError` | `FQUANT_DATAQUERY_BASE_URL`（默认 `http://127.0.0.1:8099`）+ `FQUANT_DATAQUERY_TIMEOUT_S`（默认 5）+ `FQUANT_DATAQUERY_ENABLED`（默认 1） |
 | TDX A 股 minutes 路由 | 发布 catalog + DuckDB read-only | 按交易日定位 2023 年前归档或当前 minutes 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE}` |
 | TDX A 股 trans 路由 | 发布 catalog + DuckDB read-only | 按交易日定位历史归档年片或活跃年的月度 trans 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_TRANS_ARCHIVE}` |
 | ordered-trans 研究 generation | published immutable Parquet read-only | raw trans 离线保序 materialize 为 sparse true-trade 1m；runtime 仅经 provider factory 读取，强制 48×5m/16×15m 窗口 | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_ORDERED_TRANS`（默认 `/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans`） |
@@ -51,6 +52,7 @@
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级；可通过「受控外部 fallback」（默认关闭，见第 4 节契约）补公共免费源五档，未开启时维持降级返回空
 - **realtime 已接入**：只读本地 `fstore-markets.duckdb.daily_markets` 的 generation 快照（最新）；先取全局 `MAX(trade_date)`，再按该交易日与 `asset_type` 点查；使用独立 DuckDB 客户端/连接锁，避免被财务或 K 线查询阻塞；不再调用 `tdx-api` / sina / tencent / `../fquant` HTTP
 - **universes 已接入**：阶段 3.2 走 provider `get_by_universes()`；fquant 接 fstore `chengfen_gu` + `base_infos`
+- **dataquery v2 cutover（2026-09-03，Issue #56）**：A 股点查/窄区间走 v2 HTTP；v2 rows 紧凑 `YYYYMMDD` 日期在 `_query_series` 出口统一归一 ISO；moneyflow daily 只有 total 四字段（`main_*` 显式 None 不冒充）；全市场批量（symbols>16、区间>2500 行、minutes>31 日、moneyflow range）一律 `DataQueryBlockedError` 等 engine #9/#11 pinned bundle；chips / HK / ETF / index / call auction / fstore 域不迁移
 - **ordered-trans 研究链已接入**：`ordered_trans_research` capability 只打开独立 published generation；runtime 不读 raw CSV。artifact 不回填收盘集合竞价零成交分钟，按 sparse true-trade 1m 的 timestamp bucket 验证 48×5m；首个 bounded generation 仅覆盖 `600519.SH/000001.SZ/300750.SZ` 30 个完整日，真实因子 verdict 为 `rejected`，不进入短线池/Agent/默认策略
 
 ---
@@ -367,6 +369,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-31（Research Workbench V2 完成 19 因子统一目录、preflight、Durable Run、11 项独立 full-market worker、不可变 artifact、证据关联与定时治理；不改变因子裁决且不自动进入策略池、Agent 或交易执行。）
+**最后更新**：2026-09-03（Issue #56 dataquery v2 cutover：A 股点查/窄区间切换 v2 HTTP、批量显式 blocked、`FQUANT_DATAQUERY_ENABLED` 可整链回退；此前 Research Workbench V2 完成 19 因子统一目录、preflight、Durable Run、11 项独立 full-market worker、不可变 artifact、证据关联与定时治理；不改变因子裁决且不自动进入策略池、Agent 或交易执行。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

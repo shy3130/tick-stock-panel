@@ -419,9 +419,24 @@ app.include_router(abnormal.router)
 from app.capabilities import CapabilityDenied
 from app.data_providers.fquant.catalog_resolver import CatalogError, StaleCatalogError
 from app.errors import AppError, app_error_handler
+from app.data_providers.fquant.dataquery_client import DataQueryError
 
 # 统一失败语义 (data_incomplete/stale_input/kernel_not_ready 等) → 422 + {code, detail}
 app.add_exception_handler(AppError, app_error_handler)
+
+
+@app.exception_handler(DataQueryError)
+async def dataquery_error_handler(request: Request, exc: DataQueryError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={
+            "code": exc.code,
+            "dataset": exc.dataset or None,
+            "detail": exc.message,
+            "retryable": exc.retryable,
+        },
+        headers={"Retry-After": "60"} if exc.retryable else None,
+    )
 
 
 @app.exception_handler(CapabilityDenied)

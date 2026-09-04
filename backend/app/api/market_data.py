@@ -121,6 +121,9 @@ def status(request: Request) -> dict[str, Any]:
     provider = _provider("daily")
     merged = _status_parts(provider)
     out: dict[str, Any] = {"available": True, "source": getattr(provider, "name", None), "capabilities": {}}
+    versions = getattr(provider, "get_dataquery_versions", None)
+    if callable(versions):
+        out["dataquery_versions"] = json_safe(versions())
     for key in _CAPABILITY_KEYS:
         item = merged.get(key)
         if not isinstance(item, dict):

@@ -190,3 +190,23 @@ def canonical_index_symbol(symbol: str) -> str:
     """
     code, _ = split_symbol(str(symbol).strip().upper())
     return f"{code}.INDEX"
+
+
+def symbol_to_cache_id(symbol: str) -> str | None:
+    """Canonical A-share v2 cache id (sh/sz/bj + 6 digits) or None.
+
+    Mirrors the engine's public market-inference rule (6/5 -> sh, 4/8/9 -> bj,
+    otherwise sz) for bare six-digit A-share codes; accepts full symbols
+    (``600519.SH``) and bare codes (``600519``).
+    """
+    code = symbol_to_code(symbol)
+    if not code or not code.isdigit() or len(code) != 6:
+        return None
+    head = code[0]
+    if head in ("6", "5"):
+        prefix = "sh"
+    elif head in ("4", "8", "9"):
+        prefix = "bj"
+    else:
+        prefix = "sz"
+    return prefix + code

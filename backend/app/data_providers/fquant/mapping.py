@@ -439,6 +439,38 @@ def moneyflow_minute_to_df(
     return pl.DataFrame(out) if out else pl.DataFrame()
 
 
+def moneyflow_minute_v2_to_df(
+    records: list[dict], symbol: str, date_iso: str, source: str = "fquant",
+) -> pl.DataFrame:
+    """dataquery v2 minute moneyflow (snake_case) → the minute moneyflow frame.
+
+    v2 exposes total/super-large/large/medium/small flows only; the legacy
+    main_traditional/main_broad/neutral splits do not exist in v2, so those
+    columns are emitted as None instead of being faked from other fields.
+    """
+    if not records:
+        return pl.DataFrame()
+    out: list[dict] = []
+    for rec in records:
+        out.append({
+            "symbol": symbol,
+            "trade_date": rec.get("trade_date") or date_iso,
+            "bucket_time": rec.get("bucket_time"),
+            "total_amount": finite_float_or_none(rec.get("total_amount")),
+            "net_amount": finite_float_or_none(rec.get("net_amount")),
+            "main_traditional_net": None,
+            "main_broad_net": None,
+            "large_net": finite_float_or_none(rec.get("large_net")),
+            "super_large_net": finite_float_or_none(rec.get("super_large_net")),
+            "medium_net": finite_float_or_none(rec.get("medium_net")),
+            "small_net": finite_float_or_none(rec.get("small_net")),
+            "neutral_amount": None,
+            "valid_count": finite_float_or_none(rec.get("valid_count")),
+            "source": f"{source}:moneyflow:minute",
+        })
+    return pl.DataFrame(out)
+
+
 # --------------------------------------------------------------------------- #
 # 扩展方法：trans（逐笔）→ df
 # --------------------------------------------------------------------------- #

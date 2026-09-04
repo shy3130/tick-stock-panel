@@ -2,8 +2,8 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-08-27
-> 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
+> 最后更新：2026-09-03（Issue #56 dataquery v2 cutover）
+> 状态：A 股点查/窄区间行情已切换 engine dataquery v2 HTTP（`FQUANT_DATAQUERY_ENABLED` 默认开，关=0 整链回退 legacy DuckDB）；本地 DuckDB provider 仍是其余全部数据面；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
@@ -18,6 +18,18 @@
 - 港股事实边界已显式化：日 K/minutes/trans 可用；本地发布快照中没有港股公司行动/复权事件，也没有港股财务报表。`hk_adjustment` / `hk_financial` 状态明确为 unavailable，provider 对港股复权、公司行动和财务查询 fail-closed 返回空，不借用同码 A 股数据。
 - 2026-08-11 真盘验证：筹码/个股日资金流/个股分钟资金流/板块日资金流/集合竞价/A 股逐笔分别返回 `1/1/254/3/6/6` 行；status 覆盖筹码 `2,501,804` 行、日级个股资金流 `5,629,184` 行、分钟个股资金流 `193,424,721` 行、集合竞价 `14,844,313` 行。
 - 自由 Agent 的 Pi Agent Harness sidecar 仅替换 `/api/agent/*` 的可选 LLM 会话循环；13 个工具仍由 Python 进程执行并继续只读现有 repository/provider 公开接口。试点未新增行情源、provider capability、DuckDB 写入或 canonical/enriched 消费路径，默认 Python runtime 不变。
+
+### 0.1 2026-09-03 dataquery v2 cutover（Issue #56）
+
+- **范围**：A 股 stock 的点查/窄区间行情读切换到 engine dataquery v2 HTTP（`backend/app/data_providers/fquant/dataquery_client.py`）：series `day|wide|minutes|trans|xdxr`（cache_id 规则 `^(sh|sz|bj)\d{6}$`，6/5→sh、4/8/9→bj、其余→sz，见 `symbols.symbol_to_cache_id`）+ moneyflow daily/minute 点查（批量 ≤16 标的，`MAX_POINT_SYMBOLS`）。
+- **契约**：7 码 typed error 信封（`invalid_query`/`not_found`/`schema_mismatch`/`version_pinned_unavailable`/`stale`/`incomplete`/`unavailable`），`DataVersion` fail-closed 解析（schema_version 必须匹配 dataset：series=`legacy_csv/v1`、moneyflow=`tdx_moneyflow[_minute]/v1`）；`main.py` 全局 handler 把 `DataQueryError` 转 `{code,dataset,detail,retryable}` + `Retry-After`；`/api/kline/minute` 与 `/api/market-data/status`（`dataquery_versions`）透传版本元数据。
+- **语义对齐**：v2 series rows 是紧凑 `YYYYMMDD` 日期 + 升序返回，`_query_series` 出口统一 `_v2_date_to_iso` 归一为 ISO，legacy DuckDB 链路输出形状不变；wide 路径保留 `_get_raw_oracle_rows` + `reconstruct_raw_rows` 前复权 raw 重建；`get_daily_freshness` 改读 v2 status 的 `tdx_day/a` coverage。
+- **诚实映射**：v2 moneyflow daily 只有 total 四字段——`total_net/total_inflow/total_outflow` 如实映射，`main_*` 显式 None，不用 total 冒充 main；minute moneyflow 走专用 snake_case mapper `moneyflow_minute_v2_to_df`，`main_traditional_net/main_broad_net/neutral_amount` 无 v2 来源置 None。
+- **显式 blocked（等 engine #9/#11 pinned Parquet bundle）**：全市场/批量扫描一律 `DataQueryBlockedError`（`version_pinned_unavailable` 语义，fail-loud 不静默回退）：`get_daily`/`get_minute` A 股 symbols>16、单标的区间>2500 行（wide/trans）、minutes 跨>31 日、moneyflow 任意 range/多日查询；v2 series 返回 `truncated=true` 时客户端直接抛 typed `incomplete`（503, retryable），绝不把截断序列当完整结果。bulk 的正式归宿是 pinned bundle（Issue #56 验收「生产路径不再打开 engine DuckDB」以 engine #11 交付为前提），期间夜管道/canonical history 需 `FQUANT_DATAQUERY_ENABLED=0` 运行或接受显式 blocked。
+- **不迁移（本轮显式留在本地链）**：chips（v2 无路由）、HK/ETF/index daily 与 minutes、call auction、板块/截面 moneyflow 快照（`get_moneyflow_daily_snapshot` 等 engine-owned bulk 读）、fstore 域（instruments/realtime/financial/LHB/margin/universes）维持只读本地 DuckDB——它们迁往 pinned Parquet bundle 的批次等 engine #9/#11。
+- **上线前置**：(1) engine 必须先在 `:8099` 部署 v2 再启用本 cutover，否则点查路径全部 `unavailable`（错误信息带 `FQUANT_DATAQUERY_ENABLED=0` 回退指引）；(2) 启用前抽标的做一次 v2 legacy-CSV 缓存 vs 本地 `tdx.duckdb` 的内容 parity 核验（点查/窄区间覆盖面），结论记录进本文件。
+- **回退**：`FQUANT_DATAQUERY_ENABLED=0` 恢复整条 legacy DuckDB 链（wide/xdxr/minutes/trans/moneyflow/freshness 全部回退），生产 ：8099 未部署 v2 前可用此开关。
+- **验证**：`tests/data_providers` + `tests/api/test_market_data.py` + `tests/api/test_kline_minute_source.py` 共 346 passed（新增 `test_dataquery_client.py` 52 项契约测试 + `test_provider_dataquery_v2.py` 27 项 wiring/blocked/语义测试，含 httpx.MockTransport 线格式端到端 smoke：成功 + 409 + 404 + version 透传）；零网络、零生产依赖。
 
 下文第 1～7 节记录 2026-07-02 前后的迁移过程。涉及 PG、HTTP、未提交状态或旧单文件 minutes/trans 的描述，以本节和仓库当前代码为准。
 
