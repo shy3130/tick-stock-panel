@@ -40,7 +40,9 @@ def _mock_upload(*, content: bytes, content_type: str = "text/csv", filename: st
     file = MagicMock()
     file.content_type = content_type
     file.filename = filename
-    file.read = AsyncMock(return_value=content)
+    # 像真实 UploadFile 一样: 第一次 read 返回全部内容, 之后返回 b"" 表示读尽
+    # (端点已改为分块读取, 一直返回同一段内容的 mock 会被当成无限大的文件)
+    file.read = AsyncMock(side_effect=[content, b""])
     return file
 
 
