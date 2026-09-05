@@ -141,10 +141,10 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str, max_attempts: int
         except Exception as e:  # noqa: BLE001 — 网络/超时, 可重试
             last_err = str(e)
 
-        if attempt < _FEISHU_MAX_ATTEMPTS:
+        if attempt < max_attempts:
             time.sleep(min(2 ** (attempt - 1), 3))  # 退避: 1s, 2s
 
-    logger.warning("飞书 Webhook 推送最终失败(已重试 %d 次): %s", _FEISHU_MAX_ATTEMPTS, last_err)
+    logger.warning("飞书 Webhook 推送最终失败(已重试 %d 次): %s", max_attempts, last_err)
     return False
 
 
