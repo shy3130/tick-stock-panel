@@ -23,6 +23,7 @@ class ProviderCapabilities:
     adj_factor: bool = False
     minute: bool = False
     realtime: bool = False
+    depth5: bool = False
     financial: bool = False
 
 
@@ -73,3 +74,6 @@ class MarketDataProvider(Protocol):
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
         """Return normalized realtime quotes. Implementations may return empty."""
+
+    def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
+        """Return five-level order books keyed by symbol."""
