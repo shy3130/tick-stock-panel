@@ -203,26 +203,24 @@ def test_adj_factor_routes_independently(monkeypatch):
 
 
 def test_depth5_capability_semantics(monkeypatch):
-    """五档: pro+ 档 TickFlow 可供 (usable); 档位不足时不可用且无候选。
-
-    插件数据集白名单未开放 depth5, 假插件即使声明其他数据集也不进五档候选;
-    未来契约开放后声明 depth5 的源会自然成为候选 (candidates 按 datasets 过滤)。
-    """
+    """五档可独立路由到声明 depth5 的插件, 不受 TickFlow 档位限制。"""
     _fake_sources(
         monkeypatch,
-        [{"name": "fuyao", "display_name": "fuyao", "datasets": ["realtime"],
+        [{"name": "depth_src", "display_name": "Depth", "datasets": ["depth5"],
           "available": True, "status": "ok"}],
     )
     # pro 档: TickFlow 进候选, 默认路由 tickflow → usable
     cap = _by_id(build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="pro"))["depth5"]
     assert cap["tf_available"] is True
-    assert [c["name"] for c in cap["candidates"]] == ["tickflow"]
+    assert [c["name"] for c in cap["candidates"]] == ["tickflow", "depth_src"]
     assert cap["usable"] is True
-    # starter 档: 档位不足 → 无候选, usable False (连板梯队封单缺数据)
-    cap = _by_id(build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="starter"))["depth5"]
+    # starter 档: TickFlow 不可供, 但显式路由到插件后仍可用
+    current = dict(DEFAULT_CURRENT, depth5_data_provider="depth_src")
+    cap = _by_id(build_capability_matrix(current, tickflow_tier="starter"))["depth5"]
     assert cap["tf_available"] is False
-    assert cap["candidates"] == []
-    assert cap["usable"] is False
+    assert [c["name"] for c in cap["candidates"]] == ["depth_src"]
+    assert cap["effective"] == "depth_src"
+    assert cap["usable"] is True
 
 
 def test_unknown_current_display_falls_back_to_name(monkeypatch):

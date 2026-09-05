@@ -135,11 +135,6 @@ async def _application_lifespan(app: FastAPI):
     # instruments/index/ETF 仍同步 (毫秒级)。应用立即 ready, 指标算完后自动替换。
     repo.refresh_cache(background=True)
 
-    # 能力探测
-    capset = detect_capabilities()
-    app.state.capabilities = capset
-    logger.info("ready; %d capabilities active", len(capset.all()))
-
     # 自定义数据源配置(可选): 失败只记录错误, 不影响 TickFlow 基准路径。
     try:
         from app.data_providers import custom as custom_sources
@@ -147,6 +142,11 @@ async def _application_lifespan(app: FastAPI):
         logger.info("custom data sources loaded: %d", len(custom_sources.list_sources()))
     except Exception as e:  # noqa: BLE001
         logger.warning("custom data sources init failed: %s", e)
+
+    # 自定义源必须先注册,能力探测才能补充其数据集能力。
+    capset = detect_capabilities()
+    app.state.capabilities = capset
+    logger.info("ready; %d capabilities active", len(capset.all()))
 
     # 全局行情服务
     qs = QuoteService()

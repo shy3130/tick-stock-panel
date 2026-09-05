@@ -28,7 +28,7 @@ display_name: "我的数据源"                 # 设置页显示名
 runtime: none                            # 运行时类型: node | python | none
 entry: app.plugins.my_source.provider:MyProvider   # provider 类的导入路径
 check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可选)
-datasets: [realtime]                     # 支持的数据集: daily/adj_factor/minute/realtime/financial
+datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial
 api_key_env: MY_SOURCE_API_KEY           # (可选)声明后设置页提供 Key 输入框
 hidden: false                            # (可选)true = 已加载但对设置页隐藏,不注册不展示
 description: "数据源描述"
@@ -166,6 +166,9 @@ class MyProvider:
         强烈建议实现本方法, 否则指数行情冻结在本地日K兜底。失败返回 None,
         成功但无数据返回 []。"""
 
+    def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
+        """(声明 depth5 时实现)五档盘口, 返回以 symbol 为键的标准盘口字典。"""
+
     def get_financials(self, table, symbols, latest_only=False) -> pl.DataFrame:
         """财务数据(声明 financial 数据集时实现, table 见 financial_sync 调用)。"""
 
@@ -176,6 +179,22 @@ class MyProvider:
         """(强烈建议)设置页"试拉"按钮。
         返回 {provider, dataset, rows, columns, preview, error?}; 未支持的数据集
         返回 error 字段说明会回退 TickFlow。"""
+```
+
+`get_depth_batch` 返回结构如下。价格和数量数组均按一档到五档排列;数量单位为“手”,
+`timestamp` 为毫秒 Unix 时间戳。服务层按 capability 的 `batch` / `rpm` 统一分片限速,
+provider 不应自行切换或回退到其他数据源。
+
+```python
+{
+    "600519.SH": {
+        "bid_prices": [1500.0, 1499.9, 1499.8, 1499.7, 1499.6],
+        "bid_volumes": [10, 20, 30, 40, 50],
+        "ask_prices": [1500.1, 1500.2, 1500.3, 1500.4, 1500.5],
+        "ask_volumes": [12, 22, 32, 42, 52],
+        "timestamp": 1788505200000,
+    },
+}
 ```
 
 ### get_minute 的 datetime 时区契约
@@ -219,6 +238,7 @@ class MyProvider:
 | --- | --- |
 | `get_realtime` | **软失败**: 返回 `[]` + warning 日志, 保证轮询线程不中断 |
 | `get_realtime_indices` | **软失败**: 返回 `None` + warning 日志, 保留上轮有效缓存; 成功无数据返回 `[]` |
+| `get_depth_batch` | 单批异常由服务隔离并保留其他批次; 不跨数据源回退 |
 | `get_minute` | 抛异常时调用方自动回退 TickFlow 重试 |
 | `get_daily` / `get_adj_factors` / `get_financials` | 异常由上层同步流程捕获记录; 无数据返回空 DataFrame |
 

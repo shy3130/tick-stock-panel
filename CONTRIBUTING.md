@@ -95,6 +95,9 @@
 
 新增跨边界映射时必须增加单位测试。禁止用“数值小于 1 就乘 100”一类启发式转换，这会掩盖真实数据错误。
 
+五档盘口的 `bid_volumes` / `ask_volumes` 沿用现有封单量口径,单位为“手”;前端计算
+封单额时再乘 `100` 换算为股。provider 必须在数据边界完成单位转换。
+
 ### 3.2 价格与复权
 
 - enriched 的 `open/high/low/close` 为前复权价格。
@@ -122,7 +125,7 @@
 数据源已经插件化。任何通用功能都必须通过 provider 能力和标准化数据集访问数据，不能把 TickFlow SDK 调用硬编码到策略、监控、回测、API 或前端流程中。
 
 - 使用现有的 `get_provider()`、`provider_has_dataset()` 和 preferences 路由能力。
-- 支持的数据集包括但不限于 `daily`、`adj_factor`、`minute`、`full_minute`（盘中全市场分钟落盘）、`realtime`、`financial`；新增数据集应先定义清晰的输入输出契约。
+- 支持的数据集包括但不限于 `daily`、`adj_factor`、`minute`、`full_minute`（盘中全市场分钟落盘）、`realtime`、`depth5`、`financial`；新增数据集应先定义清晰的输入输出契约。
 - provider 负责把供应商字段、单位、日期和代码格式转换为内部标准格式。
 - 上层服务依赖标准字段和能力声明，不依赖供应商响应结构。
 - 只有明确标注为 TickFlow 专属的功能才可以直接依赖 TickFlow，并且不得影响其他 provider。
@@ -138,7 +141,7 @@
 - 各页面能力门控统一以矩阵的 `usable` 为准（生效源当前能否真正提供该能力），不是 TickFlow 套餐视角；缺能力提示统一引导到数据源配置。
 - 能力层中立：通用界面（侧栏徽章、能力路由卡、各页门控提示）不得出现 TickFlow 档位/订阅词汇；档位信息只在 TickFlow 专属详情卡展示。provider 名称作为路由事实可以出现。
 - 每个能力独立路由，禁止跟随/派生特殊值（`same_as_daily` 已下线）；存量非法偏好值由 preferences getter 回退默认自愈，不做迁移。
-- 边界注记：分时监控由分钟能力兜底（`intraday_monitor_support`），不单设分时能力；`full_minute`（全量分钟）数据集已开放插件/自定义源声明；`depth5` 已进矩阵但插件数据集白名单暂未开放，当前仅 TickFlow 提供。
+- 边界注记：分时监控由分钟能力兜底（`intraday_monitor_support`），不单设分时能力；`full_minute`（全量分钟）和 `depth5` 数据集均已开放插件声明。`depth5` 独立路由且失败时不跨源回退。
 - 实时指数为产品级固定契约，不走路由矩阵：展示层（侧栏指数条、市场总览）固定核心四只（`backend/app/services/index_const.py` 单一权威：上证/深成/创业板/科创综指），后端各消费方与前端 Layout 引用同一份定义不建副本；指数页保留但标的固定为核心四只（无全指数搜索/浏览，`/api/index/list`、`/api/index/search` 已下线）；侧栏指数多选配置已下线，相关偏好（`realtime_index_symbols`/`sidebar_index_symbols`/`indices_nav_pinned`/`realtime_pull_index`/`realtime_index_mode`）已删除。监控规则的指数标的不受限——quote_service 把核心四只 + 启用规则的指数并入显式拉取。
 - 自定义源指数补充协议：A 股快照普遍不含指数（fuyao 实测无指数，指数在其独立端点）。provider 可实现可选方法 `get_realtime_indices(symbols) -> list[dict] | None`（record 结构与 realtime 一致），quote_service 在自定义源分支鸭子类型调用补拉；`None` 表示请求失败，保留上轮有效指数缓存，`[]` 表示成功但无数据；未实现的源指数缓存为空，由本地日K兜底接管。fuyao 指数快照有连坐语义——请求混入未知代码整批失败，插件侧必须先行过滤不支持的后缀（如 `.BJ`）。
 
