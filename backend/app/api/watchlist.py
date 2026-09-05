@@ -40,6 +40,28 @@ _IMPORT_CSV_TYPES = {
     "text/plain",
     "application/csv",
 }
+# 上传分块读取粒度 (与 ext_data 上传一致)
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_upload_capped(file: UploadFile, max_bytes: int, too_large: str) -> bytes:
+    """分块读取上传内容, 累计超过 max_bytes 立即拒绝(400), 返回完整字节。
+
+    与 ext_data._write_upload_capped 同类保护: 一次性 `await file.read()` 会先把整个
+    文件读入内存再比较长度, 上限在那之后才生效, 一个远超上限的上传照样把进程内存
+    顶满; 分块读取在越过上限的那一块就停止, 内存占用不超过上限 + 一块。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(400, too_large)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class AddRequest(BaseModel):
@@ -186,11 +208,9 @@ async def import_from_image(request: Request, file: UploadFile = File(...)):
     if not ok_type and not ok_ext:
         raise HTTPException(400, "仅支持 JPG / PNG / WebP / BMP / GIF 图片")
 
-    data = await file.read()
+    data = await _read_upload_capped(file, _MAX_IMPORT_IMAGE_BYTES, "图片过大（上限 12MB）")
     if not data:
         raise HTTPException(400, "空文件")
-    if len(data) > _MAX_IMPORT_IMAGE_BYTES:
-        raise HTTPException(400, "图片过大（上限 12MB）")
 
     existing = {r["symbol"] for r in watchlist.list_symbols()}
     data_dir = request.app.state.repo.store.data_dir
@@ -242,11 +262,9 @@ async def import_from_csv(request: Request, file: UploadFile = File(...)):
     if not ok_type and not ok_ext:
         raise HTTPException(400, "仅支持 CSV / TXT 文件")
 
-    data = await file.read()
+    data = await _read_upload_capped(file, _MAX_IMPORT_CSV_BYTES, "文件过大（上限 5MB）")
     if not data:
         raise HTTPException(400, "空文件")
-    if len(data) > _MAX_IMPORT_CSV_BYTES:
-        raise HTTPException(400, "文件过大（上限 5MB）")
 
     data_dir = request.app.state.repo.store.data_dir
     # 解码与自选/instruments parquet 读取为同步 CPU/IO，挪线程池避免卡事件循环
