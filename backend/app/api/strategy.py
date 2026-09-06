@@ -560,7 +560,11 @@ def _set_meta_string_field(block: str, field: str, value: str) -> str:
     )
     if count:
         return next_block
+    return _insert_meta_field(block, field, _py_string(value))
 
+
+def _insert_meta_field(block: str, field: str, value_repr: str) -> str:
+    """在 META 字典末尾(闭合 `}` 之前)插入一个字段。value_repr 已是 Python 源码。"""
     lines = block.splitlines(keepends=True)
     key_indent = None
     for line in lines:
@@ -585,7 +589,33 @@ def _set_meta_string_field(block: str, field: str, value: str) -> str:
             newline = lines[i][len(body):]
             lines[i] = body.rstrip() + "," + newline
         break
-    lines.insert(insert_at, f'{key_indent}"{field}": {_py_string(value)},\n')
+    lines.insert(insert_at, f'{key_indent}"{field}": {value_repr},\n')
+    return "".join(lines)
+
+
+def _set_meta_bool_field(code: str, field: str, value: bool) -> str:
+    """设置 META 里的布尔字段(纯文本改写, 不执行代码): 存在则替换, 不存在则追加。"""
+    found = find_meta_assignment(code)
+    if found is None:
+        raise ValueError("找不到 META 字典")
+    meta_node = found[1]
+    lines = code.splitlines(keepends=True)
+    start = meta_node.lineno - 1
+    end = meta_node.end_lineno or meta_node.lineno
+    block = "".join(lines[start:end])
+
+    value_repr = "True" if value else "False"
+    key_pattern = re.compile(
+        rf"(?m)^(\s*[\"']{re.escape(field)}[\"']\s*:\s*)(?:True|False|[\"'][^\"'\n]*[\"'])"
+    )
+    next_block, count = key_pattern.subn(
+        lambda m: f"{m.group(1)}{value_repr}",
+        block,
+        count=1,
+    )
+    if not count:
+        next_block = _insert_meta_field(block, field, value_repr)
+    lines[start:end] = next_block.splitlines(keepends=True)
     return "".join(lines)
 
 
@@ -732,6 +762,13 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
     path.parent.mkdir(parents=True, exist_ok=True)
 
     prepared = _prepare_strategy_code(req)
+
+    # AI 新建策略默认草稿态(research_only=True): 不进公开列表、不可运行, 需显式 publish。
+    # 仅 create 注入; update 保留既有 research_only, 避免静默取消已发布状态。
+    if expected_source == "ai" and (legacy_ai_path or req.mode == "create"):
+        prepared["code"] = _set_meta_bool_field(prepared["code"], "research_only", True)
+        prepared["meta"] = AIStrategyGenerator._extract_meta(prepared["code"])
+
     previous_code = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(prepared["code"], encoding="utf-8")
 
@@ -763,6 +800,7 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
         "source": expected_source,
         "path": str(path),
         "meta": prepared["meta"],
+        "research_only": prepared["meta"].get("research_only", False),
     }
 
 
@@ -1060,6 +1098,45 @@ async def ai_save(req: AISaveRequest, request: Request):
         return {"ok": True, "path": result["path"]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{strategy_id}/publish")
+def publish_ai_strategy(strategy_id: str, request: Request):
+    """把 research_only 的 AI 草稿策略翻转为公开(research_only=False)。
+
+    门 = 人的显式动作: 只有 AI 来源且仍处于草稿态的策略才能被发布。
+    发布后即进入公开列表、可 run、可监控。
+    """
+    sid = _validate_strategy_id(strategy_id)
+    engine = _get_engine(request)
+    try:
+        s = engine.get(sid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=f"策略 {sid} 不存在") from e
+
+    if s.source != "ai":
+        raise HTTPException(status_code=400, detail="仅 AI 策略可经发布端点上线")
+    if not s.meta.get("research_only"):
+        raise HTTPException(status_code=400, detail="该策略已是公开状态")
+
+    path = s.file_path
+    if path is None:
+        raise HTTPException(status_code=400, detail="策略源文件路径无效, 无法发布")
+    previous_code = path.read_text(encoding="utf-8")
+    path.write_text(_set_meta_bool_field(previous_code, "research_only", False), encoding="utf-8")
+
+    try:
+        engine.reload()
+        loaded = engine.get(sid)
+        if loaded.meta.get("research_only"):
+            raise ValueError("发布后策略仍为草稿态")
+    except Exception as e:
+        _restore_strategy_file(path, previous_code)
+        engine.reload()
+        raise ValueError(f"策略发布失败: {e}") from e
+
+    _invalidate_strategy_runtime(request)
+    return {"ok": True, "strategy_id": sid}
 
 
 @router.delete("/{strategy_id}")
