@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.services import auction_benchmark, dragon_tiger, market_recap_reports
+from app.services import auction_benchmark, dragon_tiger, market_recap_reports, preferences
 from app.services.market_recap import recap_market_stream
 
 logger = logging.getLogger(__name__)
@@ -131,8 +131,8 @@ def list_reports(request: Request):
 
 
 @router.post("/reports")
-def save_report(request: Request, req: SaveReportRequest):
-    """保存一条复盘报告。"""
+def save_report(request: Request, req: SaveReportRequest, push: bool = False):
+    """保存一条复盘报告。push=True 或 review_push_mode=auto 时才推送到外部渠道。"""
     report = market_recap_reports.save_report({
         "as_of": req.as_of,
         "focus": req.focus,
@@ -141,13 +141,14 @@ def save_report(request: Request, req: SaveReportRequest):
         "emotion_score": req.emotion_score,
         "emotion_label": req.emotion_label,
     })
-    # 推送到飞书(可选): 与定时复盘共用同一开关 review_push_enabled 与 _maybe_push_review。
+    # 推送门控: manual 模式需显式 push=True; auto 模式保持归档即推。
     # 内部 try/except 静默降级, 不影响归档返回值。
-    from app.jobs.daily_pipeline import _maybe_push_review
-    _maybe_push_review(req.content, {
-        "as_of": req.as_of,
-        "emotion_label": req.emotion_label,
-    })
+    if push or preferences.get_review_push_mode() == "auto":
+        from app.jobs.daily_pipeline import _maybe_push_review
+        _maybe_push_review(req.content, {
+            "as_of": req.as_of,
+            "emotion_label": req.emotion_label,
+        })
     return {"ok": True, "report": report}
 
 

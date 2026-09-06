@@ -684,6 +684,26 @@ def set_review_push_channels(channels: list[str]) -> list[str]:
     return cleaned
 
 
+REVIEW_PUSH_MODES = frozenset({"auto", "manual"})
+
+
+def get_review_push_mode() -> str:
+    """复盘推送触发方式: auto=归档后自动推; manual=仅显式 push。默认 manual。
+
+    定时复盘与手动保存复盘共用此开关。manual 时定时路径只归档不推送,
+    手动路径需 save_report 显式传 push=True 才推。
+    """
+    mode = load().get("review_push_mode", "manual")
+    return mode if mode in REVIEW_PUSH_MODES else "manual"
+
+
+def set_review_push_mode(mode: str) -> str:
+    """保存复盘推送触发方式, 白名单外的值回退 manual。"""
+    mode = mode if mode in REVIEW_PUSH_MODES else "manual"
+    save({"review_push_mode": mode})
+    return mode
+
+
 
 # ===== 实时监控 =====
 
