@@ -12,6 +12,8 @@ import logging
 import os
 from pathlib import Path
 
+from app.services.fs_utils import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,11 +39,9 @@ def save(updates: dict) -> dict:
     current = load()
     current.update({k: v for k, v in updates.items() if v is not None})
     p = _path()
-    p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    atomic_write_text(
+        p, json.dumps(current, indent=2, ensure_ascii=False), mode=0o600,
+    )
     return current
 
 
@@ -56,7 +56,9 @@ def clear(*keys: str) -> dict:
     current = load()
     for k in keys:
         current.pop(k, None)
-    p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(
+        p, json.dumps(current, indent=2, ensure_ascii=False), mode=0o600,
+    )
     return current
 
 
