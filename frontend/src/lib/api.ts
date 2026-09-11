@@ -1875,6 +1875,43 @@ export interface StrategyAlertEvent {
   [key: string]: unknown
 }
 
+// ===== 板块切换 (盘中轮动, 全量分钟聚合) =====
+export interface SectorRotationPoint {
+  time: string
+  rotation: number
+  leader: string
+  leader_pct: number | null
+  market_pct: number | null
+}
+
+export interface SectorRotationSector {
+  name: string
+  pct_now: number | null
+  pct_prev: number | null
+  rank_now: number | null
+  rank_prev: number | null
+  rank_change: number | null
+  flow: number | null
+  score: number | null
+  n_members: number
+  n_members_with_bars: number
+}
+
+export interface SectorRotation {
+  status: 'ok' | 'no_data' | 'empty'
+  reason?: string
+  date?: string
+  kind?: 'concept' | 'industry'
+  basis?: string
+  flow_field?: string | null
+  flow_available?: boolean
+  bucket_minutes?: number
+  member_count?: number
+  as_of?: string
+  timeline: SectorRotationPoint[]
+  sectors: SectorRotationSector[]
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -2904,6 +2941,15 @@ export const api = {
     if (opts.date) qs.set('date', opts.date)
     if (opts.limit) qs.set('limit', String(opts.limit))
     return request<DimensionMembersResult>(`/api/ext-data/${encodeURIComponent(id)}/dimension-members?${qs.toString()}`)
+  },
+
+  // ===== 板块切换 (盘中轮动) =====
+  sectorRotation: (params: { kind: 'concept' | 'industry'; flow?: string; top?: number; bucket?: number }) => {
+    const query = new URLSearchParams({ kind: params.kind })
+    if (params.flow) query.set('flow', params.flow)
+    if (params.top != null) query.set('top', String(params.top))
+    if (params.bucket != null) query.set('bucket', String(params.bucket))
+    return request<SectorRotation>(`/api/sector-rotation?${query}`)
   },
 
   dimensionIntraday: (id: string, opts: { field: string; value: string; date?: string }) => {

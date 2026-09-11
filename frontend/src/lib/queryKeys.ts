@@ -119,6 +119,10 @@ export const QK = {
   regimeCoverage:       ['regime-coverage'] as const,
   regimePhases:         (start?: string, end?: string) => ['regime-phases', start ?? '', end ?? ''] as const,
   regimeMainline:       (kind: string, start?: string, end?: string) => ['regime-mainline', kind, start ?? '', end ?? ''] as const,
+  // 板块切换 (盘中轮动, 全量分钟聚合) — 30s 前端轮询刷新
+  sectorRotation:       (kind: string, flow?: string, bucket?: number) => ['sector-rotation', kind, flow ?? '', bucket ?? 5] as const,
+  // 扩展表 schema 清单 (板块切换的资金流列选择器等)
+  extSchemaAll:         ['ext-schema-all'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
