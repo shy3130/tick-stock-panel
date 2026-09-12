@@ -48,6 +48,11 @@ _ALLOWED_BUCKETS = (1, 5, 15)
 _RANK_WINDOW_MIN = 60
 # rotation 计算取的领涨梯队宽度
 _TOP_OVERLAP = 10
+# 活跃度窗口 (分钟): 板块活跃度 = 最近该时长内成分股成交额合计
+_ACTIVITY_WINDOW_MIN = 30
+# 自定义展示板块上限 / 活跃默认行数
+_MAX_SERIES_ROWS = 20
+_DEFAULT_SERIES_ROWS = 10
 
 
 def invalidate_cache() -> None:
@@ -98,19 +103,25 @@ def _prev_daily_close(data_dir: Path, target_date: str) -> pl.DataFrame | None:
     )
 
 
-def _minute_pcts(minute_dir: Path, target: str) -> tuple[pl.DataFrame | None, str]:
-    """当日全市场分钟 → (_bare, _bucket, _pct); 读取失败返回 (None, reason)。"""
+def _minute_pcts(minute_dir: Path, target: str) -> tuple[pl.DataFrame | None, str, bool]:
+    """当日全市场分钟 → (_bare, _bucket, _pct[, amount]); 读取失败返回 (None, reason, False)。
+
+    amount 列缺失 (旧 schema) 时走精简读取, has_amount=False 由上层降级活跃度。
+    """
+    path = minute_dir / f"date={target}" / "part.parquet"
     try:
-        bars = pl.read_parquet(
-            minute_dir / f"date={target}" / "part.parquet",
-            columns=["symbol", "datetime", "close"],
-        )
-    except Exception as exc:
-        logger.warning("sector_rotation read minute partition failed: %s", exc)
-        return None, "minute_schema"
+        bars = pl.read_parquet(path, columns=["symbol", "datetime", "close", "amount"])
+        has_amount = True
+    except Exception:
+        try:
+            bars = pl.read_parquet(path, columns=["symbol", "datetime", "close"])
+            has_amount = False
+        except Exception as exc:
+            logger.warning("sector_rotation read minute partition failed: %s", exc)
+            return None, "minute_schema", False
     bars = bars.drop_nulls(subset=["datetime", "close"])
     if bars.is_empty():
-        return None, "minute_empty"
+        return None, "minute_empty", has_amount
     bars = bars.with_columns(_bare().alias("_bare"))
 
     prev = _prev_daily_close(minute_dir.parent, target)
@@ -129,8 +140,8 @@ def _minute_pcts(minute_dir: Path, target: str) -> tuple[pl.DataFrame | None, st
         .drop_nulls(subset=["_pct"])
     )
     if out.is_empty():
-        return None, "minute_empty"
-    return out, basis
+        return None, "minute_empty", has_amount
+    return out, basis, has_amount
 
 
 def _load_sector_flow(data_dir: Path, flow_field: str) -> pl.DataFrame | None:
@@ -223,6 +234,7 @@ def build_sector_rotation(
     flow_field: str | None = None,
     top: int = 30,
     bucket_minutes: int = 5,
+    series_names: list[str] | None = None,
 ) -> dict:
     """计算盘中板块切换走势 (概念/行业二选一)。
 
@@ -231,9 +243,12 @@ def build_sector_rotation(
       timeline: [{time, rotation, leader, leader_pct, market_pct}] /
       sectors: [{name, pct_now, pct_prev, rank_now, rank_prev, rank_change,
                  flow, score, n_members, n_members_with_bars}] 按 score 降序截 top 条 /
-      series: {buckets: [HH:MM], sectors: [热度降序板块名], matrix: [[各桶板块涨幅]]}
-        热度板块 × 分钟桶涨幅矩阵 (行序与 sectors 一致, 行数 ≤ top), 供前端热力图;
-        某桶无该板块行情时为 null
+      series: {buckets: [HH:MM], sectors: [展示板块名], matrix: [[各桶板块涨幅]]}
+        展示板块与分钟桶涨幅矩阵, 供前端热力图/走势线; 展示板块 = series_names
+        (自定义监控, ≤20) 或活跃度 Top10 (近 30 分钟成分股成交额合计, 量额缺失
+        时退化为 score 前 10); 某桶无该板块行情时为 null /
+      universe: [{name, pct_now, activity, n_members, n_members_with_bars}]
+        全部板块清单按活跃度降序 (自定义选择器的数据源, activity 为 None 排后)
     不可计算时返回 {status: "no_data"|"empty", reason, date?} (fail-closed, 不静默)。
     """
     if kind not in ("concept", "industry"):
@@ -243,21 +258,23 @@ def build_sector_rotation(
         raise ValueError(f"不支持的分钟桶: {bucket_minutes} (可选 {_ALLOWED_BUCKETS})")
     top = max(5, min(100, int(top)))
     flow_field = (flow_field or "").strip() or None
+    if series_names:
+        series_names = list(dict.fromkeys(str(n).strip() for n in series_names if str(n).strip()))[:_MAX_SERIES_ROWS] or None
 
     data_dir: Path = repo.store.data_dir
-    cache_key = (kind, flow_field or "", top, bucket_minutes)
+    cache_key = (kind, flow_field or "", top, bucket_minutes, tuple(series_names or ()))
     now = time.monotonic()
     hit = _cache.get(cache_key)
     if hit is not None and (now - _cache_ts.get(cache_key, 0.0)) < _CACHE_TTL:
         return hit
 
-    result = _compute(repo, data_dir, kind, flow_field, top, bucket_minutes)
+    result = _compute(repo, data_dir, kind, flow_field, top, bucket_minutes, series_names)
     _cache[cache_key] = result
     _cache_ts[cache_key] = time.monotonic()
     return result
 
 
-def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, bucket_minutes: int) -> dict:
+def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, bucket_minutes: int, series_names: list[str] | None) -> dict:
     minute_dir = data_dir / "kline_minute"
     target = _latest_minute_partition(minute_dir)
     if not target:
@@ -267,19 +284,26 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
     if map_df.is_empty() or member_count == 0:
         return {"status": "no_data", "reason": "members_missing", "date": target, "kind": kind}
 
-    pcts, basis = _minute_pcts(minute_dir, target)
+    pcts, basis, has_amount = _minute_pcts(minute_dir, target)
     if pcts is None:
         return {"status": "no_data", "reason": basis, "date": target, "kind": kind}
 
-    # 桶化 + 板块聚合: 先每股桶内均值, 再板块等权均值 (停牌/缺分钟不放大权重)
+    # 桶化 + 板块聚合: 先每股桶内均值 (成交额按桶合计), 再板块等权均值 (停牌/缺分钟不放大权重)
     member_df = map_df.rename({"_sym_up": "_bare", kind: "_member"})
     buckets = pcts.with_columns(pl.col("datetime").dt.truncate(f"{bucket_minutes}m").alias("_bucket"))
+    stock_agg = [pl.col("_pct").mean().alias("_sym_pct")]
+    if has_amount:
+        stock_agg.append(pl.col("amount").sum().alias("_sym_amt"))
     by_sector = (
         buckets.join(member_df, on="_bare", how="inner")
         .group_by(["_bucket", "_member", "_bare"])
-        .agg(pl.col("_pct").mean().alias("_sym_pct"))
+        .agg(stock_agg)
         .group_by(["_bucket", "_member"])
-        .agg(pl.col("_sym_pct").mean().alias("_spct"), pl.len().alias("_n"))
+        .agg(
+            pl.col("_sym_pct").mean().alias("_spct"),
+            pl.len().alias("_n"),
+            *( [pl.col("_sym_amt").sum().alias("_amt")] if has_amount else [] ),
+        )
         .sort(["_bucket", "_spct"], descending=[False, True])
     )
     if by_sector.is_empty():
@@ -365,6 +389,19 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         for row in by_sector.filter(pl.col("_bucket") == per_bucket[-1]["bucket"])
         .select(["_member", "_n"]).iter_rows(named=True)
     }
+    # 活跃度: 最近 _ACTIVITY_WINDOW_MIN 分钟成分股成交额合计 (量额列缺失时不可用)
+    activity_map: dict[str, float] = {}
+    if has_amount:
+        k = max(1, round(_ACTIVITY_WINDOW_MIN / bucket_minutes))
+        recent = [item["bucket"] for item in per_bucket[-k:]]
+        activity_map = {
+            row["_member"]: row["_amt"]
+            for row in by_sector.filter(pl.col("_bucket").is_in(recent))
+            .group_by("_member")
+            .agg(pl.col("_amt").sum().alias("_amt"))
+            .iter_rows(named=True)
+        }
+    all_names = sorted({name for item in per_bucket for name in item["names"]})
     names = per_bucket[-1]["names"]
     pcts_now = dict(zip(names, per_bucket[-1]["pct"], strict=True))
     pct_values = [pcts_now.get(name) for name in names]
@@ -396,14 +433,33 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         })
     sectors.sort(key=lambda item: (item["score"] is not None, item["score"] or 0.0), reverse=True)
 
-    # 热度板块 × 分钟桶涨幅矩阵 (供前端热力图按分钟轮动展示): 行 = 热度降序板块,
-    # 列 = 时间桶, 值 = 板块桶涨幅; 数据全部来自已算好的 per_bucket, 零额外计算
-    top_names = [item["name"] for item in sectors[:top]]
+    # 全部板块清单 (自定义选择器数据源), 按活跃度降序, 无活跃度数据排后
+    universe = [
+        {
+            "name": name,
+            "pct_now": _r4(pcts_now.get(name)),
+            "activity": _r4(activity_map.get(name)) if has_amount else None,
+            "n_members": members_count_by_sector.get(name, 0),
+            "n_members_with_bars": n_with_bars.get(name, 0),
+        }
+        for name in all_names
+    ]
+    universe.sort(key=lambda item: (item["activity"] is not None, item["activity"] or 0.0), reverse=True)
+
+    # 展示板块与分钟桶涨幅矩阵 (前端热力图/走势线共用): 自定义监控板块 (≤20,
+    # 剔除当日无行情的) 或活跃度 Top10 (量额缺失退化为 score 前 10)
+    if series_names:
+        known = set(all_names)
+        display_names = [n for n in series_names if n in known]
+    elif has_amount and activity_map:
+        display_names = [n for n, _ in sorted(activity_map.items(), key=lambda kv: kv[1], reverse=True)[:_DEFAULT_SERIES_ROWS]]
+    else:
+        display_names = [item["name"] for item in sectors[:_DEFAULT_SERIES_ROWS]]
     pct_maps = [dict(zip(item["names"], item["pct"], strict=True)) for item in per_bucket]
     series = {
         "buckets": [item["bucket"].strftime("%H:%M") for item in per_bucket],
-        "sectors": top_names,
-        "matrix": [[_r4(m.get(name)) for m in pct_maps] for name in top_names],
+        "sectors": display_names,
+        "matrix": [[_r4(m.get(name)) for m in pct_maps] for name in display_names],
     }
 
     return {
@@ -419,4 +475,5 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         "timeline": timeline,
         "sectors": sectors[:top],
         "series": series,
+        "universe": universe,
     }

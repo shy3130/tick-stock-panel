@@ -1913,10 +1913,21 @@ export interface SectorRotation {
   /** 热度板块 × 分钟桶涨幅矩阵 (行序同 sectors, 供热力图按分钟轮动展示) */
   series?: {
     buckets: string[]
+    /** 展示板块名 (活跃 Top10 或自定义监控清单, 涨幅走势线模式共用) */
     sectors: string[]
     /** matrix[行][列] = 该板块该桶涨幅; 无行情为 null */
     matrix: (number | null)[][]
   }
+  /** 全部板块清单按活跃度降序 (近 30 分钟成分股成交额合计; 量额缺失为 null 排后) */
+  universe?: SectorRotationUniverseItem[]
+}
+
+export interface SectorRotationUniverseItem {
+  name: string
+  pct_now: number | null
+  activity: number | null
+  n_members: number
+  n_members_with_bars: number
 }
 
 // ===== API surface =====
@@ -2951,11 +2962,12 @@ export const api = {
   },
 
   // ===== 板块切换 (盘中轮动) =====
-  sectorRotation: (params: { kind: 'concept' | 'industry'; flow?: string; top?: number; bucket?: number }) => {
+  sectorRotation: (params: { kind: 'concept' | 'industry'; flow?: string; top?: number; bucket?: number; seriesNames?: string[] }) => {
     const query = new URLSearchParams({ kind: params.kind })
     if (params.flow) query.set('flow', params.flow)
     if (params.top != null) query.set('top', String(params.top))
     if (params.bucket != null) query.set('bucket', String(params.bucket))
+    if (params.seriesNames?.length) query.set('series_names', JSON.stringify(params.seriesNames))
     return request<SectorRotation>(`/api/sector-rotation?${query}`)
   },
 

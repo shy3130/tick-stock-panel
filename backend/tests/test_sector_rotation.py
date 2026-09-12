@@ -259,6 +259,52 @@ def test_result_cache_hit(repo):
     assert again["status"] == "ok"
 
 
+def test_activity_ranking_and_custom_series(tmp_path):
+    """活跃度 = 近 30 分钟成分股成交额合计: A 题材 6 桶x2 股x100 万 = 1200 万,
+    B 题材 120 万 → universe 活跃降序 A 在前; 缺省展示行 = 活跃 Top10 (与
+    score 排序的 sectors 区分); series_names 自定义行去重并剔除当日无行情板块。"""
+    _reset_caches()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    rows = []
+    stamps = [datetime.fromisoformat(f"{DAY}T{h:02d}:{m:02d}:00") for h, m in [
+        (9, 35), (9, 40), (9, 45), (9, 50), (9, 55),
+        (10, 0), (10, 5), (10, 10), (10, 20), (10, 30), (10, 35),
+    ]]
+    for ts in stamps:
+        late = ts.hour > 10 or (ts.hour == 10 and ts.minute >= 5)
+        for sym in SYMS_A:
+            rows.append({"symbol": sym, "datetime": ts, "close": 102.0 if not late else 101.5, "amount": 1_000_000.0})
+        for sym in SYMS_B:
+            rows.append({"symbol": sym, "datetime": ts, "close": 100.2 if not late else 106.0, "amount": 100_000.0})
+    (data_dir / "kline_minute" / f"date={DAY}").mkdir(parents=True)
+    pl.DataFrame(rows).write_parquet(data_dir / "kline_minute" / f"date={DAY}" / "part.parquet")
+    _write_prev_daily(data_dir)
+    _write_concept_ext(data_dir)
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+
+    result = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5)
+    assert result["status"] == "ok"
+    universe = result["universe"]
+    assert universe[0]["name"] == "A题材"
+    assert universe[0]["activity"] == pytest.approx(12_000_000.0)
+    assert universe[1]["name"] == "B题材"
+    assert universe[1]["activity"] == pytest.approx(1_200_000.0)
+    # 缺省展示行 = 活跃 Top10 (A 在前), 与 score 排序的 sectors (B 在前) 区分
+    assert result["series"]["sectors"] == ["A题材", "B题材"]
+    assert next(s["name"] for s in result["sectors"]) == "B题材"
+
+    # 自定义展示行: 去重 + 当日无行情板块剔除, matrix 与该板块桶涨幅一致
+    custom = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5,
+        series_names=["B题材", "不存在的板块", "B题材"],
+    )
+    assert custom["series"]["sectors"] == ["B题材"]
+    assert custom["series"]["matrix"][0][-1] == pytest.approx(0.06, abs=1e-4)
+    # 缓存键含 series_names: 自定义与缺省互不串数据
+    assert result["series"]["sectors"] == ["A题材", "B题材"]
+
+
 def test_industry_kind_uses_industry_map(repo):
     """kind=industry 无行业映射 → 明确 no_data (二选一互不串数据)。"""
     result = sector_rotation.build_sector_rotation(repo, kind="industry")
