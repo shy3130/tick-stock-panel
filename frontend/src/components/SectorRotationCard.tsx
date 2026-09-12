@@ -5,8 +5,8 @@
  * 30s 前端轮询实时刷新 (分钟数据后端 6s 增量落盘, 30s 粒度已足够盘中观察)。
  * 资金流维度来自用户选择的扩展数据列 (ext schema-all 动态列出数值列, 不写死),
  * 选择按 kind 持久化到 localStorage。指数叠加线来自 /api/index/* (核心四只)。
- * 图表布局: 上=切换强度线, 下=热度板块×分钟桶热力图, 两个 grid 共享 x 轴
- * (axisPointer link 联动), 悬停热力图行与榜单行互相同步高亮。
+ * 布局: 热力图全宽在上; 下方左=切换强度线, 右=板块榜单。
+ * 两张图 x 轴窗口一致, 经 echarts.connect 联动指针; 榜单行与热力图行双向高亮。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -21,16 +21,13 @@ import { CORE_INDEXES } from '@/components/Layout'
 const FLOW_LS_PREFIX = 'sector_rotation_flow_'
 const INDEX_LS_PREFIX = 'sector_rotation_index_'
 const NUMERIC_TYPES = new Set(['float', 'int', 'number', 'double', 'long'])
+// 强度图与热力图跨实例联动分组 (x 轴指针同步)
+const CHART_CONNECT_GROUP = 'sector-rotation-card'
 
 // 热力图: 行 = 热度降序板块; 1 分钟桶全天 240+ 列不可读, 只看最近 60 列
 const HEAT_ROWS = 12
 const HEAT_COLS_1M = 60
-// 合并图布局: 上=切换强度线, 下=热力图 (行高 24), 共享 x 轴
-const INTENSITY_HEIGHT = 62
 const HEAT_ROW_HEIGHT = 24
-// heatmap 在 series 数组中的下标: [切换强度, 全市场, (指数?), 热力图]
-const HEAT_SERIES_WITH_INDEX = 3
-const HEAT_SERIES_PLAIN = 2
 
 interface HeatEventParams {
   seriesType?: string
@@ -227,33 +224,89 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
     return isMarketSessionNow() ? 'live' : 'replay'
   }, [data])
 
-  // 共享时间轴切片 (1 分钟桶只看最近 60 列) 与热力图行名, 悬停联动用
+  // 两张图共享同一 x 轴窗口 (1 分钟桶只看最近 60 列), 经 echarts.connect 联动指针
   const timeline = data?.timeline ?? []
   const total = timeline.length
   const startCol = bucket === 1 ? Math.max(0, total - HEAT_COLS_1M) : 0
-  const heatNames = (data?.series?.sectors ?? []).slice(0, HEAT_ROWS)
   const cols = Math.max(0, total - startCol)
+  const heatNames = (data?.series?.sectors ?? []).slice(0, HEAT_ROWS)
   const heatRows = Math.min(HEAT_ROWS, data?.series?.sectors.length ?? 0)
-  const heatSeriesIndex = indexLine ? HEAT_SERIES_WITH_INDEX : HEAT_SERIES_PLAIN
 
   const chartTheme = useChartTheme()
-  const combinedOption = useMemo<echarts.EChartsOption | null>(() => {
-    const heatSeries = data?.series
-    if (!heatSeries || !heatSeries.sectors.length || !timeline.length) return null
-    const names = heatSeries.sectors.slice(0, HEAT_ROWS)
+
+  // 强度图: 黄=切换强度 (左轴), 灰虚线=全市场, 蓝线=指数 (右轴 %); 窗口与热力图一致
+  const chartOption = useMemo<echarts.EChartsOption | null>(() => {
+    if (!timeline.length) return null
     const buckets = timeline.slice(startCol).map(point => point.time)
     if (!buckets.length) return null
+    return {
+      grid: { left: 38, right: 46, top: 10, bottom: 20 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: chartTheme.tooltipBg,
+        borderColor: chartTheme.tooltipBorder,
+        textStyle: { color: chartTheme.tooltipText, fontSize: 10 },
+        formatter: (params: unknown) => {
+          const list = (Array.isArray(params) ? params : [params]) as Array<{ axisValue?: string }>
+          const idx = buckets.indexOf(list[0]?.axisValue ?? '')
+          const point = timeline[startCol + idx]
+          if (!point) return ''
+          const lines = [
+            `<b>${point.time}</b>`,
+            `切换强度 ${point.rotation.toFixed(2)}`,
+            `领涨${dimLabel} ${point.leader} (${fmtPct(point.leader_pct)})`,
+            `全市场 ${fmtPct(point.market_pct)}`,
+          ]
+          const idxVal = indexLine ? indexLine.points[startCol + idx] : null
+          if (indexLine && idxVal != null) lines.push(`${indexLine.label} ${fmtPct(idxVal)}`)
+          if (phase === 'live' && idx === cols - 1) lines.push('<span style="color:#f59e0b">进行中的桶 · 数据未封口</span>')
+          return lines.join('<br/>')
+        },
+      },
+      xAxis: { type: 'category', data: buckets, axisLabel: { fontSize: 9, color: chartTheme.text } },
+      yAxis: [
+        { type: 'value', min: 0, max: 1, axisLabel: { fontSize: 9, color: chartTheme.text }, splitLine: { lineStyle: { color: 'rgba(128,140,160,0.15)' } } },
+        { type: 'value', axisLabel: { fontSize: 9, color: chartTheme.text, formatter: (v: number) => `${(v * 100).toFixed(1)}%` }, splitLine: { show: false } },
+      ],
+      series: [
+        {
+          name: '切换强度', type: 'line', smooth: true, symbol: 'none',
+          data: timeline.slice(startCol).map(point => point.rotation),
+          lineStyle: { color: '#f59e0b', width: 1.6 },
+          areaStyle: { color: 'rgba(245,158,11,0.12)' },
+        },
+        {
+          name: '全市场', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 1,
+          data: timeline.slice(startCol).map(point => point.market_pct),
+          lineStyle: { color: 'rgba(128,140,160,0.55)', width: 1, type: 'dashed' },
+        },
+        ...(indexLine ? [{
+          name: indexLine.label, type: 'line' as const, smooth: true, symbol: 'none', yAxisIndex: 1,
+          data: indexLine.points.slice(startCol),
+          lineStyle: { color: '#60a5fa', width: 1.4 },
+          connectNulls: true,
+        }] : []),
+      ],
+    }
+  }, [data, dimLabel, indexLine, timeline, startCol, cols, phase, chartTheme])
+  const chart = useEChart(chartOption)
 
-    // 热力图单元格 (行主序): 盘中时最后一列为未完成桶, 琥珀描边提示数据未封口
+  // 热力图: 行 = 热度降序板块 (综合分), 色 = 该桶板块涨幅 (红涨绿跌)
+  const heatOption = useMemo<echarts.EChartsOption | null>(() => {
+    const heatSeries = data?.series
+    if (!heatSeries || !heatSeries.sectors.length || !heatSeries.buckets.length) return null
+    const names = heatSeries.sectors.slice(0, HEAT_ROWS)
+    const buckets = heatSeries.buckets.slice(startCol)
     const live = phase === 'live'
     const cells: { value: [number, number, number | null]; itemStyle?: { borderColor: string; borderWidth: number } }[] = []
     const absValues: number[] = []
     for (let row = 0; row < names.length; row++) {
       const values = heatSeries.matrix[row] ?? []
-      for (let col = startCol; col < total; col++) {
+      for (let col = startCol; col < heatSeries.buckets.length; col++) {
         const value = values[col] ?? null
         cells.push({
           value: [col - startCol, row, value],
+          // 盘中最后一列为未完成桶, 琥珀描边提示数据未封口
           itemStyle: live && col - startCol === cols - 1 ? { borderColor: '#f59e0b', borderWidth: 1.2 } : undefined,
         })
         if (value != null && value !== 0) absValues.push(Math.abs(value))
@@ -268,107 +321,58 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
 
     const rankByName = new Map((data?.sectors ?? []).map(item => [item.name, item]))
     return {
-      axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+      grid: { left: 86, right: 10, top: 8, bottom: 46 },
       tooltip: {
         backgroundColor: chartTheme.tooltipBg,
         borderColor: chartTheme.tooltipBorder,
         textStyle: { color: chartTheme.tooltipText, fontSize: 10 },
         formatter: (params: unknown) => {
-          const list = (Array.isArray(params) ? params : [params]) as Array<{
-            seriesType?: string
-            axisValue?: string
+          const point = (Array.isArray(params) ? params : [params])[0] as {
             value?: [number, number, number | null]
-          }>
-          const first = list[0]
-          if (!first) return ''
-          if (first.seriesType === 'heatmap') {
-            const cellValue = first.value
-            if (!cellValue) return ''
-            const [x, y, v] = cellValue
-            const name = names[y]
-            if (name === undefined) return ''
-            const sector = rankByName.get(name)
-            const rankPart = sector?.rank_now ? ` · 现排名 #${sector.rank_now}` : ''
-            const changePart = sector?.rank_change ? ` (${sector.rank_change > 0 ? '↑' : '↓'}${Math.abs(sector.rank_change)})` : ''
-            const liveHint = live && x === cols - 1 ? '<br/><span style="color:#f59e0b">进行中的桶 · 数据未封口</span>' : ''
-            return [
-              `<b>${name}</b>${rankPart}${changePart}`,
-              `${buckets[x]} 桶涨幅: ${v == null ? '无数据' : fmtPct(v)}`,
-              `当前涨幅 ${fmtPct(sector?.pct_now)} · 热度 ${sector?.score?.toFixed(0) ?? '—'}`,
-            ].join('<br/>') + liveHint
           }
-          const idx = buckets.indexOf(first.axisValue ?? '')
-          const point = timeline[startCol + idx]
-          if (!point) return ''
-          const lines = [
-            `<b>${point.time}</b>`,
-            `切换强度 ${point.rotation.toFixed(2)}`,
-            `领涨${dimLabel} ${point.leader} (${fmtPct(point.leader_pct)})`,
-            `全市场 ${fmtPct(point.market_pct)}`,
-          ]
-          const idxVal = indexLine ? indexLine.points[startCol + idx] : null
-          if (indexLine && idxVal != null) lines.push(`${indexLine.label} ${fmtPct(idxVal)}`)
-          if (live && idx === cols - 1) lines.push('<span style="color:#f59e0b">进行中的桶 · 数据未封口</span>')
-          return lines.join('<br/>')
+          const cell = point?.value
+          if (!cell) return ''
+          const [x, y, v] = cell
+          const name = names[y]
+          if (name === undefined) return ''
+          const sector = rankByName.get(name)
+          const rankPart = sector?.rank_now ? ` · 现排名 #${sector.rank_now}` : ''
+          const changePart = sector?.rank_change ? ` (${sector.rank_change > 0 ? '↑' : '↓'}${Math.abs(sector.rank_change)})` : ''
+          const liveHint = phase === 'live' && x === cols - 1 ? '<br/><span style="color:#f59e0b">进行中的桶 · 数据未封口</span>' : ''
+          return [
+            `<b>${name}</b>${rankPart}${changePart}`,
+            `${buckets[x]} 桶涨幅: ${v == null ? '无数据' : fmtPct(v)}`,
+            `当前涨幅 ${fmtPct(sector?.pct_now)} · 热度 ${sector?.score?.toFixed(0) ?? '—'}`,
+          ].join('<br/>') + liveHint
         },
       },
-      grid: [
-        { left: 86, right: 34, top: 6, height: INTENSITY_HEIGHT },
-        { left: 86, right: 34, top: INTENSITY_HEIGHT + 22, bottom: 26 },
-      ],
-      xAxis: [
-        { type: 'category', gridIndex: 0, data: buckets, show: false },
-        {
-          type: 'category', gridIndex: 1, data: buckets,
-          axisLine: { show: false }, axisTick: { show: false },
-          axisLabel: { fontSize: 9, color: chartTheme.text, interval: Math.max(0, Math.ceil(cols / 8) - 1) },
-        },
-      ],
-      yAxis: [
-        { type: 'value', gridIndex: 0, min: 0, max: 1, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { fontSize: 8, color: chartTheme.text }, splitLine: { show: false } },
-        { type: 'value', gridIndex: 0, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { fontSize: 8, color: chartTheme.text, formatter: (v: number) => `${(v * 100).toFixed(1)}%` }, splitLine: { show: false }, splitNumber: 3 },
-        { type: 'category', gridIndex: 1, data: names, inverse: true, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { fontSize: 10, color: chartTheme.textStrong, formatter: (value: string) => (value.length > 8 ? `${value.slice(0, 8)}…` : value) } },
-      ],
+      xAxis: {
+        type: 'category', data: buckets,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { fontSize: 9, color: chartTheme.text, interval: Math.max(0, Math.ceil(buckets.length / 8) - 1) },
+      },
+      yAxis: {
+        type: 'category', data: names, inverse: true,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { fontSize: 10, color: chartTheme.textStrong, formatter: (value: string) => (value.length > 8 ? `${value.slice(0, 8)}…` : value) },
+      },
       visualMap: {
         type: 'continuous', min: -maxAbs, max: maxAbs,
-        orient: 'vertical', right: 0, top: 'middle',
-        itemWidth: 8, itemHeight: 90, text: ['涨', '跌'],
+        orient: 'horizontal', left: 'center', bottom: 0,
+        itemWidth: 8, itemHeight: 110, text: ['涨', '跌'],
         textStyle: { fontSize: 9, color: chartTheme.text },
         inRange: { color: ['#1E5C3C', '#3FA374', chartTheme.grid, '#D98B8B', '#C74040'] },
         calculable: false,
       },
-      series: [
-        {
-          name: '切换强度', type: 'line', xAxisIndex: 0, yAxisIndex: 0,
-          smooth: true, symbol: 'none',
-          data: timeline.slice(startCol).map(point => point.rotation),
-          lineStyle: { color: '#f59e0b', width: 1.5 },
-          areaStyle: { color: 'rgba(245,158,11,0.10)' },
-        },
-        {
-          name: '全市场', type: 'line', xAxisIndex: 0, yAxisIndex: 1,
-          smooth: true, symbol: 'none',
-          data: timeline.slice(startCol).map(point => point.market_pct),
-          lineStyle: { color: 'rgba(128,140,160,0.55)', width: 1, type: 'dashed' },
-        },
-        ...(indexLine ? [{
-          name: indexLine.label, type: 'line' as const, xAxisIndex: 0, yAxisIndex: 1,
-          smooth: true, symbol: 'none',
-          data: indexLine.points.slice(startCol),
-          lineStyle: { color: '#60a5fa', width: 1.4 },
-          connectNulls: true,
-        }] : []),
-        {
-          name: '热度热力图', type: 'heatmap', xAxisIndex: 1, yAxisIndex: 2,
-          data: cells,
-          itemStyle: { borderWidth: 1, borderColor: 'transparent' },
-          emphasis: { itemStyle: { borderColor: '#fbbf24', borderWidth: 2 } },
-        },
-      ],
+      series: [{
+        name: '热度热力图', type: 'heatmap',
+        data: cells,
+        itemStyle: { borderWidth: 1, borderColor: 'transparent' },
+        emphasis: { itemStyle: { borderColor: '#fbbf24', borderWidth: 2 } },
+      }],
     }
-  }, [data, bucket, chartTheme, indexLine, phase, dimLabel, timeline, startCol, cols])
-
-  const chart = useEChart(combinedOption, {
+  }, [data, bucket, chartTheme, phase, startCol, cols])
+  const heat = useEChart(heatOption, {
     onMouseOver: (params) => {
       if (params.seriesType !== 'heatmap') return
       const value = params.value as [number, number, number | null] | undefined
@@ -379,23 +383,33 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
     onGlobalOut: () => setHoverName(null),
   })
 
-  // 联动反向: 榜单行悬停 → 热力图整行高亮 (downplay 上一行, highlight 当前行)
+  // 联动反向: 榜单行悬停 → 热力图整行琥珀描边 (downplay 上一行, highlight 当前行)
   const prevHoverRef = useRef<number>(-1)
   useEffect(() => {
-    const inst = chart.instRef.current
+    const inst = heat.instRef.current
     if (!inst || !data || data.status !== 'ok') return
     const rowIndices = (y: number) => Array.from({ length: cols }, (_, c) => y * cols + c)
     if (prevHoverRef.current >= 0) {
-      inst.dispatchAction({ type: 'downplay', seriesIndex: heatSeriesIndex, dataIndex: rowIndices(prevHoverRef.current) })
+      inst.dispatchAction({ type: 'downplay', seriesIndex: 0, dataIndex: rowIndices(prevHoverRef.current) })
       prevHoverRef.current = -1
     }
     if (!hoverName) return
     const y = heatNames.indexOf(hoverName)
     if (y >= 0) {
-      inst.dispatchAction({ type: 'highlight', seriesIndex: heatSeriesIndex, dataIndex: rowIndices(y) })
+      inst.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: rowIndices(y) })
       prevHoverRef.current = y
     }
-  }, [hoverName, data, bucket, cols, heatNames, heatSeriesIndex, chart.instRef])
+  }, [hoverName, data, bucket, cols, heatNames, heat.instRef])
+
+  // 强度图与热力图 x 轴指针跨实例联动 (窗口一致才可对齐)
+  useEffect(() => {
+    const a = chart.instRef.current
+    const b = heat.instRef.current
+    if (!a || !b) return
+    a.group = CHART_CONNECT_GROUP
+    b.group = CHART_CONNECT_GROUP
+    echarts.connect(CHART_CONNECT_GROUP)
+  }, [data, bucket, chart.instRef, heat.instRef])
 
   const onFlowChange = (value: string) => {
     setFlow(value)
@@ -404,7 +418,7 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   }
 
   const latest = data?.timeline?.[data.timeline.length - 1]
-  const chartHeight = Math.max(220, heatRows * HEAT_ROW_HEIGHT + 128)
+  const heatHeight = Math.max(180, heatRows * HEAT_ROW_HEIGHT + 62)
 
   return (
     <section className="rounded-2xl border border-border bg-surface p-2.5">
@@ -473,40 +487,48 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           {heatRows > 0 && (
             <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
               <div className="px-1 pb-1 text-[9px] text-muted">
-                上: 切换强度 (1h 领涨梯队换血率, 越高轮动越剧烈) · 蓝线={indexLine ? indexLine.label : '指数'}(右轴) · 灰虚线=全市场(右轴) — 下: 热度板块×分钟桶热力图 (行按综合分{data.flow_available ? '+资金流' : ''}排序, 红涨绿跌, 色带在行间移动即轮动方向; 悬停与下方榜单联动)
+                热度板块 × 分钟轮动热力图 — 行按综合分{data.flow_available ? '+资金流' : ''}排序, 色为该桶板块涨幅 (红涨绿跌, 平淡近透明), 悬停与下方榜单联动
               </div>
-              <div ref={chart.ref} style={{ height: chartHeight }} className="w-full" />
+              <div ref={heat.ref} style={{ height: heatHeight }} className="w-full" />
             </div>
           )}
-          <div className="mt-2 overflow-hidden rounded-lg border border-border/60">
-            <div className="grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] border-b border-border bg-base/50 px-2 py-1.5 text-[9px] font-medium text-muted">
-              <span>{dimLabel}</span><span className="text-right">现涨幅</span><span className="text-right">1h前</span><span className="text-right">排名变化</span><span className="text-right">资金流 / 综合分</span>
+          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_1fr]">
+            <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
+              <div className="px-1 pb-1 text-[9px] text-muted">
+                切换强度 (1h 领涨梯队换血率) · 蓝线={indexLine ? indexLine.label : '指数'}(右轴) · 灰虚线=全市场(右轴) · 与热力图指针联动
+              </div>
+              <div ref={chart.ref} className="h-32 w-full" />
             </div>
-            <div className="max-h-40 overflow-y-auto">
-              {data.sectors.map((sector: SectorRotationSector) => (
-                <div
-                  key={sector.name}
-                  onMouseEnter={() => setHoverName(sector.name)}
-                  onMouseLeave={() => setHoverName(null)}
-                  className={cn(
-                    'grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] items-center border-b border-border/40 px-2 py-1.5 text-[10px] last:border-b-0 hover:bg-elevated/40',
-                    hoverName === sector.name && 'bg-accent/10',
-                  )}
-                >
-                  <span className="truncate font-medium text-foreground" title={`${sector.name} · 成分 ${sector.n_members_with_bars}/${sector.n_members}`}>
-                    {sector.name}
-                  </span>
-                  <span className={`text-right font-mono ${pctClass(sector.pct_now)}`}>{fmtPct(sector.pct_now)}</span>
-                  <span className={`text-right font-mono ${pctClass(sector.pct_prev)}`}>{fmtPct(sector.pct_prev)}</span>
-                  <span className={`text-right font-mono ${sector.rank_change == null ? 'text-muted' : sector.rank_change > 0 ? 'text-bull' : sector.rank_change < 0 ? 'text-bear' : 'text-muted'}`}>
-                    {sector.rank_change == null ? '—' : sector.rank_change > 0 ? `↑${sector.rank_change}` : sector.rank_change < 0 ? `↓${-sector.rank_change}` : '—'}
-                  </span>
-                  <span className="truncate text-right font-mono text-secondary" title={data.flow_available ? `资金流 ${fmtFlow(sector.flow)}` : '未选择资金流, 综合分=涨幅归一'}>
-                    {data.flow_available ? `${fmtFlow(sector.flow)} · ${sector.score?.toFixed(0) ?? '—'}` : `${sector.score?.toFixed(0) ?? '—'}分`}
-                  </span>
-                </div>
-              ))}
-              {!data.sectors.length && <div className="p-3 text-center text-[10px] text-muted">暂无板块数据</div>}
+            <div className="overflow-hidden rounded-lg border border-border/60">
+              <div className="grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] border-b border-border bg-base/50 px-2 py-1.5 text-[9px] font-medium text-muted">
+                <span>{dimLabel}</span><span className="text-right">现涨幅</span><span className="text-right">1h前</span><span className="text-right">排名变化</span><span className="text-right">资金流 / 综合分</span>
+              </div>
+              <div className="max-h-40 overflow-y-auto">
+                {data.sectors.map((sector: SectorRotationSector) => (
+                  <div
+                    key={sector.name}
+                    onMouseEnter={() => setHoverName(sector.name)}
+                    onMouseLeave={() => setHoverName(null)}
+                    className={cn(
+                      'grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] items-center border-b border-border/40 px-2 py-1.5 text-[10px] last:border-b-0 hover:bg-elevated/40',
+                      hoverName === sector.name && 'bg-accent/10',
+                    )}
+                  >
+                    <span className="truncate font-medium text-foreground" title={`${sector.name} · 成分 ${sector.n_members_with_bars}/${sector.n_members}`}>
+                      {sector.name}
+                    </span>
+                    <span className={`text-right font-mono ${pctClass(sector.pct_now)}`}>{fmtPct(sector.pct_now)}</span>
+                    <span className={`text-right font-mono ${pctClass(sector.pct_prev)}`}>{fmtPct(sector.pct_prev)}</span>
+                    <span className={`text-right font-mono ${sector.rank_change == null ? 'text-muted' : sector.rank_change > 0 ? 'text-bull' : sector.rank_change < 0 ? 'text-bear' : 'text-muted'}`}>
+                      {sector.rank_change == null ? '—' : sector.rank_change > 0 ? `↑${sector.rank_change}` : sector.rank_change < 0 ? `↓${-sector.rank_change}` : '—'}
+                    </span>
+                    <span className="truncate text-right font-mono text-secondary" title={data.flow_available ? `资金流 ${fmtFlow(sector.flow)}` : '未选择资金流, 综合分=涨幅归一'}>
+                      {data.flow_available ? `${fmtFlow(sector.flow)} · ${sector.score?.toFixed(0) ?? '—'}` : `${sector.score?.toFixed(0) ?? '—'}分`}
+                    </span>
+                  </div>
+                ))}
+                {!data.sectors.length && <div className="p-3 text-center text-[10px] text-muted">暂无板块数据</div>}
+              </div>
             </div>
           </div>
           <div className="mt-1.5 flex items-center gap-1.5 text-[9px] text-muted">
