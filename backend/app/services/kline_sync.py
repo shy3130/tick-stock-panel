@@ -712,9 +712,16 @@ def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
             existing = pl.read_parquet(out)
             if "datetime" in existing.columns:
                 existing = existing.filter(pl.col("datetime").is_not_null())
-            day_df = pl.concat([existing, day_df.drop("_trade_date")]).unique(
+            new_rows = day_df.drop("_trade_date")
+            # 只对本次触及的 symbol 合并去重, 未触及行原样保留: 单股补齐时避免
+            # 为合并几行数据把全市场分区整体 unique 的写放大 (issue #305)。
+            touched = new_rows["symbol"].unique().to_list()
+            same = existing.filter(pl.col("symbol").is_in(touched))
+            other = existing.filter(~pl.col("symbol").is_in(touched))
+            merged = pl.concat([same, new_rows]).unique(
                 subset=["symbol", "datetime"], keep="last",
             )
+            day_df = pl.concat([other, merged])
         else:
             day_df = day_df.drop("_trade_date")
         day_df = day_df.sort("symbol", "datetime")

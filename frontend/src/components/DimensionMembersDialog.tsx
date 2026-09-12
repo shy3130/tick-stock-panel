@@ -285,12 +285,12 @@ function DimensionMembersDialogContent({ target, onClose, onStockClick }: Omit<P
                       className="absolute left-0 top-0 grid min-h-[54px] w-full grid-cols-[minmax(132px,1fr)_74px_74px_18px] items-center border-b border-border/60 px-4 text-left text-xs transition-colors hover:bg-elevated/50 disabled:cursor-default md:grid-cols-[minmax(180px,1fr)_90px_84px_88px_100px_18px]"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      <span className="flex min-w-0 items-center gap-2">
-                        {board && <span className={`inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border text-[9px] font-bold ${board.color}`}>{board.label}</span>}
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium text-foreground">{row.name || row.symbol}</span>
-                          <span className="block font-mono text-[10px] text-muted">{row.symbol}</span>
+                      <span className="min-w-0">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="min-w-0 truncate font-medium text-foreground">{row.name || row.symbol}</span>
+                          {board && <span className={`inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border text-[9px] font-bold ${board.color}`}>{board.label}</span>}
                         </span>
+                        <span className="block font-mono text-[10px] text-muted">{row.symbol}</span>
                       </span>
                       <span className="text-right tabular-nums text-secondary">{fmtPrice(finite(row.close))}</span>
                       <span className={`text-right tabular-nums font-medium ${priceColorClass(finite(row.change_pct))}`}>{fmtPct(finite(row.change_pct))}</span>
