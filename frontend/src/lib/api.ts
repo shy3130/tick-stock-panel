@@ -1910,6 +1910,13 @@ export interface SectorRotation {
   as_of?: string
   timeline: SectorRotationPoint[]
   sectors: SectorRotationSector[]
+  /** 热度板块 × 分钟桶涨幅矩阵 (行序同 sectors, 供热力图按分钟轮动展示) */
+  series?: {
+    buckets: string[]
+    sectors: string[]
+    /** matrix[行][列] = 该板块该桶涨幅; 无行情为 null */
+    matrix: (number | null)[][]
+  }
 }
 
 // ===== API surface =====

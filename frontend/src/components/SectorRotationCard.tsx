@@ -12,9 +12,14 @@ import * as echarts from 'echarts'
 import { Activity, Database, RefreshCw } from 'lucide-react'
 import { api, type SectorRotationSector } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useChartTheme } from '@/lib/theme'
 
 const FLOW_LS_PREFIX = 'sector_rotation_flow_'
 const NUMERIC_TYPES = new Set(['float', 'int', 'number', 'double', 'long'])
+
+// 热力图: 行 = 热度降序板块; 1 分钟桶全天 240+ 列不可读, 只看最近 60 列
+const HEAT_ROWS = 12
+const HEAT_COLS_1M = 60
 
 function useEChart(option: echarts.EChartsOption | null) {
   const ref = useRef<HTMLDivElement>(null)
@@ -147,6 +152,84 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   }, [data, dimLabel])
   const chartRef = useEChart(chartOption)
 
+  // 热力图主视觉: 行 = 热度降序板块 (综合分), 列 = 分钟桶, 色 = 该桶板块涨幅 (红涨绿跌)。
+  // 平淡桶混入背景色, 只有真实的切入/退潮波段会显色 — 轮动方向一眼可见。
+  const chartTheme = useChartTheme()
+  const heatRows = Math.min(HEAT_ROWS, data?.series?.sectors.length ?? 0)
+  const heatOption = useMemo<echarts.EChartsOption | null>(() => {
+    const heatSeries = data?.series
+    if (!heatSeries || !heatSeries.sectors.length || !heatSeries.buckets.length) return null
+    const names = heatSeries.sectors.slice(0, HEAT_ROWS)
+    const total = heatSeries.buckets.length
+    const startCol = bucket === 1 ? Math.max(0, total - HEAT_COLS_1M) : 0
+    const buckets = heatSeries.buckets.slice(startCol)
+    const cells: [number, number, number | null][] = []
+    const absValues: number[] = []
+    for (let row = 0; row < names.length; row++) {
+      const values = heatSeries.matrix[row] ?? []
+      for (let col = 0; col < total; col++) {
+        const value = values[col] ?? null
+        cells.push([col - startCol, row, value])
+        if (value != null && value !== 0) absValues.push(Math.abs(value))
+      }
+    }
+    if (!cells.length) return null
+    // 色标按 |涨幅| 的 90 分位钳制: 个别小板块单桶 ±10% 会把绝对最大值撑爆,
+    // 常见 ±0.5% 的波动就会近乎透明; 超出范围的颜色由 ECharts 饱和到端点
+    absValues.sort((a, b) => a - b)
+    const p90 = absValues.length ? absValues[Math.min(absValues.length - 1, Math.floor(absValues.length * 0.9))] : 0
+    const maxAbs = Math.max(p90, 0.002)
+    const rankByName = new Map((data?.sectors ?? []).map(item => [item.name, item]))
+    return {
+      grid: { left: 86, right: 10, top: 8, bottom: 44 },
+      tooltip: {
+        backgroundColor: chartTheme.tooltipBg,
+        borderColor: chartTheme.tooltipBorder,
+        textStyle: { color: chartTheme.tooltipText, fontSize: 10 },
+        formatter: (params: unknown) => {
+          const point = params as { value: [number, number, number | null] }
+          const [x, y, v] = point.value
+          const name = names[y]
+          if (!name) return ''
+          const sector = rankByName.get(name)
+          const rankPart = sector?.rank_now ? ` · 现排名 #${sector.rank_now}` : ''
+          const changePart = sector?.rank_change ? ` (${sector.rank_change > 0 ? '↑' : '↓'}${Math.abs(sector.rank_change)})` : ''
+          return [
+            `<b>${name}</b>${rankPart}${changePart}`,
+            `${buckets[x]} 桶涨幅: ${v == null ? '无数据' : fmtPct(v)}`,
+            `当前涨幅 ${fmtPct(sector?.pct_now)} · 热度 ${sector?.score?.toFixed(0) ?? '—'}`,
+          ].join('<br/>')
+        },
+      },
+      xAxis: {
+        type: 'category', data: buckets,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { fontSize: 9, color: chartTheme.text, interval: Math.max(0, Math.ceil(buckets.length / 8) - 1) },
+      },
+      yAxis: {
+        type: 'category', data: names, inverse: true,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { fontSize: 10, color: chartTheme.textStrong, formatter: (value: string) => (value.length > 8 ? `${value.slice(0, 8)}…` : value) },
+      },
+      visualMap: {
+        type: 'continuous', min: -maxAbs, max: maxAbs,
+        orient: 'horizontal', left: 'center', bottom: 0,
+        itemWidth: 8, itemHeight: 110, text: ['涨', '跌'],
+        textStyle: { fontSize: 9, color: chartTheme.text },
+        inRange: { color: ['#1E5C3C', '#3FA374', chartTheme.grid, '#D98B8B', '#C74040'] },
+        calculable: false,
+      },
+      series: [{
+        type: 'heatmap',
+        data: cells,
+        itemStyle: { borderWidth: 1, borderColor: 'transparent' },
+        emphasis: { itemStyle: { borderColor: chartTheme.crosshair, borderWidth: 1 } },
+      }],
+    }
+  }, [data, bucket, chartTheme])
+  const heatRef = useEChart(heatOption)
+  const heatHeight = Math.max(120, heatRows * 24 + 62)
+
   const onFlowChange = (value: string) => {
     setFlow(value)
     if (value) localStorage.setItem(`${FLOW_LS_PREFIX}${kind}`, value)
@@ -201,7 +284,15 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_1fr]">
+          {heatRows > 0 && (
+            <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
+              <div className="px-1 pb-1 text-[9px] text-muted">
+                热度板块 × 分钟轮动热力图 — 行按综合分 (涨幅{data.flow_available ? '+资金流' : ''}) 排序, 色为该桶板块涨幅 (红涨绿跌, 平淡近透明), 看色带在行间移动即轮动方向
+              </div>
+              <div ref={heatRef} style={{ height: heatHeight }} className="w-full" />
+            </div>
+          )}
+          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_1fr]">
             <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
               <div className="px-1 pb-1 text-[9px] text-muted">切换强度 (1h 领涨梯队换血率) · 越高轮动越剧烈</div>
               <div ref={chartRef} className="h-32 w-full" />
@@ -234,7 +325,7 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
             <Database className="h-3 w-3" />
             {`${data.member_count} 个${dimLabel} · ${data.bucket_minutes}分钟桶 · 基准 ${data.basis === 'prev_close' ? '昨收' : data.basis === 'first_close' ? '今开' : '混合'}`}
             {data.flow_available ? ` · 资金流 ${data.flow_field}` : ' · 未启用资金流'}
-            <span className="ml-auto">每 30s 自动刷新 · 排名变化 ↑切入 ↓退潮 (相对 1 小时前)</span>
+            <span className="ml-auto">每 30s 自动刷新 · 排名变化 ↑切入 ↓退潮 (相对 1 小时前) · 热力图默认前 {HEAT_ROWS} 个热度板块</span>
           </div>
         </>
       )}

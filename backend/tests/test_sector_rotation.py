@@ -264,3 +264,25 @@ def test_industry_kind_uses_industry_map(repo):
     result = sector_rotation.build_sector_rotation(repo, kind="industry")
     assert result["status"] == "no_data"
     assert result["reason"] == "members_missing"
+
+
+def test_series_matrix_aligns_with_timeline_and_sectors(repo):
+    """热力图矩阵: 行=热度降序板块 (与 sectors 同序同截断), 列=时间桶 (与 timeline
+    同轴), 值=该桶板块涨幅 (列最大值=该桶领涨涨幅), 供前端按分钟轮动展示。"""
+    result = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5)
+    assert result["status"] == "ok"
+    series = result["series"]
+    timeline = result["timeline"]
+    assert series["buckets"] == [point["time"] for point in timeline]
+    assert series["sectors"] == [item["name"] for item in result["sectors"]]
+
+    matrix = dict(zip(series["sectors"], series["matrix"], strict=True))
+    # 末桶 (10:35): B +6.0% / A +1.5%, 与 sectors.pct_now 同口径
+    last = len(series["buckets"]) - 1
+    assert matrix["B题材"][last] == pytest.approx(0.06, abs=1e-4)
+    assert matrix["A题材"][last] == pytest.approx(0.015, abs=1e-4)
+    # 每列 (跳过无行情 None) 最大值 = 该桶领涨板块涨幅
+    for col, point in enumerate(timeline):
+        values = [matrix[name][col] for name in series["sectors"] if matrix[name][col] is not None]
+        assert values
+        assert max(values) == pytest.approx(point["leader_pct"], abs=1e-4)

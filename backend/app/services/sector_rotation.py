@@ -230,7 +230,10 @@ def build_sector_rotation(
       status/date/basis/kind/flow_field/bucket_minutes/member_count/flow_available/
       timeline: [{time, rotation, leader, leader_pct, market_pct}] /
       sectors: [{name, pct_now, pct_prev, rank_now, rank_prev, rank_change,
-                 flow, score, n_members, n_members_with_bars}] 按 score 降序截 top 条
+                 flow, score, n_members, n_members_with_bars}] 按 score 降序截 top 条 /
+      series: {buckets: [HH:MM], sectors: [热度降序板块名], matrix: [[各桶板块涨幅]]}
+        热度板块 × 分钟桶涨幅矩阵 (行序与 sectors 一致, 行数 ≤ top), 供前端热力图;
+        某桶无该板块行情时为 null
     不可计算时返回 {status: "no_data"|"empty", reason, date?} (fail-closed, 不静默)。
     """
     if kind not in ("concept", "industry"):
@@ -393,6 +396,16 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         })
     sectors.sort(key=lambda item: (item["score"] is not None, item["score"] or 0.0), reverse=True)
 
+    # 热度板块 × 分钟桶涨幅矩阵 (供前端热力图按分钟轮动展示): 行 = 热度降序板块,
+    # 列 = 时间桶, 值 = 板块桶涨幅; 数据全部来自已算好的 per_bucket, 零额外计算
+    top_names = [item["name"] for item in sectors[:top]]
+    pct_maps = [dict(zip(item["names"], item["pct"], strict=True)) for item in per_bucket]
+    series = {
+        "buckets": [item["bucket"].strftime("%H:%M") for item in per_bucket],
+        "sectors": top_names,
+        "matrix": [[_r4(m.get(name)) for m in pct_maps] for name in top_names],
+    }
+
     return {
         "status": "ok",
         "date": target,
@@ -405,4 +418,5 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         "as_of": per_bucket[-1]["bucket"].strftime("%H:%M"),
         "timeline": timeline,
         "sectors": sectors[:top],
+        "series": series,
     }
