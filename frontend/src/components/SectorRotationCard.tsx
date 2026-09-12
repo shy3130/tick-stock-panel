@@ -13,8 +13,10 @@ import { Activity, Database, RefreshCw } from 'lucide-react'
 import { api, type SectorRotationSector } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChartTheme } from '@/lib/theme'
+import { CORE_INDEXES } from '@/components/Layout'
 
 const FLOW_LS_PREFIX = 'sector_rotation_flow_'
+const INDEX_LS_PREFIX = 'sector_rotation_index_'
 const NUMERIC_TYPES = new Set(['float', 'int', 'number', 'double', 'long'])
 
 // 热力图: 行 = 热度降序板块; 1 分钟桶全天 240+ 列不可读, 只看最近 60 列
@@ -115,6 +117,57 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   })
   const data = rotationQuery.data
 
+  // 指数叠加线 (核心四只, 默认上证): 分钟桶涨幅对齐轮动时间轴, 昨收基准
+  const [indexSymbol, setIndexSymbol] = useState<string>(
+    () => localStorage.getItem(`${INDEX_LS_PREFIX}${kind}`) ?? CORE_INDEXES[0].symbol,
+  )
+  const indexLabel = CORE_INDEXES.find(item => item.symbol === indexSymbol)?.name ?? indexSymbol
+  const indexMinuteQuery = useQuery({
+    queryKey: QK.sectorRotationIndexMinute(indexSymbol, data?.date),
+    queryFn: () => api.indexMinute(indexSymbol, data!.date!),
+    enabled: !!data?.date,
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+  })
+  const indexDailyQuery = useQuery({
+    queryKey: QK.sectorRotationIndexDaily(indexSymbol),
+    queryFn: () => api.indexDaily(indexSymbol, 20),
+    enabled: !!data?.date,
+    staleTime: 300_000,
+  })
+  const onIndexChange = (value: string) => {
+    setIndexSymbol(value)
+    localStorage.setItem(`${INDEX_LS_PREFIX}${kind}`, value)
+  }
+
+  // 指数逐桶涨幅: 分钟 bar 涨幅 (昨收基准, 缺昨收退化首根收盘) 按桶均值,
+  // 时间轴对齐 timeline 的 HH:MM — 与全市场线同口径 (累计涨幅), 供切换强度图叠加
+  const indexLine = useMemo(() => {
+    if (!data || data.status !== 'ok' || !data.date) return null
+    const rotationDate = data.date
+    const rows = indexMinuteQuery.data?.rows ?? []
+    if (!rows.length) return null
+    const daily = (indexDailyQuery.data?.rows ?? []).filter(row => row.date < rotationDate)
+    const prevClose = daily.length ? Number(daily[daily.length - 1].close) : null
+    const refPx = prevClose ?? Number(rows[0].close)
+    const byTime = new Map<string, { sum: number; n: number }>()
+    for (const row of rows) {
+      const time = row.datetime.slice(11, 16)
+      if (!time) continue
+      const pct = row.close / refPx - 1
+      const cell = byTime.get(time)
+      if (cell) { cell.sum += pct; cell.n += 1 } else byTime.set(time, { sum: pct, n: 1 })
+    }
+    if (!byTime.size) return null
+    return {
+      label: indexLabel,
+      points: data.timeline.map(point => {
+        const cell = byTime.get(point.time)
+        return cell ? cell.sum / cell.n : null
+      }),
+    }
+  }, [data, indexLabel, indexMinuteQuery.data, indexDailyQuery.data])
+
   const chartOption = useMemo<echarts.EChartsOption | null>(() => {
     const timeline = data?.timeline ?? []
     if (!timeline.length) return null
@@ -127,12 +180,15 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           const index = timeline.findIndex(point => point.time === list[0]?.axisValue)
           const point = timeline[index]
           if (!point) return ''
-          return [
+          const lines = [
             `<b>${point.time}</b>`,
             `切换强度 ${point.rotation.toFixed(2)}`,
             `领涨${dimLabel} ${point.leader} (${fmtPct(point.leader_pct)})`,
             `全市场 ${fmtPct(point.market_pct)}`,
-          ].join('<br/>')
+          ]
+          const idxVal = indexLine ? indexLine.points[index] : null
+          if (indexLine && idxVal != null) lines.push(`${indexLine.label} ${fmtPct(idxVal)}`)
+          return lines.join('<br/>')
         },
       },
       xAxis: { type: 'category', data: timeline.map(point => point.time), axisLabel: { fontSize: 9, color: '#7986a0' } },
@@ -159,9 +215,19 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           data: timeline.map(point => point.market_pct),
           lineStyle: { color: 'rgba(128,140,160,0.55)', width: 1, type: 'dashed' },
         },
+        ...(indexLine ? [{
+          name: indexLine.label,
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'none',
+          yAxisIndex: 1,
+          data: indexLine.points,
+          lineStyle: { color: '#60a5fa', width: 1.4 },
+          connectNulls: true,
+        }] : []),
       ],
     }
-  }, [data, dimLabel])
+  }, [data, dimLabel, indexLine])
   const chartRef = useEChart(chartOption)
 
   // 热力图主视觉: 行 = 热度降序板块 (综合分), 列 = 分钟桶, 色 = 该桶板块涨幅 (红涨绿跌)。
@@ -260,6 +326,15 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           {data?.status === 'ok' && latest ? `${data.date} ${data.as_of} · 切换强度 ${latest.rotation.toFixed(2)} · 领涨 ${latest.leader}` : '全量分钟聚合'}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-[9px] text-muted">指数</span>
+          <select
+            aria-label="指数叠加"
+            className="h-6 max-w-24 truncate rounded border border-border bg-surface px-1 text-[10px] text-secondary outline-none focus:border-accent"
+            value={indexSymbol}
+            onChange={event => onIndexChange(event.target.value)}
+          >
+            {CORE_INDEXES.map(item => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}
+          </select>
           <span className="text-[9px] text-muted">资金流</span>
           <select
             aria-label="资金流扩展列"
@@ -306,7 +381,7 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           )}
           <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_1fr]">
             <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
-              <div className="px-1 pb-1 text-[9px] text-muted">切换强度 (1h 领涨梯队换血率) · 越高轮动越剧烈</div>
+              <div className="px-1 pb-1 text-[9px] text-muted">切换强度 (1h 领涨梯队换血率) · 越高轮动越剧烈 · 蓝线={indexLine ? indexLine.label : '指数'}(右轴) · 灰虚线=全市场(右轴)</div>
               <div ref={chartRef} className="h-32 w-full" />
             </div>
             <div className="overflow-hidden rounded-lg border border-border/60">
