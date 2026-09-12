@@ -34,7 +34,19 @@ function useEChart(option: echarts.EChartsOption | null) {
     }
   }, [])
   useEffect(() => {
-    if (!ref.current) return
+    if (!ref.current) {
+      // 容器随 loading 分支被卸载: 旧实例绑在已脱离 DOM 的节点上, 直接释放
+      instRef.current?.dispose()
+      instRef.current = null
+      return
+    }
+    // 数据键切换会走 loading 分支卸载图表容器再重挂, 组件本身不卸载,
+    // 旧实例会绑在脱离 DOM 的旧节点上 — 检测到 dom 不一致必须弃旧重建,
+    // 否则 setOption 画进离屏节点, 图表永久空白 (切 1/5/15 分钟桶复现)
+    if (instRef.current && instRef.current.getDom() !== ref.current) {
+      instRef.current.dispose()
+      instRef.current = null
+    }
     if (!instRef.current) instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
     if (option) {
       instRef.current.setOption(option, { notMerge: true })
