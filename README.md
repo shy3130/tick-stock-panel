@@ -8,7 +8,7 @@
 
 <br/>
 
-[![个人开源](https://img.shields.io/badge/%E5%A3%B0%E6%98%8E-%E6%9C%AC%E9%A1%B9%E7%9B%AE%E4%B8%BA%E4%B8%AA%E4%BA%BA%E5%BC%80%E6%BA%90_%E9%9D%9E%E9%9A%B6%E5%B1%9E%E4%BB%BB%E4%BD%95%E5%AE%98%E6%96%B9%E9%A1%B9%E7%9B%AE-green?style=for-the-badge&labelColor=red)](https://github.com/shy3130/tick-stock-panel)
+[![个人开源](https://img.shields.io/badge/%E4%B8%AA%E4%BA%BA%E5%BC%80%E6%BA%90-green?style=for-the-badge&labelColor=red)](https://github.com/shy3130/tick-stock-panel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
 [![Engine: Polars](https://img.shields.io/badge/Engine-Polars-6f42c1?style=for-the-badge)](https://pola.rs/)
 [![Data: 多源插件化 · 能力路由](https://img.shields.io/badge/Data-%E5%A4%9A%E6%BA%90%E6%8F%92%E4%BB%B6%E5%8C%96%20%C2%B7%20%E8%83%BD%E5%8A%9B%E8%B7%AF%E7%94%B1-00b386?style=for-the-badge)](./docs/custom-data-source.md)
@@ -476,29 +476,25 @@ PORT=3018                      # 服务端口
 
 ---
 
-## ❤️ 支持项目 / 💬 交流群
+## ❤️ 支持项目
 
 <div align="center">
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <b>❤️ 支持项目</b><br/>
-      <sub>如果这个项目对你有帮助,欢迎请作者喝杯咖啡 ☕</sub>
-      <table>
-        <tr><td align="center"><img src="./assets/support/wechat-appreciation.jpg" alt="微信赞赏码 · 感谢道友支持 愿一路长红" height="280" /></td></tr>
-        <tr><td align="center"><sub>愿道友一路长红 📈</sub></td></tr>
-      </table>
-    </td>
-    <td width="50%" align="center">
-      <b>💬 交流群</b><br/>
-      <sub>欢迎加入交流群,一起讨论交流<br/>个性化接口统一公布在群公告,免费使用</sub>
-      <table>
-        <tr><td align="center"><img src="./community-qr-code.jpg" alt="交流群二维码 · 个人维护的个性化接口见群公告" height="280" /></td></tr>
-      </table>
-    </td>
-  </tr>
-</table>
+<sub>如果这个项目对你有帮助,欢迎请作者喝杯咖啡 ☕</sub>
+
+<img src="./assets/support/wechat-appreciation.jpg" alt="微信赞赏码 · 感谢道友支持 愿一路长红" height="280" />
+
+<sub>愿道友一路长红 📈</sub>
+
+</div>
+
+## 💬 交流群
+
+<div align="center">
+
+<sub>欢迎加入交流群,一起讨论交流 · 个性化接口统一公布在群公告,免费使用</sub>
+
+<img src="./community-qr-code.jpg" alt="交流群二维码 · 个人维护的个性化接口见群公告" height="280" />
 
 </div>
 
