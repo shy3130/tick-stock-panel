@@ -97,6 +97,8 @@ class PullConfigReq(BaseModel):
     time_window_end: str | None = None     # "HH:MM", None=不限
     # 接口按日查询的参数名 (如 "date"): 配置后支持历史回补, 且当日拉取也带日期参数
     date_param: str | None = Field(None, min_length=1, max_length=16, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # 日期参数值的格式: iso/compact/ts_s/ts_ms (时间戳=该交易日北京时间 00:00:00), 缺省 iso
+    date_format: str = "iso"
     # 鉴权方式; 请求中缺省 (None) = 保留现有配置, {"type":"none"} = 关闭鉴权
     auth: PullAuthReq | None = None
 
@@ -876,6 +878,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         time_window_start=body.time_window_start,
         time_window_end=body.time_window_end,
         date_param=body.date_param,
+        date_format=body.date_format,
         auth=body.auth.model_dump() if body.auth else (old_pull.auth if old_pull else None),
         last_run=old_pull.last_run if old_pull else None,
         last_status=old_pull.last_status if old_pull else None,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -15,6 +16,11 @@ from app.tickflow.capabilities import Cap
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/index", tags=["index"])
+
+# 当日指数分钟结果进程内缓存: 吸收板块切换卡片/指数页 30s 轮询与重挂载的重复请求
+_INDEX_MINUTE_CACHE_TTL = 10.0
+_INDEX_MINUTE_CACHE_MAX = 32
+_index_minute_cache: dict[tuple[str, str], tuple[float, pl.DataFrame]] = {}
 
 
 def _index_info(repo, symbol: str) -> dict:
@@ -68,14 +74,38 @@ def get_index_minute(
     symbol: str = Query(..., description="指数代码, 如 000001.SH"),
     trade_date: date | None = Query(None, alias="date", description="交易日期, 默认今天"),
 ):
-    """实时读取指数分钟 K。不写入股票分钟 parquet。"""
+    """实时读取指数分钟 K。不写入股票分钟 parquet。
+
+    仅当日有效: 本地无指数分钟存储, 实时数据源也不提供历史分时, 非当日请求
+    直接返回空 (source=not_today), 不做徒劳的数据源网络等待。
+    当日结果带 10s 进程内缓存, 重复轮询只打一次数据源。
+    """
     repo = request.app.state.repo
     capset = request.app.state.capabilities
     info = _index_info(repo, symbol)
     day = trade_date or date.today()
-    df = kline_sync.fetch_minute_single(
-        symbol, day, asset_type="index", capset=capset,
-    )
+    if day != date.today():
+        return {
+            "symbol": symbol,
+            "name": info.get("name"),
+            "index_info": info,
+            "date": str(day),
+            "rows": [],
+            "source": "not_today",
+        }
+    cache_key = (symbol, day.isoformat())
+    now = time.monotonic()
+    hit = _index_minute_cache.get(cache_key)
+    if hit is not None and now - hit[0] < _INDEX_MINUTE_CACHE_TTL:
+        df = hit[1]
+    else:
+        df = kline_sync.fetch_minute_single(symbol, day, asset_type="index", capset=capset)
+        _index_minute_cache[cache_key] = (now, df)
+        while len(_index_minute_cache) > _INDEX_MINUTE_CACHE_MAX:
+            oldest = min(_index_minute_cache, key=lambda k: _index_minute_cache[k][0])
+            if oldest == cache_key:
+                break
+            del _index_minute_cache[oldest]
     return {
         "symbol": symbol,
         "name": info.get("name"),
