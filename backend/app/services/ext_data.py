@@ -12,6 +12,8 @@ from typing import Literal
 
 import polars as pl
 
+from app.services.fs_utils import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -297,9 +299,8 @@ class ExtConfigStore:
         config.updated_at = datetime.now().isoformat()
         cp = self._config_path(config.id)
         cp.parent.mkdir(parents=True, exist_ok=True)
-        cp.write_text(
-            json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        atomic_write_text(
+            cp, json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
         )
         # 字段集/模式变化会改变扩展列集合: 失效扩展帧缓存与策略结果缓存。
         # 定时拉取循环的 last_run/next_run 例行回写传 keep_strategy_cache=True,
@@ -326,9 +327,8 @@ class ExtConfigStore:
             for c in configs:
                 cp = self._config_path(c.id)
                 cp.parent.mkdir(parents=True, exist_ok=True)
-                cp.write_text(
-                    json.dumps(c.to_dict(), ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+                atomic_write_text(
+                    cp, json.dumps(c.to_dict(), ensure_ascii=False, indent=2),
                 )
             # 迁移完成后重命名旧文件作为备份
             backup = old_path.with_suffix(".json.bak")
