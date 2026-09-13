@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import ClassVar
 
@@ -145,6 +145,27 @@ def test_with_date_param_url_building():
     assert _with_date_param("https://x/api", "date", d) == "https://x/api?date=2026-01-05"
     assert _with_date_param("https://x/api?a=1", "date", d) == "https://x/api?a=1&date=2026-01-05"
     assert _with_date_param("https://x/api", None, d) == "https://x/api"
+
+
+def test_with_date_param_formats():
+    """date_format 分支: compact=YYYYMMDD; ts_s/ts_ms = 该交易日北京时间 00:00:00 时间戳。"""
+    d = date(2026, 1, 5)
+    assert _with_date_param("https://x/api", "date", d, "compact") == "https://x/api?date=20260105"
+    ts_s = int(datetime(2026, 1, 5, tzinfo=timezone(timedelta(hours=8))).timestamp())
+    assert _with_date_param("https://x/api", "ts", d, "ts_s") == f"https://x/api?ts={ts_s}"
+    assert _with_date_param("https://x/api", "ts", d, "ts_ms") == f"https://x/api?ts={ts_s * 1000}"
+    # 未知格式回退 iso
+    assert _with_date_param("https://x/api", "date", d, "bogus") == "https://x/api?date=2026-01-05"
+
+
+def test_pull_config_date_format_roundtrip_and_normalize():
+    """date_format 配置往返保留; 手改 config.json 写入非法值时归一为 iso。"""
+    cfg = PullConfig(url="https://x/api", date_param="ts", date_format="ts_ms")
+    assert cfg.date_format == "ts_ms"
+    restored = PullConfig.from_dict(cfg.to_dict())
+    assert restored.date_format == "ts_ms"
+    assert PullConfig(date_param="date", date_format="bogus").date_format == "iso"
+    assert PullConfig.from_dict({"date_param": "date"}).date_format == "iso"  # 旧配置缺字段
 
 
 def test_assert_rows_date_contract():

@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from app.market_time import cn_now, cn_today
+from app.market_time import CN_TZ, cn_now, cn_today
 from app.services.ext_data import (
     ExtConfig,
     ExtConfigStore,
@@ -130,12 +130,27 @@ def _apply_preset_flatten(config_id: str, rows: list[dict]) -> list[dict]:
     return flatten(rows)
 
 
-def _with_date_param(url: str, date_param: str | None, day: date) -> str:
-    """接口按日查询参数: ?{date_param}=YYYY-MM-DD (已有 query 用 &)。"""
+def _format_date_value(day: date, date_format: str) -> str:
+    """按配置格式把交易日序列化为接口参数值。
+
+    ts_s/ts_ms = 该交易日北京时间 00:00:00 的时间戳 (约定, 见 PULL_DATE_FORMATS);
+    未知格式回退 iso (PullConfig 构造时已归一, 这里再兜底)。
+    """
+    if date_format == "compact":
+        return day.strftime("%Y%m%d")
+    if date_format == "ts_s":
+        return str(int(datetime(day.year, day.month, day.day, tzinfo=CN_TZ).timestamp()))
+    if date_format == "ts_ms":
+        return str(int(datetime(day.year, day.month, day.day, tzinfo=CN_TZ).timestamp() * 1000))
+    return day.isoformat()
+
+
+def _with_date_param(url: str, date_param: str | None, day: date, date_format: str = "iso") -> str:
+    """接口按日查询参数: ?{date_param}={按格式序列化的日期} (已有 query 用 &)。"""
     if not date_param:
         return url
     sep = "&" if "?" in url else "?"
-    return f"{url}{sep}{date_param}={day.isoformat()}"
+    return f"{url}{sep}{date_param}={_format_date_value(day, date_format)}"
 
 
 def _apply_auth(config_id: str, auth: dict | None, url: str, headers: dict[str, str]) -> str:
@@ -196,7 +211,7 @@ async def _request_json(pull: PullConfig, config_id: str, day: date | None = Non
     正式拉取 (带日期参数) 与设置页"测试" (不带) 共用同一实现,
     保证 UA 标识头与 API Key 鉴权注入只有一套口径。
     """
-    url = _with_date_param(pull.url, pull.date_param, day) if day else pull.url
+    url = _with_date_param(pull.url, pull.date_param, day, pull.date_format) if day else pull.url
     async with httpx.AsyncClient(timeout=30) as client:
         headers = outbound_headers(pull.headers)
         url = _apply_auth(config_id, pull.auth, url, headers)

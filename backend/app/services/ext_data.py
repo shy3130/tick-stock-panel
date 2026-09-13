@@ -35,6 +35,12 @@ class ExtField:
         return cls(d["name"], d.get("dtype", "string"), d.get("label", ""))
 
 
+# 日期参数值的序列化格式 (date_format):
+#   iso=YYYY-MM-DD (默认) / compact=YYYYMMDD / ts_s=unix秒 / ts_ms=unix毫秒
+# 时间戳约定为该交易日北京时间 00:00:00
+PULL_DATE_FORMATS = ("iso", "compact", "ts_s", "ts_ms")
+
+
 class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
@@ -42,7 +48,7 @@ class PullConfig:
         "field_map", "schedule_minutes", "enabled",
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
-        "auth",
+        "date_format", "auth",
     )
 
     def __init__(
@@ -63,6 +69,7 @@ class PullConfig:
         time_window_start: str | None = None,
         time_window_end: str | None = None,
         date_param: str | None = None,
+        date_format: str = "iso",
         auth: dict | None = None,
     ) -> None:
         self.url = url
@@ -81,8 +88,10 @@ class PullConfig:
         self.time_window_start = time_window_start  # 每日拉取窗口起始 "HH:MM", None=不限
         self.time_window_end = time_window_end      # 每日拉取窗口结束 "HH:MM", None=不限
         # 接口按日期查询的参数名 (如 "date"): 非 None 时请求
-        # 带 ?{date_param}=YYYY-MM-DD, 支持历史回补; None = 接口只有当日快照
+        # 带 ?{date_param}={按 date_format 序列化的日期}, 支持历史回补; None = 接口只有当日快照
         self.date_param = date_param
+        # 日期参数值的格式; config.json 被手改写入非法值时归一为 iso (fail-closed)
+        self.date_format = date_format if date_format in PULL_DATE_FORMATS else "iso"
         # 拉取接口鉴权方式 {"type": "none|bearer|header|query", "header": ..., "param": ...},
         # 与自定义行情源 AuthConfig 同口径; Key 本体存 secrets_store, 不落 config.json
         self.auth = auth
@@ -105,6 +114,7 @@ class PullConfig:
             "time_window_start": self.time_window_start,
             "time_window_end": self.time_window_end,
             "date_param": self.date_param,
+            "date_format": self.date_format,
             "auth": self.auth,
         }
 
@@ -129,6 +139,7 @@ class PullConfig:
             time_window_start=d.get("time_window_start"),
             time_window_end=d.get("time_window_end"),
             date_param=d.get("date_param"),
+            date_format=d.get("date_format", "iso"),
             auth=d.get("auth"),
         )
 
