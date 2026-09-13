@@ -1882,6 +1882,18 @@ export interface SectorRotationPoint {
   leader: string
   leader_pct: number | null
   market_pct: number | null
+  /** 该桶上穿 0 轴 (转强) 的板块数 */
+  cross_up?: number
+  /** 该桶下穿 0 轴 (转弱) 的板块数 */
+  cross_down?: number
+}
+
+/** 0 轴穿越事件 (涨跌切换): dir=up 转强 / down 转弱 */
+export interface SectorCrossEvent {
+  time: string
+  name: string
+  dir: 'up' | 'down'
+  pct: number | null
 }
 
 export interface SectorRotationSector {
@@ -1907,18 +1919,24 @@ export interface SectorRotation {
   flow_available?: boolean
   bucket_minutes?: number
   member_count?: number
+  /** 内置属性板块排除名单 (供前端编辑器预填/恢复默认) */
+  default_exclude_sectors?: string[]
+  /** 自动活跃榜成员数上限 */
+  max_auto_members?: number
   as_of?: string
   timeline: SectorRotationPoint[]
+  /** 0 轴穿越事件 (全市场板块, 最新在前, 封顶 120 条) */
+  cross_events?: SectorCrossEvent[]
   sectors: SectorRotationSector[]
   /** 热度板块 × 分钟桶涨幅矩阵 (行序同 sectors, 供热力图按分钟轮动展示) */
   series?: {
     buckets: string[]
-    /** 展示板块名 (活跃 Top10 或自定义监控清单, 涨幅走势线模式共用) */
+    /** 展示板块名 (活跃榜 TopN 或自定义监控清单, 涨幅走势线模式共用) */
     sectors: string[]
     /** matrix[行][列] = 该板块该桶涨幅; 无行情为 null */
     matrix: (number | null)[][]
   }
-  /** 全部板块清单按活跃度降序 (近 30 分钟成分股成交额合计; 量额缺失为 null 排后) */
+  /** 全部板块清单按活跃度降序 (近 30 分钟成分股成交额合计; 量额缺失为 null 排后; 永不剔除) */
   universe?: SectorRotationUniverseItem[]
 }
 
@@ -1928,6 +1946,8 @@ export interface SectorRotationUniverseItem {
   activity: number | null
   n_members: number
   n_members_with_bars: number
+  /** 被自动活跃榜过滤 (排除名单/成员数超限); 仅影响自动选取, 仍可手动加入自定义 */
+  excluded?: boolean
 }
 
 // ===== API surface =====
@@ -2962,12 +2982,16 @@ export const api = {
   },
 
   // ===== 板块切换 (盘中轮动) =====
-  sectorRotation: (params: { kind: 'concept' | 'industry'; flow?: string; top?: number; bucket?: number; seriesNames?: string[] }) => {
+  sectorRotation: (params: { kind: 'concept' | 'industry'; flow?: string; top?: number; bucket?: number; seriesNames?: string[]; autoRows?: number; excludeSectors?: string[]; sortBy?: 'activity' | 'score' | 'pct' | 'rank_change' | 'momentum' | 'flow' }) => {
     const query = new URLSearchParams({ kind: params.kind })
     if (params.flow) query.set('flow', params.flow)
     if (params.top != null) query.set('top', String(params.top))
     if (params.bucket != null) query.set('bucket', String(params.bucket))
     if (params.seriesNames?.length) query.set('series_names', JSON.stringify(params.seriesNames))
+    // autoRows/excludeSectors/sortBy 仅自动模式生效; excludeSectors 传空数组 = 清空名称过滤
+    if (params.autoRows != null) query.set('auto_rows', String(params.autoRows))
+    if (params.excludeSectors != null) query.set('exclude_sectors', JSON.stringify(params.excludeSectors))
+    if (params.sortBy) query.set('sort_by', params.sortBy)
     return request<SectorRotation>(`/api/sector-rotation?${query}`)
   },
 
@@ -3036,7 +3060,7 @@ export const api = {
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
     time_window_start?: string | null; time_window_end?: string | null;
-    date_param?: string | null;
+    date_param?: string | null; date_format?: string;
     auth?: ExtPullAuth;
   }) =>
     request<{ status: string; pull: PullConfig }>(
@@ -3793,6 +3817,8 @@ export interface PullConfig {
   time_window_end?: string | null
   /** 接口按日查询的参数名 (如 "date"): 配置后支持历史回补 */
   date_param?: string | null
+  /** 日期参数值的格式: iso=YYYY-MM-DD / compact=YYYYMMDD / ts_s=unix秒 / ts_ms=unix毫秒 (该交易日北京 00:00) */
+  date_format?: string
   auth?: ExtPullAuth | null
 }
 

@@ -119,8 +119,9 @@ export const QK = {
   regimeCoverage:       ['regime-coverage'] as const,
   regimePhases:         (start?: string, end?: string) => ['regime-phases', start ?? '', end ?? ''] as const,
   regimeMainline:       (kind: string, start?: string, end?: string) => ['regime-mainline', kind, start ?? '', end ?? ''] as const,
-  // 板块切换 (盘中轮动, 全量分钟聚合) — 30s 前端轮询刷新; seriesKey = 自定义展示板块清单
-  sectorRotation:       (kind: string, flow?: string, bucket?: number, seriesKey?: string) => ['sector-rotation', kind, flow ?? '', bucket ?? 5, seriesKey ?? ''] as const,
+  // 板块切换 (盘中轮动, 全量分钟聚合) — 30s 前端轮询刷新; seriesKey = 自定义展示板块清单,
+  // filterKey = 自动活跃榜行数与排除名单 (会改变结果的参数必须进查询键)
+  sectorRotation:       (kind: string, flow?: string, bucket?: number, seriesKey?: string, filterKey?: string) => ['sector-rotation', kind, flow ?? '', bucket ?? 5, seriesKey ?? '', filterKey ?? ''] as const,
   // 板块切换的指数叠加线 (核心四只, 默认上证) — 分钟取当日, 日K取昨收基准
   sectorRotationIndexMinute: (symbol: string, date?: string) => ['sector-rotation-index-minute', symbol, date ?? ''] as const,
   sectorRotationIndexDaily:  (symbol: string) => ['sector-rotation-index-daily', symbol] as const,
