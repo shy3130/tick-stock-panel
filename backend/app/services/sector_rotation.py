@@ -53,6 +53,27 @@ _ACTIVITY_WINDOW_MIN = 30
 # 自定义展示板块上限 / 活跃默认行数
 _MAX_SERIES_ROWS = 20
 _DEFAULT_SERIES_ROWS = 10
+# 自动活跃榜默认排除的属性类板块 (名称子串匹配): 交易属性/指数成分/持仓/事件类
+# "标签桶"成员数动辄数百上千, 成交额合计天然占优, 会挤出真实题材。用户可通过
+# exclude_sectors 参数整体替换该名单; 传空数组 = 关闭名称过滤 (成员数上限仍生效)。
+_DEFAULT_EXCLUDE_SECTORS = (
+    '融资融券', '转融券', '转债标的', '含可转债', '沪股通', '深股通',
+    'AH股', 'B股', 'GDR', 'MSCI', '富时罗素', '标普道琼斯',
+    '上证50', '上证180', '沪深300', '中证500', '中证800', '中证1000', '科创50',
+    '重仓', '证金持股', '汇金概念',
+    '预盈预增', '预亏预减', '昨日涨停', '昨日连板', '昨日触涨停', '昨日曾涨停',
+    '次新', 'ST板块', 'ST股', '破净', '壳资源', '股权激励', '员工持股', '并购重组',
+)
+# 自动活跃榜成员数上限: 成员数超过该值的板块不参与自动选取 (仍出现在 universe 与自定义清单)
+_MAX_AUTO_MEMBERS = 300
+# 自动榜排序维度: activity=近30分钟成交额合计, score=涨幅+资金流综合分,
+# pct=现涨幅, rank_change=1h排名跃升(切入), momentum=近1小时动量(走强→走弱),
+# flow=扩展资金流列
+_SORT_MODES = ("activity", "score", "pct", "rank_change", "momentum", "flow")
+# exclude_sectors 参数条目上限
+_MAX_EXCLUDE_PARAM = 100
+# 结果缓存条目上限: 缓存键含用户参数组合, 有界淘汰防止无限增长
+_CACHE_MAX_ENTRIES = 32
 
 
 def invalidate_cache() -> None:
@@ -227,6 +248,70 @@ def _normalize_0_100(values: list[float | None]) -> list[float | None]:
     ]
 
 
+def _auto_eligible(name: str, n_members: int, exclude_sectors: tuple[str, ...]) -> bool:
+    """板块能否参与自动活跃榜: 名称不含排除子串且成员数不超上限。"""
+    if n_members > _MAX_AUTO_MEMBERS:
+        return False
+    return not any(pattern in name for pattern in exclude_sectors)
+
+
+def _rank_for_mode(
+    sort_by: str,
+    sectors: list[dict],
+    activity_map: dict[str, float],
+    has_amount: bool,
+    flow_by_member: dict[str, float],
+    flow_available: bool,
+) -> list[str]:
+    """自动榜按所选维度返回板块名降序列表 (未做排除/成员数过滤)。
+
+    activity 量额缺失时退化综合分; flow 在扩展列不可用时退化综合分;
+    pct/rank_change 的无值板块排最后; score 直接用 sectors 的既有排序。
+    """
+    if sort_by == "activity":
+        if has_amount and activity_map:
+            return [n for n, _ in sorted(activity_map.items(), key=lambda kv: kv[1], reverse=True)]
+        return [item["name"] for item in sectors]
+    if sort_by == "flow" and flow_available:
+        return [
+            name for name, _ in sorted(
+                ((item["name"], flow_by_member.get(item["name"])) for item in sectors),
+                key=lambda kv: (kv[1] is not None, kv[1] or 0.0),
+                reverse=True,
+            )
+        ]
+    if sort_by == "pct":
+        return [
+            item["name"] for item in sorted(
+                sectors,
+                key=lambda item: (item["pct_now"] is not None, item["pct_now"] or 0.0),
+                reverse=True,
+            )
+        ]
+    if sort_by == "rank_change":
+        return [
+            item["name"] for item in sorted(
+                sectors,
+                key=lambda item: (item["rank_change"] is not None, item["rank_change"] or 0),
+                reverse=True,
+            )
+        ]
+    if sort_by == "momentum":
+        # 近端动量 = 现累计涨幅 - 1h 前累计涨幅: 走强 (加速上涨) 在前, 走弱 (减速/回落) 在后;
+        # 热力图按此排序时, 上下分界直接呈现资金从走弱板块流向走强板块的方向
+        return [
+            item["name"] for item in sorted(
+                sectors,
+                key=lambda item: (
+                    item["pct_now"] is not None and item["pct_prev"] is not None,
+                    (item["pct_now"] or 0.0) - (item["pct_prev"] or 0.0),
+                ),
+                reverse=True,
+            )
+        ]
+    return [item["name"] for item in sectors]
+
+
 def build_sector_rotation(
     repo,
     *,
@@ -235,24 +320,42 @@ def build_sector_rotation(
     top: int = 30,
     bucket_minutes: int = 5,
     series_names: list[str] | None = None,
+    exclude_sectors: list[str] | None = None,
+    auto_rows: int | None = None,
+    sort_by: str = "activity",
 ) -> dict:
     """计算盘中板块切换走势 (概念/行业二选一)。
 
+    exclude_sectors: 自动活跃榜排除板块 (名称子串匹配); None = 使用内置属性板块
+    名单, [] = 清空名称过滤 (成员数上限仍生效)。仅影响自动选取, 自定义清单不过滤。
+    auto_rows: 自动模式展示行数, 缺省 10, 范围 [1, 20]。
+    sort_by: 自动榜排序维度 (activity/score/pct/rank_change/flow), 排除名单与
+    成员数上限对全部维度生效, 不足展示行数时回退不过滤。
+
     返回结构:
       status/date/basis/kind/flow_field/bucket_minutes/member_count/flow_available/
-      timeline: [{time, rotation, leader, leader_pct, market_pct}] /
+      default_exclude_sectors: 内置排除名单 (供前端编辑器预填) /
+      max_auto_members: 自动活跃榜成员数上限 /
+      timeline: [{time, rotation, leader, leader_pct, market_pct,
+                  cross_up, cross_down}] /
+      cross_events: [{time, name, dir: "up"|"down", pct}] 0 轴穿越事件
+        (全市场板块, 最新在前, 封顶 120 条; dir=up 转强/down 转弱) /
       sectors: [{name, pct_now, pct_prev, rank_now, rank_prev, rank_change,
                  flow, score, n_members, n_members_with_bars}] 按 score 降序截 top 条 /
       series: {buckets: [HH:MM], sectors: [展示板块名], matrix: [[各桶板块涨幅]]}
         展示板块与分钟桶涨幅矩阵, 供前端热力图/走势线; 展示板块 = series_names
-        (自定义监控, ≤20) 或活跃度 Top10 (近 30 分钟成分股成交额合计, 量额缺失
-        时退化为 score 前 10); 某桶无该板块行情时为 null /
-      universe: [{name, pct_now, activity, n_members, n_members_with_bars}]
-        全部板块清单按活跃度降序 (自定义选择器的数据源, activity 为 None 排后)
+        (自定义监控, ≤20, 不过滤) 或活跃榜 (sort_by 维度降序, 先剔除排除名单与
+        成员数超上限的板块, 不足展示行数时回退不过滤; momentum 维度对半取样:
+        前半=走强组, 后半=走弱组; N = auto_rows, 缺省 10); 某桶无该板块行情时为 null /
+      universe: [{name, pct_now, activity, n_members, n_members_with_bars, excluded}]
+        全部板块清单按活跃度降序 (自定义选择器的数据源, activity 为 None 排后,
+        永不剔除; excluded=True 表示被自动活跃榜过滤, 仅影响自动选取)
     不可计算时返回 {status: "no_data"|"empty", reason, date?} (fail-closed, 不静默)。
     """
     if kind not in ("concept", "industry"):
         raise ValueError(f"不支持的板块维度: {kind} (可选 concept/industry)")
+    if sort_by not in _SORT_MODES:
+        raise ValueError(f"不支持的排序维度: {sort_by} (可选 {_SORT_MODES})")
     bucket_minutes = int(bucket_minutes)
     if bucket_minutes not in _ALLOWED_BUCKETS:
         raise ValueError(f"不支持的分钟桶: {bucket_minutes} (可选 {_ALLOWED_BUCKETS})")
@@ -260,21 +363,38 @@ def build_sector_rotation(
     flow_field = (flow_field or "").strip() or None
     if series_names:
         series_names = list(dict.fromkeys(str(n).strip() for n in series_names if str(n).strip()))[:_MAX_SERIES_ROWS] or None
+    if exclude_sectors is None:
+        exclude_effective: tuple[str, ...] = _DEFAULT_EXCLUDE_SECTORS
+    else:
+        # 显式入参 (含空数组) 整体替换内置名单; 空数组归一为 () = 关闭名称过滤
+        exclude_effective = tuple(dict.fromkeys(
+            str(n).strip() for n in exclude_sectors if str(n).strip()
+        ))[:_MAX_EXCLUDE_PARAM]
+    rows_limit = _DEFAULT_SERIES_ROWS if auto_rows is None else max(1, min(_MAX_SERIES_ROWS, int(auto_rows)))
 
     data_dir: Path = repo.store.data_dir
-    cache_key = (kind, flow_field or "", top, bucket_minutes, tuple(series_names or ()))
+    cache_key = (
+        kind, flow_field or "", top, bucket_minutes, tuple(series_names or ()),
+        exclude_effective, rows_limit, sort_by,
+    )
     now = time.monotonic()
     hit = _cache.get(cache_key)
     if hit is not None and (now - _cache_ts.get(cache_key, 0.0)) < _CACHE_TTL:
         return hit
 
-    result = _compute(repo, data_dir, kind, flow_field, top, bucket_minutes, series_names)
+    result = _compute(repo, data_dir, kind, flow_field, top, bucket_minutes, series_names, exclude_effective, rows_limit, sort_by)
     _cache[cache_key] = result
     _cache_ts[cache_key] = time.monotonic()
+    while len(_cache) > _CACHE_MAX_ENTRIES:
+        oldest = min(_cache_ts, key=lambda k: _cache_ts.get(k, 0.0), default=None)
+        if oldest is None or oldest == cache_key:
+            break
+        _cache.pop(oldest, None)
+        _cache_ts.pop(oldest, None)
     return result
 
 
-def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, bucket_minutes: int, series_names: list[str] | None) -> dict:
+def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, bucket_minutes: int, series_names: list[str] | None, exclude_sectors: tuple[str, ...], auto_rows: int, sort_by: str) -> dict:
     minute_dir = data_dir / "kline_minute"
     target = _latest_minute_partition(minute_dir)
     if not target:
@@ -313,17 +433,35 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         buckets.group_by("_bucket").agg(pl.col("_pct").mean().alias("_mpct")).sort("_bucket")
     )
 
-    # 每桶领涨板块 + top 集合 (供切换走势与排名对照)
+    # 每桶领涨板块 + top 集合 (供切换走势与排名对照) + 0 轴穿越统计 (涨跌切换:
+    # 板块涨幅由负转正 = 转强/上穿, 由正转负 = 转弱/下穿; ≥0 计为多方)
     per_bucket: list[dict[str, Any]] = []
+    cross_events: list[dict[str, Any]] = []
+    prev_sign: dict[str, int] = {}
     for (bucket,), frame in by_sector.group_by("_bucket", maintain_order=True):
         names = frame["_member"].to_list()
+        pcts = frame["_spct"].to_list()
+        cross_up = cross_down = 0
+        for name, pct in zip(names, pcts, strict=True):
+            sign = 1 if pct >= 0 else -1
+            prev = prev_sign.get(name)
+            if prev is not None and prev != sign:
+                event = {"time": bucket.strftime("%H:%M"), "name": name, "dir": "up" if sign > 0 else "down", "pct": _r4(pct)}
+                if sign > 0:
+                    cross_up += 1
+                else:
+                    cross_down += 1
+                cross_events.append(event)
+            prev_sign[name] = sign
         per_bucket.append({
             "bucket": bucket,
             "names": names,
-            "pct": frame["_spct"].to_list(),
+            "pct": pcts,
             "top_set": set(names[:_TOP_OVERLAP]),
             "leader": names[0],
             "leader_pct": frame["_spct"][0],
+            "cross_up": cross_up,
+            "cross_down": cross_down,
         })
     per_bucket.sort(key=lambda item: item["bucket"])
     market_map = {row["_bucket"]: row["_mpct"] for row in market.iter_rows(named=True)}
@@ -361,6 +499,8 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
             "leader": item["leader"],
             "leader_pct": _r4(item["leader_pct"]),
             "market_pct": _r4(market_map.get(item["bucket"])),
+            "cross_up": item["cross_up"],
+            "cross_down": item["cross_down"],
         })
 
     # 资金流 (扩展数据, 用户选择): 板块 = 成分股数值合计
@@ -441,20 +581,34 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
             "activity": _r4(activity_map.get(name)) if has_amount else None,
             "n_members": members_count_by_sector.get(name, 0),
             "n_members_with_bars": n_with_bars.get(name, 0),
+            "excluded": not _auto_eligible(name, members_count_by_sector.get(name, 0), exclude_sectors),
         }
         for name in all_names
     ]
     universe.sort(key=lambda item: (item["activity"] is not None, item["activity"] or 0.0), reverse=True)
 
     # 展示板块与分钟桶涨幅矩阵 (前端热力图/走势线共用): 自定义监控板块 (≤20,
-    # 剔除当日无行情的) 或活跃度 Top10 (量额缺失退化为 score 前 10)
+    # 剔除当日无行情的, 不过滤) 或活跃榜 (sort_by 维度降序, 先剔除排除名单与
+    # 超成员数上限的板块, 不足展示行数时回退不过滤)
     if series_names:
         known = set(all_names)
         display_names = [n for n in series_names if n in known]
-    elif has_amount and activity_map:
-        display_names = [n for n, _ in sorted(activity_map.items(), key=lambda kv: kv[1], reverse=True)[:_DEFAULT_SERIES_ROWS]]
     else:
-        display_names = [item["name"] for item in sectors[:_DEFAULT_SERIES_ROWS]]
+        ranked = _rank_for_mode(sort_by, sectors, activity_map, has_amount, flow_by_member, flow_available)
+        eligible = [
+            n for n in ranked
+            if _auto_eligible(n, members_count_by_sector.get(n, 0), exclude_sectors)
+        ]
+        if sort_by == "momentum" and len(eligible) > auto_rows:
+            # 强弱切换维度对半取样: 前半=走强组, 后半=走弱组 (中部平庸板块跳过)。
+            # 否则 TopN 全是走强板块, 热力图看不到强弱对比
+            half = (auto_rows + 1) // 2
+            rest = auto_rows - half
+            display_names = eligible[:half] + (eligible[-rest:] if rest > 0 else [])
+        else:
+            display_names = eligible[:auto_rows]
+        if len(display_names) < auto_rows:
+            display_names = ranked[:auto_rows]
     pct_maps = [dict(zip(item["names"], item["pct"], strict=True)) for item in per_bucket]
     series = {
         "buckets": [item["bucket"].strftime("%H:%M") for item in per_bucket],
@@ -471,8 +625,11 @@ def _compute(repo, data_dir: Path, kind: str, flow_field: str | None, top: int, 
         "flow_available": flow_available,
         "bucket_minutes": bucket_minutes,
         "member_count": member_count,
+        "default_exclude_sectors": list(_DEFAULT_EXCLUDE_SECTORS),
+        "max_auto_members": _MAX_AUTO_MEMBERS,
         "as_of": per_bucket[-1]["bucket"].strftime("%H:%M"),
         "timeline": timeline,
+        "cross_events": list(reversed(cross_events[-120:])),
         "sectors": sectors[:top],
         "series": series,
         "universe": universe,

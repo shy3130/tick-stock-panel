@@ -312,6 +312,254 @@ def test_industry_kind_uses_industry_map(repo):
     assert result["reason"] == "members_missing"
 
 
+GYMS = ["600901.SH", "600902.SH"]  # 名称命中默认黑名单 (融资融券)
+GIANT_ALL = [f"98{i:04d}.SZ" for i in range(400)]  # 巨盘概念: 400 成员, 超成员数上限
+GIANT_BARS = GIANT_ALL[:2]
+
+
+def _write_activity_data(tmp_path: Path):
+    """带量额 + 属性类大桶的活跃度 fixture: 近 30 分钟窗口合计
+    融资融券 60M > 巨盘概念 24M > A题材 12M > B题材 1.2M。"""
+    _reset_caches()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    stamps = [datetime.fromisoformat(f"{DAY}T{h:02d}:{m:02d}:00") for h, m in [
+        (9, 35), (9, 40), (9, 45), (9, 50), (9, 55),
+        (10, 0), (10, 5), (10, 10), (10, 20), (10, 30), (10, 35),
+    ]]
+    rows = []
+    for ts in stamps:
+        late = ts.hour > 10 or (ts.hour == 10 and ts.minute >= 5)
+        for syms, amount, early_close, late_close in (
+            (GYMS, 5_000_000.0, 99.0, 101.0),        # 融资融券: -1% → +1% (动量 +2.0)
+            (GIANT_BARS, 2_000_000.0, 101.0, 99.0),  # 巨盘概念: +1% → -1% (动量 -2.0)
+            (SYMS_A, 1_000_000.0, 102.0, 101.5),     # A题材: +2% → +1.5% (动量 -0.5)
+            (SYMS_B, 100_000.0, 100.2, 106.0),       # B题材: +0.2% → +6% (动量 +5.8)
+        ):
+            for sym in syms:
+                rows.append({
+                    "symbol": sym, "datetime": ts,
+                    "close": late_close if late else early_close, "amount": amount,
+                })
+    (data_dir / "kline_minute" / f"date={DAY}").mkdir(parents=True)
+    pl.DataFrame(rows).write_parquet(data_dir / "kline_minute" / f"date={DAY}" / "part.parquet")
+    bar_syms = SYMS_A + SYMS_B + GYMS + GIANT_BARS
+    (data_dir / "kline_daily" / f"date={PREV}").mkdir(parents=True)
+    pl.DataFrame({"symbol": bar_syms, "close": [100.0] * len(bar_syms)}).write_parquet(
+        data_dir / "kline_daily" / f"date={PREV}" / "part.parquet"
+    )
+    config = ExtConfig(
+        id="ext_gn",
+        label="活跃度测试概念",
+        mode="snapshot",
+        fields=[ExtField("symbol", "string", "代码"), ExtField("所属概念", "string", "所属概念")],
+    )
+    ExtConfigStore(data_dir).upsert(config)
+    write_ext_parquet(
+        pl.DataFrame({
+            "symbol": SYMS_A + SYMS_B + GYMS + GIANT_ALL,
+            "所属概念": (["A题材"] * len(SYMS_A) + ["B题材"] * len(SYMS_B)
+                        + ["融资融券"] * len(GYMS) + ["巨盘概念"] * len(GIANT_ALL)),
+        }),
+        config,
+        data_dir,
+    )
+    flow_config = ExtConfig(
+        id="ext_flow",
+        label="活跃度测试资金流",
+        mode="snapshot",
+        fields=[ExtField("symbol", "string", "代码"), ExtField("净流入", "float", "净流入")],
+    )
+    ExtConfigStore(data_dir).upsert(flow_config)
+    write_ext_parquet(
+        pl.DataFrame({
+            "symbol": SYMS_A + SYMS_B + GYMS + GIANT_BARS,
+            "净流入": [1000.0, 500.0, 100.0, 50.0, 10000.0, 10000.0, 10.0, 10.0],
+        }),
+        flow_config,
+        data_dir,
+    )
+    return SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+
+
+def test_auto_exclude_default_and_universe_flag(tmp_path):
+    """默认排除名单生效: 融资融券 (名称命中) 与巨盘概念 (成员数>上限) 不进自动活跃榜;
+    universe 永不剔除但带 excluded 标记; 响应下发默认名单与上限。"""
+    repo = _write_activity_data(tmp_path)
+    result = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5, auto_rows=2)
+    assert result["status"] == "ok"
+    # 活跃榜 (60M/24M/12M/1.2M) 未过滤时应为 融资融券/巨盘概念 在前, 过滤后取 A/B
+    assert result["series"]["sectors"] == ["A题材", "B题材"]
+    assert [item["name"] for item in result["universe"]] == ["融资融券", "巨盘概念", "A题材", "B题材"]
+    uni = {item["name"]: item for item in result["universe"]}
+    assert uni["融资融券"]["excluded"] is True
+    assert uni["巨盘概念"]["excluded"] is True
+    assert uni["A题材"]["excluded"] is False
+    assert "融资融券" in result["default_exclude_sectors"]
+    assert result["max_auto_members"] == 300
+
+
+def test_exclude_param_replaces_default_and_empty_clears(tmp_path):
+    """exclude_sectors 整体替换默认名单 (替换后融资融券可入选);
+    [] = 关闭名称过滤但成员数上限仍生效; 全排除时回退不过滤。"""
+    repo = _write_activity_data(tmp_path)
+
+    # 替换默认名单: 仅排除 A题材 → 活跃第一的融资融券得以入选
+    replaced = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, exclude_sectors=["A题材"], auto_rows=1,
+    )
+    assert replaced["series"]["sectors"] == ["融资融券"]
+
+    # 空数组 = 清空名称过滤: 融资融券入选, 巨盘概念仍被成员数上限挡住
+    cleared = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, exclude_sectors=[], auto_rows=3,
+    )
+    assert cleared["series"]["sectors"] == ["融资融券", "A题材", "B题材"]
+
+    # 全部排除 → 过滤后不足展示行数, 回退不过滤 (避免展示行开天窗)
+    all_excluded = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5,
+        exclude_sectors=["A题材", "B题材", "融资融券", "巨盘概念"], auto_rows=2,
+    )
+    assert all_excluded["series"]["sectors"] == ["融资融券", "巨盘概念"]
+
+
+def test_custom_series_unaffected_by_exclude(tmp_path):
+    """自定义监控清单不参与任何自动过滤: 黑名单命中的板块仍可手动展示。"""
+    repo = _write_activity_data(tmp_path)
+    result = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, series_names=["融资融券", "不存在的板块", "融资融券"],
+    )
+    assert result["series"]["sectors"] == ["融资融券"]
+
+
+def test_zero_cross_up_down_stats(tmp_path):
+    """0 轴穿越统计: B 先跌后涨 → 上穿(转强) 1 次; C 先涨后跌 → 下穿(转弱) 1 次;
+    A 恒在 0 轴上方不计; timeline 各桶带计数; cross_events 最新在前。"""
+    _reset_caches()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    stamps = [datetime.fromisoformat(f"{DAY}T{h:02d}:{m:02d}:00") for h, m in [(9, 35), (9, 40), (9, 45)]]
+    groups = {
+        "A题材": (["000001.SZ", "000002.SZ"], [102.0, 102.0, 102.0]),
+        "B题材": (["000003.SZ", "000004.SZ"], [99.0, 101.0, 101.0]),
+        "C题材": (["000005.SZ", "000006.SZ"], [101.0, 99.0, 99.0]),
+    }
+    rows = []
+    for index, ts in enumerate(stamps):
+        for syms, closes in groups.values():
+            for sym in syms:
+                rows.append({"symbol": sym, "datetime": ts, "close": closes[index]})
+    (data_dir / "kline_minute" / f"date={DAY}").mkdir(parents=True)
+    pl.DataFrame(rows).write_parquet(data_dir / "kline_minute" / f"date={DAY}" / "part.parquet")
+    (data_dir / "kline_daily" / f"date={PREV}").mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": [sym for syms, _ in groups.values() for sym in syms],
+        "close": [100.0] * 6,
+    }).write_parquet(data_dir / "kline_daily" / f"date={PREV}" / "part.parquet")
+    config = ExtConfig(
+        id="ext_gn", label="穿越测试概念", mode="snapshot",
+        fields=[ExtField("symbol", "string", "代码"), ExtField("所属概念", "string", "所属概念")],
+    )
+    ExtConfigStore(data_dir).upsert(config)
+    write_ext_parquet(
+        pl.DataFrame({
+            "symbol": [sym for syms, _ in groups.values() for sym in syms],
+            "所属概念": [name for name, (syms, _) in groups.items() for _ in syms],
+        }),
+        config,
+        data_dir,
+    )
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+
+    result = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5)
+    assert result["status"] == "ok"
+    assert sum(p.get("cross_up") or 0 for p in result["timeline"]) == 1
+    assert sum(p.get("cross_down") or 0 for p in result["timeline"]) == 1
+    events = result["cross_events"]
+    by_name = {event["name"]: event for event in events}
+    assert by_name["B题材"]["dir"] == "up" and by_name["B题材"]["time"] == "09:40"
+    assert by_name["C题材"]["dir"] == "down" and by_name["C题材"]["time"] == "09:40"
+    assert "A题材" not in by_name
+    # 同桶内按涨幅降序先 B(转强) 后 C(转弱), 最新在前 → C 事件排最前
+    assert events[0]["name"] == "C题材"
+
+
+def test_sort_by_modes_select_different_dimensions(repo):
+    """自动榜维度切换 (原 fixture 无量额, activity 退化为综合分):
+    pct/score/rank_change/flow(不可用退化) 都是 B(+6%, 切入) 在前;
+    非法维度 fail-closed。"""
+    base = dict(kind="concept", bucket_minutes=5)
+    for mode in ("pct", "score", "rank_change", "momentum", "flow"):
+        result = sector_rotation.build_sector_rotation(repo, auto_rows=1, sort_by=mode, **base)
+        assert result["series"]["sectors"] == ["B题材"], mode
+    with pytest.raises(ValueError):
+        sector_rotation.build_sector_rotation(repo, sort_by="nope", **base)
+
+
+def test_momentum_mode_splits_strong_and_weak(tmp_path):
+    """强弱切换维度对半取样: eligible 超过展示行数时, 前半取动量最高 (走强组),
+    后半取动量最低 (走弱组), 中部板块跳过 — 热力图同时呈现对比两端。
+    动量: B题材 +5.8 > 融资融券 +2.0 > A题材 -0.5 (巨盘概念 -2.0 被成员数上限剔除)。"""
+    repo = _write_activity_data(tmp_path)
+    # 清空名称过滤 → eligible = [B题材, 融资融券, A题材] 3 > 2 → 对半:
+    # 走强第 1 (B题材) + 走弱第 1 (A题材), 动量第 2 的融资融券 (中部) 被跳过
+    cleared = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5,
+        exclude_sectors=[], sort_by="momentum", auto_rows=2,
+    )
+    assert cleared["series"]["sectors"] == ["B题材", "A题材"]
+    assert "融资融券" not in cleared["series"]["sectors"]
+    # 默认黑名单: eligible = [B题材, A题材] 2 ≤ 2 → 不触发对半, 普通降序
+    default = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, sort_by="momentum", auto_rows=2,
+    )
+    assert default["series"]["sectors"] == ["B题材", "A题材"]
+
+
+def test_sort_by_flow_respects_exclude_and_member_cap(tmp_path):
+    """flow 维度: 融资融券资金流 20000 最大但被默认黑名单拦截;
+    清空名称过滤后入榜第一; 巨盘概念仍被成员数上限挡住; activity 维度不受影响。"""
+    repo = _write_activity_data(tmp_path)
+    flow = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5,
+        flow_field="ext_flow.净流入", sort_by="flow", auto_rows=2,
+    )
+    assert flow["flow_available"] is True
+    assert flow["series"]["sectors"] == ["A题材", "B题材"]
+
+    cleared = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5,
+        flow_field="ext_flow.净流入", sort_by="flow", exclude_sectors=[], auto_rows=2,
+    )
+    assert cleared["series"]["sectors"] == ["融资融券", "A题材"]
+
+    activity = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, auto_rows=2,
+    )
+    assert activity["series"]["sectors"] == ["A题材", "B题材"]
+
+
+def test_exclude_cache_isolation_and_auto_rows(tmp_path):
+    """缓存键包含排除名单与展示行数: 不同参数互不串数据, 同参数命中缓存。"""
+    repo = _write_activity_data(tmp_path)
+    default_first = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5, auto_rows=2)
+    assert default_first["series"]["sectors"] == ["A题材", "B题材"]
+
+    replaced = sector_rotation.build_sector_rotation(
+        repo, kind="concept", bucket_minutes=5, exclude_sectors=["A题材"], auto_rows=1,
+    )
+    assert replaced["series"]["sectors"] == ["融资融券"]
+
+    one_row = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5, auto_rows=1)
+    assert one_row["series"]["sectors"] == ["A题材"]
+
+    # 回到默认参数: 命中第一次的缓存, 未被后续调用串改
+    (repo.store.data_dir / "kline_minute" / f"date={DAY}" / "part.parquet").unlink()
+    default_again = sector_rotation.build_sector_rotation(repo, kind="concept", bucket_minutes=5, auto_rows=2)
+    assert default_again["series"]["sectors"] == ["A题材", "B题材"]
+
+
 def test_series_matrix_aligns_with_timeline_and_sectors(repo):
     """热力图矩阵: 行=热度降序板块 (与 sectors 同序同截断), 列=时间桶 (与 timeline
     同轴), 值=该桶板块涨幅 (列最大值=该桶领涨涨幅), 供前端按分钟轮动展示。"""
