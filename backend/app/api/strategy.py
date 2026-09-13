@@ -16,7 +16,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.strategy import config as strategy_config
@@ -256,6 +256,16 @@ class SaveConfigRequest(BaseModel):
 
 class AIGenerateRequest(BaseModel):
     prompt: str
+
+
+class AIIterateRequest(BaseModel):
+    """AI 迭代请求 — 与 BuildRequest step1 同构, 复用 build_step1 拼 prompt"""
+    name: str = ""
+    description: str = ""
+    direction: str = "long"
+    rules: str = ""
+    execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    max_rounds: int = Field(default=4, ge=1, le=10)
 
 
 class AISaveRequest(BaseModel):
@@ -939,6 +949,37 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI生成失败: {e}") from e
+    return result
+
+
+@router.post("/ai/iterate")
+async def ai_iterate(req: AIIterateRequest, request: Request):
+    """生成→回测→诊断→修改 的有界闭环 (只读回测, 产物为 ai_ 草稿, 不自动上线)。"""
+    from app.services.ai_provider import is_codex_cli_provider
+    from app.strategy.ai_iterator import AIStrategyIterator
+
+    # Codex CLI 无 tools= 协议, 迭代能力边界在入口 fail-closed (不静默降级为纯文本)。
+    if is_codex_cli_provider():
+        raise HTTPException(
+            status_code=400,
+            detail="当前 AI 供应商不支持工具调用迭代, 请改用 OpenAI 兼容模型",
+        )
+
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+    try:
+        prompt = build_step1(
+            req.name, req.description, req.direction, req.rules,
+            strategy_id="", execution_backend=req.execution_backend,
+        )
+        iterator = AIStrategyIterator(max_rounds=req.max_rounds)
+        result = await iterator.iterate(prompt, engine=engine, data_dir=str(data_dir))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception:
+        # 内部异常详情只进日志, 不透给客户端 (§8)
+        logger.exception("AI 迭代失败")
+        raise HTTPException(status_code=500, detail="AI 迭代失败, 请稍后重试")
     return result
 
 

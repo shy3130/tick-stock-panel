@@ -812,6 +812,20 @@ export interface StrategyCodeSaveResult {
   research_only?: boolean
 }
 
+/** AI 迭代每一轮的回测证据 (stats 为比率, 0.15 = 15%) */
+export interface AiIterateRound {
+  round: number
+  stats: Record<string, number> | null
+  change_summary: string
+}
+
+export interface AiIterateResult {
+  draft_strategy_id: string
+  rounds: AiIterateRound[]
+  final_code: string
+  final_meta: Record<string, any>
+}
+
 // ===== Custom Signals (自定义信号) =====
 export interface CustomSignalCondition {
   left: string     // 字段名
@@ -3593,6 +3607,21 @@ export const api = {
     request<{ ok: boolean; path: string }>('/api/strategies/ai/save', {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code, name: meta?.name ?? '', description: meta?.description ?? '' }),
+    }),
+
+  /** AI 迭代: 生成 v1 → 跑回测 → 诊断 → 修改 的有界闭环, 草稿已落盘 data/strategies/ai/ */
+  strategyAiIterate: (payload: {
+    name?: string
+    description?: string
+    direction?: string
+    rules?: string
+    execution_backend?: 'polars_expr' | 'matrix_native'
+    max_rounds?: number
+  }) =>
+    request<AiIterateResult>('/api/strategies/ai/iterate', {
+      method: 'POST',
+      timeoutMs: null,
+      body: JSON.stringify(payload),
     }),
 }
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -320,6 +321,97 @@ async def generate_ai_text(
     )
 
 
+async def generate_ai_text_with_tools(
+    messages: Sequence[Message],
+    tools: Sequence[dict],
+    *,
+    execute_tool,
+    temperature: float | None = 0.3,
+    max_tokens: int | None = 3000,
+    timeout: float = 180.0,
+    max_rounds: int = 4,
+) -> list[dict]:
+    """OpenAI 原生 tools 有界循环: 调用 → 逐条执行工具 → role:tool 回填 → 循环。
+
+    与 generate_ai_text 的差异: 这里返回「完整 messages」(含 tool 往返), 最后一条
+    assistant 消息承载最终文本; 调用方可扫描 role:tool 消息重建逐轮证据 (回测指标)。
+    execute_tool 为 async (name, args) -> dict, 返回 {"ok": bool, "result"|"error"},
+    由调用方注入 (见 services.tool_catalog.execute_tool)。tools 是硬能力依赖
+    (Codex CLI 无 tools= 协议), 故入口 fail-closed, 不做纯文本降级。
+    """
+    if is_codex_cli_provider():
+        raise RuntimeError("当前 AI 供应商不支持工具调用迭代, 请改用 OpenAI 兼容模型")
+
+    max_tokens = _resolve_max_tokens(max_tokens)
+    if not tools:
+        raise ValueError("generate_ai_text_with_tools 需要至少一个工具 schema")
+
+    req_messages: list[dict] = [dict(m) for m in messages]
+    tool_schemas = list(tools)
+
+    for _ in range(max_rounds):
+        _check_input_budget(req_messages, max_tokens=max_tokens)
+        message = await _run_openai_message_once(
+            req_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            tools=tool_schemas,
+        )
+        if message is None:
+            return req_messages
+
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if not tool_calls:
+            # 模型不再请求工具, 产出最终文本, 结束循环。
+            req_messages.append({"role": "assistant", "content": message.content or ""})
+            return req_messages
+
+        assistant = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": getattr(tc, "type", "function"),
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ],
+        }
+        if message.content:
+            assistant["content"] = message.content
+        req_messages.append(assistant)
+
+        for tc in tool_calls:
+            tool_result = await execute_tool(
+                tc.function.name,
+                _parse_tool_arguments(tc.function.arguments),
+            )
+            req_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                }
+            )
+
+    return req_messages
+
+
+def _parse_tool_arguments(raw: str) -> dict:
+    """把 tool call 的 arguments JSON 字符串解析为 dict, 解析失败返回空 dict。"""
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 async def stream_ai_text(
     messages: Sequence[Message],
     *,
@@ -359,6 +451,30 @@ async def _run_openai_once(
     max_tokens: int | None,
     timeout: float,
 ) -> str:
+    message = await _run_openai_message_once(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+    if message is None:
+        return ""
+    return (message.content or "").strip()
+
+
+async def _run_openai_message_once(
+    messages: Sequence[Message],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+    tools: Sequence[dict] | None = None,
+):
+    """一次 OpenAI create() 调用, 返回完整 message (含 tool_calls, 而非仅 content)。
+
+    _run_openai_once 只取 .content; 工具循环需要 .tool_calls 以回填 role:tool,
+    故在此返回完整消息对象。tools 非空时以 tools= 透传, 否则走纯文本路径。
+    """
     ai_key = secrets_store.get_ai_key()
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
@@ -366,7 +482,7 @@ async def _run_openai_once(
     client = _openai_client(ai_key, timeout)
     model = current_ai_model()
     req_messages = list(messages)
-    kwargs = _openai_kwargs(temperature=temperature, max_tokens=max_tokens)
+    kwargs = _openai_kwargs(temperature=temperature, max_tokens=max_tokens, tools=tools)
     while True:
         try:
             resp = await client.chat.completions.create(
@@ -384,8 +500,8 @@ async def _run_openai_once(
                 raise RuntimeError(_format_openai_error(exc)) from exc
             raise
     if not resp.choices:
-        return ""
-    return (resp.choices[0].message.content or "").strip()
+        return None
+    return resp.choices[0].message
 
 
 async def _stream_openai(
@@ -574,6 +690,7 @@ def _openai_kwargs(
     model: str = "",
     base_url: str = "",
     prefer_final_answer: bool = False,
+    tools: Sequence[dict] | None = None,
 ) -> dict:
     """Build OpenAI create() kwargs and map supported provider capabilities.
 
@@ -598,6 +715,8 @@ def _openai_kwargs(
         # hidden reasoning shares max_tokens with the final answer and can
         # exhaust the budget before any visible content is emitted.
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    if tools:
+        kwargs["tools"] = list(tools)
     return kwargs
 
 
