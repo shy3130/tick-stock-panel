@@ -484,7 +484,7 @@ PORT=3018                      # 服务端口
 
 <img src="./assets/support/wechat-appreciation.jpg" alt="微信赞赏码 · 感谢道友支持 愿一路长红" height="280" />
 
-<sub>愿道友一路长红 📈</sub>
+<sub>作者精力有限,优先响应赞助回馈,希望理解 📈</sub>
 
 </div>
 
@@ -492,13 +492,13 @@ PORT=3018                      # 服务端口
 
 <div align="center">
 
-<sub>欢迎加入交流群,一起讨论交流 · 个性化接口统一公布在群公告,免费使用</sub>
+<sub>欢迎加入交流群,一起讨论交流 · 个人维护了一些个性化接口统一公布在群公告</sub>
 
 <img src="./community-qr-code.jpg" alt="交流群二维码 · 个人维护的个性化接口见群公告" height="280" />
 
 </div>
 
-> 作者精力有限,优先响应赞助回馈,希望理解
+
 
 ---
 
