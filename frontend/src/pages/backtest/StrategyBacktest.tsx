@@ -1587,8 +1587,27 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
       {/* 配置面板 */}
       <section className="space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto">
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-medium text-secondary">选择策略</label>
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <label className="text-xs font-medium text-secondary whitespace-nowrap">选择策略</label>
+              {/* 资产类型切换: 股票 / ETF — 与策略页一致; 分钟策略 asset_types 仅股票, ETF 列表自然不含 */}
+              <div className="inline-flex h-6 shrink-0 rounded-btn border border-border overflow-hidden">
+                {(['stock', 'etf'] as const).map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => { setAssetType(t); setSelectedStrategy(null); setSymbols(''); setResult(null) }}
+                    aria-pressed={assetType === t}
+                    className={`h-full px-2.5 text-[11px] font-medium transition-colors cursor-pointer ${assetType === t
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-muted hover:text-secondary hover:bg-elevated'
+                    }`}
+                  >
+                    {t === 'stock' ? '股票' : 'ETF'}
+                  </button>
+                ))}
+              </div>
+            </div>
             {/* 分钟K成交 — 日线策略专属 (分钟策略入场天然按触发分钟成交) */}
             {!isMinuteStrategy && (
             <div className="flex items-center gap-1">
