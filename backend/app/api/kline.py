@@ -495,8 +495,10 @@ def _latest_live_candle(
     if df_today.is_empty():
         return None
 
-    # 非交易日(周末/假日)缓存日期 != 今天, 跳过注入避免产生重复蜡烛
-    if not enriched_date or enriched_date != date.today():
+    # 非交易日(周末/假日)缓存日期 != 北京今天, 跳过注入避免产生重复蜡烛。
+    # 必须用 cn_today(): 服务器本地 date.today() 在 UTC 主机北京 00:00-08:00、
+    # 以及美西主机整个 A 股交易时段都会与 enriched 的北京交易日错开, 盘中日K不更新。
+    if not enriched_date or enriched_date != cn_today():
         return None
 
     # 查找该 symbol 的实时 enriched 行
