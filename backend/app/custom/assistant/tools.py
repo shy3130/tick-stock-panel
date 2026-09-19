@@ -307,7 +307,7 @@ def _get_stock_daily(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo = _require_repo(ctx)
     symbol = _validate_symbol(args.get("symbol"))
     days = _clamp(args.get("days"), 10, 500, 60)
-    end = date.today()
+    end = cn_today()
     start = end - timedelta(days=int(days * 1.9) + 20)
     df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
     if df is None or df.is_empty():
@@ -338,7 +338,7 @@ def _get_stock_analysis(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     repo = _require_repo(ctx)
     symbol = _validate_symbol(args.get("symbol"))
-    end = date.today()
+    end = cn_today()
     df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, end - timedelta(days=500), end)
     if df is None or df.is_empty():
         return {"symbol": symbol, "note": "本地没有该标的的日线数据, 无法分析。"}
