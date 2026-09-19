@@ -700,12 +700,24 @@ function buildOption(
     series.push(maLine('ma60', THEME.ma60, 'MA60'))
   }
 
-  // 加入自选日标注: 蓝色竖虚线从加入日那根K线的下沿连到主图底端的「自选」标签。
+  // 加入自选日标注: 蓝色竖虚线从该根K线的下沿连到主图底端的「自选」标签。
   // 用 custom series 而非 markLine: 两端要贴网格底边, 而 y 轴随 dataZoom 动态定界,
   // 静态 option 里算不出底边价格; markLine 的坐标是数据坐标, 越界值会让整条线被丢弃。
-  // 日期不在当前区间就静默不画; 周末/节假日加入的不做 snap —— 回退到相邻交易日
-  // 等于在图上断言一个用户没加入过的日期。区间外由弹窗工具栏「自选于 …」文字兜底。
-  const addedIdx = addedDate ? dateIndexMap.get(addedDate) : undefined
+  //
+  // 加入日不一定有K线 (周末/节假日加入, 或当天数据尚未落盘), 此时回落到 <= 加入日的
+  // 最近交易日 —— 与「加入以来」的基准日同口径, 竖线所在那天的收盘价正是基准价。
+  // 仍落在当前区间外 (例如半年前加入) 才不画, 由弹窗工具栏「自选于 …」文字兜底。
+  const addedIdx = (() => {
+    if (!addedDate) return undefined
+    const exact = dateIndexMap.get(addedDate)
+    if (exact != null) return exact
+    let last: number | undefined  // dates 升序, 取最后一个 <= addedDate 的类目
+    for (let i = 0; i < dates.length; i += 1) {
+      if (dates[i] > addedDate) break
+      last = i
+    }
+    return last
+  })()
   if (addedIdx != null && data[addedIdx]) {
     // 标签内留白四边各 4px (两个汉字 @10px ≈ 20x10 → 框 28x18);
     // 整个框再离图表下边框留 8px margin
