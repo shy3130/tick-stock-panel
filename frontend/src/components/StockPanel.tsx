@@ -51,6 +51,8 @@ interface Props {
   dailyKlineFlex?: string
   /** 初始可见蜡烛根数 (默认 60); 'all' = 初始适配显示全部数据 (用于全区间回放) */
   visibleBars?: number | 'all'
+  /** 加入自选日 (北京时间 YYYY-MM-DD); 有值时日K主图绘制「自选」竖虚线 */
+  addedDate?: string | null
 }
 
 export { getDefaultRange }
@@ -79,6 +81,7 @@ export function StockPanel({
   intradayDays = DEFAULT_INTRADAY_DAYS,
   dailyKlineFlex = 'flex-1',
   visibleBars,
+  addedDate,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -217,6 +220,7 @@ export function StockPanel({
           onPriceDoubleClick={onPriceDoubleClick}
           visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
           extColumns={extColumns}
+          addedDate={addedDate}
         />
 
         {showIntraday && selectedDate && !intradayDismissed && (

@@ -6,6 +6,7 @@
  */
 import type { ColumnConfig } from '@/lib/list-columns'
 import type { MinuteKlineRow } from '@/lib/api'
+import { cnDateTimeFromUtc } from '@/lib/format'
 
 // ===== 信号 =====
 
@@ -108,6 +109,10 @@ export function getSortValue(r: any, col: ColumnConfig): any {
     case 'deviate_30d':  return r.deviate_30d
     case 'limit_ups':     return r.consecutive_limit_ups ?? 0
     case 'limit_downs':   return r.consecutive_limit_downs ?? 0
+    // 用北京时间的完整串排序而非原始 UTC: 与展示同口径。缺值返回 null 而非 '' ——
+    // useTableSort 会先试 Number(''), 空串会被当成 0 排到最前。
+    case 'added_at':      return r.added_at ? cnDateTimeFromUtc(r.added_at) : null
+    case 'pct_since_added': return r.pct_since_added
     case 'score':         return r.score
     default: return null
   }

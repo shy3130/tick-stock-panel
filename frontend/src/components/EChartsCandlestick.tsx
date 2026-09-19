@@ -340,6 +340,8 @@ interface Props {
   activeIndicators?: string[]
   /** 成交量柱相对前 N 个交易日均量的显示设置 */
   volumeCompare?: VolumeCompareConfig
+  /** 加入自选日 (北京时间 YYYY-MM-DD); 有值且落在当前区间内时, 主图画一条「自选」竖虚线 */
+  addedDate?: string | null
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -360,6 +362,9 @@ const CT = () => chartTheme(getTheme())
 
 /** 可见蜡烛超过此数量时，涨停/炸板标签切换为小圆点。 */
 const COMPACT_THRESHOLD = 60
+
+/** 加入自选日竖线颜色 (蓝色虚线, 与同花顺的标注观感一致) */
+const ADDED_DATE_COLOR = '#3B82F6'
 
 /** 子图上方信息栏高度 (px) */
 const INFO_BAR_H = 16
@@ -474,6 +479,7 @@ function buildOption(
   infoIdx: number,
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
+  addedDate: string | null | undefined,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -694,6 +700,57 @@ function buildOption(
     series.push(maLine('ma60', THEME.ma60, 'MA60'))
   }
 
+  // 加入自选日标注: 蓝色竖虚线从加入日那根K线的下沿连到主图底端的「自选」标签。
+  // 用 custom series 而非 markLine: 两端要贴网格底边, 而 y 轴随 dataZoom 动态定界,
+  // 静态 option 里算不出底边价格; markLine 的坐标是数据坐标, 越界值会让整条线被丢弃。
+  // 日期不在当前区间就静默不画; 周末/节假日加入的不做 snap —— 回退到相邻交易日
+  // 等于在图上断言一个用户没加入过的日期。区间外由弹窗工具栏「自选于 …」文字兜底。
+  const addedIdx = addedDate ? dateIndexMap.get(addedDate) : undefined
+  if (addedIdx != null && data[addedIdx]) {
+    // 标签内留白四边各 4px (两个汉字 @10px ≈ 20x10 → 框 28x18);
+    // 整个框再离图表下边框留 8px margin
+    const BADGE_PAD = 4
+    const BADGE_W = 20 + BADGE_PAD * 2
+    const BADGE_H = 10 + BADGE_PAD * 2
+    const BADGE_MARGIN_BOTTOM = 8
+    series.push({
+      name: 'addedDateMark',
+      type: 'custom',
+      xAxisIndex: 0, yAxisIndex: 0,
+      silent: true, animation: false, z: 3,
+      data: [[addedIdx, data[addedIdx].low]],
+      renderItem: (params: any, api: any) => {
+        const cs = params.coordSys
+        const [x, lowY] = api.coord([api.value(0), api.value(1)])
+        const badgeTop = cs.y + cs.height - BADGE_H - BADGE_MARGIN_BOTTOM
+        return {
+          type: 'group',
+          children: [
+            {
+              type: 'line',
+              // 该根K线下沿低于标签时 (贴底的长下影) 夹到标签顶, 避免线段反向
+              shape: { x1: x, y1: Math.min(lowY, badgeTop), x2: x, y2: badgeTop },
+              style: { stroke: ADDED_DATE_COLOR, lineWidth: 1, lineDash: [4, 3] },
+            },
+            {
+              type: 'rect',
+              shape: { x: x - BADGE_W / 2, y: badgeTop, width: BADGE_W, height: BADGE_H, r: 2 },
+              style: { fill: CT().tooltipBg, stroke: ADDED_DATE_COLOR, lineWidth: 1 },
+            },
+            {
+              type: 'text',
+              style: {
+                text: '自选', x, y: badgeTop + BADGE_H / 2, fill: ADDED_DATE_COLOR,
+                font: '10px JetBrains Mono, monospace',
+                textAlign: 'center', textVerticalAlign: 'middle',
+              },
+            },
+          ],
+        }
+      },
+    })
+  }
+
   // BOLL 布林带 — 需在 activeIndicators 中激活
   const showBOLL = activeIndicators.includes('boll') && data.some(d => d.boll_upper != null || d.boll_lower != null)
   if (showBOLL) {
@@ -817,6 +874,7 @@ export function EChartsCandlestick({
   visibleBars = 60,
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
+  addedDate,
 }: Props) {
   const hoverSurfaceRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1178,6 +1236,7 @@ export function EChartsCandlestick({
       infoIdxRef.current,
       linkedPrice,
       volumeCompare,
+      addedDate,
     )
 
     chart.setOption(option, true)
@@ -1195,7 +1254,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

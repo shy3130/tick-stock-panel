@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Callable
 
 import anyio
@@ -13,6 +13,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
+from app.market_time import CN_TZ
 from app.price_limits import (
     polars_is_risk_warning_name,
     polars_limit_price,
@@ -381,12 +382,89 @@ _WATCHLIST_COLS = [
 ]
 
 
+def _added_dates_bj(entries: list[dict]) -> dict[str, date]:
+    """自选条目的 added_at (naive UTC ISO 串) → 北京日期; 空值/非法值跳过该条。
+
+    added_at 由 watchlist.add_batch 以 datetime.utcnow() 写入 (无 Z 后缀), 属 UTC 语义;
+    必须显式按 UTC 解析再转北京 —— 否则北京时间 00:00-08:00 加入的记录会被算到前一天。
+    换算惯例同 backtest/minute_replay.py, 服务器本地时区不参与 (CONTRIBUTING §3.3)。
+    """
+    out: dict[str, date] = {}
+    for entry in entries:
+        raw = entry.get("added_at")
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        out[entry["symbol"]] = dt.astimezone(CN_TZ).date()
+    return out
+
+
+def _added_base_closes(
+    repo,
+    added_dates: dict[str, date],
+    stock_symbols: set[str],
+) -> pl.DataFrame:
+    """取各标的「加入日或之前最近一个交易日」的前复权收盘价, 作为区间收益基准。
+
+    返回 symbol/base_close 两列表; 无可用值返回空表, 由调用方按 null 降级。
+
+    - **只覆盖股票**: 内存历史缓存 (get_enriched_range) 仅含股票, ETF/指数只有最新日
+      缓存, 逐只回补会在行情 tick 热路径上形成 N+1 parquet 扫描, 故显式降级为「—」。
+    - **基准日取 <= 加入日**: 周末/节假日/停牌自然回落到前一交易日。与 K 线竖线的
+      「不 snap」有意不同 —— 价格口径可以回落, 日期事实不行。
+    - **超出缓存窗口 (约 300 个自然日) 的标的直接跳过**, 不触发 scan 兜底。
+    """
+    stock_targets = {s: d for s, d in added_dates.items() if s in stock_symbols}
+    if not stock_targets:
+        return pl.DataFrame()  # 没有可算的股票标的 → 不碰 repo
+    span = repo.get_enriched_history_span()
+    if span is None:
+        return pl.DataFrame()
+    span_start, span_end = span
+    in_range = {s: d for s, d in stock_targets.items() if d >= span_start}
+    if len(in_range) < len(stock_targets):
+        logger.debug(
+            "自选加入后涨跌幅: %d/%d 只早于可查询历史 (%s 之前), 降级为 null",
+            len(stock_targets) - len(in_range), len(stock_targets), span_start,
+        )
+    if not in_range:
+        return pl.DataFrame()
+    # 窗口必须钳制在缓存区间内: get_enriched_range 是全有或全无的 (cache_min > start
+    # 或 cache_max < end 即整体返回 None), 一只越界的标的会让全部标的失去基准价。
+    # start > end 只出现在「加入日晚于缓存末日」(本地数据未同步) 时, 退化为取缓存末日。
+    end = min(max(in_range.values()), span_end)
+    start = min(min(in_range.values()), end)
+    hist = repo.get_enriched_range(
+        start, end, symbols=list(in_range), columns=["symbol", "date", "close"]
+    )
+    if hist is None or hist.is_empty():
+        return pl.DataFrame()
+    added = pl.DataFrame(
+        {"symbol": list(in_range), "added_date": list(in_range.values())},
+        schema={"symbol": pl.Utf8, "added_date": pl.Date},
+    )
+    return (
+        hist.join(added, on="symbol", how="inner")
+        .filter(pl.col("date") <= pl.col("added_date"))
+        .group_by("symbol")
+        .agg(pl.col("close").sort_by(pl.col("date")).last().alias("base_close"))
+    )
+
+
 @router.get("/enriched")
 def watchlist_enriched(
     request: Request,
     ext_columns: str | None = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
 ):
-    """自选股 enriched 数据 — 直接从 enriched 最新日读取, 无即时计算。
+    """自选股 enriched 数据 — 直接从 enriched 最新日读取, 无重计算。
+
+    仅两列为按行向量化现算 (不落盘): 涨跌停价, 以及「加入后涨跌幅」(pct_since_added,
+    以加入日收盘价为基准)。本端点在行情 tick 热路径上被反复调用, 故不做历史 scan 兜底。
 
     ext_columns 参数示例: "industry_rating.score,fund_flow.net_inflow"
     会动态 LEFT JOIN 对应的 ext_{config_id} DuckDB view。
@@ -394,7 +472,8 @@ def watchlist_enriched(
     t0 = time.perf_counter()
 
     repo = request.app.state.repo
-    symbols = [r["symbol"] for r in watchlist.list_symbols()]
+    entries = watchlist.list_symbols()
+    symbols = [r["symbol"] for r in entries]
     if not symbols:
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
@@ -494,6 +573,47 @@ def watchlist_enriched(
             .then(polars_limit_price(pl.col("prev_close"), pct, up=False))
             .otherwise(None)
             .alias("limit_down_price"),
+        )
+
+    # 「加入日期」与「加入以来」— 与涨跌停价同为读时现算, 不落盘。只在这一处挂一次即
+    # 覆盖 stock/etf/index 三分支。pct_since_added 为小数口径 (与 momentum_* 一致)。
+    try:
+        added_at_df = pl.DataFrame(
+            {
+                "symbol": symbols,
+                # 旧 schema 迁移补的空串归一为 null, 前端只需判断一种「缺失」
+                "added_at": [(r.get("added_at") or None) for r in entries],
+            },
+            schema={"symbol": pl.Utf8, "added_at": pl.Utf8},
+        )
+        with_base = df.join(added_at_df, on="symbol", how="left")
+        base_df = _added_base_closes(repo, _added_dates_bj(entries), set(stock_symbols))
+        if base_df.is_empty():
+            # 无基准价 (缓存冷 / 全为 ETF 或超窗): 整列降级为 null
+            df = with_base.with_columns(pl.lit(None, dtype=pl.Float64).alias("pct_since_added"))
+        else:
+            # 整链算完再回绑 df, 异常时 df 保持原样
+            df = (
+                with_base.join(base_df, on="symbol", how="left")
+                .with_columns(
+                    pl.when(
+                        pl.col("base_close").is_not_null()
+                        & pl.col("base_close").is_finite()
+                        & (pl.col("base_close") > 0)
+                        & pl.col("close").is_not_null()
+                    )
+                    .then(pl.col("close") / pl.col("base_close") - 1.0)
+                    .otherwise(None)
+                    .alias("pct_since_added")
+                )
+                .drop("base_close")
+            )
+    except Exception as e:
+        # 装饰列失败不得影响自选主表; 两列必须存在 (值可为 null), 否则前端排序/筛选静默失效
+        logger.warning("自选加入日期/加入后涨跌幅计算跳过: %s", e, exc_info=True)
+        df = df.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("added_at"),
+            pl.lit(None, dtype=pl.Float64).alias("pct_since_added"),
         )
 
     # 动态 JOIN 扩展数据表

@@ -90,10 +90,14 @@ export const BUILTIN_COLUMNS: ColumnConfig[] = [
   { id: 'builtin:revenue_yoy', source: { type: 'builtin', key: 'revenue_yoy' }, label: '营收增速', visible: false, align: 'center' },
   { id: 'builtin:net_income_yoy', source: { type: 'builtin', key: 'net_income_yoy' }, label: '净利增速', visible: false, align: 'center' },
   { id: 'builtin:debt_ratio', source: { type: 'builtin', key: 'debt_ratio' }, label: '负债率', visible: false, align: 'center' },
+  // 自选加入信息 (后端读时计算, 不落盘; 默认隐藏)
+  { id: 'builtin:added_at', source: { type: 'builtin', key: 'added_at' }, label: '加入日期', visible: false, align: 'center' },
+  { id: 'builtin:pct_since_added', source: { type: 'builtin', key: 'pct_since_added' }, label: '加入以来', visible: false, align: 'center' },
 ]
 
 export const COLUMN_GROUPS: ColumnGroup[] = [
   { id: 'price', label: '价格', icon: '💰', keys: ['price', 'pct', 'change_amount', 'amplitude', 'open', 'high', 'low', 'prev_close', 'limit_up_price', 'limit_down_price'] },
+  { id: 'added', label: '自选', icon: '⭐', keys: ['added_at', 'pct_since_added'] },
   { id: 'volume', label: '成交', icon: '📊', keys: ['turnover', 'volume', 'amount', 'float_val', 'vol_ratio', 'annual_vol'] },
   { id: 'ma', label: '均线', icon: '📈', keys: ['ma5', 'ma10', 'ma20', 'ma60'] },
   { id: 'range', label: '区间', icon: '📏', keys: ['high_60d', 'low_60d'] },

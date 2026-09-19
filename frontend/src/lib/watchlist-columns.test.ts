@@ -56,3 +56,42 @@ describe('watchlist columns: 新增内置列向后兼容', () => {
     expect(byId.get('builtin:high')!.visible).toBe(false)
   })
 })
+
+// 自选加入信息列 (加入日期 / 加入后涨跌幅): 数据来自 /enriched 的读时计算字段,
+// 同样遵循「新增列默认隐藏」契约。列 key 必须与后端返回的字段名逐字一致。
+describe('watchlist columns: 自选加入信息列', () => {
+  const ADDED_KEYS = ['added_at', 'pct_since_added']
+
+  it('两列已注册且默认隐藏, 并归入「自选」分组', () => {
+    for (const key of ADDED_KEYS) {
+      const col = BUILTIN_COLUMNS.find(c => c.source.type === 'builtin' && c.source.key === key)
+      expect(col, `内置列 ${key} 应存在`).toBeTruthy()
+      expect(col!.visible).toBe(false)
+    }
+    // 必须进 COLUMN_GROUPS, 否则列存在于表格配置但在自定义列面板里不可见
+    const group = COLUMN_GROUPS.find(g => g.id === 'added')
+    expect(group, '应存在「自选」列分组').toBeTruthy()
+    for (const key of ADDED_KEYS) {
+      expect(group!.keys).toContain(key)
+    }
+  })
+
+  it('老用户配置 (不含新列 id) 合并后自动补齐两列且默认隐藏', () => {
+    const saved = BUILTIN_COLUMNS
+      .filter(c => ['builtin:symbol', 'builtin:price', 'builtin:pct'].includes(c.id))
+      .map(c => ({ ...c }))
+
+    const merged = mergeColumns(saved, BUILTIN_COLUMNS)
+    const byId = new Map(merged.map(c => [c.id, c]))
+
+    for (const key of ADDED_KEYS) {
+      const col = byId.get(`builtin:${key}`)
+      expect(col, `合并后应包含新列 builtin:${key}`).toBeTruthy()
+      expect(col!.visible).toBe(false)
+    }
+    // 用户已有列的显隐与顺序不受影响, 新列追加在末尾
+    expect(byId.get('builtin:price')!.visible).toBe(true)
+    expect(merged[0].id).toBe('builtin:symbol')
+    expect(merged.map(c => c.id).slice(-2)).toEqual(['builtin:added_at', 'builtin:pct_since_added'])
+  })
+})

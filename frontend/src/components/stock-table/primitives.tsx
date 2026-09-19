@@ -9,7 +9,7 @@
  * 财务率类用 fmtPct、kdj 用 toFixed(1)、vol_ma 用 fmtBigNum 等。
  */
 import type { ReactNode } from 'react'
-import { fmtPrice, fmtPct, fmtBigNum, fmtVolume, priceColorClass } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, fmtVolume, priceColorClass, cnDateFromUtc } from '@/lib/format'
 import type { ColumnConfig } from '@/lib/list-columns'
 import { NUM_CELL_CLASS } from '@/lib/stock-table'
 
@@ -153,6 +153,15 @@ export function renderBuiltinDataCell(r: any, col: ColumnConfig): ReactNode | nu
           )}
         </td>
       )
+    // 自选加入信息（后端读时计算；added_at 为 naive UTC，须转北京时间展示）
+    case 'added_at':
+      return (
+        <td key={col.id} className={`${alignTdClass(col.align)} text-secondary`}>
+          {cnDateFromUtc(r.added_at) || '—'}
+        </td>
+      )
+    case 'pct_since_added':
+      return <td key={col.id} className={`${numCls} ${priceColorClass(r.pct_since_added)}`}>{fmtPct(r.pct_since_added)}</td>
     // 财务指标（后端 enriched 未返回时显示 —）
     case 'eps':           return <td key={col.id} className={numCls}>{r.eps != null ? fmtPrice(r.eps) : '—'}</td>
     case 'bps':           return <td key={col.id} className={numCls}>{r.bps != null ? fmtPrice(r.bps) : '—'}</td>

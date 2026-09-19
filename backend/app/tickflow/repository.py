@@ -1278,6 +1278,20 @@ class KlineRepository:
             df = cache.clear() if df.is_empty() else df.select(existing)
         return df.sort(["symbol", "date"])
 
+    def get_enriched_history_span(self) -> tuple[date, date] | None:
+        """内存 enriched 历史缓存的可用日期区间 (含端点); 不可用/预热中返回 None。
+
+        纯读 O(1), 不触发刷新: 调用方 (随行情 tick 反复调用的自选 enriched 端点) 需要
+        区分「预热中」与「日期超窗」, 而 get_enriched_range 对两者都返回 None。
+        """
+        cache = self._enriched_history_cache
+        start = self._enriched_history_start
+        if cache is None or cache.is_empty() or start is None:
+            return None
+        # 历史缓存与最新日缓存同批写入/清空, end 通常即 _enriched_cache_date;
+        # 仅当首次刷新在写 latest 之前中断时缺失, 回退取日期列最大值
+        return start, self._enriched_cache_date or cache["date"].max()
+
     def get_live_agg(self) -> pl.DataFrame:
         """返回盘中实时指标预计算聚合表。如无缓存则懒加载。
 

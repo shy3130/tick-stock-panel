@@ -7,7 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
-import { fmtPct } from '@/lib/format'
+import { fmtPct, cnDateFromUtc } from '@/lib/format'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
@@ -151,7 +151,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     () => symbol ? buildMonitorPriceLines(monitorRules.data?.rules ?? [], symbol) : [],
     [monitorRules.data?.rules, symbol],
   )
-  const inWatchlist = (watchlist.data?.symbols ?? []).some((s: any) => s.symbol === symbol)
+  const watchlistEntry = useMemo(
+    () => (watchlist.data?.symbols ?? []).find(s => s.symbol === symbol),
+    [watchlist.data, symbol],
+  )
+  const inWatchlist = !!watchlistEntry
+  // 加入自选日 (北京时间)。该日不在当前K线区间内或恰是非交易日时竖线不画, 由工具栏文字兜底。
+  const addedDate = useMemo(
+    () => cnDateFromUtc(watchlistEntry?.added_at) || null,
+    [watchlistEntry],
+  )
 
   const toggleWatchlist = useMutation({
     mutationFn: ({
@@ -404,6 +413,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                       onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
                       min={dateRange.start}
                     />
+                    {/* 常显而非仅超窗时显示: 弹窗不知道区间内那天是否交易日,
+                        常显既避免错误的区间判断, 也覆盖「区间外」与「周末加入」两种情况 */}
+                    {addedDate && (
+                      <span
+                        className="text-[10px] text-muted shrink-0"
+                        title="加入自选日 (北京时间); 该日无K线时不画竖线"
+                      >
+                        自选于 {addedDate}
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1">
@@ -617,6 +636,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   prefetchSymbols={prefetchSymbols}
                   intradayDays={effectiveIntradayDays}
                   dailyKlineFlex="flex-[1.4]"
+                  addedDate={addedDate}
                 />
               ) : (
                 <>
