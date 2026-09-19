@@ -22,7 +22,7 @@ import {
   dimensionKindForSourceField,
   type DimensionMembersTarget,
 } from '@/components/DimensionMembersDialog'
-import { toNavItems, type NavItem } from '@/components/StockPreviewDialog'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import { cn } from '@/lib/cn'
 
 interface ScreenerTableProps {

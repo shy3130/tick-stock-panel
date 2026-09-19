@@ -904,6 +904,10 @@ export function EChartsCandlestick({
   const infoIdxRef = useRef<number>(data.length - 1)
   const compactRef = useRef(false)
   const userZoomRef = useRef<{ start: number; end: number } | null>(null)
+  // dataZoom 监听只在图表创建时注册一次, 直接调用会一直执行「创建那次渲染」的 updateCompactPresentation:
+  // 它的 data/dateIndexMap/markers 停在旧标的, 会把上一只的买卖标记 merge 回新标的图上。
+  // 与 dataRef/getInfoBarHTMLRef 同法, 经 ref 取最新一次渲染的函数。
+  const updateCompactPresentationRef = useRef<() => void>(() => {})
   // 竖虚线(crosshair)是否可见: 控制信息栏「至今」字段的显隐。鼠标移出图表区即 false。
   const hoverActiveRef = useRef(false)
 
@@ -1145,7 +1149,7 @@ export function EChartsCandlestick({
       const newCompact = visibleCount > COMPACT_THRESHOLD
       if (newCompact !== compactRef.current) {
         compactRef.current = newCompact
-        updateCompactPresentation()
+        updateCompactPresentationRef.current()
       }
     })
 
@@ -1232,6 +1236,7 @@ export function EChartsCandlestick({
     }
     if (seriesUpdates.length > 0) chart.setOption({ series: seriesUpdates })
   }
+  updateCompactPresentationRef.current = updateCompactPresentation
 
   // ===== 核心: 仅在数据/配置变更时全量 setOption =====
   useEffect(() => {

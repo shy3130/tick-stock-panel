@@ -13,7 +13,8 @@ import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { StockPreviewDialog, toNavItems, type NavItem } from '@/components/StockPreviewDialog'
+import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import {
   DimensionMembersDialog,
   dimensionKindForSourceField,
