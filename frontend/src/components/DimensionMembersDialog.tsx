@@ -13,7 +13,7 @@ import {
 import { Activity, Building2, ChevronRight, Database, RefreshCw, Search, Tags, Users, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { boardTag } from '@/components/stock-table/primitives'
-import { toNavItems, type NavItem } from '@/components/StockPreviewDialog'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import { api, type DimensionIntradayPoint, type MarketSnapshotRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
