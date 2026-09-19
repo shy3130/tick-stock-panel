@@ -486,9 +486,9 @@ def _latest_live_candle(
         if not qs:
             return None
         df_today, enriched_date = qs.get_enriched_today()
-    elif asset_type == "etf":
+    elif asset_type in {"etf", "index"}:
         df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset(
-            "etf", refresh=refresh_asset,
+            asset_type, refresh=refresh_asset,
         )
     else:
         return None
