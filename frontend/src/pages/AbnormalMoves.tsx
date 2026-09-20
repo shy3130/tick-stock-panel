@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import {
@@ -12,6 +12,7 @@ import {
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/components/stock-table/primitives'
 import { PageHeader } from '@/components/PageHeader'
@@ -73,7 +74,17 @@ const SIGNAL_META: Record<IntradaySignalKey, { label: string; cls: string }> = {
 
 export function AbnormalMoves() {
   const [tab, setTab] = useState<AbnormalTab>('intraday')
-  const [preview, setPreview] = useState<{ symbol: string; name: string } | null>(null)
+  // navList: 弹窗切股的候选列表, 打开详情时由来源 tab 一并给出
+  const [preview, setPreview] = useState<{ symbol: string; name: string; navList: NavItem[] } | null>(null)
+
+  // 打开详情: 带上来源 tab 的候选列表, 切股限定在当前所见标的内
+  const openStock = useCallback((symbol: string, name?: string, navList?: NavItem[]) => {
+    setPreview({ symbol, name: name ?? symbol, navList: navList ?? [] })
+  }, [])
+
+  const handleNavigate = useCallback((sym: string, name?: string) => {
+    setPreview(prev => (prev ? { ...prev, symbol: sym, name: name ?? sym } : prev))
+  }, [])
 
   return (
     // 整页占满视口: 头部/tab固定, 只有各 tab 内容区滚动
@@ -123,14 +134,12 @@ export function AbnormalMoves() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-5 pb-4 pt-3">
-        {tab === 'auction' && (
-          <AuctionView onOpenStock={(s, n) => setPreview({ symbol: s, name: n ?? s })} />
-        )}
+        {tab === 'auction' && <AuctionView onOpenStock={openStock} />}
         {tab === 'intraday' && (
-          <IntradayView onPreview={r => setPreview({ symbol: r.symbol, name: r.name ?? r.symbol })} />
+          <IntradayView onPreview={(r, navList) => openStock(r.symbol, r.name ?? undefined, navList)} />
         )}
         {tab === 'deviation' && (
-          <DeviationView onPreview={r => setPreview({ symbol: r.symbol, name: r.name ?? r.symbol })} />
+          <DeviationView onPreview={(r, navList) => openStock(r.symbol, r.name ?? undefined, navList)} />
         )}
       </div>
 
@@ -138,6 +147,8 @@ export function AbnormalMoves() {
         <StockPreviewDialog
           symbol={preview.symbol}
           name={preview.name}
+          navList={preview.navList}
+          onNavigate={handleNavigate}
           onClose={() => setPreview(null)}
         />
       )}
@@ -153,7 +164,7 @@ export function AbnormalMoves() {
 const _BENCH_CHASE_RISK_PCT = 5
 
 function AuctionView({ onOpenStock }: {
-  onOpenStock: (symbol: string, name?: string | null) => void
+  onOpenStock: (symbol: string, name?: string, navList?: NavItem[]) => void
 }) {
   const q = useQuery({
     queryKey: ['auction-benchmark', 'latest'],
@@ -223,9 +234,14 @@ function AuctionView({ onOpenStock }: {
 
 function BenchmarkCard({ q, onOpenStock }: {
   q: UseQueryResult<AuctionBenchmarkPayload, Error>
-  onOpenStock: (symbol: string, name?: string | null) => void
+  onOpenStock: (symbol: string, name?: string, navList?: NavItem[]) => void
 }) {
   const d = q.data
+  // 切股导航列表: 本期名单 (须在提前 return 之前 memo, 之后不能再放 hook)
+  const navItems = useMemo(
+    () => toNavItems((d?.items ?? []).map(i => ({ symbol: i.thscode, name: i.name }))),
+    [d],
+  )
 
   if (q.isLoading) {
     return (
@@ -310,7 +326,7 @@ function BenchmarkCard({ q, onOpenStock }: {
               <button
                 key={i.thscode}
                 type="button"
-                onClick={() => onOpenStock(i.thscode, i.name)}
+                onClick={() => onOpenStock(i.thscode, i.name ?? undefined, navItems)}
                 className="flex w-full items-center gap-2 border-t border-border/30 px-4 py-2 text-left text-[11px] transition-colors hover:bg-accent/[0.05]"
                 title={`查看 ${i.name ?? i.thscode} 详情 · 竞价 ${gap ?? '—'}%`}
               >
@@ -362,7 +378,7 @@ function BenchmarkCard({ q, onOpenStock }: {
 // ================================================================
 
 function IntradayView({ onPreview }: {
-  onPreview: (r: AbnormalIntradayRow) => void
+  onPreview: (r: AbnormalIntradayRow, navList?: NavItem[]) => void
 }) {
   const [sigFilter, setSigFilter] = useState<'all' | IntradaySignalKey>('all')
   const [boardFilter, setBoardFilter] = useState<'all' | (typeof BOARDS)[number]>('all')
@@ -392,6 +408,9 @@ function IntradayView({ onPreview }: {
     if (s) list = list.filter(r => `${r.symbol} ${r.name ?? ''}`.toLowerCase().includes(s))
     return list
   }, [data, sigFilter, boardFilter, excludeSt, query])
+
+  // 切股导航列表: 当前筛选后的行序
+  const navItems = useMemo(() => toNavItems(rows), [rows])
 
   const total = (data?.rows ?? []).length
 
@@ -470,7 +489,7 @@ function IntradayView({ onPreview }: {
               <tr><td colSpan={8} className="px-3 py-10 text-center text-muted">{data ? '当前筛选下没有命中标的' : '暂无数据'}</td></tr>
             ) : (
               rows.map((r, i) => (
-                <IntradayRowView key={r.symbol} row={r} rank={i + 1} onPreview={() => onPreview(r)} />
+                <IntradayRowView key={r.symbol} row={r} rank={i + 1} onPreview={() => onPreview(r, navItems)} />
               ))
             )}
           </tbody>
@@ -566,7 +585,7 @@ function IntradayRowView({ row, rank, onPreview }: {
 // ================================================================
 
 function DeviationView({ onPreview }: {
-  onPreview: (r: AbnormalRow) => void
+  onPreview: (r: AbnormalRow, navList?: NavItem[]) => void
 }) {
   // 主开关: 默认关闭, 开启后才轮询计算 (仅控制本页计算, 后台告警由监控规则驱动)
   const [enabled, setEnabled] = useState(() => storage.abnormalEnabled.get(false))
@@ -646,6 +665,9 @@ function DeviationView({ onPreview }: {
     }
     return list
   }, [view, windowFilter, direction, boardFilter, watchlistOnly, excludeSt, watchSymbols, query, minCloseness])
+
+  // 切股导航列表: 当前筛选后的行序
+  const navItems = useMemo(() => toNavItems(rows), [rows])
 
   const counts = view?.counts
   const updating = overview.isFetching
@@ -886,7 +908,7 @@ function DeviationView({ onPreview }: {
                       key={r.symbol}
                       row={r}
                       rank={i + 1}
-                      onPreview={() => onPreview(r)}
+                      onPreview={() => onPreview(r, navItems)}
                     />
                   ))
                 )}
