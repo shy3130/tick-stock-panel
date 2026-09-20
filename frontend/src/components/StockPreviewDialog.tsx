@@ -263,12 +263,13 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              'relative rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ease-smooth',
+              'relative rounded-dialog border border-border bg-surface shadow-2xl shadow-black/50 overflow-hidden flex flex-col transition-all duration-200 ease-smooth',
               maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] max-w-[1200px] max-h-[95vh]',
             )}
           >
-            {/* 顶栏 */}
-            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-5 shrink-0">
+            {/* 顶栏: 单行 = 个股身份 + 视图/区间控件 + 操作按钮。纯样式重排, 交互逻辑不变 */}
+            <div className="shrink-0 border-b border-border/60 bg-elevated/30">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2 pt-2.5 sm:px-5">
               <div className="flex min-w-0 items-center gap-2">
                 {(() => {
                   const board = symbol ? boardTag(symbol) : null
@@ -278,17 +279,47 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     </span>
                   ) : null
                 })()}
-                <span className="shrink-0 font-mono text-sm font-medium text-foreground">{symbol}</span>
-                {name && <span className="truncate text-xs text-muted">{name}</span>}
+                <span className="shrink-0 font-mono text-[15px] font-semibold tracking-tight text-foreground">{symbol}</span>
+                {name && <span className="truncate text-xs text-secondary">{name}</span>}
 
                 {/* 切股导航: 上一只 / n·N / 下一只 */}
                 <NavPager nav={nav} prevLabel="上一只" nextLabel="下一只" />
               </div>
 
-              <div className="flex shrink-0 items-center gap-1">
+              {/* 视图/区间控件: 原第二行并入顶行, 紧邻操作按钮 (原「自选于」标注位置) */}
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2.5">
+                {/* 日K / 分时 切换 */}
+                <div role="tablist" aria-label="图表视图" className="inline-flex shrink-0 items-center rounded border border-border/60 bg-base/60 p-0.5">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === 'daily'}
+                    onClick={() => setView('daily')}
+                    className={`inline-flex h-6 items-center gap-1 rounded px-2.5 text-[11px] transition-colors ${
+                      view === 'daily' ? 'bg-accent/20 text-accent font-medium' : 'text-muted hover:text-secondary hover:bg-elevated/60'
+                    }`}
+                  >
+                    <LineChart className="h-3 w-3" />
+                    日 K
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === 'intraday'}
+                    onClick={() => setView('intraday')}
+                    className={`inline-flex h-6 items-center gap-1 rounded px-2.5 text-[11px] transition-colors ${
+                      view === 'intraday' ? 'bg-accent/20 text-accent font-medium' : 'text-muted hover:text-secondary hover:bg-elevated/60'
+                    }`}
+                  >
+                    <Clock className="h-3 w-3" />
+                    分时
+                  </button>
+                </div>
+                <span className="h-4 w-px shrink-0 bg-border/70" />
                 {/* 区间选择 — 随视图切换 */}
                 {view === 'daily' ? (
-                  <div className="flex items-center gap-1">
+                  <div className="inline-flex items-center gap-2">
+                    <div className="inline-flex items-center rounded border border-border/60 bg-base/60 p-0.5">
                     {PRESETS.map(p => {
                       const now = new Date()
                       const s = new Date(now)
@@ -304,51 +335,42 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                             ns.setMonth(ns.getMonth() - p.months)
                             setDateRange({ start: ns.toISOString().slice(0, 10), end })
                           }}
-                          className={`h-6 px-1.5 rounded text-[11px] transition-colors cursor-pointer
+                          className={`h-6 rounded px-2.5 text-[11px] transition-colors cursor-pointer
                             ${isActive
-                              ? 'bg-accent/20 text-accent font-medium border border-accent/30'
-                              : 'text-muted hover:text-foreground hover:bg-elevated border border-transparent'
+                              ? 'bg-accent/20 text-accent font-medium'
+                              : 'text-muted hover:text-secondary hover:bg-elevated/60'
                             }`}
                         >
                           {p.label}
                         </button>
                       )
                     })}
+                    </div>
                     <DatePicker
                       value={dateRange.start}
                       onChange={(v) => setDateRange(prev => ({ ...prev, start: v }))}
                       max={dateRange.end}
                     />
-                    <span className="text-muted/40 text-[10px]">~</span>
+                    <span className="text-muted/70 text-[10px]">~</span>
                     <DatePicker
                       value={dateRange.end}
                       onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
                       min={dateRange.start}
                     />
-                    {/* 常显而非仅超窗时显示: 弹窗不知道区间内那天是否交易日,
-                        常显既避免错误的区间判断, 也覆盖「区间外」与「周末加入」两种情况 */}
-                    {addedDate && (
-                      <span
-                        className="text-[10px] text-muted shrink-0"
-                        title="加入自选日 (北京时间); 该日无K线时不画竖线"
-                      >
-                        自选于 {addedDate}
-                      </span>
-                    )}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1">
-                    <div className="inline-flex shrink-0 items-center rounded border border-border bg-elevated p-0.5" aria-label="分时周期">
+                  <div className="inline-flex items-center gap-2">
+                    <div className="inline-flex shrink-0 items-center rounded border border-border/60 bg-base/60 p-0.5" aria-label="分时周期">
                       {dayOptions.map(days => (
                         <button
                           key={days}
                           type="button"
                           aria-pressed={effectiveIntradayDays === days}
                           onClick={() => selectIntradayDays(days)}
-                          className={`h-5 rounded px-1.5 font-mono text-[10px] transition-colors ${
+                          className={`h-6 rounded px-2.5 text-[11px] transition-colors ${
                             effectiveIntradayDays === days
-                              ? 'bg-accent/20 text-accent'
-                              : 'text-muted hover:text-secondary'
+                              ? 'bg-accent/20 text-accent font-medium'
+                              : 'text-muted hover:text-secondary hover:bg-elevated/60'
                           }`}
                         >
                           {days}日
@@ -357,39 +379,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     </div>
                   </div>
                 )}
+              </div>
 
-                <span className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-
-                {/* 日K / 分时 切换 */}
-                <div role="tablist" aria-label="图表视图" className="inline-flex shrink-0 items-center rounded border border-border bg-elevated p-0.5">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={view === 'daily'}
-                    onClick={() => setView('daily')}
-                    className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors ${
-                      view === 'daily' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
-                    }`}
-                  >
-                    <LineChart className="h-3 w-3" />
-                    日 K
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={view === 'intraday'}
-                    onClick={() => setView('intraday')}
-                    className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors ${
-                      view === 'intraday' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
-                    }`}
-                  >
-                    <Clock className="h-3 w-3" />
-                    分时
-                  </button>
-                </div>
-
-                <span className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-
+              <div className="flex shrink-0 items-center gap-1">
                 {/* 自选 */}
                 {inWatchlist ? (
                   <button
@@ -441,12 +433,13 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
 
                 <button
                   onClick={onClose}
-                  className="shrink-0 rounded-btn p-1.5 text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                  className="shrink-0 rounded-btn p-1.5 text-secondary transition-colors hover:bg-danger/15 hover:text-danger"
                   aria-label="关闭个股详情"
                   title="关闭"
                 >
                   <X className="h-4 w-4" />
                 </button>
+              </div>
               </div>
             </div>
 
@@ -534,8 +527,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
               )
             })()}
 
-            {/* 图表内容 */}
-            <div className="flex-1 overflow-auto p-4">
+            {/* 图表内容 — 内衬卡片容器, 图表区与弹窗背景分层 (纯样式) */}
+            <div className="flex-1 overflow-auto p-3 sm:p-4">
+              <div className="rounded border border-border/50 bg-base/30 p-3">
               {view === 'daily' ? (
                 <StockPanel
                   symbol={symbol}
@@ -551,13 +545,14 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   addedDate={addedDate}
                 />
               ) : (
-                <>
+                <div className="flex flex-col gap-3">
                 <StockPanel
                   symbol={symbol}
                   dateRange={dateRange}
                   infoBarOnly
                   prefetchSymbols={prefetchSymbols}
                   intradayDays={effectiveIntradayDays}
+                  addedDate={addedDate}
                 />
                 <StockMultiDayIntradayChart
                   symbol={symbol}
@@ -567,8 +562,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   priceLines={monitorPriceLines}
                   onPriceDoubleClick={openPriceAlert}
                 />
-                </>
+                </div>
               )}
+              </div>
             </div>
 
             {/* 扩展插槽: 对话框底部二开区 (无注册时不渲染) */}

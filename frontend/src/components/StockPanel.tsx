@@ -201,6 +201,7 @@ export function StockPanel({
         onAddToWatchlist={onAddToWatchlist}
         onRemoveFromWatchlist={onRemoveFromWatchlist}
         watchlistPending={watchlistPending}
+        addedDate={addedDate}
       />
 
       {infoBarOnly ? null : (
