@@ -1,0 +1,17 @@
+<!-- Tick Stock Panel 品牌 logo — App 图标 / 头像徽章版
+     品牌紫渐变圆角方底 + 纯白标记 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Tick Stock Panel">
+  <defs>
+    <linearGradient id="tsp-badge" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#tsp-badge)"/>
+  <path d="M23.5 15.5 H19 A3.5 3.5 0 0 0 15.5 19 V45 A3.5 3.5 0 0 0 19 48.5 H23.5"
+        stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <path d="M40.5 15.5 H45 A3.5 3.5 0 0 1 48.5 19 V45 A3.5 3.5 0 0 1 45 48.5 H40.5"
+        stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <line x1="32" y1="19.5" x2="32" y2="44.5" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-opacity="0.6"/>
+  <rect x="27.5" y="23" width="9" height="14" rx="1.4" fill="#FFFFFF"/>
+</svg>
