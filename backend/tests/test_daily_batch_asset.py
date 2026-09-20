@@ -40,3 +40,39 @@ def test_daily_batch_groups_index_symbols(repo, monkeypatch):
     assert calls["stock_batch"] == [["600000.SH"]]
     assert calls["index"] == ["000001.SH"]
     assert "000001.SH" in out["data"]
+
+
+# 钉死的北京日期, 不会碰巧等于跑测试那天的 date.today()
+_BJ = _dt.date(2026, 3, 2)
+
+
+def test_daily_batch_window_ends_on_beijing_today(repo, monkeypatch):
+    """自选迷你K 的默认截止日必须是北京今天。
+
+    QuoteService 盘中 flush 的当日分区日期是北京交易日。未修复代码用
+    date.today() 做窗口右端: 美西主机整个 A 股交易时段、UTC 主机北京
+    00:00-08:00, 本地日历日比北京早一天, 今日实时 K 被排除, 迷你蜡烛停在昨天。
+    raising=False: 未修复代码没有调用 cn_today, 钉了也不会被用到。
+    """
+    from app.api import kline as kline_api
+
+    captured: list[tuple[_dt.date, _dt.date]] = []
+
+    def fake_stock_batch(symbols, start, end, columns=None):
+        captured.append((start, end))
+        return pl.DataFrame({
+            "symbol": ["600000.SH"], "date": [_BJ],
+            "open": [10.0], "high": [10.6], "low": [9.9], "close": [10.6], "volume": [1.0],
+        })
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: _BJ, raising=False)
+    monkeypatch.setattr(repo, "get_daily_batch", fake_stock_batch)
+    monkeypatch.setattr(repo, "resolve_asset_type", lambda s: "stock")
+
+    state = type("S", (), {"repo": repo})()
+    req = type("R", (), {"app": type("A", (), {"state": state})()})()
+
+    kline_api.get_daily_batch(req, {"symbols": ["600000.SH"], "days": 12})
+    assert captured, "应查询日K"
+    _start, end = captured[0]
+    assert end == _BJ, f"窗口右端必须是北京日期 {_BJ}, 实际 {end} (服务器本地 {_dt.date.today()})"

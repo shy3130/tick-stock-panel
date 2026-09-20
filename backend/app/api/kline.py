@@ -613,9 +613,12 @@ def get_daily_batch(request: Request, body: dict):
 
     repo = request.app.state.repo
     import polars as pl
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    end = date.today()
+    # 窗口右端必须是北京今天: QuoteService 当日 flush 的分区日期是北京交易日。
+    # 美西主机整个 A 股交易时段、UTC 主机北京 00:00-08:00, date.today() 比北京早一天,
+    # 迷你蜡烛会把当日实时 K 排除在窗口外。
+    end = cn_today()
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
