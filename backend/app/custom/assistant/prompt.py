@@ -6,7 +6,7 @@ focus 字段, 此处面向多轮对话, 故独立实现而非复用拼接)。
 """
 from __future__ import annotations
 
-from datetime import date
+from app.market_time import cn_today
 
 _SYSTEM_TEMPLATE = """\
 你是 Tick Stock Panel 的本地行情数据分析助手, 基于面板已落库的真实数据作答。
@@ -65,4 +65,4 @@ def build_system_prompt(context: dict | None) -> str:
         if symbol:
             lines.append(f"- 用户正在关注的标的: {symbol}。")
     context_block = "\n".join(lines) if lines else "- 用户未提供页面上下文。"
-    return _SYSTEM_TEMPLATE.format(today=date.today().isoformat(), context=context_block)
+    return _SYSTEM_TEMPLATE.format(today=cn_today().isoformat(), context=context_block)
