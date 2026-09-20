@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, RefreshCw, Clock, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -9,6 +9,7 @@ import { cnSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { fmtPct, cnDateFromUtc } from '@/lib/format'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
+import { NavPager, NavWrapToast } from '@/components/NavPager'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
 import { DatePicker } from '@/components/DatePicker'
@@ -19,6 +20,8 @@ import { usePreferences } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { storage } from '@/lib/storage'
+import { navItemKey, type NavItem } from '@/lib/listNav'
+import { useListNav } from '@/lib/useListNav'
 import { DEFAULT_INTRADAY_DAYS } from '@/lib/kline'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 
@@ -38,31 +41,6 @@ interface Props {
   navList?: NavItem[]
   /** 切股回调: 收到目标 symbol/name, 由调用方更新预览状态 */
   onNavigate?: (symbol: string, name?: string) => void
-}
-
-/** 切股导航列表项 */
-export interface NavItem { symbol: string; name?: string }
-
-/** 把 symbol+name 的列表转成切股导航列表项 (统一 name 归一化为 undefined, 免去各处重复 map + as 断言) */
-export function toNavItems<T extends { symbol: string; name?: string | null }>(xs: T[]): NavItem[] {
-  return xs.map(x => ({ symbol: x.symbol, name: x.name ?? undefined }))
-}
-
-/** 首↔尾循环的索引换算: go(delta) 与 邻近预取 共用, 保证换行规则单源 */
-function wrapNavIndex(navIdx: number, delta: number, navTotal: number): number {
-  return (navIdx + delta + navTotal) % navTotal
-}
-
-/** 榜单里同一标的可能多次出现 (多概念/行业 leader、监控重复触发), 去重以免切股/计数空跳; 保留首次出现。 */
-function uniqueNavItems(xs: NavItem[]): NavItem[] {
-  const seen = new Set<string>()
-  const out: NavItem[] = []
-  for (const n of xs) {
-    if (seen.has(n.symbol)) continue
-    seen.add(n.symbol)
-    out.push(n)
-  }
-  return out
 }
 
 // ===== 板块标识（与 Screener 列表一致）=====
@@ -179,75 +157,32 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   })
 
   // ===== 切股导航 =====
-  const navList = useMemo(() => uniqueNavItems(navListSource ?? []), [navListSource])
-
-  // 当前 symbol 在 navList 中的位置 (不在列表则为 -1, 此时不显示计数/按钮)
-  const navIdx = navList.findIndex(n => n.symbol === symbol)
-  const navTotal = navList.length
-  const navEnabled = navTotal >= 2 && navIdx >= 0
-
-  // 首↔尾循环的弱提示 (自显 ~1.5s, 不引全局 Toast)
-  const [wrapMsg, setWrapMsg] = useState<string | null>(null)
-  const wrapTimer = useRef<number | null>(null)
-  useEffect(() => {
-    return () => { if (wrapTimer.current) window.clearTimeout(wrapTimer.current) }
-  }, [])
-
-  // 父级 onNavigate/onClose 多为内联 lambda, 用最新值 ref 承接, 避免每次父渲染重建 go/键盘监听
-  const onNavigateRef = useRef(onNavigate)
-  onNavigateRef.current = onNavigate
+  // onClose 只有 ESC 用; onNavigate 由 useListNav 内部承接 (支持内联 lambda)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
-  // 前后切股: 返回是否真正导航 (供键盘判断是否要 preventDefault)
-  const go = useCallback((delta: 1 | -1): boolean => {
-    if (!navEnabled) return false
-    const nextIdx = wrapNavIndex(navIdx, delta, navTotal)
-    const wrapped = nextIdx === (delta === 1 ? 0 : navTotal - 1)
-    if (wrapped) {
-      // 提示词描述切股后的落点 (而非起点)
-      setWrapMsg(delta === 1 ? '已到榜首' : '已到末尾')
-      if (wrapTimer.current) window.clearTimeout(wrapTimer.current)
-      wrapTimer.current = window.setTimeout(() => setWrapMsg(null), 1500)
-    }
-    const next = navList[nextIdx]
-    onNavigateRef.current?.(next.symbol, next.name)
-    return true
-  }, [navList, navIdx, navTotal])
+  const nav = useListNav<NavItem>({
+    items: navListSource ?? [],
+    keyOf: navItemKey,
+    currentKey: symbol,
+    onNavigate: n => onNavigate?.(n.symbol, n.name),
+    // 点位监控弹窗/规则编辑器打开时方向键不切股 (与 ESC 的 !priceAlertDraft 守卫同层级)
+    blocked: () => !!priceAlertDraft || showMonitorEditor,
+    wrapHints: { head: '已到榜首', tail: '已到末尾' },
+  })
 
   // 邻近预取目标: 当前股左右相邻两只 (首↔尾循环), 交由 StockPanel 提前拉取日K/财务/分时缓存
-  const prefetchSymbols = useMemo(() => {
-    if (!navEnabled) return []
-    return [
-      navList[wrapNavIndex(navIdx, -1, navTotal)].symbol,
-      navList[wrapNavIndex(navIdx, 1, navTotal)].symbol,
-    ]
-  }, [navEnabled, navIdx, navTotal, navList])
+  const prefetchSymbols = useMemo(() => nav.neighbors.map(n => n.symbol), [nav.neighbors])
 
-  // ESC 关闭 + 左右键切股
+  // ESC 关闭 (左右键切股由 useListNav 接管)
   useEffect(() => {
     if (!symbol) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !priceAlertDraft) { onCloseRef.current(); return }
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        // 点位监控弹窗打开时方向键不切股 (与 ESC 的 !priceAlertDraft 守卫同层级)
-        if (priceAlertDraft) return
-        // 焦点在输入框/编辑器时方向键让位给光标/输入, 不切股
-        const t = e.target as HTMLElement | null
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
-        if (showMonitorEditor) return
-        if (go(e.key === 'ArrowRight' ? 1 : -1)) {
-          e.preventDefault()
-          // 切股后清掉控件残留的键盘焦点: 点过分时tab/外链等控件后方向键切股,
-          // 浏览器会给该控件显示 focus-visible 默认蓝色 outline, 切换后 blur 掉避免残留。
-          // keydown 的 e.target 即聚焦元素, 复用已捕获的 t (已排除输入框/编辑器)。
-          t?.blur()
-        }
-      }
+      if (e.key === 'Escape' && !priceAlertDraft) onCloseRef.current()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [symbol, go, showMonitorEditor, priceAlertDraft])
+  }, [symbol, priceAlertDraft])
 
   // 弹窗内切股时保留当前视图 (分时 tab 下切股不应跳回日K);
   // 仅当弹窗首次打开 (symbol 从 null 变非空) 时重置为日K。
@@ -347,30 +282,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 {name && <span className="truncate text-xs text-muted">{name}</span>}
 
                 {/* 切股导航: 上一只 / n·N / 下一只 */}
-                {navEnabled && (
-                  <>
-                    <span className="mx-0.5 shrink-0 text-muted/20">|</span>
-                    <button
-                      onClick={() => go(-1)}
-                      title="上一只 (←)"
-                      aria-label="上一只"
-                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer"
-                    >
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </button>
-                    <span className="shrink-0 font-mono text-[11px] text-secondary tabular-nums whitespace-nowrap">
-                      {navIdx + 1} / {navTotal}
-                    </span>
-                    <button
-                      onClick={() => go(1)}
-                      title="下一只 (→)"
-                      aria-label="下一只"
-                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer"
-                    >
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
+                <NavPager nav={nav} prevLabel="上一只" nextLabel="下一只" />
               </div>
 
               <div className="flex shrink-0 items-center gap-1">
@@ -696,19 +608,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             </AnimatePresence>
 
             {/* 首↔尾循环弱提示 */}
-            <AnimatePresence>
-              {wrapMsg && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 8 }}
-                  transition={{ duration: 0.2 }}
-                  className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full border border-border bg-surface/95 px-3 py-1.5 text-[11px] text-secondary shadow-lg backdrop-blur"
-                >
-                  {wrapMsg}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <NavWrapToast message={nav.wrapMsg} />
           </motion.div>
         </div>
       )}

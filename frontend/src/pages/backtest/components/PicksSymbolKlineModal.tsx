@@ -1,9 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import { StockPanel } from '@/components/StockPanel'
+import { NavPager, NavWrapToast } from '@/components/NavPager'
 import type { ChartMarker } from '@/components/EChartsCandlestick'
 import type { StrategyBacktestResult, StrategyBacktestTrade } from '@/lib/api'
+import { navItemKey, type NavItem } from '@/lib/listNav'
+import { useListNav } from '@/lib/useListNav'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
@@ -16,21 +19,37 @@ interface Props {
   /** 回测有效区间 (图默认展示范围) */
   periodStart: string
   periodEnd: string
+  /** 有序候选列表 (选股分析全部标的): 提供后支持左右键/顶栏按钮切标的 */
+  navList?: NavItem[]
+  /** 切标的回调: 收到目标 symbol/name, 由调用方更新选中状态 */
+  onNavigate?: (symbol: string, name?: string) => void
   onClose: () => void
 }
 
 /** 「选股分析」行的标的级K线弹窗 (单笔回放见 TradeKlineModal) */
-export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, onClose }: Props) {
+export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, navList, onNavigate, onClose }: Props) {
   const backdrop = useDialogBackdrop(onClose)
+
+  // onClose 只有 ESC 用; onNavigate 由 useListNav 内部承接 (支持内联 lambda)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  const nav = useListNav<NavItem>({
+    items: navList ?? [],
+    keyOf: navItemKey,
+    currentKey: symbol,
+    onNavigate: n => onNavigate?.(n.symbol, n.name),
+    wrapHints: { head: '已到榜首', tail: '已到末尾' },
+  })
 
   useEffect(() => {
     if (!symbol) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [symbol, onClose])
+  }, [symbol])
 
   const view = useMemo(() => {
     if (!symbol || !result) return { trades: [] as StrategyBacktestTrade[], stat: null, name: '' }
@@ -109,6 +128,9 @@ export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, 
                       </span>
                     )}
                     <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">标的回放</span>
+
+                    {/* 切标的: 上一只 / n·N / 下一只 */}
+                    <NavPager nav={nav} prevLabel="上一只" nextLabel="下一只" />
                   </div>
                   <div className="mt-1 text-[11px] text-muted">
                     回测 {periodStart} ~ {periodEnd} · {trades.length} 笔交易
@@ -162,6 +184,9 @@ export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, 
                 visibleBars="all"
               />
             </div>
+
+            {/* 首↔尾循环弱提示 */}
+            <NavWrapToast message={nav.wrapMsg} />
           </motion.div>
         </div>
       )}
