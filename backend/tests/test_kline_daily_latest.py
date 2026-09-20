@@ -71,7 +71,10 @@ def _live_frame() -> pl.DataFrame:
     })
 
 
-def test_daily_latest_returns_only_current_memory_row() -> None:
+def test_daily_latest_returns_only_current_memory_row(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, repo = _client(_live_frame(), date.today())
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600000.SH"})
@@ -96,7 +99,10 @@ def test_daily_latest_returns_only_current_memory_row() -> None:
     assert repo.latest_asset_calls == 0
 
 
-def test_daily_latest_returns_none_for_stale_cache() -> None:
+def test_daily_latest_returns_none_for_stale_cache(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, _ = _client(_live_frame(), date.today() - timedelta(days=1))
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600000.SH"})
@@ -109,7 +115,10 @@ def test_daily_latest_returns_none_for_stale_cache() -> None:
     }
 
 
-def test_daily_latest_returns_none_when_symbol_is_missing() -> None:
+def test_daily_latest_returns_none_when_symbol_is_missing(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, _ = _client(_live_frame(), date.today())
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600001.SH"})
@@ -122,7 +131,10 @@ def test_daily_latest_returns_none_when_symbol_is_missing() -> None:
     }
 
 
-def test_daily_latest_uses_etf_enriched_cache() -> None:
+def test_daily_latest_uses_etf_enriched_cache(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     etf = _live_frame().with_columns(pl.lit("510300.SH").alias("symbol"))
     client, repo = _client(
         pl.DataFrame(),
@@ -162,3 +174,53 @@ def test_daily_latest_uses_index_enriched_cache(monkeypatch) -> None:
     assert body["source"] == "live"
     assert repo.latest_asset_calls == 1
     assert repo.latest_asset_refresh is False
+BJ = date(2026, 3, 2)  # 钉死的北京日期, 不会碰巧等于跑测试那天的 date.today()
+
+
+def _frame_on(day: date, symbol: str = "600000.SH") -> pl.DataFrame:
+    return pl.DataFrame({
+        "symbol": [symbol],
+        "date": [day],
+        "open": [10.0],
+        "high": [10.8],
+        "low": [9.9],
+        "close": [10.6],
+        "volume": [123_456.0],
+        "amount": [1_234_560.0],
+        "ma5": [10.2],
+        "signal_limit_up": [False],
+    })
+
+
+def _request(frame: pl.DataFrame, trade_date: date):
+    from types import SimpleNamespace
+
+    repo = _FakeRepo()
+    qs = _FakeQuoteService(frame, trade_date)
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo, quote_service=qs)))
+
+
+def test_live_candle_uses_beijing_today_not_server_local(monkeypatch) -> None:
+    """缓存日期是北京今天时必须注入; 不能拿服务器本地 date.today() 去比较。
+
+    raising=False: 未修复代码没有在这条路径调用 cn_today, 钉了也不会被用到,
+    比较仍走 date.today() → 与 2026-03-02 不等 → 返回 None。
+    """
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: BJ, raising=False)
+    row = kline_api._latest_live_candle(_request(_frame_on(BJ), BJ), "600000.SH", "stock")
+    assert row is not None
+    assert row["close"] == 10.6
+    assert row["date"] == str(BJ)
+
+
+def test_live_candle_stale_vs_beijing_today(monkeypatch) -> None:
+    """缓存停在北京昨天时不注入。"""
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: BJ, raising=False)
+    row = kline_api._latest_live_candle(
+        _request(_frame_on(date(2026, 3, 1)), date(2026, 3, 1)), "600000.SH", "stock",
+    )
+    assert row is None

@@ -138,14 +138,53 @@ def test_minute_price_limit_prefers_authoritative_prices_only_today(monkeypatch)
         "rate": 0.10,
         "limit_up": 10.88,
         "limit_down": 8.90,
+        "no_limit": False,
         "source": "instrument",
     }
     assert historical == {
         "rate": 0.05,
         "limit_up": None,
         "limit_down": None,
+        "no_limit": False,
         "source": "rule",
     }
+
+
+class _NewStockRepo:
+    """listing_date 在无涨跌幅窗口内的注册制新股维表 (C沈鼓场景)。"""
+
+    def __init__(self, listing: date):
+        self.listing = listing
+
+    def get_instruments_asset(self, asset_type: str) -> pl.DataFrame:
+        assert asset_type == "stock"
+        return pl.DataFrame({
+            "symbol": ["601091.SH"],
+            "name": ["C沈鼓"],
+            "limit_up": [100000.0],   # 哨兵值
+            "limit_down": [None],
+            "listing_date": [self.listing],
+        })
+
+
+def test_minute_price_limit_no_limit_window_overrides_rate_and_sentinel():
+    """listing_date 命中窗口: 历史日 (哨兵/as_of 均失效) 也返回 no_limit=True。"""
+    listing = date(2026, 9, 17)
+    repo = _NewStockRepo(listing)
+
+    # 行情日 = 上市次日 (窗口内), 维表 as_of 与行情日无关 (无 as_of 列)
+    info = kline._get_price_limit_info(repo, "601091.SH", date(2026, 9, 18), "stock", "C沈鼓")
+
+    assert info is not None
+    assert info["no_limit"] is True
+    assert info["limit_up"] is None
+    assert info["limit_down"] is None
+
+    # 窗口外 (第 6 个交易日之后) 恢复 rate 口径
+    after = kline._get_price_limit_info(repo, "601091.SH", date(2026, 10, 15), "stock", "沈鼓能源")
+    assert after is not None
+    assert after["no_limit"] is False
+    assert after["rate"] == 0.10
 
 
 def _daily_limit_rows(current_close: float) -> pl.DataFrame:

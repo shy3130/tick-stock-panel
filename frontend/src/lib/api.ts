@@ -266,6 +266,8 @@ export interface PriceLimitInfo {
   rate: number
   limit_up: number | null
   limit_down: number | null
+  /** 注册制新股上市初期无涨跌幅窗口内为 true: 不画涨跌停带, y 轴按实际数据自适应 */
+  no_limit?: boolean
   source: 'rule' | 'instrument'
 }
 

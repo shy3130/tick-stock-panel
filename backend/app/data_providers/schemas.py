@@ -9,7 +9,7 @@ DAILY_COLUMNS = [
 ADJ_FACTOR_COLUMNS = ["symbol", "asset_type", "source", "trade_date", "ex_factor"]
 
 INSTRUMENT_COLUMNS = [
-    "symbol", "name", "exchange", "asset_type", "source", "list_date", "status",
+    "symbol", "name", "exchange", "asset_type", "source", "listing_date", "status",
 ]
 
 MINUTE_COLUMNS = [

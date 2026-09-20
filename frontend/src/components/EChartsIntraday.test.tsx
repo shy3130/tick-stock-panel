@@ -57,3 +57,73 @@ it('aggregates available minutes without inventing a missing opening price', asy
   expect(host.textContent).toContain('—')
   expect(host.textContent).toContain('155')
 })
+
+// ================================================================
+// y 轴范围: 无涨跌幅新股不被钳制到 ±10% 涨跌停带内 (C沈鼓场景)
+// ================================================================
+const wideRows = (day: string) => [
+  { datetime: `${day} 09:30:00`, open: 15, high: 15, low: 15, close: 15, volume: 100, amount: 150000 },
+  { datetime: `${day} 11:20:00`, open: 57.7, high: 57.8, low: 57.7, close: 57.77, volume: 55, amount: 318000 },
+]
+
+function lastYAxis(): any {
+  const call = chart.setOption.mock.calls.at(-1)
+  return call?.[0]?.yAxis?.[0]
+}
+
+it('no_limit day: adaptive y-axis covers data far beyond the ±10% band', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(
+    <EChartsIntraday
+      data={wideRows('2026-09-18')}
+      date="2026-09-18"
+      prevClose={20.8}
+      priceLimit={{ rate: 0.1, limit_up: null, limit_down: null, no_limit: true, source: 'rule' }}
+    />,
+  ))
+  const axis = lastYAxis()
+  // 旧钳制行为会把 y 轴夹到 18.72~22.88, 曲线全部出界; 现在必须覆盖 15~57.77
+  expect(axis.min).toBeLessThanOrEqual(15)
+  expect(axis.max).toBeGreaterThanOrEqual(57.77)
+})
+
+it('regular stock: adaptive y-axis still clamps to the limit band', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(
+    <EChartsIntraday
+      data={[
+        { datetime: '2026-09-18 09:30:00', open: 20, high: 20, low: 20, close: 20, volume: 100, amount: 200000 },
+        { datetime: '2026-09-18 15:00:00', open: 22, high: 22, low: 22, close: 22, volume: 55, amount: 121000 },
+      ]}
+      date="2026-09-18"
+      prevClose={20}
+      priceLimit={{ rate: 0.1, limit_up: 22, limit_down: 18, no_limit: false, source: 'rule' }}
+    />,
+  ))
+  const axis = lastYAxis()
+  expect(axis.min).toBeCloseTo(18, 6)
+  expect(axis.max).toBeCloseTo(22, 6)
+})
+
+it('listing day without prevClose anchors y-axis with scale, not zero', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(
+    <EChartsIntraday data={wideRows('2026-09-17')} date="2026-09-17" />,
+  ))
+  const axis = lastYAxis()
+  expect(axis.min).toBeUndefined()
+  expect(axis.max).toBeUndefined()
+  expect(axis.scale).toBe(true)
+})

@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,8 +20,9 @@ from fastapi.testclient import TestClient
 from app.api import indices
 from app.api.kline import router as kline_router
 
-TODAY = date.today()
-YDAY = TODAY - timedelta(days=1)
+# 钉死的北京日期 (#369 后读侧守卫是 cn_today, 测试必须与服务器本地 date.today() 解耦)
+TODAY = date(2026, 3, 2)
+YDAY = date(2026, 3, 1)
 
 
 def _live_index_frame(day: date) -> pl.DataFrame:
@@ -75,11 +76,13 @@ def _index_request(repo: _IndexRepo):
     )
 
 
-# 本 PR 读侧 _latest_live_candle 守卫仍是 date.today(); TODAY 取同一进程的
-# date.today(), 缓存日期与守卫一致。不桩 cn_today, 避免让人以为这条路径已切北京日期。
+# #369 已合入: 读侧守卫是 cn_today, 注入路径测试统一钉 kline_api.cn_today = TODAY
 
 
-def test_index_daily_injects_live_candle() -> None:
+def test_index_daily_injects_live_candle(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: TODAY)
     repo = _IndexRepo()
     result = indices.get_index_daily(
         _index_request(repo), symbol="000001.SH", days=5, start_date=None, end_date=None,
@@ -100,8 +103,11 @@ def test_index_daily_injects_live_candle() -> None:
     ],
     ids=["empty", "stale"],
 )
-def test_index_daily_skips_live_candle_when_cache_unusable(latest) -> None:
+def test_index_daily_skips_live_candle_when_cache_unusable(monkeypatch, latest) -> None:
     """enriched 为空或日期非今日时, 历史行原样返回, 不追加蜡烛。"""
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: TODAY)
     repo = _IndexRepo(latest=latest)
     result = indices.get_index_daily(
         _index_request(repo), symbol="000001.SH", days=5, start_date=None, end_date=None,
@@ -111,7 +117,10 @@ def test_index_daily_skips_live_candle_when_cache_unusable(latest) -> None:
     assert TODAY.isoformat() not in dates
 
 
-def test_kline_daily_latest_reads_index_cache() -> None:
+def test_kline_daily_latest_reads_index_cache(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: TODAY)
     repo = _IndexRepo()
     app = FastAPI()
     app.include_router(kline_router)

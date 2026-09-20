@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.market_time import cn_now, cn_today, in_continuous_session
-from app.price_limits import is_risk_warning_name, price_limit_pct
+from app.price_limits import is_no_limit_day, is_risk_warning_name, parse_listing_date, price_limit_pct
 from app.db_safe import is_valid_ext_ident
 from app.services import kline_sync, trading_day
 from app.services import minute_adjust
@@ -265,7 +265,7 @@ def _get_price_limit_info(
     if asset_type == "index":
         return None
 
-    info = {
+    info: dict = {
         "rate": price_limit_pct(
             symbol,
             trade_date,
@@ -275,26 +275,39 @@ def _get_price_limit_info(
         ),
         "limit_up": None,
         "limit_down": None,
+        "no_limit": False,
         "source": "rule",
     }
-    if trade_date != cn_today():
-        return info
 
+    # instrument 行一次取出: 今日权威涨跌停价 + listing_date 窗口判定共用
+    row: dict | None = None
     try:
         import polars as pl
 
         instruments = repo.get_instruments_asset(asset_type)
         available = [
             column
-            for column in ("symbol", "limit_up", "limit_down")
+            for column in ("symbol", "limit_up", "limit_down", "listing_date")
             if column in instruments.columns
         ]
-        if "symbol" not in available or len(available) == 1:
-            return info
-        hit = instruments.filter(pl.col("symbol") == symbol).select(available).head(1)
-        row = hit.to_dicts()[0] if not hit.is_empty() else None
+        if "symbol" in available and len(available) > 1:
+            hit = instruments.filter(pl.col("symbol") == symbol).select(available).head(1)
+            if not hit.is_empty():
+                row = hit.to_dicts()[0]
     except Exception:
+        row = None
+
+    # 注册制新股上市初期无涨跌幅: listing_date 命中窗口时 no_limit=True,
+    # 压过 rate 与维表值 (前端不再画涨跌停带, y 轴按实际数据自适应)
+    if row is not None:
+        listing = parse_listing_date(row.get("listing_date"))
+        if listing is not None and is_no_limit_day(symbol, listing, trade_date):
+            info["no_limit"] = True
+            return info
+
+    if trade_date != cn_today():
         return info
+
     if row is None:
         return info
 
@@ -495,8 +508,11 @@ def _latest_live_candle(
     if df_today.is_empty():
         return None
 
-    # 非交易日(周末/假日)缓存日期 != 今天, 跳过注入避免产生重复蜡烛
-    if not enriched_date or enriched_date != date.today():
+    # 非交易日(周末/假日)缓存日期 != 北京今天, 跳过注入避免产生重复蜡烛。
+    # 必须用 cn_today(): 美洲时区主机整个 A 股交易时段本地日期落后北京一天,
+    # 旧代码盘中直接丢K。UTC 主机盘中(UTC 1:30-7:00)本地日期与北京相同, 并不丢K;
+    # UTC 的旧症状是北京 00:00-08:00 把昨日残留快照误当实时K注入。
+    if not enriched_date or enriched_date != cn_today():
         return None
 
     # 查找该 symbol 的实时 enriched 行
