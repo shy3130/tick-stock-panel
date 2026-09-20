@@ -140,8 +140,11 @@ def test_daily_latest_uses_etf_enriched_cache() -> None:
     assert repo.latest_asset_refresh is False
 
 
-def test_daily_latest_uses_index_enriched_cache() -> None:
+def test_daily_latest_uses_index_enriched_cache(monkeypatch) -> None:
     """指数日K的当日实时行走独立 index enriched 缓存, 不能直接 return None。"""
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     idx = _live_frame().with_columns(pl.lit("000001.SH").alias("symbol"))
     client, repo = _client(
         pl.DataFrame(),

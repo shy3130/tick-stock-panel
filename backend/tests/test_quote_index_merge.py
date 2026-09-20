@@ -76,3 +76,76 @@ def test_merge_live_daily_preserves_full_index_partition(tmp_path):
     result = pl.read_parquet(out)
     assert len(result) == 3, f"merge 后分区应有 3 只指数, 实际 {len(result)}"
     assert result.filter(pl.col("symbol") == "000001.SH")["close"][0] == 3001.0
+
+
+def test_index_live_write_without_monitor_rules(monkeypatch) -> None:
+    """默认配置无指数监控规则时, 核心指数仍 merge/flush live enriched。
+
+    核心四只每轮已显式拉取, 写盘不得再门控 has_asset_rules("index"),
+    否则盘中 kline_index_enriched 停在上一交易日, 读侧无法注入当日K。
+    """
+    from datetime import datetime, time as dt_time
+    from types import SimpleNamespace
+
+    from app.market_time import CN_TZ, cn_today
+    import app.services.quote_service as qs_module
+    from app.services.quote_service import QuoteService
+
+    class _Engine:
+        def has_asset_rules(self, asset_type: str) -> bool:
+            return False
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.merge_calls: list[tuple[str, list[str]]] = []
+
+        def get_index_symbol_set(self) -> set:
+            return set()
+
+        def get_etf_instruments(self):
+            return pl.DataFrame()
+
+        def flush_live_daily(self, df) -> None:
+            return None
+
+        def flush_live_daily_asset(self, asset_type: str, df) -> None:
+            return None
+
+        def merge_live_daily_asset(self, asset_type: str, df) -> None:
+            self.merge_calls.append((asset_type, df["symbol"].to_list()))
+
+    qs = QuoteService()
+    repo = _Repo()
+    qs._repo = repo
+    qs._app_state = SimpleNamespace(monitor_engine=_Engine())
+    flush_calls: list[tuple[str, bool, list[str]]] = []
+    monkeypatch.setattr(qs_module, "_persist_last_fetch", lambda ms: None)
+    monkeypatch.setattr(qs, "_update_volume_delta", lambda *a, **k: None)
+    monkeypatch.setattr(qs, "_evaluate_monitors", lambda *a, **k: None)
+    monkeypatch.setattr(qs, "_broadcast_quote_updated", lambda: None)
+    monkeypatch.setattr(
+        qs,
+        "_flush_live_enriched",
+        lambda df, extra=None, asset_type="stock", merge=False: flush_calls.append(
+            (asset_type, merge, df["symbol"].to_list())
+        ),
+    )
+
+    ts = int(datetime.combine(cn_today(), dt_time(10, 0), tzinfo=CN_TZ).timestamp() * 1000)
+    qs._process_full_market_records(
+        [{
+            "symbol": "000001.SH",
+            "last_price": 3001.0,
+            "open": 3000.0,
+            "high": 3010.0,
+            "low": 2990.0,
+            "volume": 1000,
+            "amount": 10000.0,
+            "timestamp": ts,
+        }],
+        t0=0.0,
+        now_ts=0.0,
+    )
+
+    assert repo.merge_calls == [("index", ["000001.SH"])]
+    assert ("index", True, ["000001.SH"]) in flush_calls
