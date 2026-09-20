@@ -53,7 +53,9 @@ def get_index_daily(
 
     df = repo.get_index_daily(symbol, start, end)
     if not df.is_empty():
-        return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": df.to_dicts(), "source": "index_enriched"}
+        from app.api.kline import _maybe_inject_live_candle
+        rows = _maybe_inject_live_candle(request, symbol, df.to_dicts(), "index")
+        return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": rows, "source": "index_enriched"}
 
     capset = request.app.state.capabilities
     if not capset.has(Cap.KLINE_DAILY_BATCH):

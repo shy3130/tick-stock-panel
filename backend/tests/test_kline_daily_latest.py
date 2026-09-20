@@ -152,6 +152,28 @@ def test_daily_latest_uses_etf_enriched_cache(monkeypatch) -> None:
     assert repo.latest_asset_refresh is False
 
 
+def test_daily_latest_uses_index_enriched_cache(monkeypatch) -> None:
+    """指数日K的当日实时行走独立 index enriched 缓存, 不能直接 return None。"""
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
+    idx = _live_frame().with_columns(pl.lit("000001.SH").alias("symbol"))
+    client, repo = _client(
+        pl.DataFrame(),
+        None,
+        asset_type="index",
+        latest_asset=(idx, date.today()),
+    )
+
+    response = client.get("/api/kline/daily/latest", params={"symbol": "000001.SH"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["row"] is not None
+    assert body["row"]["close"] == 10.6
+    assert body["source"] == "live"
+    assert repo.latest_asset_calls == 1
+    assert repo.latest_asset_refresh is False
 BJ = date(2026, 3, 2)  # 钉死的北京日期, 不会碰巧等于跑测试那天的 date.today()
 
 

@@ -893,10 +893,11 @@ class QuoteService:
             self._flush_live_enriched(daily_df, quote_extra, asset_type="stock")
         if not etf_daily_df.is_empty() and self._repo:
             self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf")
-        # ---- 指数: 仅有指数监控规则时才写盘 (无规则零成本) ----
-        # 指数为按码显式拉取 (部分标的) → merge 不截断分区
-        engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
-        if engine and engine.has_asset_rules("index") and self._repo:
+        # ---- 指数: 核心四只每轮已显式拉取, 与股票/ETF 同口径 merge 写盘 ----
+        # 不能再门控 has_asset_rules("index"): 默认配置无指数监控规则, 否则
+        # 盘中 kline_index_enriched 停在上一交易日, 读侧守卫直接跳过不注入。
+        # 指数为按码显式拉取 (部分标的) → merge 不截断分区。
+        if self._repo:
             index_daily_df = self._build_daily(index_records)
             if not index_daily_df.is_empty():
                 try:
