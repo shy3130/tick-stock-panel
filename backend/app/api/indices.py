@@ -47,7 +47,9 @@ def get_index_daily(
 ):
     """读取指数日 K。指数数据使用独立 kline_index_* parquet。"""
     repo = request.app.state.repo
-    end = date.fromisoformat(end_date) if end_date else date.today()
+    # 未传 end_date 时用北京今天。实时注入只在内存缓存命中时补当日 K,
+    # 缓存冷时 parquet 当日行能否进结果取决于这个窗口右端。
+    end = date.fromisoformat(end_date) if end_date else cn_today()
     start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days)
     info = _index_info(repo, symbol)
 

@@ -133,3 +133,34 @@ def test_kline_daily_latest_reads_index_cache(monkeypatch) -> None:
     assert body["source"] == "live"
     assert body["row"]["close"] == 3040.0
     assert repo.latest_calls == [("index", False)]
+
+
+def test_index_daily_default_end_is_beijing_today(monkeypatch) -> None:
+    """/api/index/daily 未传 end_date 时窗口右端必须是北京今天。
+
+    #371 给指数日 K 补了实时注入, 但读 parquet 的默认截止日仍是 date.today()。
+    缓存冷时注入为空, 窗口把北京当日的官方指数 K 排除。
+    raising=False: 未修复代码没有在这条路径调用 cn_today。
+    """
+    from datetime import date as _date
+
+    from app.api import kline as kline_api
+
+    captured: list[tuple] = []
+    repo = _IndexRepo()
+    orig = repo.get_index_daily
+
+    def _wrap(symbol, start, end, columns=None):
+        captured.append((start, end))
+        return orig(symbol, start, end, columns)
+
+    repo.get_index_daily = _wrap  # type: ignore[method-assign]
+    monkeypatch.setattr(kline_api, "cn_today", lambda: TODAY, raising=False)
+    monkeypatch.setattr(indices, "cn_today", lambda: TODAY, raising=False)
+
+    indices.get_index_daily(
+        _index_request(repo), symbol="000001.SH", days=5, start_date=None, end_date=None,
+    )
+    assert captured, "应查询指数日K"
+    _start, end = captured[0]
+    assert end == TODAY, f"窗口右端必须是北京日期 {TODAY}, 实际 {end} (服务器本地 {_date.today()})"
