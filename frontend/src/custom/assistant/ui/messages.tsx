@@ -117,9 +117,12 @@ export const FootprintGroup = memo(function FootprintGroup({ calls }: { calls: T
   return (
     <div className="space-y-2">
       <FootprintCard calls={calls} />
-      {charts.map((chart, i) => (
-        <DailyChartCard key={`${chart.kind}-${chart.symbol}-${i}`} chart={chart} />
-      ))}
+      {/* 两张起并排 (日K+分时同屏最常见), 避免全宽长条被横向拉扁 */}
+      <div className={`grid gap-2 ${charts.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {charts.map((chart, i) => (
+          <DailyChartCard key={`${chart.kind}-${chart.symbol}-${i}`} chart={chart} />
+        ))}
+      </div>
     </div>
   )
 })

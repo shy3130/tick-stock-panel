@@ -46,14 +46,14 @@ function ChartShell({
   const id = gradId(chart)
   return (
     <div className="overflow-hidden rounded-card border border-border bg-base/60">
-      <div className="flex items-center justify-between px-3 py-1.5 text-xs">
-        <span className="font-medium text-foreground">{titleOf(chart)}</span>
-        <span className="font-mono text-muted">{meta}</span>
+      <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-1.5 text-xs">
+        <span className="truncate font-medium text-foreground">{titleOf(chart)}</span>
+        <span className="shrink-0 font-mono text-muted">{meta}</span>
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
-        className="h-20 w-full px-3"
+        className="h-32 w-full px-3"
         role="img"
         aria-label={ariaLabel}
       >
@@ -65,7 +65,7 @@ function ChartShell({
         </defs>
         {children}
       </svg>
-      <div className="flex items-center justify-between px-3 py-1.5 text-[11px]">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 px-3 py-1.5 text-[11px]">
         <span className="font-mono text-muted">{footerLeft}</span>
         <span className="font-mono text-muted">{footerRight}</span>
       </div>
