@@ -242,8 +242,22 @@ def _get_stock_quote(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return result
 
 
+def _finite_float(value: Any) -> float | None:
+    """转 float; None / 非数字 / nan / inf 返回 None, 避免写入非法 JSON。"""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 def _num(v: Any) -> float | None:
-    return round(float(v), 3) if v is not None else None
+    number = _finite_float(v)
+    return None if number is None else round(number, 3)
 
 
 def _intraday_chart_payload(
@@ -267,11 +281,13 @@ def _intraday_chart_payload(
         return None
     points: list[list[Any]] = []
     for row in df.sort("datetime").to_dicts():
-        dt, close = row.get("datetime"), row.get("close")
+        dt = row.get("datetime")
+        close = _finite_float(row.get("close"))
         if dt is None or close is None:
             continue
         t = dt.strftime("%H:%M") if hasattr(dt, "strftime") else str(dt)[-8:-3]
-        points.append([t, round(float(close), 3), round(float(row.get("volume") or 0), 2)])
+        volume = _finite_float(row.get("volume"))
+        points.append([t, round(close, 3), 0.0 if volume is None else round(volume, 2)])
     if len(points) < 2:
         return None
     payload: dict[str, Any] = {
