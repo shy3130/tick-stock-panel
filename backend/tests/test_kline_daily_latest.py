@@ -224,3 +224,45 @@ def test_live_candle_stale_vs_beijing_today(monkeypatch) -> None:
         _request(_frame_on(date(2026, 3, 1)), date(2026, 3, 1)), "600000.SH", "stock",
     )
     assert row is None
+
+
+def test_get_daily_default_end_is_beijing_today(monkeypatch) -> None:
+    """/api/kline/daily 未传 end_date 时窗口右端必须是北京今天。
+
+    实时注入只在内存缓存命中时补当日 K。缓存冷 (进程刚起 / 盘后重启) 时,
+    parquet 里的当日行能否进结果完全取决于查询窗口。未修复代码用
+    date.today(): 美西盘中、UTC 北京 00:00-08:00 会把当日官方 K 排除。
+    raising=False: 未修复代码没有调用 cn_today, 钉了也不会被用到。
+    """
+    from types import SimpleNamespace
+
+    from app.api import kline as kline_api
+
+    captured: list[tuple[date, date]] = []
+
+    class _Repo:
+        def resolve_asset_type(self, symbol: str) -> str:
+            return "stock"
+
+        def get_instruments(self) -> pl.DataFrame:
+            return pl.DataFrame({
+                "symbol": ["600000.SH"], "name": ["浦发银行"],
+                "total_shares": [1.0], "float_shares": [1.0],
+            })
+
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            captured.append((start, end))
+            return pl.DataFrame({
+                "symbol": ["600000.SH"], "date": [BJ],
+                "open": [10.0], "high": [10.6], "low": [9.9], "close": [10.6],
+                "volume": [1.0], "amount": [1.0],
+            })
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: BJ, raising=False)
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        repo=_Repo(), quote_service=None, capabilities=None,
+    )))
+    kline_api.get_daily(req, symbol="600000.SH", days=120, start_date=None, end_date=None, ext_columns=None)
+    assert captured, "应查询日K"
+    _start, end = captured[0]
+    assert end == BJ, f"窗口右端必须是北京日期 {BJ}, 实际 {end} (服务器本地 {date.today()})"
