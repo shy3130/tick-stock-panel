@@ -207,6 +207,55 @@ def test_failed_custom_source_does_not_fall_back_to_unsupported_tickflow(monkeyp
     get_client.assert_not_called()
 
 
+def test_gzip_payload_strips_nonfinite_floats() -> None:
+    """gzip 路径不得写出 NaN/Infinity: 前端 JSON.parse 会直接炸掉。
+
+    停牌/坏源/指标暖机窗口会出现 nan 或 inf。Python json.dumps 默认 allow_nan=True,
+    压缩路径会把非法 JSON 词写进 gzip 体; 未压缩路径走 Starlette allow_nan=False, 整段 500。
+    助手分时小图已经按同样口径清洗 (test_assistant_intraday_chart_finite)。
+    """
+    import gzip as gz
+    import json
+    from types import SimpleNamespace
+
+    from fastapi.responses import Response
+
+    req = SimpleNamespace(headers={"accept-encoding": "gzip"})
+    payload = {
+        "symbol": _SYMBOL,
+        # 压缩路径只在 JSON 超过 1024 字节时启用
+        "pad": "x" * 1200,
+        "rows": [
+            {"close": float("nan")},
+            {"close": float("inf")},
+            {"close": 10.5},
+        ],
+    }
+    result = kline._gzip_payload(req, payload, pref_key="minute_batch_compress")
+    assert isinstance(result, Response)
+    text = gz.decompress(result.body).decode()
+    json.dumps(json.loads(text), allow_nan=False)
+    data = json.loads(text)
+    assert data["rows"][0]["close"] is None
+    assert data["rows"][1]["close"] is None
+    assert data["rows"][2]["close"] == 10.5
+
+
+def test_uncompressed_payload_strips_nonfinite_floats() -> None:
+    """未压缩路径同样清洗, 避免 Starlette JSONResponse allow_nan=False 整段 500。"""
+    import json
+    from types import SimpleNamespace
+
+    req = SimpleNamespace(headers={})
+    payload = {"rows": [{"close": float("nan")}, {"close": float("-inf")}]}
+    result = kline._gzip_payload(req, payload, pref_key="daily_batch_compress")
+    assert isinstance(result, dict)
+    json.dumps(result, allow_nan=False)
+    assert result["rows"][0]["close"] is None
+    assert result["rows"][1]["close"] is None
+
+
+
 def test_pro_tier_keeps_tickflow_minute_fallback(monkeypatch):
     capset = CapabilitySet({Cap.KLINE_MINUTE_BY_SYMBOL: CapabilityLimits()})
     tickflow = MagicMock()
