@@ -1,10 +1,10 @@
-<!-- Tick Stock Panel 品牌 logo — 纯白版, 透明底
+<!-- Tick Stock Panel 品牌 logo — 纯白版, 透明底, 全直角 (无圆角/圆笔帽)
      用法: 深色/品牌色背景上 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Tick Stock Panel">
-  <path d="M20 9 H13.5 A2.5 2.5 0 0 0 11 11.5 V52.5 A2.5 2.5 0 0 0 13.5 55 H20"
-        stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
-  <path d="M44 9 H50.5 A2.5 2.5 0 0 1 53 11.5 V52.5 A2.5 2.5 0 0 1 50.5 55 H44"
-        stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
-  <line x1="32" y1="15" x2="32" y2="49" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-opacity="0.55"/>
-  <rect x="26.5" y="19.5" width="11" height="17" rx="1.6" fill="#FFFFFF"/>
+  <path d="M20 9 H11 V55 H20"
+        stroke="#FFFFFF" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <path d="M44 9 H53 V55 H44"
+        stroke="#FFFFFF" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <line x1="32" y1="15" x2="32" y2="49" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="butt" stroke-opacity="0.55"/>
+  <rect x="26.5" y="19.5" width="11" height="17" fill="#FFFFFF"/>
 </svg>

@@ -1,4 +1,4 @@
-<!-- Tick Stock Panel 品牌主 logo — 透明底, 品牌紫渐变
+<!-- Tick Stock Panel 品牌主 logo — 透明底, 品牌紫渐变, 全直角 (无圆角/圆笔帽)
      概念: 方括号 [ ] = 终端/代码/量化边界; 中央 K 线 = 行情本体
      bullish 姿态: 上影短/下影长, 站稳向上
      用法: 浅色背景; 深色背景请用 logo-white.svg -->
@@ -9,14 +9,14 @@
       <stop offset="1" stop-color="#7C3AED"/>
     </linearGradient>
   </defs>
-  <!-- 左方括号 -->
-  <path d="M20 9 H13.5 A2.5 2.5 0 0 0 11 11.5 V52.5 A2.5 2.5 0 0 0 13.5 55 H20"
-        stroke="url(#tsp-brand)" stroke-width="5" stroke-linecap="round"/>
-  <!-- 右方括号 -->
-  <path d="M44 9 H50.5 A2.5 2.5 0 0 1 53 11.5 V52.5 A2.5 2.5 0 0 1 50.5 55 H44"
-        stroke="url(#tsp-brand)" stroke-width="5" stroke-linecap="round"/>
-  <!-- K 线 wick (上影短/下影长) -->
-  <line x1="32" y1="15" x2="32" y2="49" stroke="url(#tsp-brand)" stroke-width="3.5" stroke-linecap="round" stroke-opacity="0.55"/>
-  <!-- K 线 body -->
-  <rect x="26.5" y="19.5" width="11" height="17" rx="1.6" fill="url(#tsp-brand)"/>
+  <!-- 左方括号 (直角折线) -->
+  <path d="M20 9 H11 V55 H20"
+        stroke="url(#tsp-brand)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <!-- 右方括号 (直角折线) -->
+  <path d="M44 9 H53 V55 H44"
+        stroke="url(#tsp-brand)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <!-- K 线 wick (上影短/下影长, 平头端点) -->
+  <line x1="32" y1="15" x2="32" y2="49" stroke="url(#tsp-brand)" stroke-width="3.5" stroke-linecap="butt" stroke-opacity="0.55"/>
+  <!-- K 线 body (直角矩形) -->
+  <rect x="26.5" y="19.5" width="11" height="17" fill="url(#tsp-brand)"/>
 </svg>
