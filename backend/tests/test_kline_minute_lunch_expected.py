@@ -70,6 +70,11 @@ LUNCH_TIMES = [(11, 35), (11, 50), (12, 0)]
 class _FakeRepo:
     def __init__(self, bars: int = 120) -> None:
         self._bars = bars
+        # /minute 与 /minute-batch 读取 repo.store.data_dir 判断分钟基准标记
+        import tempfile
+        from types import SimpleNamespace
+        from pathlib import Path
+        self.store = SimpleNamespace(data_dir=Path(tempfile.mkdtemp()))
 
     def resolve_asset_type(self, symbol: str) -> str:
         return "stock"

@@ -118,6 +118,13 @@ def test_minute_batch_explicit_date_is_not_replaced(market) -> None:
 
 
 class _FakeRepo:
+    def __init__(self) -> None:
+        # /minute 现读取 repo.store.data_dir 判断分钟基准标记 (未标记目录即旧行为)
+        import tempfile
+        from types import SimpleNamespace
+        from pathlib import Path
+        self.store = SimpleNamespace(data_dir=Path(tempfile.mkdtemp()))
+
     def resolve_asset_type(self, symbol: str) -> str:
         return "stock"
 

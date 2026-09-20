@@ -45,6 +45,11 @@ def _minute_rows(count: int = 240) -> pl.DataFrame:
 class _DetailRepo:
     def __init__(self, minute: pl.DataFrame | None = None) -> None:
         self.minute = minute if minute is not None else _minute_rows()
+        # /minute 读取 repo.store.data_dir 判断分钟基准标记 (无标记即旧行为)
+        import tempfile
+        from types import SimpleNamespace
+        from pathlib import Path
+        self.store = SimpleNamespace(data_dir=Path(tempfile.mkdtemp()))
 
     def resolve_asset_type(self, symbol: str) -> str:
         return "stock"

@@ -24,6 +24,13 @@ _LOCAL_ROWS = 30
 
 
 class _FakeRepo:
+    def __init__(self) -> None:
+        # /minute 读取 repo.store.data_dir 判断分钟基准标记 (无标记即旧行为)
+        import tempfile
+        from types import SimpleNamespace
+        from pathlib import Path
+        self.store = SimpleNamespace(data_dir=Path(tempfile.mkdtemp()))
+
     def resolve_asset_type(self, symbol: str) -> str:
         return "stock"
 
@@ -68,7 +75,7 @@ def _patch_market(monkeypatch, *, in_session: bool) -> None:
 def _patch_live_fetch(monkeypatch) -> None:
     import app.api.kline as kline_api
 
-    def _fake_fetch(symbol, trade_date, asset_type="stock", *, capset):
+    def _fake_fetch(symbol, trade_date, asset_type="stock", *, capset, raw_basis=False):
         return pl.DataFrame({
             "datetime": [datetime(2026, 8, 26, 9, 59)],
             "close": [11.11],

@@ -300,7 +300,7 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
     from app.api import kline as kline_api
 
     # mock sync_minute_batch: stock 返回 df_s, etf 返回 df_e (不同 symbol 便于 concat 后 filter 验证)
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         if asset_type == "stock":
             return _mock_minute_df(symbol="600519.SH")
         if asset_type == "etf":
@@ -355,7 +355,7 @@ def _endpoint_mocks(monkeypatch, local_df: pl.DataFrame, sync_ret: pl.DataFrame 
 
     captured: list[dict] = []
 
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         captured.append({"symbols": list(symbols), "start": start_time, "asset": asset_type})
         return sync_ret if sync_ret is not None else pl.DataFrame()
 
