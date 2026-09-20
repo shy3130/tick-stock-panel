@@ -496,8 +496,9 @@ def _latest_live_candle(
         return None
 
     # 非交易日(周末/假日)缓存日期 != 北京今天, 跳过注入避免产生重复蜡烛。
-    # 必须用 cn_today(): 服务器本地 date.today() 在 UTC 主机北京 00:00-08:00、
-    # 以及美西主机整个 A 股交易时段都会与 enriched 的北京交易日错开, 盘中日K不更新。
+    # 必须用 cn_today(): 美洲时区主机整个 A 股交易时段本地日期落后北京一天,
+    # 旧代码盘中直接丢K。UTC 主机盘中(UTC 1:30-7:00)本地日期与北京相同, 并不丢K;
+    # UTC 的旧症状是北京 00:00-08:00 把昨日残留快照误当实时K注入。
     if not enriched_date or enriched_date != cn_today():
         return None
 

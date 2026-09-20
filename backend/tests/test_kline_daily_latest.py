@@ -71,7 +71,10 @@ def _live_frame() -> pl.DataFrame:
     })
 
 
-def test_daily_latest_returns_only_current_memory_row() -> None:
+def test_daily_latest_returns_only_current_memory_row(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, repo = _client(_live_frame(), date.today())
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600000.SH"})
@@ -96,7 +99,10 @@ def test_daily_latest_returns_only_current_memory_row() -> None:
     assert repo.latest_asset_calls == 0
 
 
-def test_daily_latest_returns_none_for_stale_cache() -> None:
+def test_daily_latest_returns_none_for_stale_cache(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, _ = _client(_live_frame(), date.today() - timedelta(days=1))
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600000.SH"})
@@ -109,7 +115,10 @@ def test_daily_latest_returns_none_for_stale_cache() -> None:
     }
 
 
-def test_daily_latest_returns_none_when_symbol_is_missing() -> None:
+def test_daily_latest_returns_none_when_symbol_is_missing(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     client, _ = _client(_live_frame(), date.today())
 
     response = client.get("/api/kline/daily/latest", params={"symbol": "600001.SH"})
@@ -122,7 +131,10 @@ def test_daily_latest_returns_none_when_symbol_is_missing() -> None:
     }
 
 
-def test_daily_latest_uses_etf_enriched_cache() -> None:
+def test_daily_latest_uses_etf_enriched_cache(monkeypatch) -> None:
+    from app.api import kline as kline_api
+
+    monkeypatch.setattr(kline_api, "cn_today", lambda: date.today())
     etf = _live_frame().with_columns(pl.lit("510300.SH").alias("symbol"))
     client, repo = _client(
         pl.DataFrame(),
