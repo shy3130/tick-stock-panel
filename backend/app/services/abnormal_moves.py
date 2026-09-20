@@ -22,12 +22,18 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date
 from typing import Any
 
 import polars as pl
 
 from app.indicators.pipeline import BENCH_KEYS, DEVIATION_WINDOWS, bench_rt_pct_for
+from app.market_time import cn_today
+from app.services import trading_day
+
+
+def _is_closed_session() -> bool:
+    """工作日休市 (国庆等): 探针确定休市才视为无「今日涨跌」可叠加。未知保持叠加。"""
+    return trading_day.is_trading_day() is False
 
 # ── 规则表 ────────────────────────────────────────────────
 
@@ -195,8 +201,13 @@ def build_overview(
             index_quotes = None
         for k in BENCH_KEYS:
             bench_by_key[k] = bench_rt_pct_for(index_quotes, k)
-    # enriched 已含今日收盘 (盘后已同步) 时, 今日涨跌已计入历史偏离, 不再叠加
-    includes_today = cache_date is not None and cache_date >= date.today().isoformat()
+    # 快照的 change_pct 属于 cache_date 当日涨跌, 已经含在 deviate_* 里。
+    # 只有缓存日早于北京今天、且今天仍是交易日时, 才叠加「今日」涨跌;
+    # 周末/节假日没有新的今日涨跌, 再叠一次就是把最近交易日涨跌算两遍。
+    today = cn_today()
+    includes_today = cache_date is not None and cache_date >= today.isoformat()
+    if not includes_today and (today.weekday() >= 5 or _is_closed_session()):
+        includes_today = True
 
     out_rows: list[dict[str, Any]] = []
     for symbol, base in hist_rows.items():
