@@ -65,6 +65,9 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
 }
 
 function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = []): EChartsOption {
+  // 无涨跌幅标的 (注册制新股上市初期窗口, 后端 no_limit 标记): 不存在可信
+  // 涨跌停带, 自适应/涨跌停两类模式都退化为纯数据对称范围, 也不画涨跌停虚线
+  const limitLinesActive = showLimitLines && !priceLimit?.no_limit
   // 将数据映射到全天时间轴上的正确位置
   const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
   const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
@@ -160,13 +163,14 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         : largest
     ), 0) * 1.05
 
-    if (showLimitLines && yMode === 'limit') {
+    if (limitLinesActive && yMode === 'limit') {
       const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
       const limitDiffUp = limitUp - prevClose
       const limitDiffDown = prevClose - limitDown
       const limitDiff = Math.max(limitDiffUp, limitDiffDown)
-      // 涨跌停模式: Y 轴按实际涨跌停价
-      maxDiff = Math.max(limitDiff, monitoredDiff)
+      // 涨跌停模式: Y 轴按实际涨跌停价, 但不小于实际数据范围 (数据超带 =
+      // 涨跌幅规则不适用或数据异常, 钳制会把曲线推出图外)
+      maxDiff = Math.max(limitDiff, maxDiff, monitoredDiff)
       yMin = prevClose - maxDiff
       yMax = prevClose + maxDiff
       // 加 markLine 标注涨停价和跌停价 (仅虚线, 不显示文字)
@@ -185,17 +189,14 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         },
       )
     } else {
-      // 自适应模式: Y 轴按实际涨跌幅对称, 但不超出实际涨跌停范围
-      if (showLimitLines) {
-        const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
-        const limitDiff = Math.max(limitUp - prevClose, prevClose - limitDown)
-        maxDiff = Math.min(maxDiff, limitDiff)
-      }
-      if (!showLimitLines && maxDiff > 0) {
+      // 自适应模式: Y 轴按实际涨跌幅对称。不做涨跌停带上限钳制 — 带内数据
+      // maxDiff 本就 ≤ limitDiff (钳制是恒等), 而数据超带时 (无涨跌幅新股/
+      // 数据异常) 钳制会把曲线推出图外 (issue: C沈鼓 分时被夹在 ±10% 内)
+      if (!limitLinesActive && maxDiff > 0) {
         maxDiff *= 1.1
       }
       // 至少保证一个可视范围 (防止数据平时 maxDiff=0)。指数不使用涨跌停范围，最小范围要更紧，否则低波动指数会被压成横线。
-      const minDiff = showLimitLines ? prevClose * 0.01 : prevClose * 0.001
+      const minDiff = limitLinesActive ? prevClose * 0.01 : prevClose * 0.001
       if (maxDiff < minDiff) maxDiff = minDiff
       maxDiff = Math.max(maxDiff, monitoredDiff)
       yMin = prevClose - maxDiff
@@ -300,7 +301,12 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         type: 'value',
         min: yMin,
         max: yMax,
-        interval: maxDiff || undefined,
+        // 上市首日无 prevClose 时 min/max 为 undefined, scale 避免 value 轴
+        // 默认从 0 锚定把曲线挤到图上部 (有 min/max 时本属性无影响)。
+        // 区间过宽时 (无涨跌幅新股, maxDiff 远超昨收) interval 减半让昨收
+        // 落在刻度上; 正常涨跌停带内保持原 interval 行为
+        scale: true,
+        interval: prevClose != null && maxDiff > prevClose * 0.5 ? maxDiff / 2 : maxDiff || undefined,
         splitArea: { show: false },
         axisLine: { show: false },
         axisTick: { show: false },
