@@ -17,6 +17,7 @@ from datetime import date, datetime
 
 import numpy as np
 import polars as pl
+import pytest
 
 from app.backtest.engine import BacktestEngine
 from app.backtest.minute_trigger import build_minute_exit_reference
@@ -25,7 +26,10 @@ NUMERIC_COLS = BacktestEngine._MINUTE_NUMERIC_COLS  # open/high/low/close/volume
 
 
 def _sample_minute_df(symbol: str = "000001.SZ") -> pl.DataFrame:
-    """构造一份带 datetime 列 + float 列的分钟K (get_minute_by_dates 的返回形态)。"""
+    """构造一份带 datetime 列 + float 列的分钟K (get_minute_by_dates 的返回形态)。
+
+    volume/amount 按数据契约: volume 单位手, amount 单位元 = 价 x 手 x 100。
+    """
     base = datetime(2024, 1, 2, 9, 31)
     return pl.DataFrame({
         "symbol": [symbol] * 4,
@@ -36,7 +40,7 @@ def _sample_minute_df(symbol: str = "000001.SZ") -> pl.DataFrame:
         "low": [9.9, 10.4, 10.7, 10.5],
         "close": [10.2, 10.6, 10.85, 10.65],
         "volume": [100, 200, 150, 120],
-        "amount": [1020.0, 2120.0, 1627.0, 1278.0],
+        "amount": [10.2 * 100 * 100, 10.6 * 200 * 100, 10.85 * 150 * 100, 10.65 * 120 * 100],
     })
 
 
@@ -74,11 +78,18 @@ def test_resolve_minute_fill_sell_cross_below_ref():
 
 
 def test_resolve_minute_fill_vwap():
-    """无参考线 → VWAP = 总成交额 / 总成交量。"""
+    """无参考线 → VWAP = 总成交额 / (总成交量x100)。
+
+    volume 单位手、amount 单位元, VWAP 必须除以股数 (x100) — 与 scoring/
+    intraday_features/matrix 的 VWAP 同口径 (#387)。量级护栏拦住 100 倍
+    量纲错误: 均价必须落在当日价格区间附近, 而不是夹具数值的巧合比值。
+    """
     arr = _to_compact_arr(_sample_minute_df())
-    total_amt = 1020.0 + 2120.0 + 1627.0 + 1278.0
-    total_vol = 100 + 200 + 150 + 120
-    assert BacktestEngine._resolve_minute_fill(arr, None, "buy") == total_amt / total_vol
+    total_amt = 10.2 * 100 * 100 + 10.6 * 200 * 100 + 10.85 * 150 * 100 + 10.65 * 120 * 100
+    total_vol = (100 + 200 + 150 + 120) * 100  # 手 → 股
+    vwap = BacktestEngine._resolve_minute_fill(arr, None, "buy")
+    assert vwap == pytest.approx(total_amt / total_vol)
+    assert 10.0 < vwap < 11.0  # 量级护栏: 真实均价量级, 拦截缺 x100 的 100 倍错误
 
 
 def test_resolve_minute_fill_empty_returns_none():
@@ -119,7 +130,6 @@ def test_minute_exit_reference_removes_current_close_from_ma20():
     )
 
     assert result[0, 0] == 10.0
-
 
 class _FakeRepo:
     """最小 repo 桩: get_minute_by_dates 直接返回预构造的混合列 DataFrame。"""

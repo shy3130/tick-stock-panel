@@ -1617,7 +1617,9 @@ class BacktestEngine:
             total_vol = float(np.nansum(volumes))
             total_amt = float(np.nansum(amounts))
             if total_vol > 0 and total_amt > 0:
-                return total_amt / total_vol
+                # volume 单位是手 (1 手 = 100 股), amount 是元 — 与 scoring/
+                # intraday_features/matrix 的 VWAP 同口径; 缺 x100 会放大 100 倍 (#387)
+                return total_amt / (total_vol * 100.0)
 
         return float(closes[-1]) if np.isfinite(closes[-1]) else None
 
