@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Modal } from '@/components/Modal'
 import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal } from 'lucide-react'
 import { api, friendlyStreamError } from '@/lib/api'
 import type { AiIterateRound } from '@/lib/api'
-import { storage } from '@/lib/storage'
+import { storage, type DefaultStrategyBasicFilter } from '@/lib/storage'
 import { cn } from '@/lib/cn'
+import { ALL_BOARDS } from './StrategySettingsDialog'
+import { loadDefaultBasicFilter } from './DefaultStrategyParamsDialog'
 
 // ===== 工具函数 =====
 
@@ -94,7 +96,24 @@ const DIRECTIONS = [
 
 // ===== 组件 =====
 
-const CUSTOM_TEMPLATE = `"""策略简短描述"""
+/** 渲染 basic_filter 的 Python 字面量段 (缩进 8 空格, 与模板 META 对齐) */
+export function renderBasicFilterPy(bf: DefaultStrategyBasicFilter): string {
+  const py = (v: number | boolean | null) => (v === null ? 'None' : v === true ? 'True' : v === false ? 'False' : String(v))
+  const boards = bf.boards.length ? bf.boards : [...ALL_BOARDS]
+  return [
+    `        "price_min": ${py(bf.price_min)}, "price_max": ${py(bf.price_max)},`,
+    `        "market_cap_min": None,`,
+    `        "float_cap_min": ${py(bf.float_cap_min)}, "float_cap_max": ${py(bf.float_cap_max)},`,
+    `        "amount_min": ${py(bf.amount_min)}, "amount_max": ${py(bf.amount_max)},`,
+    `        "turnover_min": ${py(bf.turnover_min)}, "turnover_max": ${py(bf.turnover_max)},`,
+    `        "exclude_st": ${py(bf.exclude_st)}, "exclude_new_days": 30,`,
+    `        "boards": [${boards.map(b => `"${b}"`).join(', ')}],`,
+  ].join('\n')
+}
+
+/** 自定义策略代码模板: basic_filter 段用「默认基础参数」填充 */
+export function buildCustomTemplate(bf: DefaultStrategyBasicFilter): string {
+  return `"""策略简短描述"""
 import polars as pl
 
 META = {
@@ -105,13 +124,7 @@ META = {
     "asset_types": ["stock"],
     "timeframes": ["1d"],
     "basic_filter": {
-        "price_min": 5, "price_max": 200,
-        "market_cap_min": None,
-        "float_cap_min": 30e8, "float_cap_max": 1500e8,
-        "amount_min": None,
-        "turnover_min": 1,
-        "exclude_st": True, "exclude_new_days": 30,
-        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+${renderBasicFilterPy(bf)}
     },
     "params": [],
     "scoring": {
@@ -140,8 +153,9 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
         & (pl.col("volume") > pl.col("vol_ma5") * 1.5)
     )
 `
+}
 
-const MATRIX_TEMPLATE = `"""矩阵原生策略示例"""
+const MATRIX_TEMPLATE_FN = (bf: DefaultStrategyBasicFilter) => `"""矩阵原生策略示例"""
 import numpy as np
 from app.backtest.matrix import MarketDataMatrix, SignalMatrix, make_signal_matrix, matrix_feature
 
@@ -153,13 +167,7 @@ META = {
     "asset_types": ["stock"],
     "timeframes": ["1d"],
     "basic_filter": {
-        "price_min": 5, "price_max": 200,
-        "market_cap_min": None,
-        "float_cap_min": 30e8, "float_cap_max": 1500e8,
-        "amount_min": None,
-        "turnover_min": 1,
-        "exclude_st": True, "exclude_new_days": 30,
-        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+${renderBasicFilterPy(bf)}
     },
     "params": [],
     "scoring": {},
@@ -199,6 +207,11 @@ interface Props {
 export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create', existingStrategyIds }: Props) {
   // 根据 mode 选择存储 key
   const draftStore = mode === 'modify' ? storage.strategyModify : storage.strategyDraft
+  // 新建策略的默认基础参数 (策略页「默认基础参数」设置; 打开构建器时取最新)
+  const [defaultBF, setDefaultBF] = useState<DefaultStrategyBasicFilter>(() => loadDefaultBasicFilter())
+  useEffect(() => { if (open) setDefaultBF(loadDefaultBasicFilter()) }, [open])
+  const CUSTOM_TEMPLATE = useMemo(() => buildCustomTemplate(defaultBF), [defaultBF])
+  const MATRIX_TEMPLATE = useMemo(() => MATRIX_TEMPLATE_FN(defaultBF), [defaultBF])
   const [step, setStep] = useState(1)
   const [tab, setTab] = useState<'ai' | 'custom'>('ai')
   const [customCopied, setCustomCopied] = useState(false)
@@ -331,7 +344,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         const id = resolveStrategyId('ai')
         setStrategyId(id); setSource('ai'); setPreviewTab('code')
         let finalResult: any = null
-        for await (const evt of api.strategyBuildStream(1, { name: name.trim(), description: description.trim(), direction, execution_backend: executionBackend, rules: rules.trim(), strategy_id: id })) {
+        for await (const evt of api.strategyBuildStream(1, { name: name.trim(), description: description.trim(), direction, execution_backend: executionBackend, rules: rules.trim(), strategy_id: id, basic_filter: defaultBF })) {
           if (evt.type === 'delta') {
             setCode(prev => prev + evt.content)
           } else if (evt.type === 'error') {

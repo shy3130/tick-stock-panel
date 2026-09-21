@@ -12,7 +12,7 @@ import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -548,6 +548,8 @@ class BuildRequest(BaseModel):
     rules: str = ""
     strategy_id: str = ""
     execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    # 用户「默认基础参数」(策略页设置): 生成代码的 META.basic_filter 优先采用
+    basic_filter: dict[str, Any] | None = None
     # step2 字段
     current_code: str = ""
     instruction: str = ""
@@ -881,6 +883,7 @@ def _build_prompt(req: BuildRequest) -> str:
             req.rules,
             req.strategy_id,
             req.execution_backend,
+            basic_filter=req.basic_filter,
         )
     if req.step == 2:
         return build_step2(req.current_code, req.instruction)

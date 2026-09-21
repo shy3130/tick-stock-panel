@@ -78,7 +78,7 @@ function Section({ icon: Icon, title, accent, defaultOpen = true, children, extr
 
 
 // ===== 区间字段（最小 ~ 最大） =====
-function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, step }: {
+export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, step }: {
   label: string
   minVal: any
   maxVal: any
@@ -113,7 +113,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
 }
 
 // 板块标签
-const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
+export const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
 
 // 策略参数字段
 function ParamField({ def, value, onChange }: {

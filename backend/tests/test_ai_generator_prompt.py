@@ -31,6 +31,32 @@ def test_build_step1_keeps_user_prompt_compact():
     assert len(prompt) < 1000
 
 
+def test_build_step1_without_basic_filter_keeps_prompt_unchanged_shape():
+    """basic_filter=None: 提示词不含默认基础过滤段 (既有行为零变化)。"""
+    prompt = build_step1("测试策略", "测试描述", "long", "1. 规则", "")
+
+    assert "默认基础过滤" not in prompt
+    assert "策略规则：\n1. 规则" in prompt
+
+
+def test_build_step1_injects_user_default_basic_filter():
+    """basic_filter 传入: 提示词要求 META.basic_filter 严格采用用户默认值。"""
+    bf = {
+        "price_min": 3, "price_max": 100,
+        "float_cap_min": 20e8, "float_cap_max": None,
+        "exclude_st": False, "boards": ["沪主板", "深主板"],
+    }
+
+    prompt = build_step1("测试策略", "测试描述", "long", "1. 规则", "", basic_filter=bf)
+
+    assert "默认基础过滤" in prompt
+    assert "'price_min': 3" in prompt
+    # Python 字面量语义 (True/False/None), 而非 JSON 的 true/false/null
+    assert "'exclude_st': False" in prompt
+    assert "'float_cap_max': None" in prompt
+    assert "'boards': ['沪主板', '深主板']" in prompt
+
+
 def test_build_step2_uses_runtime_meta_constraints():
     prompt = build_step2("META = {}", "调整参数和评分")
 

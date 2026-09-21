@@ -22,6 +22,11 @@ def _load_doc(name: str) -> str:
 DIRECTION_CN = {"long": "做多", "short": "做空", "monitor": "监控"}
 
 
+def _format_basic_filter(basic_filter: dict) -> str:
+    """dict → Python 字面量单行 (True/False/None 保持 Python 语法, 供 AI 直接抄进 META)。"""
+    return repr(dict(basic_filter))
+
+
 def build_step1(
     name: str,
     description: str,
@@ -29,13 +34,21 @@ def build_step1(
     rules: str,
     strategy_id: str = "",
     execution_backend: str = "polars_expr",
+    basic_filter: dict | None = None,
 ) -> str:
     """步骤1：规则 → 完整策略代码（参数 + 信号 + 评分）
 
     注意: 生成规范已在 ai_generator.py 的 system prompt 中加载，
     此处只拼用户输入以降低网关超时概率。
+    basic_filter: 用户「默认基础参数」(策略页设置); None = 不约束, AI 自行默认。
     """
     id_line = f"\n策略ID（必须使用此ID）：{strategy_id}" if strategy_id else ""
+    bf_line = (
+        f"\n用户默认基础过滤参数（META 的 basic_filter 必须严格使用以下值，"
+        f"除非策略规则与之明确冲突并在代码注释中说明）：\n{_format_basic_filter(basic_filter)}\n"
+        if basic_filter
+        else ""
+    )
 
     return f"""请根据以下用户输入生成完整策略代码：
 
@@ -43,7 +56,7 @@ def build_step1(
 策略描述：{description}
 选股方向：{DIRECTION_CN.get(direction, direction)}
 执行后端：{execution_backend}
-策略规则：
+{bf_line}策略规则：
 {rules}
 
 输出要求：

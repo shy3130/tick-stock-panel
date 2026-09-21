@@ -23,6 +23,20 @@ function kv<T>(key: string) {
   }
 }
 
+/** 新建策略默认基础过滤参数 (与策略 META.basic_filter 字段/单位一致: 价格元, 市值/成交额元, 换手%) */
+export interface DefaultStrategyBasicFilter {
+  price_min: number | null
+  price_max: number | null
+  float_cap_min: number | null
+  float_cap_max: number | null
+  amount_min: number | null
+  amount_max: number | null
+  turnover_min: number | null
+  turnover_max: number | null
+  exclude_st: boolean
+  boards: string[]
+}
+
 export const storage = {
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
@@ -103,6 +117,9 @@ export const storage = {
 
   /** 策略创建草稿（新建专用） */
   strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-draft'),
+
+  /** 新建策略默认基础过滤参数 (策略页「默认基础参数」设置; null=未自定义, 用内置默认) */
+  defaultStrategyBasicFilter: kv<DefaultStrategyBasicFilter | null>('default-strategy-basic-filter'),
 
   /** 策略修改草稿（AI修改专用，不影响创建按钮） */
   strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-modify'),
