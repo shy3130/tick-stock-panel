@@ -998,6 +998,10 @@ class QuoteService:
         ] if c in df.columns]
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
+        # 整列 null = 数据源未提供该字段 (如 fuyao 的 turnover_rate/amplitude 显式置 None),
+        # 必须丢弃: 下游 compute_enriched_today 对这些列是「列存在即直接采用」,
+        # 转发全空列会跳过回退计算, 当日换手/振幅将永远为空且每轮实时覆写自锁
+        keep = [c for c in keep if c == "symbol" or df[c].null_count() < len(df)]
         out = df.select(keep)
         # 实时 API 的 turnover_rate 入口契约为小数制(0.05 = 5%).
         # enriched 内部统一存百分数值(5 = 5%), 后续页面/筛选直接展示和比较。

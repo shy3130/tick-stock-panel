@@ -209,6 +209,42 @@ def test_realtime_enriched_keeps_rows_without_history_and_limits_technical_field
     assert "_has_history_state" not in result.columns
 
 
+def test_realtime_enriched_missing_quote_extra_fields_fall_back_to_recompute():
+    """quote_extra 未提供换手/振幅 (fuyao 等源) 时, 当日值必须从 float_shares/价格回退计算。
+
+    实时链路 _build_quote_extra 丢弃全空列后, today_ohlcv 不带这两列,
+    _compute_limit_signals_today 从 float_shares 算换手、compute_enriched_today
+    从价格算振幅 —— 不允许再出现「全空列进管道 → 列存在即跳过重算 → 当日永远为空」。
+    """
+    today = date(2026, 7, 30)
+    today_rows = pl.DataFrame({
+        "symbol": ["600001.SH", "000820.SZ", "001000.SZ"],
+        "date": [today] * 3,
+        "open":  [10.1, 11.0, 11.0],
+        "high":  [10.2, 11.2, 11.1],
+        "low":   [10.0, 10.8, 10.9],
+        "close": [10.2, 11.0, 11.0],
+        "volume": [1200.0, 3000.0, 2000.0],
+        "amount": [12240.0, 33000.0, 22000.0],
+        "prev_close": [10.0, 10.5, 10.5],
+    })
+    instruments = pl.DataFrame({
+        "symbol": ["600001.SH", "000820.SZ", "001000.SZ"],
+        "name": ["已有历史", "复牌股票", "上市新股"],
+        "float_shares": [1_000_000.0] * 3,
+        "limit_up": [11.0, 11.0, 100000.0],
+        "limit_down": [9.0, 9.0, 0.0],
+        "as_of": [today] * 3,
+    })
+
+    result = compute_enriched_today(_live_state(), _previous_enriched(), today_rows, instruments)
+
+    # 换手 = volume(手) * 10000 / float_shares(股)
+    assert result["turnover_rate"].to_list() == [12.0, 30.0, 20.0]
+    # 振幅 = (high - low) / prev_close
+    assert result["amplitude"].is_not_null().all()
+
+
 def test_repository_restores_active_rows_missing_from_latest_enriched(tmp_path):
     today = date(2026, 7, 30)
     repo = KlineRepository(DataStore(tmp_path))
