@@ -20,7 +20,7 @@ import polars as pl
 import pytest
 
 from app.backtest.engine import BacktestEngine
-from app.backtest.minute_trigger import build_minute_exit_reference
+from app.backtest.minute_trigger import build_minute_entry_reference, build_minute_exit_reference
 
 NUMERIC_COLS = BacktestEngine._MINUTE_NUMERIC_COLS  # open/high/low/close/volume/amount
 
@@ -130,6 +130,47 @@ def test_minute_exit_reference_removes_current_close_from_ma20():
     )
 
     assert result[0, 0] == 10.0
+
+
+def test_minute_entry_reference_removes_current_close():
+    """买入参考线 = 前 4 日均值, 不随当日收盘变化 (#388)。
+
+    rolling_mean(close,5) 含当根收盘 → 参考线依赖 15:00 才知道的收盘价 (前视)。
+    修复后 (window·MA - close)/(window-1) 代数剔除当根, 当日开盘即已知,
+    与卖出侧 build_minute_exit_reference 同一纪律。
+    """
+    base = [10.0, 10.0, 10.0, 10.0]
+    refs = {}
+    for c5 in (9.0, 9.6, 10.6, 11.0):
+        close = np.array([*base, c5], dtype=np.float64).reshape(-1, 1)
+        refs[c5] = float(build_minute_entry_reference(close)[4, 0])
+    for c5, ref in refs.items():
+        assert ref == pytest.approx(10.0), f"c5={c5}: 参考线不应随当日收盘变化"
+    close = np.array([*base, 10.0], dtype=np.float64).reshape(-1, 1)
+    result = build_minute_entry_reference(close)
+    assert np.isnan(result[:4]).all()  # 不足窗口的行 → NaN → 退化 VWAP
+
+
+def test_minute_fill_price_independent_of_current_close():
+    """性质回归 (#388): 同一盘中路径只改当日收盘, 成交价必须相同。
+
+    盘中下单那一刻不可能知道当日收盘; 若成交价随收盘漂移, 即为前视。
+    """
+    base = [10.0, 10.0, 10.0, 10.0]
+    fills = {}
+    for c5 in (10.6, 9.6):
+        close = np.array([*base, c5], dtype=np.float64).reshape(-1, 1)
+        ref = float(build_minute_entry_reference(close)[4, 0])
+        # 同一盘中路径: 开盘 9.5 / 最高 10.6 / 最低 9.4, 只改最后一根分钟K收盘
+        minute = np.array([
+            [9.5, 10.6, 9.4, 9.5, 100, 9.5 * 100 * 100],
+            [9.5, 10.6, 9.4, 9.5, 100, 9.5 * 100 * 100],
+            [9.5, 10.6, 9.4, c5, 100, c5 * 100 * 100],
+        ], dtype=np.float64)
+        fills[c5] = BacktestEngine._resolve_minute_fill(minute, ref, "buy")
+    assert fills[10.6] == pytest.approx(fills[9.6])
+    assert 9.5 < fills[10.6] <= 10.6  # 成交价在当日已知的盘中范围内
+
 
 class _FakeRepo:
     """最小 repo 桩: get_minute_by_dates 直接返回预构造的混合列 DataFrame。"""

@@ -1,4 +1,8 @@
-"""分钟级卖出信号回放的支持范围与参考价计算。"""
+"""分钟级成交回放的参考价计算 — 买卖两侧同守「当日已知」纪律。
+
+参考线在当日开盘即必须已知: 含当根收盘的均线会让盘中模拟成交价依赖
+15:00 才确定的收盘价 (前视), 污染 minute_fill 声称的分钟级精确成交。
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -47,3 +51,18 @@ def build_minute_exit_reference(
 
     result.setflags(write=False)
     return result
+
+
+def build_minute_entry_reference(close: np.ndarray, window: int = 5) -> np.ndarray:
+    """分钟穿越成交的参考线: 前 window-1 根收盘均值 (当日开盘即已知)。
+
+    rolling_mean 第 t 行含当根收盘, 代数剔除当根即得前 window-1 根均值:
+    (window·MA_window[t] - close[t]) / (window-1)。与卖出侧
+    build_minute_exit_reference 同一纪律 — 买卖参考线都不得使用当日收盘。
+    MA 不足窗口 (NaN) 的行结果为 NaN, 调用方按无参考线退化到 VWAP。
+    """
+    from app.backtest.matrix import rolling_mean  # 延迟导入: matrix 模块级依赖本模块
+
+    ma = rolling_mean(close, window)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return (float(window) * ma - close) / float(window - 1)
