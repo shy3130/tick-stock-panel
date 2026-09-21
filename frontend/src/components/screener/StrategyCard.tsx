@@ -96,12 +96,14 @@ interface StrategyCardProps {
   timeframeBadge?: string
   /** 后台计算中 (渐进式 run_all): 数字未出时显示脉冲占位 */
   computing?: boolean
+  /** 等待运行 (自动计算关闭/失败时的分钟策略): 数字未出时显示「待计算」点击引导 */
+  awaitRun?: boolean
 }
 
 export function StrategyCard({
   name, description, source, active, count, expiredCount,
   loading, cardSize,
-  onRun, disabled, onSettings, monitored, onToggleMonitor, timeframeBadge, computing,
+  onRun, disabled, onSettings, monitored, onToggleMonitor, timeframeBadge, computing, awaitRun,
 }: StrategyCardProps) {
   const cs = CARD_STYLES[cardSize]
   const activeCls = active
@@ -154,6 +156,9 @@ export function StrategyCard({
             {count == null && !loading && computing && (
               <span className="mt-1.5 text-sm font-mono font-bold text-muted/50 animate-pulse">···</span>
             )}
+            {count == null && !loading && !computing && awaitRun && (
+              <span className="mt-1.5 text-[10px] text-muted/60 transition-colors group-hover:text-accent/80" title="自动计算未开启或失败 — 点击卡片实时计算">待计算</span>
+            )}
             {loading && <div className="mt-1 h-4 w-10 rounded bg-elevated animate-pulse" />}
           </button>
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
@@ -183,6 +188,9 @@ export function StrategyCard({
               )}
               {count == null && !loading && computing && (
                 <span className="text-xs font-mono font-bold text-muted/50 animate-pulse shrink-0">···</span>
+              )}
+              {count == null && !loading && !computing && awaitRun && (
+                <span className="text-[10px] text-muted/60 transition-colors group-hover:text-accent/80 shrink-0" title="自动计算未开启或失败 — 点击卡片实时计算">待计算</span>
               )}
               {loading && <span className="w-5 h-3 rounded bg-elevated animate-pulse shrink-0" />}
             </div>
@@ -219,6 +227,9 @@ export function StrategyCard({
             )}
             {count == null && !loading && computing && (
               <span className="text-xs font-mono font-bold text-muted/50 animate-pulse">···</span>
+            )}
+            {count == null && !loading && !computing && awaitRun && (
+              <span className="text-[9px] text-muted/60 transition-colors group-hover:text-accent/80 shrink-0" title="自动计算未开启或失败 — 点击卡片实时计算">待算</span>
             )}
             {hasExpired && (
               <span className="text-[9px] font-mono text-red-400/70">{'-' + expiredCount}</span>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X, SlidersHorizontal } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
@@ -21,6 +21,7 @@ import { StrategyCard, CardSize, loadCardSize, cardWrapCls } from '@/components/
 import { ScreenerTable } from '@/components/screener/ScreenerTable'
 import { ScreenerFilter as ScreenerFilterType, defaultFilter, filterActive, countActiveFilters, applyFilter, FilterPanel } from '@/components/screener/ScreenerFilter'
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
+import { DefaultStrategyParamsDialog } from '@/components/screener/DefaultStrategyParamsDialog'
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
 import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
@@ -62,6 +63,7 @@ export function Screener() {
   const [showBuilder, setShowBuilder] = useState(false)
   const [builderMode, setBuilderMode] = useState<'create' | 'modify'>('create')
   const [showStore, setShowStore] = useState(false)
+  const [showDefaultParams, setShowDefaultParams] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
   const { pool, addToPool, removeFromPool, reorderPool, prune } = useStrategyPool()
   const [cardSize, setCardSize] = useState<CardSize>(loadCardSize)
@@ -99,6 +101,7 @@ export function Screener() {
   const [filter, setFilter] = useState<ScreenerFilterType>(defaultFilter)
   const filterMap = useRef<Map<string, ScreenerFilterType>>(new Map())
   const runAllDateRef = useRef<string | null>(null)
+  const minuteRunDateRef = useRef<string | null>(null)
   const qc = useQueryClient()
 
   // 结果列配置 — 默认内置列，异步合并后端/localStorage 偏好
@@ -237,9 +240,14 @@ export function Screener() {
     return tfFilter === '1m' ? isMinute : !isMinute
   }), [visiblePool, strategyMap, tfFilter])
 
-  // runAll/盘后缓存只覆盖日线策略; 池中分钟策略由手动单跑实时计算
+  // runAll/盘后缓存只覆盖日线策略; 分钟策略不落盘后缓存 (strategy_cache 为日线语义),
+  // 由下方 runAllMinute 进入页面时异步批量计算点亮卡片
   const dailyPoolIds = useMemo(
     () => visiblePool.filter(id => !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false)),
+    [visiblePool, strategyMap],
+  )
+  const minutePoolIds = useMemo(
+    () => visiblePool.filter(id => strategyMap.get(id)?.timeframes?.includes('1m') ?? false),
     [visiblePool, strategyMap],
   )
 
@@ -264,7 +272,8 @@ export function Screener() {
     }
   }, [loadErrors])
 
-  // 进入页面自动跑策略池中的策略，获取命中数 (仅日线策略; 分钟策略手动单跑)
+  // 进入页面自动跑策略池中的策略，获取命中数 (日线走盘后缓存/渐进式 runAll;
+  // 分钟策略结果不落缓存, 由 runAllMinute 异步批量计算后合入 hitCounts)
   const runAll = useMutation({
     mutationFn: ({ date, strategyIds }: { date?: string; strategyIds?: string[] } = {}) =>
       api.screenerRunAll(
@@ -289,6 +298,22 @@ export function Screener() {
       qc.invalidateQueries({ queryKey: ['screener-cached'] })
     },
   })
+
+  // 分钟策略批量计算: 结果不落盘后缓存 (strategy_cache 为日线语义), 只取 total
+  // 合入 hitCounts 点亮卡片。传空日期让后端用分钟分区自身最新交易日 (与单跑同口径)。
+  const runAllMinute = useMutation({
+    mutationFn: (strategyIds: string[]) =>
+      api.screenerRunAll(undefined, strategyIds, assetType, '1m'),
+    onSuccess: (data) => {
+      const counts: Record<string, number> = {}
+      for (const [id, item] of Object.entries(data.results)) {
+        counts[id] = item.total
+      }
+      if (Object.keys(counts).length) setHitCounts(prev => ({ ...prev, ...counts }))
+    },
+    onError: (e) => toast(`分钟策略计算失败：${String((e as any).message ?? e)}`, 'error'),
+  })
+  const minuteMutate = runAllMinute.mutate
 
   const missingStrategyIds = useMemo(
     () => dailyPoolIds.filter(id => summaryQuery.data?.results[id]?.as_of !== asOf),
@@ -326,7 +351,18 @@ export function Screener() {
       const expiredCount = Math.max(everCount - r.total, 0)
       if (expiredCount > 0) expired[id] = expiredCount
     }
-    setHitCounts(counts)
+    // 摘要只含日线缓存结果; 分钟命中数来自 runAllMinute/单跑, 不在缓存里 —
+    // 摘要每次刷新 (轮询/失效重取) 都会整表替换, 必须保留分钟策略已有数字,
+    // 否则分钟卡片会被周期性冲掉退回「待计算」
+    setHitCounts(prev => {
+      const next = { ...counts }
+      for (const id of Object.keys(prev)) {
+        if (next[id] == null && strategyMap.get(id)?.timeframes?.includes('1m')) {
+          next[id] = prev[id]
+        }
+      }
+      return next
+    })
     setExpiredCounts(expired)
     // 渐进式: computed_at 晚于本轮起点的策略已算完, 从 pending 中移除;
     // 无 computed_at (监控实时叠加/旧缓存) 视为新鲜。容差吸收前后端时钟差。
@@ -341,7 +377,7 @@ export function Screener() {
         setPendingRun(rest.length ? { ...pendingRun, ids: rest } : null)
       }
     }
-  }, [summaryQuery.data, asOf, pendingRun])
+  }, [summaryQuery.data, asOf, pendingRun, strategyMap])
 
   // 渐进式兜底: 后台计算最长等 8 分钟, 防止异常时无限轮询
   useEffect(() => {
@@ -531,7 +567,10 @@ export function Screener() {
   useEffect(() => {
     // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll
     // 分钟筛选视图下不跑日线缓存 (切回 全部/日线 视图时本 effect 会重新评估)
+    // 与分钟 runAll 互斥: 后端并发 run_all 会崩 Numba, 分钟在跑时先让路,
+    // 其结束后 isPending 翻转, 本 effect 重新评估
     if (assetType !== 'stock' || tfFilter === '1m') return
+    if (runAllMinute.isPending) return
     if (!asOf || strategyPresets.length === 0 || !summaryQuery.isSuccess || runAll.isPending || dailyPoolIds.length === 0) return
     const runKey = `${asOf}|${dailyPoolIds.join(',')}`
     if (runAllDateRef.current === runKey) return
@@ -544,7 +583,22 @@ export function Screener() {
     if (!screenerAutoRun) return
     runAllDateRef.current = runKey
     requestRunAll({ date: asOf, strategyIds: missingStrategyIds })
-  }, [asOf, strategyPresets.length, summaryQuery.isSuccess, dailyPoolIds, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, requestRunAll])
+  }, [asOf, strategyPresets.length, summaryQuery.isSuccess, dailyPoolIds, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, requestRunAll])
+
+  // 分钟策略自动计算: 结果不落盘后缓存, 每次进入页面/池变化后异步跑一轮点亮卡片。
+  // 与日线 runAll 串行 (并发 run_all 会崩 Numba); 分钟卡片不可见 (日线视图) 时不白算。
+  // 不随 asOf 变化重跑 — 分钟分区只有最新交易日, 与 asOf 无关 (单跑同口径)。
+  useEffect(() => {
+    if (assetType !== 'stock' || tfFilter === '1d') return
+    if (runAll.isPending || runAllPendingRef.current) return
+    if (!asOf || strategyPresets.length === 0 || runAllMinute.isPending || minutePoolIds.length === 0) return
+    const runKey = `${minutePoolIds.join(',')}|${assetType}`
+    if (minuteRunDateRef.current === runKey) return
+    // 受系统开关控制 (与日线一致); 关闭时卡片保留「待计算」点击引导
+    if (!screenerAutoRun) return
+    minuteRunDateRef.current = runKey
+    minuteMutate(minutePoolIds)
+  }, [asOf, strategyPresets.length, minutePoolIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, minuteMutate])
 
   // 执行周期由策略自身声明决定: 日线走盘后缓存/单跑, 分钟走本地分钟K分区实时跑
   const run = useMutation({
@@ -623,6 +677,8 @@ export function Screener() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['screener-strategies'] })
       if (asOf) requestRunAll({ date: asOf })
+      // 分钟策略: 重置去重 key, 策略列表失效重取后 effect 重新触发批量计算
+      minuteRunDateRef.current = null
     },
   })
 
@@ -820,6 +876,16 @@ export function Screener() {
                 获取策略
               </button>
             )}
+            {/* 默认基础参数: 之后新建策略默认使用的基础过滤配置 */}
+            <button
+              onClick={() => setShowDefaultParams(true)}
+              title="默认基础参数 — 新建策略默认使用的基础过滤配置"
+              className="inline-flex items-center justify-center h-7 w-7 rounded-btn
+                border border-border bg-surface text-muted
+                hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+            </button>
           </div>
         }
       />
@@ -840,6 +906,10 @@ export function Screener() {
             {displayPool.map(id => {
               const s = strategyMap.get(id)
               if (!s) return null
+              const isMinute = s.timeframes?.includes('1m') ?? false
+              const selfRunning = run.isPending && activeStrategy === s.id
+              // 分钟批量计算中: 卡片脉冲占位, 算完数字自动点亮
+              const minuteRunning = isMinute && runAllMinute.isPending
               return (
                 <StrategyCard
                   key={s.id}
@@ -850,14 +920,15 @@ export function Screener() {
                   count={hitCounts[id]}
                   expiredCount={expiredCounts[id]}
                   loading={runAll.isPending}
-                  computing={pendingRunIds.has(id)}
+                  computing={pendingRunIds.has(id) || selfRunning || minuteRunning}
+                  awaitRun={hitCounts[id] == null && isMinute && !selfRunning && !minuteRunning}
                   cardSize={cardSize}
                   onRun={() => handleRun(s)}
                   disabled={run.isPending && activeStrategy === s.id}
                   onSettings={() => setSettingsStrategyId(s.id)}
                   monitored={strategyMonitorMap.has(s.id)}
                   onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
-                  timeframeBadge={s.timeframes?.includes('1m') ? '分钟' : undefined}
+                  timeframeBadge={isMinute ? '分钟' : undefined}
                 />
               )
             })}
@@ -1077,6 +1148,11 @@ export function Screener() {
         onClose={closePreview}
         navList={previewNavList}
         onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
+      />
+
+      <DefaultStrategyParamsDialog
+        show={showDefaultParams}
+        onClose={() => setShowDefaultParams(false)}
       />
 
       <StrategySettingsDialog
