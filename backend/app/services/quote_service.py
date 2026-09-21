@@ -290,7 +290,9 @@ class QuoteService:
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
+        # 此处不持久化关闭: lifespan shutdown (容器停止/重启) 也调用 stop,
+        # 持久化 False 会让每次重启后实时行情都变关闭、需手动再开。
+        # 持久化语义归 disable() (用户主动关闭)。
         logger.info("行情服务已停止")
 
     def enable(self) -> bool:
@@ -316,6 +318,7 @@ class QuoteService:
     def disable(self) -> None:
         """关闭自动行情。"""
         self.stop()
+        self._save_enabled(False)
         logger.info("行情服务已关闭")
 
     # ================================================================
