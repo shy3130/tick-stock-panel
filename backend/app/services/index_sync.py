@@ -265,6 +265,48 @@ def _load_etf_factors(repo: KlineRepository) -> pl.DataFrame:
         return pl.DataFrame()
 
 
+def etf_adj_factor_window_start(adj_path, history_start: datetime) -> datetime:
+    """ETF 除权拉取窗口起点。
+
+    本地还没有因子文件时与日K历史对齐 (调用方传入 today-365 或最早分区日),
+    不要只拉最近 30 天: 拆分落在窗口外则全年日K都不复权。已有文件则从最新
+    事件日续拉。
+    """
+    if not adj_path.exists():
+        return history_start
+    try:
+        max_date = pl.scan_parquet(adj_path).select(pl.col("trade_date").max()).collect().item()
+    except Exception as e:
+        logger.warning("读取 ETF 除权因子最新日期失败, 回退日K历史起点: %s", e)
+        return history_start
+    if max_date is None:
+        return history_start
+    if isinstance(max_date, str):
+        stored = datetime.combine(datetime.fromisoformat(max_date).date(), datetime.min.time())
+    elif isinstance(max_date, datetime):
+        stored = datetime.combine(max_date.date(), datetime.min.time())
+    else:
+        stored = datetime.combine(max_date, datetime.min.time())
+    return stored
+
+
+def _load_local_etf_daily(repo: KlineRepository, symbols: list[str]) -> pl.DataFrame:
+    """读本批 symbol 的完整本地 ETF 日K, 供前复权改写历史价。"""
+    daily_dir = repo.store.data_dir / "kline_etf_daily"
+    if not daily_dir.exists() or not any(daily_dir.glob("date=*")):
+        return pl.DataFrame()
+    from app.parquet import scan_daily_parquet
+    try:
+        return (
+            scan_daily_parquet((daily_dir / "**" / "*.parquet").as_posix())
+            .filter(pl.col("symbol").is_in(symbols))
+            .collect()
+        )
+    except Exception as e:
+        logger.warning("读取本地 ETF 日K失败: %s", e)
+        return pl.DataFrame()
+
+
 def sync_etf_adj_factor(
     symbols: list[str],
     repo: KlineRepository,
@@ -336,14 +378,18 @@ def sync_and_persist_etf_daily(
 
         repo.append_etf_daily(raw)
         batch_factors = factors.filter(pl.col("symbol").is_in(chunk)) if not factors.is_empty() else factors
-        # ETF 使用复权和通用技术指标；不传 instruments，避免套用 A股涨跌停/连板逻辑。
-        enriched = compute_enriched(raw, factors=batch_factors, instruments=None)
+        # 前复权 ratio = cum/total, 新除权事件会改写全部历史价。只用本次拉取
+        # 窗口算 enriched 时, 拆分日前的分区停在未复权价, 日K 留下跳空。
+        local = _load_local_etf_daily(repo, chunk)
+        hist = local if not local.is_empty() else raw
+        # ETF 使用复权和通用技术指标; 不传 instruments, 避免套用 A股涨跌停/连板逻辑。
+        enriched = compute_enriched(hist, factors=batch_factors, instruments=None)
         repo.append_etf_enriched(enriched)
         total_rows += raw.height
         logger.info("etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
-        del raw, enriched
+        del raw, enriched, local, hist
         gc.collect()
     repo.refresh_index_views()
     return total_rows

@@ -519,21 +519,30 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 on_chunk_done=on_chunk_done,
             )
             if new_data.is_empty():
-                return 0, []
-            affected = new_data["symbol"].unique().to_list()
-            factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-            out = repo.store.data_dir / factor_dir / "all.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists():
-                existing = pl.read_parquet(out)
-                before = existing.height
-                merged = pl.concat([existing, new_data]).unique(
-                    subset=["symbol", "trade_date"], keep="last",
-                ).sort(["symbol", "trade_date"])
-                _atomic_write_parquet(merged, out)
-                return merged.height - before, affected
-            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-            return new_data.height, affected
+                # 扶摇等自定义源对 ETF 直接空返回, 与「该 ETF 无除权」无法区分;
+                # 有 TickFlow 除权能力时回退, 否则 ETF 日K永远不复权。
+                if asset_type == "etf":
+                    logger.info(
+                        "custom adj_factor provider %s returned no ETF rows, falling back to TickFlow",
+                        provider_name,
+                    )
+                else:
+                    return 0, []
+            else:
+                affected = new_data["symbol"].unique().to_list()
+                factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
+                out = repo.store.data_dir / factor_dir / "all.parquet"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                if out.exists():
+                    existing = pl.read_parquet(out)
+                    before = existing.height
+                    merged = pl.concat([existing, new_data]).unique(
+                        subset=["symbol", "trade_date"], keep="last",
+                    ).sort(["symbol", "trade_date"])
+                    _atomic_write_parquet(merged, out)
+                    return merged.height - before, affected
+                _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
+                return new_data.height, affected
         # 自定义源未配置 adj_factor → 回退 TickFlow
 
     if not capset.has(Cap.ADJ_FACTOR):
