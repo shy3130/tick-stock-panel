@@ -13,13 +13,14 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import polars as pl
 import pytest
 
-from app.backtest.engine import BacktestEngine
+from app.backtest.engine import BacktestEngine, MatcherConfig
+from app.backtest.matrix import build_market_matrix
 from app.backtest.minute_trigger import build_minute_entry_reference, build_minute_exit_reference
 
 NUMERIC_COLS = BacktestEngine._MINUTE_NUMERIC_COLS  # open/high/low/close/volume/amount
@@ -213,3 +214,93 @@ def test_load_minute_for_fills_handles_missing_dates():
         repo, ["000001.SZ"], {"2024-01-02", "2024-01-03"}, "stock",
     )
     assert result == {}
+
+
+def _ma5_panel(fill_close: float) -> pl.DataFrame:
+    """前 4 日收盘固定 10, 成交日收盘可变; ma5 含当根 (enriched 口径)。
+
+    6 根日K: 信号在第 4 根 (index 3), open_t+1 成交在第 5 根 (index 4),
+    第 6 根留给离场。成交日 OHLC 固定为盘中路径, 只改收盘。
+    """
+    closes = [10.0, 10.0, 10.0, 10.0, fill_close, 10.0]
+    rows = []
+    for i, close in enumerate(closes):
+        window = closes[max(0, i - 4): i + 1]
+        ma5 = float("nan") if i < 4 else sum(window) / 5.0
+        rows.append({
+            "symbol": "A", "name": "A",
+            "date": date(2024, 1, 1) + timedelta(days=i),
+            "open": 9.5 if i == 4 else close,
+            "high": 10.6 if i == 4 else close,
+            "low": 9.4 if i == 4 else close,
+            "close": close,
+            "volume": 1000.0,
+            "score": 1.0,
+            "ma5": ma5,
+            "signal_limit_up": False,
+            "signal_limit_down": False,
+        })
+    return pl.DataFrame(rows)
+
+
+def test_polars_panel_minute_reference_strips_current_close():
+    """默认 polars_expr 路径 build_market_matrix 不传 reference_price。
+
+    回退若直接拷 panel ma5, 参考线含当根收盘 (前视)。#388 只修了
+    matrix_native / composite 的显式 build_minute_entry_reference。
+    剔除当根后参考线 = 前 4 日收盘均值, 不随当日收盘变化。
+    """
+    refs = {}
+    for c5 in (9.0, 9.6, 10.6, 11.0):
+        panel = _ma5_panel(c5)
+        entries = pl.Series([False, False, False, True, False, False])
+        matrix = build_market_matrix(panel, entries, None)
+        refs[c5] = float(matrix.reference_price[4, 0])
+    for c5, ref in refs.items():
+        assert ref == pytest.approx(10.0), f"c5={c5}: 参考线不应随当日收盘变化"
+        assert ref != pytest.approx((40.0 + c5) / 5.0)
+
+
+def test_polars_panel_minute_fill_independent_of_current_close():
+    """性质回归: 同一盘中路径只改当日收盘, polars 面板路径成交价必须相同。
+
+    建仓口径次日开盘 + 分钟成交。成交日盘中 open=9.5 / high=10.6,
+    参考线若含收盘则会随 c5 漂移, 成交价跟着变。
+    """
+    fills = {}
+    minute = pl.DataFrame({
+        "symbol": ["A", "A"],
+        "datetime": [
+            datetime(2024, 1, 5, 9, 31),
+            datetime(2024, 1, 5, 10, 0),
+        ],
+        "open": [9.5, 9.5],
+        "high": [10.6, 10.6],
+        "low": [9.4, 9.4],
+        "close": [9.5, 9.5],
+        "volume": [100.0, 100.0],
+        "amount": [9.5 * 100.0 * 100, 9.5 * 100.0 * 100],
+    })
+    for c5 in (10.6, 9.6):
+        panel = _ma5_panel(c5)
+        entries = pl.Series([False, False, False, True, False, False])
+        exits = pl.Series([False] * 6)
+        result = BacktestEngine(repo=_FakeRepo(minute)).simulate_portfolio(
+            panel,
+            entries,
+            exits,
+            MatcherConfig(
+                entry_fill="open_t+1",
+                exit_fill="close_t",
+                minute_fill=True,
+                fees_pct=0,
+                slippage_bps=0,
+                max_positions=1,
+                initial_capital=100_000,
+                max_hold_days=1,
+            ),
+        )
+        assert len(result.trades) == 1
+        fills[c5] = result.trades[0].entry_price
+    assert fills[10.6] == pytest.approx(fills[9.6])
+    assert fills[10.6] == pytest.approx(10.0)

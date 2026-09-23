@@ -2344,13 +2344,23 @@ def build_market_matrix_from_signals(
             raise ValueError("reference_price shape does not match MarketDataMatrix")
         resolved_reference_price = np.array(reference_price, dtype=np.float32, copy=True)
     else:
+        # polars_expr / 长表路径不传 reference_price, 回退用 panel 均线。
+        # enriched maN 含当根收盘; 盘中成交不可能知道当日收盘, 代数剔除
+        # 与 build_minute_entry_reference / 卖出侧同一纪律 (#388 只修了
+        # matrix_native 显式传入的那条路径)。
         resolved_reference_price = np.full(market.shape, np.nan, dtype=np.float32)
-        for column in ("ma5", "ma10", "ma20"):
-            values = market.fields.get(column)
-            if values is None:
-                continue
-            use = ~np.isfinite(resolved_reference_price) & np.isfinite(values) & (values > 0)
-            resolved_reference_price[use] = values[use]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for window, column in ((5, "ma5"), (10, "ma10"), (20, "ma20")):
+                values = market.fields.get(column)
+                if values is None:
+                    continue
+                stripped = (float(window) * values - market.close) / float(window - 1)
+                use = (
+                    ~np.isfinite(resolved_reference_price)
+                    & np.isfinite(stripped)
+                    & (stripped > 0)
+                )
+                resolved_reference_price[use] = stripped[use].astype(np.float32, copy=False)
 
     if minute_exit_trigger:
         trigger_reference = build_minute_exit_reference(
