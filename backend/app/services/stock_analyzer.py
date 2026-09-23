@@ -17,11 +17,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
 
 from app.indicators.levels import compute_levels, summarize_levels
+from app.market_time import cn_today
 from app.services.financial_sync import get_financial_df
 
 logger = logging.getLogger(__name__)
@@ -41,9 +43,7 @@ def _load_kline(repo, symbol: str) -> pl.DataFrame:
 
     repo: KlineRepository;走内存缓存,性能可控。
     """
-    from datetime import date, timedelta
-
-    end = date.today()
+    end = cn_today()
     start = end - timedelta(days=_KLINE_WINDOW * 2)  # 多取一些保证交易日够
     # 按资产类型分流: ETF/指数走独立 enriched 存储 (无财务数据, 提示词已有兜底)
     df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
