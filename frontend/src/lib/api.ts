@@ -1985,6 +1985,17 @@ export interface SectorRotationUniverseItem {
 }
 
 // ===== API surface =====
+export interface WindResponse {
+  ok: boolean
+  message?: string
+  code?: string
+  data?: {
+    columns?: Array<string | number>
+    rows?: unknown[]
+    [key: string]: unknown
+  }
+}
+
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
@@ -3736,6 +3747,20 @@ export const api = {
       timeoutMs: null,
       body: JSON.stringify(payload),
     }),
+
+  // ===== Wind 行情（万得金融数据）=====
+  windStatus: async (): Promise<WindResponse> =>
+    request<WindResponse>('/api/wind/status'),
+  windQuote: async (windcode: string, indexes?: string): Promise<WindResponse> =>
+    request<WindResponse>(
+      `/api/wind/quote?windcode=${encodeURIComponent(windcode)}${indexes ? `&indexes=${encodeURIComponent(indexes)}` : ''}`,
+    ),
+  windKline: async (windcode: string, begin: string, end: string, period = '1d', aftype = '0'): Promise<WindResponse> =>
+    request<WindResponse>(
+      `/api/wind/kline?windcode=${encodeURIComponent(windcode)}&begin_date=${encodeURIComponent(begin)}&end_date=${encodeURIComponent(end)}&period=${encodeURIComponent(period)}&aftype=${encodeURIComponent(aftype)}`,
+    ),
+  windSearch: async (question: string): Promise<WindResponse> =>
+    request<WindResponse>(`/api/wind/search?question=${encodeURIComponent(question)}`),
 }
 
 // ===== Pipeline =====

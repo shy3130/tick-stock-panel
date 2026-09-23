@@ -64,6 +64,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/branding',
   '/settings',
   '/dev',
+  '/wind',
   '/settings/keys',
   '/settings/ai',
   '/settings/queries',
@@ -148,6 +149,7 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
       { path: 'dev', element: <Dev /> },
+      { path: 'wind', element: <Wind /> },
       // 旧路由兼容重定向
       { path: 'settings/keys', element: <Navigate to="/settings?tab=data-sources" replace /> },
       { path: 'settings/ai', element: <Navigate to="/settings?tab=ai" replace /> },
