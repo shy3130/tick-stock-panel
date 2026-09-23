@@ -99,3 +99,32 @@ def test_missing_symbol_returns_empty_no_raise(fake_repo):
 
 def test_list_index_symbols(fake_repo):
     assert market_data.list_index_symbols() == [{"symbol": "000001.SH", "name": "上证指数"}]
+
+
+BJ = datetime.date(2026, 3, 2)  # 钉死的北京日期, 不会碰巧等于跑测试那天的 date.today()
+
+
+@pytest.mark.parametrize("fn,symbol,kind", [
+    ("get_index_daily", "000001.SH", "index"),
+    ("get_etf_daily", "510300.SH", "etf"),
+    ("get_daily", "600000.SH", "stock"),
+])
+def test_default_end_is_beijing_today(fake_repo, monkeypatch, fn, symbol, kind):
+    """未传 end 时日K窗口右端必须是北京今天, 不能用服务器本地 date.today()。
+
+    CONTRIBUTING §3.3: A 股交易时段按北京时间, 服务器时区不能成为隐式输入。
+    自定义/AI 策略在选股页读指数/ETF/个股日K 时常省略 end, 缺省走本模块。
+
+    美西主机整个 A 股交易时段、UTC 主机北京 00:00-08:00, 本地日历日比北京
+    早一天: 管道已写入的当日官方 K 被排除, 相对强弱/对照指数停在昨天。
+
+    raising=False: 未修复代码没有调用 cn_today, 钉了也不会被用到,
+    仍走 date.today() → 与 2026-03-02 不等。
+    """
+    monkeypatch.setattr(market_data, "cn_today", lambda: BJ, raising=False)
+    getattr(market_data, fn)(symbol)
+    last = fake_repo.calls[-1]
+    assert last[0] == kind
+    end = last[3]
+    assert end == BJ, f"窗口右端必须是北京日期 {BJ}, 实际 {end} (服务器本地 {datetime.date.today()})"
+    assert end != datetime.date.today()
