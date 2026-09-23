@@ -157,6 +157,10 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线研究经验的技术�
 > 📌 财务面分析能力正在接入中。当前未同步该标的的财务报表,基本面维度暂无法评估。
 > 技术面分析不依赖财务数据,以下结论依然有效;待财务数据同步后可补充本维度。
 
+**当用户消息中标注了该标的为 ETF 时**,本节请输出:
+> 📌 该标的为场内 ETF,无上市公司财务报表,基本面/财务面不适用公司盈利质量框架。
+> 请仅基于价量与关键价位做技术分析,不要编造 ROE/营收等数字,也不要写成「财务接入中」。
+
 **绝对不要**在无数据时编造 ROE / 增速等数字。
 
 ### 5. 📰 消息面(价量异动推断)
@@ -202,7 +206,7 @@ def _build_user_prompt(
 ) -> str:
     """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。
 
-    asset_type 用于区分无财务数据时的文案:指数无财务是常态,不走 Free 文案。
+    asset_type 用于区分无财务数据时的文案:指数/ETF 无财务是常态,不走 Free 文案。
     """
     parts: list[str] = [
         f"标的标准代码: {symbol}",
@@ -229,6 +233,14 @@ def _build_user_prompt(
             "",
             "(该标的为指数: 无财务、股本与涨跌停数据。请按系统提示词第 4 节的说明,"
             "在基本面/财务面维度给出\"接入中\"的友好提示,不要编造数据;"
+            "消息面维度基于价量异动推断即可。)",
+        ])
+    elif asset_type == "etf":
+        parts.extend([
+            "",
+            "(该标的为 ETF: 场内基金无上市公司财务报表、股本与涨跌停口径。"
+            "请按系统提示词第 4 节的说明,在基本面/财务面维度明确这是 ETF 常态,"
+            "不要编造公司财务数字,也不要写成「财务接入中」;"
             "消息面维度基于价量异动推断即可。)",
         ])
     else:
@@ -296,8 +308,9 @@ async def analyze_stock_stream(
     levels = compute_levels(df)
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
 
-    # 3. 财务(辅助)
-    fins = _load_financials(data_dir, symbol)
+    # 3. 财务(辅助)。ETF/指数无公司报表, 跳过扫描, 由提示词走对应常态文案。
+    asset_type = repo.resolve_asset_type(symbol)
+    fins = {} if asset_type in {"etf", "index"} else _load_financials(data_dir, symbol)
 
     # 4. meta
     yield json.dumps({
@@ -314,7 +327,7 @@ async def analyze_stock_stream(
 
         kline_tail = _clean_rows(df, _KLINE_KEEP_COLS)
         user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus,
-                                         asset_type=repo.resolve_asset_type(symbol))
+                                         asset_type=asset_type)
         got_content = False
         async for delta in stream_ai_text(
             [
