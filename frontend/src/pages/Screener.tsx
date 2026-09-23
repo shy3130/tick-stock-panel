@@ -682,32 +682,34 @@ export function Screener() {
     },
   })
 
-  // 策略监控: 查询规则, 建立 strategyId → ruleId 映射 (只看 type=strategy 且 enabled)
+  // 策略监控: 查询规则, 建立 assetType:strategyId → ruleId 映射 (只看 type=strategy 且 enabled)
   const monitorRules = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList })
   const strategyMonitorMap = useMemo(() => {
     const m = new Map<string, string>()
     for (const r of monitorRules.data?.rules ?? []) {
       if (r.type === 'strategy' && r.enabled && r.strategy_id) {
-        m.set(r.strategy_id, r.id)
+        m.set(`${r.asset_type ?? 'stock'}:${r.strategy_id}`, r.id)
       }
     }
     return m
   }, [monitorRules.data])
 
   const toggleStrategyMonitor = (strategyId: string, strategyName: string) => {
-    const existingRuleId = strategyMonitorMap.get(strategyId)
+    const existingRuleId = strategyMonitorMap.get(`${assetType}:${strategyId}`)
     if (existingRuleId) {
       // 已监控 → 删除规则
       api.monitorRuleDelete(existingRuleId).then(() =>
         qc.invalidateQueries({ queryKey: QK.monitorRules }),
       )
     } else {
-      // 未监控 → 直接创建 type=strategy 规则
+      // 未监控 → 直接创建 type=strategy 规则; 必须带当前页资产类型,
+      // 否则 ETF 页点监控会默认 stock, 引擎在股票轮评估, ETF 命中永不告警。
       api.monitorRuleSave({
         id: genRuleId(),
         name: `策略监控 · ${strategyName}`,
         enabled: true,
         type: 'strategy',
+        asset_type: assetType,
         scope: 'all',
         symbols: [],
         sector: null,
@@ -926,7 +928,7 @@ export function Screener() {
                   onRun={() => handleRun(s)}
                   disabled={run.isPending && activeStrategy === s.id}
                   onSettings={() => setSettingsStrategyId(s.id)}
-                  monitored={strategyMonitorMap.has(s.id)}
+                  monitored={strategyMonitorMap.has(`${assetType}:${s.id}`)}
                   onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
                   timeframeBadge={isMinute ? '分钟' : undefined}
                 />
