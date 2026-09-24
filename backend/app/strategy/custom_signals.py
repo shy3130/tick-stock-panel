@@ -41,6 +41,8 @@ ALLOWED_FIELDS: frozenset[str] = frozenset({
     # 行情
     "open", "high", "low", "close", "volume", "amount", "turnover_rate",
     "consecutive_limit_ups", "consecutive_limit_downs",
+    # 不复权价: 按实际价位设条件时用, 前复权价会被分红送转整体下调
+    "raw_close", "raw_high", "raw_low",
     # 基础
     "prev_close", "change_pct", "change_amount", "amplitude",
     # 均线 / 指数均线
