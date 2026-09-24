@@ -1031,6 +1031,121 @@ export interface Lot {
   created_at?: string
 }
 
+// ===== Paper (虚拟账户/模拟盘) =====
+/** 多账户: 追加 ?account= 查询参数 (缺省账户由后端 default 兜底)。 */
+function accUrl(base: string, account?: string): string {
+  if (!account) return base
+  return `${base}${base.includes('?') ? '&' : '?'}account=${encodeURIComponent(account)}`
+}
+
+export interface PaperAccount {
+  id: string
+  name?: string
+  initial_cash: number
+  cash: number
+  commission_pct: number
+  stamp_tax_pct: number
+  slippage_bps: number
+  queue_limit_orders?: boolean
+  status: 'active' | 'frozen'
+  created_at: string
+}
+
+export interface PaperAccountSummary {
+  id: string
+  name: string
+  status: 'active' | 'frozen'
+  initial_cash?: number
+  cash?: number
+  latest_nav?: number | null
+  created_at?: string
+}
+
+export interface PaperHolding {
+  symbol: string
+  asset_type: string
+  qty: number
+  avg_cost: number
+  last_price: number
+  market_value: number
+  pnl: number
+  pnl_pct: number
+  available_qty: number
+}
+
+export interface PaperNavItem {
+  date: string
+  cash: number
+  mv: number
+  nav: number
+  benchmark_close?: number
+}
+
+export interface PaperOverview {
+  initialized: boolean
+  account_id?: string
+  account_name?: string
+  status?: 'active' | 'frozen'
+  queue_limit_orders?: boolean
+  cash?: number
+  market_value?: number
+  total?: number
+  total_pnl?: number
+  initial_cash?: number
+  estimating?: boolean
+  holdings?: PaperHolding[]
+  fees?: { commission_pct: number; stamp_tax_pct: number; slippage_bps: number }
+}
+
+export interface PaperOrder {
+  id: string
+  symbol: string
+  asset_type: string
+  side: 'buy' | 'sell'
+  qty: number
+  order_type: 'market' | 'next_open' | 'close'
+  status: 'pending' | 'filled' | 'cancelled' | 'expired'
+  ref_price?: number | null
+  postponed: number
+  source: string
+  created_at: string
+  filled_at?: string | null
+  fill_price?: number | null
+  fees?: number | null
+  reason?: string | null
+}
+
+export interface PaperAutoRule {
+  id: string
+  name: string
+  match_kind: 'strategy' | 'rule'
+  match_id: string
+  side: 'buy' | 'sell'
+  size_mode: 'fixed_amount' | 'pct_equity'
+  size_value: number
+  order_type: 'market' | 'next_open' | 'close'
+  cooldown_days: number
+  enabled: boolean
+  created_at: string
+}
+
+export interface PaperFill {
+  seq: number
+  ts: string
+  date: string
+  order_id: string | null
+  symbol: string
+  asset_type: string
+  side: 'buy' | 'sell' | 'corp_action'
+  qty?: number
+  price?: number
+  fee?: number
+  kind?: 'fill' | 'corp_action'
+  factor?: number
+  qty_before?: number
+  cost_before?: number
+}
+
 export interface VDBasicFilter {
   price_min?: number | null                 // 股价下限 (元)
   price_max?: number | null                 // 股价上限 (元)
@@ -3575,6 +3690,69 @@ export const api = {
 
   lotDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/lots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ===== Paper (虚拟账户/模拟盘: 虚拟资金 + 真实行情价格模拟撮合, 多账户) =====
+  paperAccounts: () =>
+    request<{ accounts: PaperAccountSummary[] }>('/api/paper/accounts'),
+
+  paperOverview: (account?: string) =>
+    request<PaperOverview>(accUrl('/api/paper/overview', account)),
+
+  paperCreateAccount: (body: { initial_cash: number; account_id?: string; name?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number; queue_limit_orders?: boolean }) =>
+    request<{ account: PaperAccount }>('/api/paper/account', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  paperSettings: (body: { queue_limit_orders?: boolean }, account?: string) =>
+    request<{ account: PaperAccount }>(accUrl('/api/paper/settings', account), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  paperOrderCreate: (body: { symbol: string; side: 'buy' | 'sell'; qty?: number; amount?: number; order_type: 'market' | 'next_open' | 'close'; ref_price?: number }, account?: string) =>
+    request<{ order: PaperOrder }>(accUrl('/api/paper/orders', account), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  paperOrders: (status?: string, account?: string) => {
+    const p = new URLSearchParams()
+    if (status) p.set('status', status)
+    if (account) p.set('account', account)
+    const q = p.toString()
+    return request<{ orders: PaperOrder[] }>(`/api/paper/orders${q ? `?${q}` : ''}`)
+  },
+
+  paperOrderCancel: (id: string, account?: string) =>
+    request<{ order: PaperOrder }>(accUrl(`/api/paper/orders/${encodeURIComponent(id)}`, account), { method: 'DELETE' }),
+
+  paperTrades: (account?: string) =>
+    request<{ fills: PaperFill[] }>(accUrl('/api/paper/trades', account)),
+
+  paperNav: (account?: string) =>
+    request<{ nav: Array<{ date: string; cash: number; mv: number; nav: number }> }>(accUrl('/api/paper/nav', account)),
+
+  paperStats: (account?: string) =>
+    request<{ rounds: number; win_rate: number; profit_loss_ratio: number | null; avg_holding_days: number; realized_pnl: number; max_drawdown: number | null }>(accUrl('/api/paper/stats', account)),
+
+  paperFreeze: (frozen: boolean, account?: string) =>
+    request<{ account: PaperAccount }>(accUrl('/api/paper/freeze?frozen=' + frozen, account), { method: 'POST' }),
+
+  paperAutoRules: (account?: string) =>
+    request<{ rules: PaperAutoRule[] }>(accUrl('/api/paper/auto_rules', account)),
+
+  paperAutoRuleCreate: (body: Omit<PaperAutoRule, 'id' | 'created_at'>, account?: string) =>
+    request<{ rule: PaperAutoRule }>(accUrl('/api/paper/auto_rules', account), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  paperAutoRuleSetEnabled: (id: string, enabled: boolean, account?: string) =>
+    request<{ rule: PaperAutoRule }>(accUrl(`/api/paper/auto_rules/${encodeURIComponent(id)}/enabled?enabled=${enabled}`, account), { method: 'POST' }),
+
+  paperAutoRuleDelete: (id: string, account?: string) =>
+    request<{ ok: boolean }>(accUrl(`/api/paper/auto_rules/${encodeURIComponent(id)}`, account), { method: 'DELETE' }),
 
   /** 模拟触发 ladder 封单监控 (Dev 调试, 不落盘不推送) */
   monitorRuleTestLadder: () =>

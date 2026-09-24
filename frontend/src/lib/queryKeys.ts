@@ -104,6 +104,16 @@ export const QK = {
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   lots:                 ['lots'] as const,
   lotsKline:            (symbols: string) => ['lots-kline', symbols] as const,
+
+  // 模拟盘 (多账户: 键按账户隔离; paperAll 作账户无关失效前缀)
+  paperAll:             ['paper'] as const,
+  paperAccounts:        ['paper', 'accounts'] as const,
+  paperOverview:        (acc: string) => ['paper', 'overview', acc] as const,
+  paperOrders:          (acc: string) => ['paper', 'orders', acc] as const,
+  paperTrades:          (acc: string) => ['paper', 'trades', acc] as const,
+  paperNav:             (acc: string) => ['paper', 'nav', acc] as const,
+  paperStats:           (acc: string) => ['paper', 'stats', acc] as const,
+  paperAutoRules:       (acc: string) => ['paper', 'auto-rules', acc] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
   // AI 大盘复盘

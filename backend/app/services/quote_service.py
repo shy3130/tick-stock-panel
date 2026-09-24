@@ -1318,6 +1318,27 @@ class QuoteService:
             if rule_events:
                 self._maybe_send_webhook(rule_events, engine)
 
+            # 模拟盘钩子: 与监控评估同频 —— ① 用同一份实时快照撮合 pending 即时单;
+            # ② rule_events 喂给自动跟单规则触发自动下单。逐账户执行 (账户间规则与订单隔离)。
+            # 即时撮合仅股票 (ETF 即时单在下单时已转次日开盘); 独立 try ——
+            # 模拟盘任何异常只留痕, 不得影响监控告警链路。
+            if stock_ready and self._app_state is not None:
+                try:
+                    from app.strategy import paper as paper_trading
+                    from app.strategy import paper_auto
+                    data_dir = self._app_state.repo.store.data_dir
+                    snapshot = dict(zip(
+                        enriched_today["symbol"].to_list(),
+                        enriched_today["raw_close"].to_list(),
+                        strict=False,
+                    ))
+                    for acc_id in paper_trading.list_account_ids(data_dir):
+                        paper_trading.evaluate_intraday(data_dir, snapshot, account_id=acc_id)
+                        if rule_events:
+                            paper_auto.on_rule_events(data_dir, rule_events, account_id=acc_id)
+                except Exception as e:
+                    logger.warning("模拟盘钩子失败 (不影响监控): %s", e)
+
         except Exception as e:  # noqa: BLE001
             logger.warning("监控评估失败: %s", e)
 
