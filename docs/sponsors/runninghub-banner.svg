@@ -1,0 +1,54 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RunningHub API sponsor banner">
+  <defs>
+    <linearGradient id="rGrad" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#b8f51e"/>
+      <stop offset="1" stop-color="#f6ffc4"/>
+    </linearGradient>
+    <linearGradient id="ctaGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b8f51e"/>
+      <stop offset="1" stop-color="#e9ff9e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#b8f51e" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#b8f51e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c1105"/>
+      <stop offset="1" stop-color="#000000"/>
+    </linearGradient>
+    <clipPath id="cardClip">
+      <rect x="0" y="0" width="1200" height="300" rx="24"/>
+    </clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="300" rx="24" fill="url(#bgGrad)" stroke="#2a3512" stroke-width="1"/>
+  <g clip-path="url(#cardClip)">
+  <ellipse cx="150" cy="150" rx="240" ry="200" fill="url(#glow)"/>
+
+  <text x="58" y="240" font-family="'Arial Black','Arial Bold',Arial,sans-serif" font-weight="900" font-size="230" fill="url(#rGrad)">R</text>
+
+  <line x1="272" y1="72" x2="272" y2="228" stroke="#3a4a14" stroke-width="1.5"/>
+
+  <text x="310" y="88" font-family="Arial,sans-serif" font-size="14" letter-spacing="2" fill="#8a9a72">BUILT FOR PRODUCTION · 为生产环境而设计</text>
+
+  <text x="310" y="136" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="42" font-weight="700" fill="#ffffff">RunningHub <tspan fill="url(#rGrad)">API</tspan></text>
+
+  <rect x="740" y="100" width="196" height="44" rx="22" fill="none" stroke="#b8f51e" stroke-opacity="0.55"/>
+  <text x="838" y="129" text-anchor="middle" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="19" font-weight="600" fill="#d7f75a">400+ 主流大模型</text>
+
+  <text x="310" y="182" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',sans-serif" font-size="20" fill="#c9d1bd">单一接口直连 400+ 主流大模型，图片 / 视频 / AI 内容一秒生成</text>
+
+  <g font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="15" fill="#a8b894">
+    <rect x="310" y="206" width="176" height="34" rx="17" fill="#11170a" stroke="#2c3a13"/>
+    <text x="398" y="228" text-anchor="middle">ComfyUI 免运维托管</text>
+    <rect x="502" y="206" width="128" height="34" rx="17" fill="#11170a" stroke="#2c3a13"/>
+    <text x="566" y="228" text-anchor="middle">按需弹性计量</text>
+    <rect x="646" y="206" width="216" height="34" rx="17" fill="#11170a" stroke="#2c3a13"/>
+    <text x="754" y="228" text-anchor="middle">细粒度权限 · 全链路加密</text>
+  </g>
+
+  <rect x="948" y="121" width="212" height="58" rx="29" fill="url(#ctaGrad)"/>
+  <text x="1054" y="158" text-anchor="middle" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="21" font-weight="700" fill="#0a0f02">立即接入 API →</text>
+  <text x="1054" y="228" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" fill="#7d8a6a">runninghub.ai</text>
+  </g>
+</svg>

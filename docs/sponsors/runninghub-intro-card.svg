@@ -1,0 +1,43 @@
+<svg width="1200" height="294" viewBox="0 0 1200 294" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RunningHub API 特性与优惠">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c1105"/>
+      <stop offset="1" stop-color="#000000"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#CCFF00" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#CCFF00" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ctaGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#CCFF00"/>
+      <stop offset="1" stop-color="#F5FFCD"/>
+    </linearGradient>
+    <clipPath id="cardClip">
+      <rect x="0" y="0" width="1200" height="294" rx="24"/>
+    </clipPath>
+    <linearGradient id="gradOfficial" x1="114.561" y1="307.02" x2="503.424" y2="307.02" gradientUnits="userSpaceOnUse">
+<stop stop-color="#CCFF00"/>
+<stop offset="1" stop-color="#F5FFCD"/>
+</linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1200" height="294" rx="24" fill="url(#bgGrad)" stroke="#2a3512" stroke-width="1"/>
+  <g clip-path="url(#cardClip)">
+  <text x="80" y="42" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="18" font-weight="700" fill="#ffffff">RunningHub API</text>
+  <line x1="80" y1="56" x2="1120" y2="56" stroke="#232c11" stroke-width="1"/>
+  <circle cx="88" cy="83" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="88" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc"><tspan font-weight="700" fill="#CCFF00">Seedance</tspan> 满血版 API 接入<tspan font-weight="700" fill="#CCFF00">全网骨折价</tspan>，在线工具低至 <tspan font-weight="700" fill="#CCFF00">0.21元/秒</tspan>，节省 <tspan font-weight="700" fill="#CCFF00">60%-80%成本</tspan>！</text>
+  <circle cx="88" cy="108" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="113" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc">超稳定高并发高<tspan font-weight="700" fill="#CCFF00">折扣</tspan>，随用随充按需弹性付费，不捆绑不排队不抽卡</text>
+  <circle cx="88" cy="133" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="138" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc">无限画布、ComfyUI、Agent 等在线工具从剧本到成片全链路制作</text>
+  <circle cx="88" cy="158" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="163" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc">一站式接入 LLM API、多模态 API、工作流 API、AI 应用</text>
+  <circle cx="88" cy="183" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="188" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc">400+ 主流模型<tspan font-weight="700" fill="#CCFF00">（支持国际版权限）</tspan>8000+ 版本<tspan font-weight="700" fill="#CCFF00">任选</tspan></text>
+  <circle cx="88" cy="208" r="3.5" fill="#CCFF00"/>
+  <text x="104" y="213" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#d6ddcc">数千家企业信赖，<tspan font-weight="700" fill="#CCFF00">500万 C 端月活</tspan>验证</text>
+  <line x1="80" y1="238" x2="1120" y2="238" stroke="#232c11" stroke-width="1"/>
+  <text x="80" y="266" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',Arial,sans-serif" font-size="14" fill="#a8b894">RunningHub 折扣获取与免费测试联系 · <tspan font-family="Arial,sans-serif" font-weight="600" fill="#CCFF00">zhenyuedong@haima.me</tspan></text>
+  <text x="1120" y="266" text-anchor="end" font-family="Arial,sans-serif" font-size="13" fill="#7d8a6a">runninghub.ai</text>
+  </g>
+</svg>

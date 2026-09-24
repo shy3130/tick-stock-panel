@@ -372,10 +372,33 @@ def clear_ai_settings() -> dict:
     settings.ai_model = ""
     settings.ai_codex_command = "codex"
     settings.ai_codex_reasoning_effort = ""
-    settings.ai_max_output_tokens = 8192
-    settings.ai_context_window = 64000
+    settings.ai_max_output_tokens = 16384
+    settings.ai_context_window = 128000
 
     return {"ok": True}
+
+
+@router.get("/ai/sponsor-models")
+async def list_sponsor_models() -> dict:
+    """代理获取赞助商(RunningHub)的模型列表。
+
+    其网关按 Origin 头过滤: 浏览器跨域请求只会拿到国产模型子集,
+    服务端请求无 Origin 头可取全量, 故由后端代理转发。
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.get("https://llm.runninghub.ai/v1/models")
+            res.raise_for_status()
+            data = res.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"获取模型列表失败: {exc}") from exc
+    models = sorted({
+        item.get("id") for item in data.get("data", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+    })
+    return {"models": models}
 
 
 # ===== 偏好设置 =====

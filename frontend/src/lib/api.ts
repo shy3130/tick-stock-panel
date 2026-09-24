@@ -2035,6 +2035,10 @@ export const api = {
   clearAiSettings: () =>
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
+  /** 赞助商(RunningHub)模型列表(后端代理, 规避其网关按 Origin 过滤) */
+  sponsorModels: () =>
+    request<{ models: string[] }>('/api/settings/ai/sponsor-models'),
+
   preferences: () => request<Preferences>('/api/settings/preferences'),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
   capabilityMatrix: () => request<CapabilityMatrix>('/api/settings/capability-matrix'),

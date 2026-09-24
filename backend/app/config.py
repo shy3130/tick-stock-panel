@@ -84,9 +84,9 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "openai_compat"
-    ai_base_url: str = "https://api.zhaji.dev/v1"
+    ai_base_url: str = "https://llm.runninghub.ai/v1"
     ai_api_key: str = ""
-    ai_model: str = "gpt-5.5"
+    ai_model: str = "openai/gpt-6-astra-saver"
     ai_codex_command: str = "codex"
     ai_codex_reasoning_effort: str = ""
     # 默认浏览器风格 UA,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
@@ -98,9 +98,10 @@ class Settings(BaseSettings):
     )
     # AI 输出上限 (max_tokens) 与输入上下文窗口上限 (约 token)。
     # 任务级 max_tokens 会被钳制到 ai_max_output_tokens; 输入估算超出上下文窗口时给出明确报错。
-    # 默认 8192 高于所有现有任务 (最多 4500), 避免默认配置反而截断长报告; 可在 AI 设置里调整。
-    ai_max_output_tokens: int = 8192
-    ai_context_window: int = 64000
+    # 钳制仅封顶不放大: 现有任务最多请求 4500, 上调默认值只影响用户自行调高任务上限的场景。
+    # 上下文 128000 对齐当前主流模型底线 (GPT/Claude/GLM/DeepSeek/Kimi 均 ≥128k); 可在 AI 设置里调整。
+    ai_max_output_tokens: int = 16384
+    ai_context_window: int = 128000
 
     # Server
     host: str = "0.0.0.0"

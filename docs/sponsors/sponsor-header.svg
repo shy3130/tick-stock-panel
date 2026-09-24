@@ -1,0 +1,4 @@
+<svg width="240" height="56" viewBox="0 0 240 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="赞助支持 Sponsor">
+  <rect x="0" y="4" width="240" height="48" rx="24" fill="#0c1105" stroke="#2c3a13"/>
+  <text x="22" y="34" font-family="'PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="19" font-weight="700" fill="#f2f5ec">赞助支持 <tspan fill="#CCFF00" font-size="14">· SPONSOR</tspan></text>
+</svg>
