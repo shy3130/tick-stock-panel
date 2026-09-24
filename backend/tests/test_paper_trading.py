@@ -118,7 +118,7 @@ def test_sell_requires_holding_and_t1(tmp_path, monkeypatch):
     buy_order, err = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
     assert err is None
     assert buy_order["status"] == "pending"
-    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}) == 1
+    assert len(paper.evaluate_intraday(tmp_path, {SYM: 10.0})) == 1
     # T+1: 当日买入当日不可卖
     _, err = paper.create_order(tmp_path, SYM, "sell", qty=100)
     assert "可卖数量不足" in err
@@ -150,8 +150,15 @@ def test_immediate_fill_cash_and_positions_consistent(tmp_path, monkeypatch):
 
     order, err = paper.create_order(tmp_path, SYM, "buy", qty=1000, ref_price=10.0)
     assert err is None
-    fills = paper.evaluate_intraday(tmp_path, {SYM: 10.0, "000002.SZ": 5.0})
-    assert fills == 1
+    events = paper.evaluate_intraday(tmp_path, {SYM: 10.0, "000002.SZ": 5.0})
+    assert len(events) == 1
+    # V3 成交事件: 字段对齐监控告警 (source=paper), ts 为毫秒, 文案中文可读
+    ev = events[0]
+    assert ev["source"] == "paper" and ev["type"] == "fill" and ev["severity"] == "info"
+    assert ev["symbol"] == SYM and ev["side"] == "buy" and ev["qty"] == 1000
+    assert ev["price"] == pytest.approx(10.005)
+    assert isinstance(ev["ts"], int) and ev["ts"] > 0
+    assert "买入成交" in ev["message"] and "1000股" in ev["message"]
     filled = paper.get_order(tmp_path, order["id"])
     # 滑点向上: 10 * 1.0005
     assert filled["fill_price"] == pytest.approx(10.005)
@@ -175,7 +182,7 @@ def test_limit_up_buy_rejected(tmp_path, monkeypatch):
     _cap_account(tmp_path)
     order, _ = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
     # 主板涨停 11.0; 快照 11 + 滑点 ≥ 涨停 → 拒单
-    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == 0
+    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == []
     got = paper.get_order(tmp_path, order["id"])
     assert got["status"] == "expired"
     assert "涨停" in got["reason"]
@@ -194,7 +201,7 @@ def test_limit_down_sell_rejected(tmp_path, monkeypatch):
     sell, err = paper.create_order(tmp_path, SYM, "sell", qty=100)
     assert err is None
     # 跌停 9.0; 快照 9 减滑点后不高于跌停价 -> 拒单
-    assert paper.evaluate_intraday(tmp_path, {SYM: 9.0}) == 0
+    assert paper.evaluate_intraday(tmp_path, {SYM: 9.0}) == []
     got = paper.get_order(tmp_path, sell["id"])
     assert got["status"] == "expired" and "跌停" in got["reason"]
 
@@ -230,7 +237,7 @@ def test_pending_sell_occupies_available_quota(tmp_path, monkeypatch):
     _cap_account(tmp_path)
     _, err = paper.create_order(tmp_path, SYM, "buy", qty=200, ref_price=10.0)
     assert err is None
-    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}) == 1
+    assert len(paper.evaluate_intraday(tmp_path, {SYM: 10.0})) == 1
     # 次日: 可卖 200
     monkeypatch.setattr(paper, "cn_today", lambda: day + timedelta(days=1))
     paper._materialize(tmp_path)
@@ -505,7 +512,7 @@ def test_limit_queue_retries_next_open_then_expires(tmp_path, monkeypatch):
     order, _ = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
 
     # day1 盘中触及涨停 11.0 → 不再过期, 转 next_open 排队
-    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == 0
+    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == []
     got = paper.get_order(tmp_path, order["id"])
     assert got["status"] == "pending" and got["order_type"] == "next_open"
     assert got["postponed"] == 1 and "排队" in got["reason"]
@@ -533,7 +540,7 @@ def test_limit_queue_fills_when_open_below_limit(tmp_path, monkeypatch):
         (day, 10.5, 10.9),  # 次日开盘 10.5 未涨停
     ])
     order, _ = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
-    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == 0  # 涨停排队
+    assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == []  # 涨停排队
     assert paper.get_order(tmp_path, order["id"])["status"] == "pending"
     summary = paper.settle_day(tmp_path, day.isoformat())
     assert summary["filled"] == 1
@@ -551,12 +558,12 @@ def test_multi_account_isolation(tmp_path, monkeypatch):
     paper.create_account(tmp_path, 500_000, account_id="acc_a", name="策略A")
 
     # 同一标的分别在两个账户各买一笔
-    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="default") == 0  # 无订单
+    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="default") == []  # 无订单
     o1, err = paper.create_order(tmp_path, SYM, "buy", qty=100, account_id="default")
     o2, err = paper.create_order(tmp_path, SYM, "buy", qty=200, account_id="acc_a")
     assert err is None
-    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="default") == 1
-    assert paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="acc_a") == 1
+    assert len(paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="default")) == 1
+    assert len(paper.evaluate_intraday(tmp_path, {SYM: 10.0}, account_id="acc_a")) == 1
 
     # 订单互不可见
     assert [o["id"] for o in paper.load_orders(tmp_path, "default")] == [o1["id"]]

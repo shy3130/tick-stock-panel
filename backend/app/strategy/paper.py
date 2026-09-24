@@ -713,13 +713,34 @@ def _queue_or_expire(data_dir: Path, order: dict, acc: dict, reason: str, accoun
     _expire(data_dir, order, reason, account_id)
 
 
-def evaluate_intraday(data_dir: Path, snapshot: dict[str, float], account_id: str = DEFAULT_ACCOUNT_ID) -> int:
-    """盘中钩子: 用最新快照价撮合 pending 即时单。返回成交笔数。
+def _fill_event(fill: dict, account_id: str) -> dict:
+    """成交台账行 → 推送事件。字段对齐监控告警 (AlertEvent), 供 SSE toast /
+    语音播报 / 系统通知 / alert_store 留痕 / Webhook 复用, 前端无需新管道。
+    ts 用 fill.seq (毫秒), 与 alert_store 的 ts 口径一致; 文案用中文可读措辞。
+    """
+    side_label = "买入" if fill["side"] == "buy" else "卖出"
+    return {
+        "source": "paper",
+        "type": "fill",
+        "severity": "info",
+        "ts": int(fill["seq"]),
+        "symbol": fill["symbol"],
+        "side": fill["side"],
+        "qty": fill["qty"],
+        "price": fill["price"],
+        "account_id": account_id,
+        "message": f"模拟盘{side_label}成交 {fill['qty']}股 @ {fill['price']:.2f}",
+    }
+
+
+def evaluate_intraday(data_dir: Path, snapshot: dict[str, float], account_id: str = DEFAULT_ACCOUNT_ID) -> list[dict]:
+    """盘中钩子: 用最新快照价撮合 pending 即时单。返回本次成交事件列表。
 
     snapshot: {symbol: raw 最新价} (来自 enriched raw_close)。仅处理 market 单;
     调用方 (quote_service) 已保证交易时段。ETF 不在快照内自然顺延。
+    事件由调用方广播 (SSE/语音/系统通知/留痕/Webhook), 域模块只产出不投递。
     """
-    filled = 0
+    events: list[dict] = []
     with PAPER_LOCK:
         today = cn_today().isoformat()
         pending_orders = sorted(
@@ -730,9 +751,10 @@ def evaluate_intraday(data_dir: Path, snapshot: dict[str, float], account_id: st
             price = snapshot.get(order["symbol"])
             if price is None or price <= 0:
                 continue  # 无快照顺延
-            if _fill_order(data_dir, order, float(price), today, account_id) is not None:
-                filled += 1
-    return filled
+            fill = _fill_order(data_dir, order, float(price), today, account_id)
+            if fill is not None:
+                events.append(_fill_event(fill, account_id))
+    return events
 
 
 # ── 行情读取 (结算用, 与账户无关) ───────────────────────

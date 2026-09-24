@@ -543,10 +543,36 @@ export function Paper() {
   const holdings = ov.holdings ?? []
   const orders = (ordersQ.data?.orders ?? []).filter(o => o.status === 'pending' || o.status === 'expired' || o.status === 'cancelled').slice(0, 20)
   const trades: PaperFill[] = (tradesQ.data?.fills ?? []).slice(0, 30)
+  const allFills: PaperFill[] = tradesQ.data?.fills ?? []
   const nav = navQ.data?.nav ?? []
   const stats = statsQ.data
   const pnlPct = ov.initial_cash && ov.initial_cash > 0 ? ((ov.total_pnl ?? 0) / ov.initial_cash) * 100 : 0
   const accounts = accountsQ.data?.accounts ?? []
+
+  /** 导出全部成交台账 CSV (带 BOM, Excel 可直接打开); 口径与页面「成交台账」一致 */
+  const exportTradesCsv = () => {
+    if (allFills.length === 0) return
+    const esc = (v: string | number | null | undefined) => {
+      const s = v == null ? '' : String(v)
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const lines = ['日期,代码,方向,数量,成交价,费用,类型,订单号']
+    for (const f of allFills) {
+      lines.push([
+        f.date, f.symbol,
+        f.kind === 'corp_action' ? '除权' : f.side === 'buy' ? '买入' : '卖出',
+        f.qty ?? '', f.price ?? '', f.fee ?? '',
+        f.kind ?? 'fill', f.order_id ?? '',
+      ].map(esc).join(','))
+    }
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `模拟盘成交台账_${accId}_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -665,6 +691,16 @@ export function Paper() {
                     {t === 'orders' ? '订单' : '成交台账'}
                   </button>
                 ))}
+                {tab === 'trades' && (
+                  <button
+                    onClick={exportTradesCsv}
+                    disabled={allFills.length === 0}
+                    className="ml-auto rounded-btn border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-accent/30 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                    title="导出全部成交台账 (CSV, Excel 可直接打开)"
+                  >
+                    导出 CSV
+                  </button>
+                )}
                 {stats && (
                   <span className="ml-auto text-[11px] text-muted" title="回合为 FIFO 配对的完整买卖; 回撤按定版净值序列">
                     回合 {stats.rounds} · 胜率 {stats.win_rate}% · 盈亏比 {stats.profit_loss_ratio ?? '--'} · 均持 {stats.avg_holding_days}天 · 回撤{' '}
