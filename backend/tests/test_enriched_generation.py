@@ -41,6 +41,42 @@ def test_repository_enriched_noop_does_not_bump_generation(tmp_path) -> None:
     assert repo.get_matrix_data_generation("stock") == first
 
 
+def test_commit_twice_is_idempotent_issue417(tmp_path) -> None:
+    """Issue #417 回归: 有变化分区提交后再遇到无变化分区的空提交,
+    必须幂等返回而非抛 ownership was lost (修复前第二次 commit 抛错)。"""
+    publication = EnrichedPublication(tmp_path, recover=True)
+    first = tmp_path / "kline_daily_enriched" / "date=2026-08-13" / "part.parquet"
+    second = tmp_path / "kline_daily_enriched" / "date=2026-08-14" / "part.parquet"
+    publication.write_parquet(_frame(10.0), first)
+    assert publication.commit() is not None   # 分区1: 有变化, 正常发布
+    assert publication.commit() is None       # 分区2: 无变化, 空提交幂等
+    # 已提交过的发布对象继续写入仍可用 (write 重新认领)
+    publication.write_parquet(_frame(11.0), second)
+    assert publication.commit() is not None
+
+
+def test_repository_changed_partition_before_unchanged_issue417(tmp_path) -> None:
+    """Issue #417 回归: 一次写多个日期分区且「有变化在前、无变化在后」,
+    修复前第二个 (无变化) 分区的空提交必然抛 ownership was lost, 整批失败。"""
+    repo = KlineRepository(DataStore(tmp_path))
+    d1, d2 = date(2026, 8, 13), date(2026, 8, 14)
+    base = {"symbol": ["000001.SZ"] * 2, "date": [d1, d2]}
+    repo.append_enriched(pl.DataFrame({
+        **base,
+        "open": [10.0, 10.0], "high": [10.0, 10.0], "low": [10.0, 10.0],
+        "close": [10.0, 10.0], "volume": [1_000.0, 1_000.0],
+    }))
+    first = repo.get_matrix_data_generation("stock")
+    # 第二批: d1 有变化, d2 与库中内容一致 (无变化分区排在其后)
+    repo.append_enriched(pl.DataFrame({
+        **base,
+        "open": [10.5, 10.0], "high": [10.5, 10.0], "low": [10.5, 10.0],
+        "close": [10.5, 10.0], "volume": [1_000.0, 1_000.0],
+    }))
+    assert repo.get_matrix_data_generation("stock") != first
+    assert repo.get_matrix_data_generation("stock") != first  # 幂等不抛
+
+
 def test_failed_multi_partition_publication_remains_fail_closed(
     tmp_path,
     monkeypatch,
