@@ -934,7 +934,9 @@ class FuyaoProvider:
                     if src not in field_map and src not in row and isinstance(value, (int, float)):
                         row[src] = value
                 rows_out.append(row)
-        return pl.DataFrame(rows_out) if rows_out else pl.DataFrame()
+        # 稀疏列(如仅银行有值的 financial_expense)前 100 行可能全空, 默认采样会
+        # 推断成 Null 列, 后续数值 append 失败 → 全量扫描推断
+        return pl.DataFrame(rows_out, infer_schema_length=None) if rows_out else pl.DataFrame()
 
     def _financial_metrics(self, symbols: list[str]) -> pl.DataFrame:
         client = self._get_client()
