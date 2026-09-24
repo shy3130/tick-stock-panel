@@ -201,3 +201,31 @@ def on_rule_events(data_dir: Path, events: list[dict], account_id: str = paper.D
                 created.append(order)
                 logger.info("paper auto %s: %s 触发 %s %d 股 (%s)", rule["name"], symbol, rule["side"], qty, order["id"])
     return created
+
+
+_ORDER_TYPE_LABEL = {"market": "即时", "next_open": "次日开盘", "close": "当日收盘"}
+
+
+def auto_order_events(created: list[dict], account_id: str = paper.DEFAULT_ACCOUNT_ID) -> list[dict]:
+    """自动跟单创建的订单 → 推送事件。与成交事件同构 (source=paper 对齐
+    AlertEvent), 走同一推送通道; rule_id 从 order.source (auto:{rule_id}) 还原。
+    """
+    events: list[dict] = []
+    for o in created:
+        source = str(o.get("source", ""))
+        rule_id = source.removeprefix("auto:") if source.startswith("auto:") else ""
+        side_label = "买入" if o["side"] == "buy" else "卖出"
+        type_label = _ORDER_TYPE_LABEL.get(o["order_type"], o["order_type"])
+        events.append({
+            "source": "paper",
+            "type": "auto_order",
+            "severity": "info",
+            "ts": int(cn_now().timestamp() * 1000),
+            "symbol": o["symbol"],
+            "rule_id": rule_id,
+            "side": o["side"],
+            "qty": o["qty"],
+            "account_id": account_id,
+            "message": f"自动跟单触发{side_label}下单 ({type_label}) {o['qty']}股",
+        })
+    return events

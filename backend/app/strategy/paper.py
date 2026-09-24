@@ -713,6 +713,19 @@ def _queue_or_expire(data_dir: Path, order: dict, acc: dict, reason: str, accoun
     _expire(data_dir, order, reason, account_id)
 
 
+def day_fill_events(data_dir: Path, day: str, account_id: str = DEFAULT_ACCOUNT_ID) -> list[dict]:
+    """指定交易日的全部成交 → 推送事件。
+
+    盘后结算路径 (daily_pipeline paper_settle) 用它把结算成交留痕到告警中心;
+    盘中即时成交走 evaluate_intraday 返回值, 不经过本函数。
+    """
+    return [
+        _fill_event(f, account_id)
+        for f in load_fills(data_dir, account_id)
+        if f.get("date") == day and f.get("kind") == "fill"
+    ]
+
+
 def _fill_event(fill: dict, account_id: str) -> dict:
     """成交台账行 → 推送事件。字段对齐监控告警 (AlertEvent), 供 SSE toast /
     语音播报 / 系统通知 / alert_store 留痕 / Webhook 复用, 前端无需新管道。

@@ -628,3 +628,51 @@ def test_legacy_single_account_layout_migrates(tmp_path, monkeypatch):
     assert not (legacy / "account.json").exists()
     # 幂等: 重复访问不报错
     assert paper.get_account(tmp_path)["cash"] == 750000.0
+
+
+# ── V3 补全: 结算成交留痕 / 自动跟单下单事件 ──────────
+def test_day_fill_events_returns_todays_fills(tmp_path, monkeypatch):
+    """day_fill_events: 只取指定交易日、kind=fill 的台账行, 转 AlertEvent 同构事件。"""
+    day = date(2026, 9, 24)
+    monkeypatch.setattr(paper, "cn_today", lambda: day)
+    _write_daily(tmp_path, [(day - timedelta(days=1), 10.0, 10.0)])
+    _cap_account(tmp_path)
+
+    # 当日无成交 → 空列表
+    assert paper.day_fill_events(tmp_path, day.isoformat()) == []
+
+    _, err = paper.create_order(tmp_path, SYM, "buy", qty=1000, ref_price=10.0)
+    assert err is None
+    assert len(paper.evaluate_intraday(tmp_path, {SYM: 10.0})) == 1
+
+    events = paper.day_fill_events(tmp_path, day.isoformat())
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["source"] == "paper" and ev["type"] == "fill" and ev["severity"] == "info"
+    assert ev["symbol"] == SYM and ev["side"] == "buy" and ev["qty"] == 1000
+    assert isinstance(ev["ts"], int) and ev["ts"] > 0
+    assert "买入成交" in ev["message"]
+    # 幂等 (结算重跑同日不重复追加事件)
+    assert paper.day_fill_events(tmp_path, day.isoformat()) == events
+
+
+def test_auto_order_events_shape(tmp_path):
+    """auto_order_events: 订单 → AlertEvent 同构事件, rule_id 从 source 还原。"""
+    from app.strategy import paper_auto
+
+    orders = [
+        {"symbol": "600000.SH", "side": "buy", "qty": 500,
+         "order_type": "next_open", "source": "auto:rule_abc"},
+        {"symbol": "000001.SZ", "side": "sell", "qty": 200,
+         "order_type": "market", "source": "manual"},
+    ]
+    events = paper_auto.auto_order_events(orders, account_id="acc1")
+    assert len(events) == 2
+    buy_ev, sell_ev = events
+    assert buy_ev["source"] == "paper" and buy_ev["type"] == "auto_order"
+    assert buy_ev["rule_id"] == "rule_abc" and buy_ev["account_id"] == "acc1"
+    assert "买入" in buy_ev["message"] and "次日开盘" in buy_ev["message"] and "500股" in buy_ev["message"]
+    assert isinstance(buy_ev["ts"], int) and buy_ev["ts"] > 0
+    assert sell_ev["rule_id"] == "" and "卖出" in sell_ev["message"] and "即时" in sell_ev["message"]
+    # 空列表 → 空
+    assert paper_auto.auto_order_events([]) == []

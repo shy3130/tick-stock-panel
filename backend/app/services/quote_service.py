@@ -1338,9 +1338,11 @@ class QuoteService:
                         paper_events.extend(
                             paper_trading.evaluate_intraday(data_dir, snapshot, account_id=acc_id))
                         if rule_events:
-                            paper_auto.on_rule_events(data_dir, rule_events, account_id=acc_id)
-                    # 成交推送 (V3): 复用监控中心既有管道 —— SSE toast / 语音 (前端按
-                    # source 拼文案) / 系统通知 / alert_store 留痕 / Webhook。全部静默降级。
+                            created = paper_auto.on_rule_events(data_dir, rule_events, account_id=acc_id)
+                            paper_events.extend(paper_auto.auto_order_events(created, account_id=acc_id))
+                    # 成交/自动跟单下单推送 (V3): 复用监控中心既有管道 —— SSE toast /
+                    # 语音 (前端按 source 拼文案) / 系统通知 / alert_store 留痕 /
+                    # Webhook。全部静默降级。
                     if paper_events:
                         self._broadcast_alerts(paper_events)
                         try:

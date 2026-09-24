@@ -745,6 +745,19 @@ def run_now(
         paper_summary = totals
         if paper_summary.get("filled") or paper_summary.get("corp_actions"):
             logger.info("paper_settle: %s", paper_summary)
+        # 结算成交留痕 (V3): next_open/close 单的成交发生在盘后管道内, 盘中钩子
+        # 覆盖不到; 管道无 SSE 广播器, 这里补 alert_store 留痕进监控中心即可见。
+        if totals["filled"]:
+            try:
+                from app.services import alert_store
+                settle_events = []
+                for acc_id in paper_trading.list_account_ids(repo.store.data_dir):
+                    settle_events.extend(paper_trading.day_fill_events(
+                        repo.store.data_dir, today.isoformat(), account_id=acc_id))
+                if settle_events:
+                    alert_store.append_many(repo.store.data_dir, settle_events)
+            except Exception as e:
+                logger.warning("模拟盘结算成交留痕失败: %s", e)
         emit("paper_settle", 94, "模拟盘结算完成")
     except Exception as e:
         logger.warning("paper_settle failed (soft): %s", e)
