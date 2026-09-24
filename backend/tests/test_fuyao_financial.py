@@ -137,6 +137,41 @@ def test_balance_and_cashflow_mapping(monkeypatch):
     assert cf["pay_dividends_profits_interest_cash"] == pytest.approx(64000000000.0)
 
 
+class _PerSymbolIncomeClient(_FakeFinClient):
+    """按标的返回不同利润表行, 模拟全市场同步的逐股请求。"""
+
+    def __init__(self, rows_by_symbol: dict[str, dict]):
+        super().__init__()
+        self.rows_by_symbol = rows_by_symbol
+
+    def financial_statements(self, stmt, thscode, limit=1):
+        self.stmt_calls.append((stmt, thscode, limit))
+        return [dict(self.rows_by_symbol[thscode], thscode=thscode)]
+
+
+def test_income_sparse_column_after_100_null_rows(monkeypatch):
+    """前 100 只标的某映射列全空、之后才出现数值时, 整表仍须构建成功。
+
+    真实场景: interest_expenses→financial_expense 仅银行等少数标的有值,
+    全市场按代码顺序同步时前 100 行全为 None, Polars 默认按前 100 行推断出
+    Null 列, 遇到中信银行的 6.1199e10 即 append 失败, income 整表从未写入。
+    """
+    rows_by_symbol = {
+        f"{600000 + i:06d}.SH": dict(_INCOME_ROW, interest_expenses=None)
+        for i in range(100)
+    }
+    rows_by_symbol["601998.SH"] = dict(_INCOME_ROW, interest_expenses=6.1199e10)
+    provider = _provider_with(monkeypatch, _PerSymbolIncomeClient(rows_by_symbol))
+
+    df = provider.get_financials("income", list(rows_by_symbol), latest_only=True)
+
+    assert df.height == 101
+    assert df.schema["financial_expense"] == pl.Float64
+    bank = df.filter(pl.col("symbol") == "601998.SH").row(0, named=True)
+    assert bank["financial_expense"] == pytest.approx(6.1199e10)
+    assert df.filter(pl.col("symbol") != "601998.SH")["financial_expense"].null_count() == 100
+
+
 _METRICS_ABILITIES = [
     {
         "ability": "profitability",
