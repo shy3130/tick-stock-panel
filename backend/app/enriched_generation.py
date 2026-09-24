@@ -331,6 +331,11 @@ class EnrichedPublication:
             generation = uuid.uuid4().hex
             _write_marker(path, _ready_payload(generation))
         self._publishing = False
+        # 待发布内容已全部落盘, 复位脏标记: 多日期分区写入复用同一发布对象,
+        # 无变化分区会再调 commit() (空提交) — 不复位会以过期脏标记命中
+        # ownership 校验而误抛 "ownership was lost" (Issue #417)。
+        # 之后的写入会经 _claim_or_verify 重新认领并再次置位。
+        self._changed = False
         return generation
 
     def _claim_or_verify(self) -> None:
