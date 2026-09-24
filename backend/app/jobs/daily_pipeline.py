@@ -724,6 +724,45 @@ def run_now(
             stage_errors.append(f"compute_mainline: {e}")
             skipped.append("mainline")
 
+    # Step 2.8: 模拟盘结算: 顺延单按当日开盘/收盘撮合 → 除权调整 → 定版净值。
+    # 幂等: 重跑同日不会重复成交/二次除权 (订单状态与 corp_action 台账守卫)。
+    # 必须在日K/除权同步之后, 才能读到当日 raw OHLC 与因子。核心账务不受
+    # 「市场环境」等可选开关控制, 恒运行 (开销可忽略); 软失败不阻断主管道。
+    paper_summary: dict = {}
+    try:
+        emit("paper_settle", 94, "模拟盘结算…")
+        from app.strategy import paper as paper_trading
+        # 逐账户结算 (账户间订单/台账隔离), 汇总合并供日志与结果展示
+        totals = {"filled": 0, "expired": 0, "corp_actions": 0, "nav": None, "accounts": []}
+        for acc_id in paper_trading.list_account_ids(repo.store.data_dir):
+            s = paper_trading.settle_day(repo.store.data_dir, today.isoformat(), account_id=acc_id)
+            totals["filled"] += s.get("filled", 0)
+            totals["expired"] += s.get("expired", 0)
+            totals["corp_actions"] += s.get("corp_actions", 0)
+            if s.get("nav") is not None:
+                totals["nav"] = s["nav"]
+            totals["accounts"].append({"account": acc_id, **{k: s.get(k) for k in ("filled", "expired", "corp_actions")}})
+        paper_summary = totals
+        if paper_summary.get("filled") or paper_summary.get("corp_actions"):
+            logger.info("paper_settle: %s", paper_summary)
+        # 结算成交留痕 (V3): next_open/close 单的成交发生在盘后管道内, 盘中钩子
+        # 覆盖不到; 管道无 SSE 广播器, 这里补 alert_store 留痕进监控中心即可见。
+        if totals["filled"]:
+            try:
+                from app.services import alert_store
+                settle_events = []
+                for acc_id in paper_trading.list_account_ids(repo.store.data_dir):
+                    settle_events.extend(paper_trading.day_fill_events(
+                        repo.store.data_dir, today.isoformat(), account_id=acc_id))
+                if settle_events:
+                    alert_store.append_many(repo.store.data_dir, settle_events)
+            except Exception as e:
+                logger.warning("模拟盘结算成交留痕失败: %s", e)
+        emit("paper_settle", 94, "模拟盘结算完成")
+    except Exception as e:
+        logger.warning("paper_settle failed (soft): %s", e)
+        stage_errors.append(f"paper_settle: {e}")
+
     # Step 3: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)
@@ -744,6 +783,7 @@ def run_now(
         "minute_rows": written_minute,
         "regime_days": regime_days,
         "mainline_rows": mainline_rows,
+        "paper_settle": paper_summary,
         "lagging_symbols": len(lagging_symbols),
         "enriched_total_days": enriched_total_days,
         "integrity_repair_from": repair_start.isoformat() if repair_start else None,

@@ -143,6 +143,13 @@ function buildSingleText(a: AlertEvent): string {
     return parts.join(' ')
   }
 
+  // 模拟盘成交: message 已是中文可读文案 ("模拟盘买入成交 1000股 @ 10.01"), 补名称即可
+  if (a.source === 'paper') {
+    const parts = [name]
+    if (a.message) parts.push(a.message)
+    return parts.join(' ')
+  }
+
   // 价格/异动/其他: message 是条件摘要 (如 "现价 ≥ 100 · 涨幅 5%")
   const parts = [name]
   if (a.message) parts.push(a.message)
