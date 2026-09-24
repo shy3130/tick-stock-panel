@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowDown,
+  Gift,
   History,
   Plus,
   SendHorizontal,
@@ -45,6 +46,10 @@ const EASE_SMOOTH: [number, number, number, number] = [0.16, 1, 0.3, 1]
 const WIDTH_STORAGE_KEY = 'assistant.width.v1'
 const DEFAULT_WIDTH = 720
 const MIN_WIDTH = 480
+
+const RH_PROMO_URL = 'https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c'
+const RH_PROMO_DISMISS_KEY = 'assistant.rh_promo.dismissed_at.v1'
+const RH_PROMO_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000
 
 function loadWidth(): number {
   try {
@@ -169,6 +174,61 @@ function DrawerPanel({
   )
 }
 
+/** RunningHub 推广条: 嵌在抽屉标题行中间, 单行跑马灯横向滚动(悬停暂停),
+ * 琥珀色高亮(深浅主题各取一档), 可点击跳转邀请链接。
+ * 点 X 后一周(7 天)内不再显示 —— 时间戳持久化到 localStorage; DrawerPanel 随抽屉
+ * 开合挂载/卸载, 每次点开对话框重新检查是否已到期, 到期后自动恢复。 */
+function RhPromoBanner() {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      const ts = Number(localStorage.getItem(RH_PROMO_DISMISS_KEY))
+      return Number.isFinite(ts) && Date.now() - ts < RH_PROMO_SNOOZE_MS
+    } catch { return false }
+  })
+  if (dismissed) return null
+  const snooze = () => {
+    setDismissed(true)
+    try { localStorage.setItem(RH_PROMO_DISMISS_KEY, String(Date.now())) } catch { /* 存储不可用时仅本次关闭 */ }
+  }
+  const copy = (key: string) => (
+    <a
+      key={key}
+      href={RH_PROMO_URL}
+      target="_blank"
+      rel="noreferrer"
+      className="flex shrink-0 items-center gap-1 pr-8 text-[10px] leading-relaxed text-secondary transition-colors hover:text-foreground"
+    >
+      <span className="font-medium text-amber-600 dark:text-amber-400">Claude、ChatGPT、Gemini</span>
+      <span>等国际模型直连稳定不掉线，</span>
+      <span className="font-medium text-amber-600 dark:text-amber-400">最高优惠 80%</span>
+      <span>，</span>
+      <span className="font-medium text-amber-600 dark:text-amber-400">通过此链接注册赠送 1000 RH 积分</span>
+      <span>🎁</span>
+    </a>
+  )
+  // 窗口(overflow-hidden)裁剪滚动内容, 礼包图标与 X 按钮在窗口外, 永不被文字盖住;
+  // 轨道 w-max 按内容撑宽, 份数为偶数时 translateX(-50%) 恰好位移整份文案宽度,
+  // 循环回跳视觉无缝。4 份保证极宽抽屉下窗口内也始终有内容。
+  return (
+    <div className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-btn border border-amber-400/30 bg-amber-400/15 py-1 pl-2 pr-1 dark:border-amber-400/25 dark:bg-amber-400/10">
+      <Gift className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex w-max animate-[rh-marquee_26s_linear_infinite] whitespace-nowrap motion-reduce:animate-none group-hover:[animation-play-state:paused]">
+          {['a', 'b', 'c', 'd'].map(copy)}
+        </div>
+      </div>
+      <button
+        onClick={snooze}
+        title="关闭推广 (一周内不再显示)"
+        aria-label="关闭推广 (一周内不再显示)"
+        className="shrink-0 rounded-btn p-0.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  )
+}
+
 function DrawerHeader({
   status,
   sessions,
@@ -185,16 +245,17 @@ function DrawerHeader({
   return (
     <div className="relative flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
       <Sparkles className="h-4 w-4 shrink-0 text-accent" />
-      <span className="text-sm font-semibold text-foreground">AI 助手</span>
+      <span className="shrink-0 text-sm font-semibold text-foreground">AI 助手</span>
       {status?.model && (
         <span
-          className="max-w-36 truncate rounded-btn bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-muted"
-          title={`供应商: ${status.provider}`}
+          className="min-w-0 truncate rounded-btn bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-muted"
+          title={`模型: ${status.model}\n供应商: ${status.provider ?? '-'}`}
         >
           {status.model}
         </span>
       )}
-      <div className="ml-auto flex items-center gap-0.5">
+      <RhPromoBanner />
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <div className="relative">
           <IconButton title="历史会话" onClick={() => setMenuOpen(v => !v)} disabled={sending}>
             <History className="h-4 w-4" />

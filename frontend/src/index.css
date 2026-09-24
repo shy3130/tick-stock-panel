@@ -77,3 +77,10 @@ body {
   -moz-osx-font-smoothing: auto;
   text-rendering: optimizeLegibility;
 }
+
+/* RunningHub 推广横幅跑马灯: 双份相同内容 + translateX(-50%) 无缝循环,
+ * 悬停暂停由 Tailwind group-hover:[animation-play-state:paused] 控制 */
+@keyframes rh-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
