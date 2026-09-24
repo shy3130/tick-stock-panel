@@ -1340,6 +1340,29 @@ export interface GroupStat {
   win_rate: number
 }
 
+/** 回测候选 (candidates): 回测报告的持久化标量摘要; metrics 单位为小数 (0.052 = 5.2%) */
+export interface BacktestCandidate {
+  id: string
+  kind: 'factor' | 'strategy'
+  name: string
+  source_id: string
+  metrics: Partial<{
+    total_return: number
+    annual_return: number
+    max_drawdown: number
+    sharpe: number
+    sortino: number
+    win_rate: number
+    n_trades: number
+    profit_factor: number
+    avg_return: number
+    median_return: number
+  }>
+  data_as_of: string | null
+  status: 'pending' | 'validated' | 'rejected'
+  created_at: string
+}
+
 export interface FactorBacktestResult {
   run_id: string
   config: Record<string, any>
@@ -2824,6 +2847,10 @@ export const api = {
   },
 
   backtestStatus: () => request<{ available: boolean }>('/api/backtest/status'),
+
+  /** 策略/因子候选 (回测报告的持久化摘要, 模拟盘对比用) */
+  backtestCandidates: () =>
+    request<{ items: BacktestCandidate[] }>('/api/backtest/candidates'),
 
   backtestRun: (payload: {
     symbols: string[]

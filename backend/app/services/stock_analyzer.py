@@ -195,6 +195,32 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线研究经验的技术�
 # 用户消息构建
 # ================================================================
 
+def _paper_position_part(pos: dict | None, close: float | None, raw_close: float | None) -> str:
+    """虚拟持仓上下文 (V3): 模拟盘持有该标的时注入提示词, 让 AI 结合仓位给建议。
+
+    pos 为空 / 数量或成本无效时返回空串 (不注入"空仓"之类误导性表述)。
+    浮盈用 raw 口径: 持仓 avg_cost 是不复权 raw 成本, 与前复权 close 混算会在
+    除权后产生虚假盈亏, 故优先用 raw_close (缺列时退化用 close 并接受口径误差)。
+    """
+    if not pos:
+        return ""
+    qty = pos.get("qty") or 0
+    avg_cost = pos.get("avg_cost") or 0
+    if qty <= 0 or avg_cost <= 0:
+        return ""
+    ref = raw_close if (raw_close is not None and raw_close > 0) else close
+    lines = [f"持仓数量: {qty} 股, 平均成本: {avg_cost:.3f} 元 (不复权)"]
+    if ref is not None and ref > 0:
+        pnl_pct = (ref / avg_cost - 1) * 100
+        lines.append(f"现价 {ref:.2f} 元, 浮动盈亏: {pnl_pct:+.2f}%")
+    return (
+        "\n以下是该标的在模拟盘 (虚拟账户) 的当前持仓:\n"
+        + "\n".join(lines)
+        + "\n请在结论中结合该虚拟持仓状态给出持有/减仓/加仓的可执行参考,"
+        "并明确这是基于模拟盘虚拟持仓的建议。\n"
+    )
+
+
 def _build_user_prompt(
     kline_tail: list[dict],
     fins: dict[str, list[dict]],
@@ -203,8 +229,10 @@ def _build_user_prompt(
     symbol: str,
     focus: str,
     asset_type: str = "stock",
+    paper_position: dict | None = None,
+    raw_close: float | None = None,
 ) -> str:
-    """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。
+    """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点 (+ 虚拟持仓)。
 
     asset_type 用于区分无财务数据时的文案:指数/ETF 无财务是常态,不走 Free 文案。
     """
@@ -254,6 +282,9 @@ def _build_user_prompt(
     focus_instruction = build_focus_instruction(focus, report_name="个股分析报告")
     if focus_instruction:
         parts.extend(["", focus_instruction])
+    paper_part = _paper_position_part(paper_position, close, raw_close)
+    if paper_part:
+        parts.extend(["", paper_part])
     return "\n".join(parts)
 
 
@@ -325,9 +356,20 @@ async def analyze_stock_stream(
     try:
         from app.services.ai_provider import stream_ai_text
 
+        # 虚拟持仓上下文 (V3): 默认模拟盘账户持有该标的时注入 (任何异常静默跳过, 不影响分析)。
+        paper_position = None
+        try:
+            from app.strategy import paper as paper_trading
+            paper_position = paper_trading.load_positions(data_dir).get(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取模拟盘持仓失败 (跳过注入): %s", e)
+        # 浮盈口径用 raw: 持仓成本不复权, 与前复权 close 混算会在除权后失真
+        raw_close = float(df.tail(1)["raw_close"][0]) if "raw_close" in df.columns else None
+
         kline_tail = _clean_rows(df, _KLINE_KEEP_COLS)
         user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus,
-                                         asset_type=asset_type)
+                                         asset_type=asset_type, paper_position=paper_position,
+                                         raw_close=raw_close)
         got_content = False
         async for delta in stream_ai_text(
             [

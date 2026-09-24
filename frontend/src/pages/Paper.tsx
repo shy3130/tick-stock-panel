@@ -313,6 +313,82 @@ function OrderForm({ acc, onDone }: { acc: string; onDone: () => void }) {
   )
 }
 
+/** 策略候选对比 (V3): 模拟盘统计 vs 回测候选 (回测报告的持久化标量摘要, 口径与回测对齐)。
+ * 单位口径: 候选 metrics 为小数 (fmtPct 渲染), 模拟盘统计为百分数原值 — 各自按己方单位渲染, 不做数值换算。 */
+interface PaperCompareStats {
+  total_return_pct: number | null
+  annual_pct: number | null
+  max_drawdown: number | null
+  win_rate: number | null
+  n_trades: number | null
+  profit_loss_ratio: number | null
+}
+
+function CandidateCompareCard({ paper }: { paper: PaperCompareStats }) {
+  const candsQ = useQuery({ queryKey: QK.backtestCandidates, queryFn: api.backtestCandidates })
+  const candidates = (candsQ.data?.items ?? []).filter(c => c.kind === 'strategy')
+  const [selId, setSelId] = useState('')
+  const sel = candidates.find(c => c.id === selId) ?? candidates[0]
+  const m = sel?.metrics ?? {}
+  const paperPct = (v: number | null | undefined) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
+  const candPct = (v: number | null | undefined) => (v == null ? '—' : fmtPct(v))
+  const num = (v: number | null | undefined, digits = 0) => (v == null ? '—' : v.toFixed(digits))
+  const rows: Array<[string, string, string]> = [
+    ['累计收益', paperPct(paper.total_return_pct), candPct(m.total_return)],
+    ['年化收益', paperPct(paper.annual_pct), candPct(m.annual_return)],
+    ['最大回撤', paper.max_drawdown != null ? `-${paper.max_drawdown.toFixed(2)}%` : '—', candPct(m.max_drawdown)],
+    ['胜率', paper.win_rate != null ? `${paper.win_rate.toFixed(1)}%` : '—', candPct(m.win_rate)],
+    ['交易次数', num(paper.n_trades), num(m.n_trades)],
+    ['盈亏比', num(paper.profit_loss_ratio, 2), num(m.profit_factor, 2)],
+    ['夏普比率', '—', num(m.sharpe, 2)],
+  ]
+  return (
+    <div className="rounded-card border border-border/60 bg-surface p-3">
+      <div className="flex items-center gap-2">
+        <div className="shrink-0 text-sm font-medium">策略对比</div>
+        {candidates.length > 0 ? (
+          <select
+            value={sel?.id ?? ''}
+            onChange={e => setSelId(e.target.value)}
+            className="min-w-0 flex-1 rounded-btn border border-border bg-base px-1.5 py-1 text-xs text-secondary"
+            title="选择要对比的策略候选"
+          >
+            {candidates.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-[10px] text-muted">暂无策略候选</span>
+        )}
+      </div>
+      {sel ? (
+        <table className="mt-2 w-full text-[11px]">
+          <thead>
+            <tr className="text-muted">
+              <th className="py-0.5 text-left font-normal">指标</th>
+              <th className="py-0.5 text-right font-normal">模拟盘</th>
+              <th className="max-w-0 truncate py-0.5 text-right font-normal" title={sel.name}>{sel.name} (回测)</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono">
+            {rows.map(([label, p, c]) => (
+              <tr key={label} className="border-t border-border/40">
+                <td className="py-1 font-sans text-muted">{label}</td>
+                <td className="py-1 text-right text-secondary">{p}</td>
+                <td className="py-1 text-right text-secondary">{c}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="mt-2 text-[11px] leading-relaxed text-muted">
+          在策略页保存回测候选后, 可与模拟盘同口径对比 (累计/年化/回撤/胜率等)。
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** 自动跟单规则列表 + 新建表单 (V2): 监控事件 → 自动下单 (按账户隔离) */
 function AutoRulesPanel({ acc }: { acc: string }) {
   const qc = useQueryClient()
@@ -773,10 +849,20 @@ export function Paper() {
             </div>
           </div>
 
-          {/* 右列: 下单 + 自动跟单 */}
+          {/* 右列: 下单 + 自动跟单 + 策略对比 */}
           <div className="space-y-4">
             <OrderForm acc={accId} onDone={invalidateAll} />
             <AutoRulesPanel acc={accId} />
+            <CandidateCompareCard paper={{
+              total_return_pct: nav.length >= 2 && nav[0].nav > 0 ? (nav[nav.length - 1].nav / nav[0].nav - 1) * 100 : null,
+              annual_pct: nav.length >= 2 && nav[0].nav > 0
+                ? (Math.pow(nav[nav.length - 1].nav / nav[0].nav, 252 / nav.length) - 1) * 100
+                : null,
+              max_drawdown: stats?.max_drawdown ?? null,
+              win_rate: stats?.win_rate ?? null,
+              n_trades: allFills.filter(f => f.kind !== 'corp_action').length,
+              profit_loss_ratio: stats?.profit_loss_ratio ?? null,
+            }} />
             <div className="rounded-card border border-border/60 bg-base/40 p-3 text-[11px] leading-relaxed text-muted">
               <div className="font-medium text-secondary">撮合口径</div>
               <div className="mt-1">· 即时单: 交易时段按最新快照价 + 滑点成交</div>
