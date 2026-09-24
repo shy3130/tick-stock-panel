@@ -321,6 +321,16 @@ class EnrichedPublication:
     def commit(self) -> str | None:
         if not self._changed:
             return None
+        if not self._publishing:
+            # 本次是同一发布对象的重复提交: 上一次 commit 已落盘并复位
+            # _publishing, 标记也回到了 ready (ready payload 不含
+            # publication_id)。写入方会把一个发布对象复用到多个分区
+            # (如 ETF enriched 按完整本地历史一次写 245+ 个交易日分区),
+            # 其中内容无变化的分区会直接走到这里 —— 此时没有任何待提交
+            # 内容, 必须幂等返回, 否则会误判为 "ownership lost" 并打断
+            # 整批写入。
+            self._changed = False
+            return None
         path = _marker_path(self.data_dir, self.asset_type)
         with _exclusive_generation_lock(self.data_dir, self.asset_type):
             current = _read_marker(path)
