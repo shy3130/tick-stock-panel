@@ -67,6 +67,8 @@ export function toOHLC(rows: KlineRow[]): OHLC[] {
       ma10: r.ma10 != null ? Number(r.ma10) : null,
       ma20: r.ma20 != null ? Number(r.ma20) : null,
       ma60: r.ma60 != null ? Number(r.ma60) : null,
+      ma120: r.ma120 != null ? Number(r.ma120) : null,
+      ma200: r.ma200 != null ? Number(r.ma200) : null,
       macd_dif: r.macd_dif != null ? Number(r.macd_dif) : null,
       macd_dea: r.macd_dea != null ? Number(r.macd_dea) : null,
       macd_hist: r.macd_hist != null ? Number(r.macd_hist) : null,

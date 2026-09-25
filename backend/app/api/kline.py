@@ -421,7 +421,7 @@ def get_daily(
 
     if df.is_empty():
         try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
+            raw = kline_sync.sync_daily_batch([symbol], count=days + 200)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
         if raw.is_empty():
@@ -564,7 +564,7 @@ def _latest_live_candle(
         "change_pct": q.get("change_pct"),
         "is_live": True,
     }
-    for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
+    for key in ("ma5", "ma10", "ma20", "ma30", "ma60", "ma120", "ma200",
                 "macd_dif", "macd_dea", "macd_hist",
                 "kdj_k", "kdj_d", "kdj_j",
                 "boll_upper", "boll_lower",

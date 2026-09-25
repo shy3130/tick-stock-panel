@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { EChartsCandlestick, type OHLC } from './EChartsCandlestick'
+import { toOHLC } from './StockDailyKChart'
 
 const chart = vi.hoisted(() => ({
   handlers: {} as Record<string, (event?: any) => void>,
@@ -85,6 +86,46 @@ it('切标的后响应 dataZoom 仍用当前标的的买卖标记, 不回退到�
 
   expect(lastMarkPoint()).toContain('B-SELL')
   expect(lastMarkPoint()).not.toContain('A-BUY')
+})
+
+it('映射日 K 接口的 MA120 和 MA200 字段', () => {
+  const [row] = toOHLC([{
+    date: '2026-09-25',
+    open: 10,
+    high: 11,
+    low: 9,
+    close: 10.5,
+    ma120: 10.1,
+    ma200: 9.9,
+  }])
+
+  expect(row.ma120).toBe(10.1)
+  expect(row.ma200).toBe(9.9)
+})
+
+it('显示 MA120 和 MA200 曲线及数值', async () => {
+  const data = rows(10).map((row, index) => ({
+    ...row,
+    ma120: index < 2 ? null : 9.5,
+    ma200: index < 2 ? null : 9.2,
+  }))
+
+  await act(async () => root.render(
+    <EChartsCandlestick
+      data={data}
+      height={400}
+      showMA
+      showInfoBar
+      visibleBars="all"
+    />,
+  ))
+
+  const option = chart.setOption.mock.calls.at(-1)?.[0] as any
+  const seriesNames = option.series.map((series: any) => series.name)
+  expect(seriesNames).toContain('MA120')
+  expect(seriesNames).toContain('MA200')
+  expect(host.textContent).toContain('MA120:9.50')
+  expect(host.textContent).toContain('MA200:9.20')
 })
 
 it('切股后鼠标未离开图表, 竖虚线重新命中即恢复「至今/周期」', async () => {

@@ -1,11 +1,9 @@
 """盘中递推状态 (live_agg) 的窗口必须真有足够的交易日 K 线。
 
-_build_live_agg 按「自然日 90 天」切历史再 tail(59)/tail(60) 取部分和、N 日前收盘:
+_build_live_agg 按交易日窗口切历史再取部分和、N 日前收盘:
 
-- 春节/国庆长假前后, 90 个自然日只有 57~59 个交易日, 全市场的盘中 MA60、
-  60 日动量用残缺窗口算出, 与盘后全量 (rolling_mean(60) / shift(60)) 不一致;
-- 次新股历史不足窗口长度时, tail(N) 取到的是全部已有 K 线, 盘中 MA60 等于
-  (已有收盘价之和 + 今收) / 60 这类残缺值, 而盘后全量在窗口不满时为空。
+- 长假或次新股历史不足窗口长度时, tail(N) 取到的是残缺窗口, 全市场盘中 MA200
+  会与盘后全量 rolling_mean(200) 不一致, 或错误地把不满窗口显示为有效均线。
 """
 from __future__ import annotations
 
@@ -23,7 +21,7 @@ TODAY = date(2025, 3, 3)
 CLOSED = {date(2025, 1, 1)} | {date(2025, 1, 28) + timedelta(days=i) for i in range(8)}
 
 VALUE_COLUMNS = (
-    "ma5", "ma10", "ma20", "ma30", "ma60",
+    "ma5", "ma10", "ma20", "ma30", "ma60", "ma120", "ma200",
     "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
     "vol_ma5", "vol_ma10", "vol_ratio_5d",
 )
@@ -33,7 +31,7 @@ NULLNESS_COLUMNS = ("high_60d", "low_60d", "boll_upper", "boll_lower", "annual_v
 
 def _history_days() -> list[date]:
     days: list[date] = []
-    d = TODAY - timedelta(days=299)
+    d = TODAY - timedelta(days=320)
     while d < TODAY:
         if d.weekday() < 5 and d not in CLOSED:
             days.append(d)
@@ -95,11 +93,8 @@ def _assert_matches_full(incremental: pl.DataFrame, bars: pl.DataFrame) -> None:
     assert mismatches == []
 
 
-def test_fixture_holiday_window_has_fewer_than_60_trading_days():
-    days = _history_days()
-    latest = days[-1]
-    in_90_calendar_days = [d for d in days if d >= latest - timedelta(days=90)]
-    assert len(in_90_calendar_days) < 60  # 构造前提: 长假让 90 个自然日不足 60 个交易日
+def test_fixture_has_at_least_200_trading_days():
+    assert len(_history_days()) >= 200
 
 
 def test_window_start_counts_trading_days():
@@ -108,12 +103,8 @@ def test_window_start_counts_trading_days():
     calendar_start = latest - timedelta(days=90)
     dates = pl.Series("date", days)
 
-    # 长假: 自然日起点只含 58 个交易日 → 前移到第 60 个交易日
-    assert _live_agg_window_start(dates, latest, calendar_start) == days[-60]
-    assert _live_agg_window_start(dates, latest, calendar_start) < calendar_start
-    # 平常: 自然日起点已覆盖 60 个交易日 → 保持自然日起点 (窗口不缩小)
-    assert _live_agg_window_start(dates, latest, days[-65]) == days[-65]
-    # 本地不足 60 个交易日 → 退回自然日起点
+    assert _live_agg_window_start(dates, latest, calendar_start) == days[-200]
+    assert _live_agg_window_start(dates, latest, days[-205]) == days[-205]
     assert _live_agg_window_start(dates.tail(30), latest, calendar_start) == calendar_start
 
 
