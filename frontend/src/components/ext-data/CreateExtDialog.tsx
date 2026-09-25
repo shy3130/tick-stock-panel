@@ -33,6 +33,8 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
   const [label, setLabel] = useState('')
   const [description, setDescription] = useState('')
   const [mode, setMode] = useState<'snapshot' | 'timeseries'>('snapshot')
+  // 市场级表: 行 = 全市场每日一条, 无标的列 (市场环境/情绪指数类), 跳过标的关联
+  const [marketLevel, setMarketLevel] = useState(false)
   const [fields, setFields] = useState<ExtDataField[]>([])
   const [detectedSourceNames, setDetectedSourceNames] = useState<string[]>([])
   const [error, setError] = useState('')
@@ -114,14 +116,17 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
         id,
         label,
         mode,
-        fields: [
-          { name: 'symbol', dtype: 'string', label: '标的代码' },
-          { name: 'code', dtype: 'string', label: '代码' },
-          ...userF,
-        ],
+        fields: marketLevel
+          ? userF
+          : [
+            { name: 'symbol', dtype: 'string', label: '标的代码' },
+            { name: 'code', dtype: 'string', label: '代码' },
+            ...userF,
+          ],
         description: description.trim() || undefined,
-        symbol_map: submittedSymbolMap,
-        code_map: submittedCodeMap,
+        symbol_map: marketLevel ? {} : submittedSymbolMap,
+        code_map: marketLevel ? {} : submittedCodeMap,
+        market_level: marketLevel,
       })
 
       if (sourceMode === 'url' && (savePull || importNow || enablePull)) {
@@ -172,7 +177,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
     id.trim()
       && label.trim()
       && fields.some((f) => f.name.trim())
-      && matchStatus !== 'none'
+      && (marketLevel || matchStatus !== 'none')
       && (sourceMode !== 'url' || url.trim()),
   )
 
@@ -186,6 +191,15 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
     let status: 'none' | 'partial' | 'full' = 'none'
 
     setDetectedSourceNames(detected.map(f => f.name))
+
+    // 市场级表: 不做标的识别, 直接采认全部检测字段
+    if (marketLevel) {
+      setFields(detected)
+      setSymbolMap({})
+      setCodeMap({})
+      setMatchStatus('full')
+      return
+    }
 
     if (symCands.length === 1 && codeCands.length === 1) {
       sm = { type: 'mapped', col: symCands[0] }
@@ -395,6 +409,31 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 )
               })}
             </div>
+
+            {/* 市场级: 行=全市场一条, 无标的列 (择时状态/情绪指数类) */}
+            <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-border/60 bg-elevated/40 px-2.5 py-1.5">
+              <input
+                type="checkbox"
+                checked={marketLevel}
+                onChange={e => {
+                  setMarketLevel(e.target.checked)
+                  if (e.target.checked) {
+                    setSymbolMap({})
+                    setCodeMap({})
+                    setMatchStatus('full')
+                  } else {
+                    setMatchStatus('none')
+                  }
+                }}
+                className="h-3.5 w-3.5 shrink-0"
+              />
+              <span className="text-[10px] text-secondary">
+                市场级数据
+                <span className="ml-1 text-muted" title="行 = 全市场每日一条, 无标的代码列。适用于市场环境/情绪指数/择时状态等序列, 跳过标的关联; 通过 /rows 与 /values 接口消费">
+                  每行是全市场一条 (无标的列), 跳过标的关联
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="grid grid-cols-[1fr_1fr] gap-3">

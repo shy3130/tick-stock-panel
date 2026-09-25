@@ -32,6 +32,11 @@ export function ExtDataPullPanel({ config, onSaved }: {
   const [dateFormat, setDateFormat] = useState(pull?.date_format ?? 'iso')
   const [timeField, setTimeField] = useState(pull?.time_field ?? '')
   const [timeoutSec, setTimeoutSec] = useState(pull?.timeout_seconds ?? 30)
+  // 分页协议 (仅 GET): 页码参数名配置后按页循环拉取
+  const [pageParam, setPageParam] = useState(pull?.page_param ?? '')
+  const [pageSizeParam, setPageSizeParam] = useState(pull?.page_size_param ?? '')
+  const [pageSize, setPageSize] = useState(pull?.page_size ?? 0)
+  const [maxPages, setMaxPages] = useState(pull?.max_pages ?? 20)
   const [enabled, setEnabled] = useState(pull?.enabled ?? false)
 
   // 接口鉴权: 方式入 pull 配置; Key 本体只存后端 secrets.json
@@ -92,6 +97,11 @@ export function ExtDataPullPanel({ config, onSaved }: {
       date_format: dateFormat,
       time_field: timeField.trim() || null,
       timeout_seconds: effTimeoutSec,
+      page_param: pageParam.trim() || null,
+      page_size_param: pageSizeParam.trim() || null,
+      page_size: pageSize > 0 ? pageSize : 0,
+      page_start: pull?.page_start ?? 1,   // UI 不暴露, 保留已有值 (从 0 计数的接口手改 config.json)
+      max_pages: maxPages >= 1 && maxPages <= 200 ? maxPages : 20,
     }
   }
 
@@ -381,6 +391,42 @@ export function ExtDataPullPanel({ config, onSaved }: {
             title="单次拉取/测试/回补请求的超时, 默认 30 秒, 范围 5~300"
             className="w-full rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[10px] font-mono text-foreground"
           />
+        </div>
+
+        <div>
+          <div className="text-[10px] text-muted mb-1">
+            分页 (接口数据量大时分页拉取 · 仅 GET · 留空页码参数=单次请求)
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <input
+              value={pageParam} onChange={e => setPageParam(e.target.value)}
+              placeholder="页码参数名 · 如 page"
+              title="配置后按页循环拉取, 直到空页/最后一页/达上限"
+              className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
+            />
+            <input
+              value={pageSizeParam} onChange={e => setPageSizeParam(e.target.value)}
+              placeholder="每页条数参数名 · 如 pageSize"
+              title="配合下方每页条数一起发送; 也用于短页判停"
+              className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
+            />
+            <input
+              type="number" min={1}
+              value={pageSize}
+              onChange={e => setPageSize(Number(e.target.value))}
+              placeholder="每页条数"
+              title="每页条数值 (>0 且已填参数名才发送)"
+              className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
+            />
+            <input
+              type="number" min={1} max={200}
+              value={maxPages}
+              onChange={e => setMaxPages(Number(e.target.value))}
+              placeholder="最多页数 · 默认 20"
+              title="安全上限, 防止接口永远返回数据拖死拉取循环"
+              className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
+            />
+          </div>
         </div>
 
 

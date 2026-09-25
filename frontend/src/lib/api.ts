@@ -3223,17 +3223,29 @@ export const api = {
   analysisMenuDelete: (id: string) =>
     request<{ status: string }>(`/api/analysis-menus/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  extDataCreate: (body: { id: string; label: string; mode: 'snapshot' | 'timeseries'; fields: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string> }) =>
+  extDataCreate: (body: { id: string; label: string; mode: 'snapshot' | 'timeseries'; fields: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string>; market_level?: boolean }) =>
     request<ExtDataConfig>('/api/ext-data', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  extDataUpdate: (id: string, body: { label?: string; fields?: { name: string; dtype: string; label: string }[]; description?: string }) =>
+  extDataUpdate: (id: string, body: { label?: string; fields?: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string>; market_level?: boolean }) =>
     request<ExtDataConfig>(`/api/ext-data/${id}`, {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  /** 字段取值枚举 (filter 配套): 去重 + 计数, 按出现次数降序 */
+  extDataValues: (id: string, field: string, opts?: { date?: string; start_date?: string; end_date?: string; limit?: number }) => {
+    const qs = new URLSearchParams({ field })
+    if (opts?.date) qs.set('date', opts.date)
+    if (opts?.start_date) qs.set('start_date', opts.start_date)
+    if (opts?.end_date) qs.set('end_date', opts.end_date)
+    if (opts?.limit) qs.set('limit', String(opts.limit))
+    return request<{ id: string; field: string; date: string | null; total: number; distinct: number; values: { value: string | number | null; count: number }[] }>(
+      `/api/ext-data/${id}/values?${qs.toString()}`,
+    )
+  },
 
   extDataDelete: (id: string) =>
     request<{ status: string }>(`/api/ext-data/${id}`, { method: 'DELETE' }),
@@ -3265,6 +3277,11 @@ export const api = {
     time_field?: string | null;
     auth?: ExtPullAuth;
     timeout_seconds?: number;
+    page_param?: string | null;
+    page_size_param?: string | null;
+    page_size?: number;
+    page_start?: number;
+    max_pages?: number;
   }) =>
     request<{ status: string; pull: PullConfig }>(
       `/api/ext-data/${id}/pull`,
@@ -4110,6 +4127,16 @@ export interface PullConfig {
   auth?: ExtPullAuth | null
   /** 单次拉取请求超时 (秒), 默认 30 */
   timeout_seconds?: number
+  /** 分页协议 (仅 GET): 页码参数名 (如 "page"), 配置后按页循环拉取 */
+  page_param?: string | null
+  /** 每页条数参数名 (如 "pageSize"), 配合 page_size 一起发送 */
+  page_size_param?: string | null
+  /** 每页条数值 (>0 且配置 page_size_param 才发送); 也用于短页判停 */
+  page_size?: number
+  /** 起始页码 (有的接口从 0 计数), 默认 1 */
+  page_start?: number
+  /** 分页安全上限, 默认 20 (防接口永远返回数据拖死循环) */
+  max_pages?: number
 }
 
 export interface ExtDataBackfillResult {
