@@ -1955,3 +1955,41 @@ def update_review_push(req: ReviewPushIn) -> dict:
     if req.mode is not None:
         mode = preferences.set_review_push_mode(req.mode)
     return {"review_push_channels": saved, "review_push_mode": mode}
+
+
+# ================================================================
+# API Token 管理 (open-platform-plan §4) — 仅 UI 会话可达
+# (挂在 /api/settings 前缀下, 受访问密码保护; Token 通道无对应 scope,
+#  网关规则表里没有本组端点, Bearer 调用会被 403 拒绝)
+# ================================================================
+class ApiTokenCreateIn(BaseModel):
+    name: str
+    scopes: list[str]
+
+
+@router.get("/api-tokens")
+def api_tokens_list(request: Request) -> dict:
+    from app.services import api_tokens as svc
+
+    return {"tokens": svc.list_tokens(request.app.state.repo.store.data_dir)}
+
+
+@router.post("/api-tokens")
+def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
+    """创建 Token — 明文只在本次响应出现一次, 前端弹窗提示立即保存。"""
+    from app.services import api_tokens as svc
+
+    try:
+        record, plaintext = svc.create_token(request.app.state.repo.store.data_dir, body.name, body.scopes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"token": record, "plaintext": plaintext}
+
+
+@router.delete("/api-tokens/{token_id}")
+def api_tokens_revoke(token_id: str, request: Request) -> dict:
+    from app.services import api_tokens as svc
+
+    if not svc.revoke_token(request.app.state.repo.store.data_dir, token_id):
+        raise HTTPException(status_code=404, detail=f"Token '{token_id}' 不存在")
+    return {"status": "revoked", "id": token_id}

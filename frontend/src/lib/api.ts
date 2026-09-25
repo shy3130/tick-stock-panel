@@ -1971,6 +1971,16 @@ export interface WecomBotStatus {
   last_error: string
 }
 
+/** API Token 记录 (管理视图, 不含哈希) */
+export interface ApiTokenRecord {
+  id: string
+  name: string
+  scopes: string[]
+  created_at: string
+  last_used_at?: string | null
+  revoked: boolean
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -2197,6 +2207,22 @@ export const api = {
   /** 赞助商(RunningHub)模型列表(后端代理, 规避其网关按 Origin 过滤) */
   sponsorModels: () =>
     request<{ models: string[] }>('/api/settings/ai/sponsor-models'),
+
+  // ===== API Token 管理 (开放层; 仅 UI 会话可达) =====
+  apiTokensList: () =>
+    request<{ tokens: ApiTokenRecord[] }>('/api/settings/api-tokens'),
+
+  /** 创建 Token — 明文只在本次响应出现一次 */
+  apiTokenCreate: (name: string, scopes: string[]) =>
+    request<{ token: ApiTokenRecord; plaintext: string }>('/api/settings/api-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name, scopes }),
+    }),
+
+  apiTokenRevoke: (id: string) =>
+    request<{ status: string; id: string }>(`/api/settings/api-tokens/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
