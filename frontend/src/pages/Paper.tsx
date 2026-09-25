@@ -139,8 +139,9 @@ function StatCard({ label, value, sub, valueClass }: { label: string; value: str
   )
 }
 
-/** 初始化向导: 选中账户不存在时展示 (account_id 已由外层定好) */
-function SetupCard({ accId, onDone }: { accId: string; onDone: (createdId: string) => void }) {
+/** 初始化向导: 选中账户不存在或正在新建时展示。
+ * onCancel 由外层按「是否已有其他账户」传入 —— 一个账户都没有时必须先建一个, 不给取消。 */
+function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (createdId: string) => void; onCancel?: () => void }) {
   const [cash, setCash] = useState('1000000')
   const [name, setName] = useState('')
   const m = useMutation({
@@ -157,7 +158,7 @@ function SetupCard({ accId, onDone }: { accId: string; onDone: (createdId: strin
     <div className="mx-auto mt-16 max-w-md rounded-card border border-border bg-surface p-6">
       <div className="flex items-center gap-2">
         <CircleDollarSign className="h-5 w-5 text-accent" />
-        <h2 className="text-base font-semibold">创建虚拟账户</h2>
+        <h2 className="text-[16px] leading-6 font-semibold">创建虚拟账户</h2>
       </div>
       <p className="mt-2 text-xs leading-relaxed text-muted">
         虚拟资金 + 真实行情价格模拟撮合, 不涉及任何真实资金。费用口径与回测一致
@@ -178,13 +179,25 @@ function SetupCard({ accId, onDone }: { accId: string; onDone: (createdId: strin
         className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-2 font-mono text-sm outline-none focus:border-accent/50"
         placeholder="1000000"
       />
-      <button
-        onClick={() => valid && m.mutate()}
-        disabled={!valid || m.isPending}
-        className="mt-4 w-full rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity disabled:opacity-50"
-      >
-        {m.isPending ? '创建中…' : '创建账户'}
-      </button>
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => valid && m.mutate()}
+          disabled={!valid || m.isPending}
+          className="flex-1 rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity hover:bg-accent/90 disabled:opacity-50"
+        >
+          {m.isPending ? '创建中…' : '创建账户'}
+        </button>
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            disabled={m.isPending}
+            className="rounded-btn border border-border px-4 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title="放弃创建, 返回原账户"
+          >
+            取消
+          </button>
+        )}
+      </div>
       {m.isError && <div className="mt-2 text-xs text-danger">{String((m.error as Error).message)}</div>}
     </div>
   )
@@ -569,7 +582,9 @@ export function Paper() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<'orders' | 'trades'>('orders')
   const [accId, setAccIdState] = useState(() => localStorage.getItem(ACC_STORAGE_KEY) || 'default')
-  const [creatingNew, setCreatingNew] = useState(false)
+  // 新建账户草稿 id: 非空 = 正在创建。点「+」只进入草稿态, 不动 accId / localStorage,
+  // 取消即丢弃; 旧实现直接把生成的 id 写进 accId, 刷新后卡在无主向导上无法退出。
+  const [draftId, setDraftId] = useState<string | null>(null)
   const setAccId = (id: string) => {
     localStorage.setItem(ACC_STORAGE_KEY, id)
     setAccIdState(id)
@@ -598,18 +613,52 @@ export function Paper() {
     return <div className="p-5 text-sm text-muted">加载中…</div>
   }
   const ov = overviewQ.data
-  if (creatingNew || !ov?.initialized) {
+  const accounts = accountsQ.data?.accounts ?? []
+  if (draftId !== null || !ov?.initialized) {
+    // 已有其他账户 → 顶部保留账户切换 (切走即放弃创建) + 可取消; 一个账户都没有 → 纯向导
+    const cancellable = accounts.length > 0
+    const selectedId = accounts.some(a => a.id === accId) ? accId : accounts[0]?.id ?? accId
+    const cancelCreate = () => {
+      setDraftId(null)
+      // 选中态是残留 id 时回到第一个既有账户 (正常新建流程 accId 本就有效, 此行不触发)
+      if (!accounts.some(a => a.id === accId)) setAccId(accounts[0].id)
+    }
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="模拟盘" subtitle="虚拟账户 · 用假钱验证你的策略" />
+        <PageHeader
+          title="模拟盘"
+          subtitle="虚拟账户 · 用假钱验证你的策略"
+          right={cancellable ? (
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedId}
+                onChange={e => { setDraftId(null); setAccId(e.target.value) }}
+                className="max-w-36 rounded-btn border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent/50"
+                title="切换虚拟账户 (切换即放弃本次创建)"
+              >
+                {accounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                ))}
+              </select>
+              <button
+                onClick={cancelCreate}
+                className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-danger/40 hover:text-danger"
+                title="放弃创建, 返回原账户"
+              >
+                取消创建
+              </button>
+            </div>
+          ) : undefined}
+        />
         <div className="flex-1 overflow-y-auto">
           <SetupCard
-            accId={accId}
+            accId={draftId ?? accId}
             onDone={createdId => {
+              setDraftId(null)
               setAccId(createdId)
-              setCreatingNew(false)
               invalidateAll()
             }}
+            onCancel={cancellable ? cancelCreate : undefined}
           />
         </div>
       </div>
@@ -623,7 +672,6 @@ export function Paper() {
   const nav = navQ.data?.nav ?? []
   const stats = statsQ.data
   const pnlPct = ov.initial_cash && ov.initial_cash > 0 ? ((ov.total_pnl ?? 0) / ov.initial_cash) * 100 : 0
-  const accounts = accountsQ.data?.accounts ?? []
 
   /** 导出全部成交台账 CSV (带 BOM, Excel 可直接打开); 口径与页面「成交台账」一致 */
   const exportTradesCsv = () => {
@@ -679,7 +727,7 @@ export function Paper() {
                 ))}
               </select>
               <button
-                onClick={() => setAccId(genAccountId())}
+                onClick={() => setDraftId(genAccountId())}
                 className="flex items-center gap-0.5 rounded-btn border border-border px-1.5 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
                 title="新建虚拟账户"
               >
