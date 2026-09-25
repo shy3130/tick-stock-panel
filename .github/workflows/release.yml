@@ -18,7 +18,7 @@ on:
       version:
         description: '版本号 (如 v0.1.33, 用作 Release tag 和标题)'
         required: true
-        default: 'v0.1.33'
+        default: 'v0.3.2'
       platforms:
         description: '要构建的平台 (逗号分隔: windows,macos,linux)'
         required: true
@@ -234,3 +234,76 @@ jobs:
             - 含纯 Polars 回测引擎; 不含 vectorbt 回测(为控制体积)
             - 系统通知: 设置 → 实时监控 → 系统通知
             - 检查更新: 设置 → 系统设置 → 关于
+
+  # 第三步: 生成 latest.json 更新清单 (客户端「检查更新」的稳定契约)
+  manifest:
+    needs: build
+    # fail-fast: false 时部分平台失败会让 build 整体标红, 但已成功的平台资产
+    # 依然有效 — 清单照样生成 (以 Release 上实际存在的资产为准, 天然支持
+    # "今天发 Windows, 明天补 mac" 的分批发布: 每次按当前 Release 全量重建)。
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 生成并上传 latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets && cd assets
+          # 只拉已知的三个安装包 (latest.json 自身等其他资产不进清单)
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'TickFlowStockPanel-Setup-x64.exe' \
+            --pattern 'TickFlowStockPanel-macos-arm64.dmg' \
+            --pattern 'TickFlowStockPanel-linux-x64.tar.gz' \
+            --clobber || true
+          cd ..
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
+          TAG="$TAG" REPO="$GITHUB_REPOSITORY" RELEASE_JSON="$RELEASE_JSON" python3 - <<'EOF'
+          import hashlib, json, os, sys
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          repo = os.environ["REPO"]
+          rel = json.loads(os.environ["RELEASE_JSON"])
+
+          # 资产文件名 → 渠道名 (客户端按渠道取下载地址)
+          channels_cfg = {
+              "TickFlowStockPanel-Setup-x64.exe": "windows",
+              "TickFlowStockPanel-macos-arm64.dmg": "macos-arm64",
+              "TickFlowStockPanel-linux-x64.tar.gz": "linux-x64",
+          }
+          by_name = {a["name"]: a for a in rel.get("assets", [])}
+
+          channels = {}
+          for name, channel in channels_cfg.items():
+              local = Path("assets") / name
+              if not local.exists():
+                  continue  # 本次未构建该平台 (分批发布), 清单只列实际存在的
+              sha = hashlib.sha256(local.read_bytes()).hexdigest()
+              channels[channel] = {
+                  "name": name,
+                  "url": by_name[name]["browser_download_url"],
+                  "size": by_name[name]["size"],
+                  "sha256": sha,
+              }
+
+          if not channels:
+              print("::warning::Release 上没有任何安装包资产, 跳过 latest.json 生成")
+              sys.exit(0)
+
+          # version 去掉 v 前缀, 与 package.json 语义版本一致
+          version = tag[1:] if tag.startswith("v") else tag
+          manifest = {
+              "version": version,
+              "tag": tag,
+              "released_at": rel.get("published_at") or rel.get("created_at"),
+              "prerelease": bool(rel.get("prerelease")),
+              "notes_url": f"https://github.com/{repo}/releases/tag/{tag}",
+              "channels": channels,
+          }
+          Path("latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(manifest, indent=2))
+          EOF
+          # --clobber: 同名资产覆盖 (重跑同一版本时更新清单而不是追加 _01 副本)
+          gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber

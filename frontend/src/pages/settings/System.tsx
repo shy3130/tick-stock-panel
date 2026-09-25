@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, ExternalLink } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, ExternalLink, CheckCircle2, Download } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -17,6 +17,19 @@ import {
 } from '@/lib/voiceBroadcast'
 import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
 
+// 检查更新的目标仓库 (Release 清单来源)
+const UPDATE_REPO = 'shy3130/tickflow-stock-panel'
+
+/** 语义版本比较: a<b → -1, 相等 → 0, a>b → 1; 无法解析按 0.0.0 处理 */
+function compareVersion(a: string, b: string): number {
+  const parse = (v: string) => (v.trim().replace(/^v/i, '').match(/\d+/g) ?? []).slice(0, 3).map(Number)
+  const [a1 = 0, a2 = 0, a3 = 0] = parse(a)
+  const [b1 = 0, b2 = 0, b3 = 0] = parse(b)
+  if (a1 !== b1) return Math.sign(a1 - b1)
+  if (a2 !== b2) return Math.sign(a2 - b2)
+  return Math.sign(a3 - b3)
+}
+
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
   const { data: prefs } = usePreferences()
@@ -26,6 +39,39 @@ export function SettingsSystemPanel() {
   const screenerAutoRun = prefs?.screener_auto_run ?? true
   const [extTpl, setExtTpl] = useState(() => loadStockExternalTemplate())
   const [clearing, setClearing] = useState(false)
+
+  // ===== 检查更新 =====
+  // 优先 api.github.com (官方带 CORS, 浏览器可直连; 未认证限额 60 次/时, 手动触发足够);
+  // latest.json 清单 (release.yml 产物) 作兜底 — API 限流或字段变动时仍可取到版本号。
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'latest' | 'found' | 'error'>('idle')
+  const [updateInfo, setUpdateInfo] = useState<{ latest: string; url: string } | null>(null)
+  const checkUpdate = useCallback(async () => {
+    const current = (versionData?.version ?? '').trim()
+    setUpdateState('checking')
+    try {
+      let latest = ''
+      let url = `https://github.com/${UPDATE_REPO}/releases/latest`
+      const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { cache: 'no-store' })
+      if (r.ok) {
+        const rel = await r.json()
+        latest = String(rel.tag_name ?? '')
+        url = rel.html_url || url
+      }
+      if (!latest) {
+        const m = await fetch(`https://github.com/${UPDATE_REPO}/releases/latest/download/latest.json`, { cache: 'no-store' })
+        if (m.ok) {
+          const manifest = await m.json()
+          latest = String(manifest.tag ?? '')
+          url = manifest.notes_url || url
+        }
+      }
+      if (!latest) throw new Error('no release info')
+      setUpdateInfo({ latest, url })
+      setUpdateState(compareVersion(current, latest) < 0 ? 'found' : 'latest')
+    } catch {
+      setUpdateState('error')
+    }
+  }, [versionData?.version])
   const [toastEnabled, setToastEnabled] = useState(() => {
     try { return localStorage.getItem('alert_toast_enabled') !== '0' } catch { return true }
   })
@@ -363,18 +409,46 @@ export function SettingsSystemPanel() {
         <div className="flex items-center justify-between gap-4 py-2">
           <div className="min-w-0">
             <div className="text-sm text-foreground">检查更新</div>
-            <div className="text-[11px] text-muted truncate">前往 GitHub Releases 下载最新版本</div>
+            <div className="text-[11px] text-muted truncate">
+              {updateState === 'found' && updateInfo
+                ? `发现新版本 ${updateInfo.latest} (当前 ${versionData?.version ?? '—'})`
+                : updateState === 'latest'
+                  ? `已是最新版本 (${versionData?.version ?? '—'})`
+                  : updateState === 'error'
+                    ? '检查失败 (网络受限?), 可直接前往 Releases'
+                    : '对比 GitHub Releases 最新 Release, 提示新版本'}
+            </div>
           </div>
-          <a
-            href="https://github.com/shy3130/tickflow-stock-panel/releases/latest"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
-                       bg-elevated text-secondary hover:text-foreground transition-colors shrink-0"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            检查更新
-          </a>
+          <div className="flex shrink-0 items-center gap-2">
+            {updateState === 'found' && updateInfo && (
+              <a
+                href={updateInfo.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
+                           bg-accent text-white hover:bg-accent/90 transition-colors"
+              >
+                <Download className="h-3.5 w-3.5" />
+                前往下载
+              </a>
+            )}
+            <button
+              onClick={checkUpdate}
+              disabled={updateState === 'checking'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
+                         bg-elevated text-secondary hover:text-foreground transition-colors
+                         disabled:opacity-50"
+            >
+              {updateState === 'checking' ? (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              ) : updateState === 'latest' ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {updateState === 'checking' ? '检查中…' : updateState === 'latest' ? '已检查' : '检查更新'}
+            </button>
+          </div>
         </div>
       </section>
     </>

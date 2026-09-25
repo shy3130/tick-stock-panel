@@ -1,6 +1,6 @@
 # 核心能力开放与插件化改造设计方案
 
-> 状态: 设计稿（未实现）。本文档定义「核心域 / 扩展域」边界、对外 API 的认证与契约形态、以及分期改造路线。
+> 状态: V1/V2 已实现（0.3.2）—— Token + scope 网关 + 限流、五个 scope 全量 Tier A、`/api/openapi.json?tier=a` 契约视图、设置页 Token 管理（「设置 → 开放接口」）。V3+（钩子契约、SSE 票据、模拟盘拆分）仍为设计。使用说明见 [features.md → 开放接口](./features.md#-开放接口open-api--tier-a)。
 > 遵循 [CONTRIBUTING.md](../CONTRIBUTING.md) 的数据口径、插件化与测试矩阵要求; 扩展机制现状见 [secondary-development.md](./secondary-development.md)。
 
 ## 1. 目标与非目标
@@ -162,14 +162,14 @@
 
 ### V1 开门（Token + 护栏 + 最小契约）— 建议立即
 
-- Token 存储/创建/吊销 + 设置页管理 UI（「系统 → API Token」）。
-- 中间件: Bearer 识别 → scope 校验 → 限流 → CORS 配置。
-- Tier A 标注: 先覆盖 `read:market` + `read:ext` 两组（行情与扩展数据, 风险最低、二开最先用）。
-- 测试矩阵: 认证（无/错/过期 Token 401、scope 不足 403）、限流 429、CORS 头。
+- ✅ Token 存储/创建/吊销 + 设置页管理 UI（「设置 → 开放接口」，`services/api_tokens.py`）。
+- ✅ 中间件: Bearer 识别 → scope 校验 → 限流（`services/api_gateway.py`，CORS 原本已全开）。
+- ✅ Tier A: 直接覆盖全部五个 scope（`api_gateway._RULES` 规则表）。
+- ✅ 测试矩阵: `backend/tests/test_api_gateway.py`（401/403/429/吊销即拒/前缀混淆防护）。
 
 ### V2 契约化 + 示例仓库
 
-- Tier A 扩到策略/回测/监控事件/模拟盘; `?tier=a` OpenAPI 视图。
+- ✅ Tier A 已含策略/回测/监控事件/模拟盘; `GET /api/openapi.json?tier=a` 契约视图（规则表单源）。
 - 组织下建 `api-examples` 示例仓库: 「拉行情 → 跑策略 → 取结果 → 模拟盘跟单」三个可运行脚本 + README。
 - SSE 短期票据（query token）方案落地。
 

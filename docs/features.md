@@ -228,3 +228,47 @@ APScheduler 默认 15:35 CST 自动:拉日 K → 重算 enriched 表 → 跑监�
 ### 令牌桶限流
 
 适配各档位 rpm / batch 限制,批量合并 + 增量拉取,避免触发数据源限流。
+
+## 🌐 开放接口(Open API · Tier A)
+
+外部程序(自己的看板/脚本/量化服务)无需面板密码,凭 **API Token** 直接调用核心只读与任务接口 —— 这是「核心能力开放」的第一层出口。总体设计与后续 Tier 见 [open-platform-plan.md](./open-platform-plan.md)。
+
+### Token 管理
+
+**设置 → 开放接口**: 新建 Token(名称 + 权限勾选),明文 `tsp_` 前缀只显示一次;可随时吊销,吊销立即生效。服务端只存 SHA-256 哈希(`data/user_data/api_tokens.json`,权限 0600)。
+
+### 五个权限(scope)
+
+| scope | 能力 |
+| :--- | :--- |
+| `read:market` | 标的搜索 / 日K / 分时 / 指数 / 市场快照 (默认勾选) |
+| `read:ext` | 扩展表 rows / values / schema 查询 |
+| `read:analysis` | 策略清单与结果 / 回测报告 / 市场环境 / 告警 |
+| `run:backtest` | 提交回测 / 选股 / 因子检验任务 |
+| `paper:trade` | 模拟盘读取与下单/撤单 (最高敏感) |
+
+管理接口(数据同步 / 扩展表写入 / 设置)**永不开放给 Token**;数据同步等写操作只能通过面板密码会话进行。
+
+### 调用方式
+
+```bash
+curl -H "Authorization: Bearer tsp_xxxx" \
+  "http://localhost:8398/api/kline/daily?symbol=600519.SH&start_date=2026-01-01"
+```
+
+- **认证通道与面板密码并行**: 带 `Authorization: Bearer` 走 Token 网关(scope 校验 + 限流),不带则走原有密码会话 —— 面板与外部调用互不影响;
+- **限流**: 每 Token 默认 120 次/分钟(滑动窗口,`OPEN_API_RATE_LIMIT_PER_MIN` 环境变量可调 1–10000),响应带 `X-RateLimit-Remaining` / `X-RateLimit-Limit` 头,超限返回 429 + `Retry-After`;
+- **错误语义**: 401 Token 无效或已吊销 / 403 权限不足或该接口未开放 / 429 超限;
+- **CORS 全开**(自托管场景),浏览器直连亦可。
+
+### 契约文档(机器可读)
+
+```bash
+curl "http://localhost:8398/api/openapi.json?tier=a"
+```
+
+返回按网关规则表过滤后的 OpenAPI 3 规范(`x-tier: a`)—— 哪些路径对外开放、需要什么 scope,**规则表是唯一契约源**,生成代码 / Postman 导入即用。
+
+### 桌面客户端版本清单
+
+发布流水线会在每个 Release 附带 `latest.json`(版本号、三平台下载地址、sha256),设置 → 系统设置 → 检查更新即基于它(优先 GitHub API)提示新版本。
