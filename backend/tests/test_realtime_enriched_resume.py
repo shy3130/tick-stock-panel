@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import (
     ENRICHED_COLUMNS_BY_CATEGORY,
@@ -117,6 +118,8 @@ def _live_state() -> pl.DataFrame:
         "_ma20_partial_sum": [190.0],
         "_ma30_partial_sum": [290.0],
         "_ma60_partial_sum": [590.0],
+        "_ma120_partial_sum": [1190.0],
+        "_ma200_partial_sum": [1990.0],
         "_boll_partial_sum": [190.0],
         "_boll_partial_sq_sum": [1900.0],
         "_high_59d": [10.1],
@@ -131,7 +134,7 @@ def _live_state() -> pl.DataFrame:
         "_vol_ma5_prev_sum": [5000.0],
         "_kdj_8d_low": [9.9],
         "_kdj_8d_high": [10.1],
-        "_window_len": [59],
+        "_window_len": [199],
         "_rsi_avg_gain_6": [0.01],
         "_rsi_avg_loss_6": [0.01],
         "_rsi_avg_gain_14": [0.01],
@@ -192,6 +195,8 @@ def test_realtime_enriched_keeps_rows_without_history_and_limits_technical_field
     halted = result.filter(pl.col("symbol") == "600002.SH").row(0, named=True)
 
     assert existing["ma5"] is not None
+    assert existing["ma120"] == pytest.approx((1190.0 + 10.2) / 120)
+    assert existing["ma200"] == pytest.approx((1990.0 + 10.2) / 200)
     assert resumed["raw_close"] == 11.0
     assert resumed["signal_limit_up"] is True
     assert resumed["consecutive_limit_ups"] == 1

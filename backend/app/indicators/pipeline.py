@@ -139,6 +139,8 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "ma20":                    "20日简单均线",
     "ma30":                    "30日简单均线",
     "ma60":                    "60日简单均线(季线)",
+    "ma120":                   "120日简单均线(半年线)",
+    "ma200":                   "200日简单均线(年线)",
     # ── 指数均线 EMA ─────────────────────────────────────
     "ema5":                    "5日指数均线",
     "ema10":                   "10日指数均线",
@@ -212,7 +214,7 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
 ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "storage":  [k for k in ENRICHED_COLUMNS if k in ENRICHED_STORAGE_COLS],
     "basic":    ["prev_close", "change_pct", "change_amount", "amplitude"],
-    "ma":       ["ma5", "ma10", "ma20", "ma30", "ma60"],
+    "ma":       ["ma5", "ma10", "ma20", "ma30", "ma60", "ma120", "ma200"],
     "ema":      ["ema5", "ema10", "ema20", "ema30", "ema60"],
     "macd":     ["macd_dif", "macd_dea", "macd_hist"],
     "boll":     ["boll_upper", "boll_lower"],
@@ -337,7 +339,7 @@ _INDICATOR_DEPS: dict[str, set[str]] = {
 
 # compute_indicators 可产出的全部指标/临时列 (needed=None 时即为此全集, 行为不变)
 _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
-    "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60",
+    "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60", "ma120", "ma200",
     "ema5", "ema10", "ema20", "ema30", "ema60", "_ema12", "_ema26",
     "_boll_std", "_kdj_ln", "_kdj_hn", "_tr", "vol_ma5", "vol_ma10",
     "_vol_ma5", "high_60d", "low_60d",
@@ -408,6 +410,10 @@ def compute_indicators(
         _p1.append(pl.col("close").rolling_mean(30).over("symbol").alias("ma30"))
     if "ma60" in want:
         _p1.append(pl.col("close").rolling_mean(60).over("symbol").alias("ma60"))
+    if "ma120" in want:
+        _p1.append(pl.col("close").rolling_mean(120).over("symbol").alias("ma120"))
+    if "ma200" in want:
+        _p1.append(pl.col("close").rolling_mean(200).over("symbol").alias("ma200"))
     if "ema5" in want:
         _p1.append(pl.col("close").ewm_mean(alpha=_ema_alpha(5), adjust=False).over("symbol").alias("ema5"))
     if "ema10" in want:
@@ -1976,7 +1982,7 @@ def compute_enriched_today(
             None 或 0 表示不折算(盘后或时间不可用, 此时 volume 已是全天量)。
 
     返回:
-        今天的 enriched DataFrame (~5500 行, 64 列)
+        今天的 enriched DataFrame (~5500 行)
     """
     if today_ohlcv.is_empty() or live_agg.is_empty():
         return pl.DataFrame()
@@ -2061,6 +2067,8 @@ def compute_enriched_today(
         ((pl.col("_ma20_partial_sum") + pl.col("close")) / 20).alias("ma20"),
         ((pl.col("_ma30_partial_sum") + pl.col("close")) / 30).alias("ma30"),
         ((pl.col("_ma60_partial_sum") + pl.col("close")) / 60).alias("ma60"),
+        ((pl.col("_ma120_partial_sum") + pl.col("close")) / 120).alias("ma120"),
+        ((pl.col("_ma200_partial_sum") + pl.col("close")) / 200).alias("ma200"),
     ])
 
     # ---- Bollinger ----
@@ -2176,6 +2184,7 @@ def compute_enriched_today(
     # 取到的是残缺窗口; 全量 rolling_*(N) / shift(N) 窗口不满为空, 按窗口内实际根数同口径置空。
     min_history_bars = {
         "ma5": 4, "ma10": 9, "ma20": 19, "ma30": 29, "ma60": 59,
+        "ma120": 119, "ma200": 199,
         "vol_ma5": 4, "vol_ma10": 9, "vol_ratio_5d": 5,
         "boll_upper": 19, "boll_lower": 19, "high_60d": 59, "low_60d": 59,
         "momentum_3d": 3, "momentum_5d": 5, "momentum_10d": 10,
@@ -2259,6 +2268,7 @@ def compute_enriched_today(
         "close_right", "high_right", "low_right", "_prev_close_raw",
         "_ma5_partial_sum", "_ma10_partial_sum", "_ma20_partial_sum",
         "_ma30_partial_sum", "_ma60_partial_sum",
+        "_ma120_partial_sum", "_ma200_partial_sum",
         "_boll_partial_sum", "_boll_partial_sq_sum",
         "_high_59d", "_low_59d",
         "_close_5d_ago", "_close_10d_ago", "_close_20d_ago",

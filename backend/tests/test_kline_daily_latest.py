@@ -67,6 +67,8 @@ def _live_frame() -> pl.DataFrame:
         "volume": [123_456.0],
         "amount": [1_234_560.0],
         "ma5": [10.2],
+        "ma120": [10.1],
+        "ma200": [9.9],
         "signal_limit_up": [False],
     })
 
@@ -94,6 +96,8 @@ def test_daily_latest_returns_only_current_memory_row(monkeypatch) -> None:
         "amount": 1_234_560.0,
         "change_pct": None,
         "ma5": 10.2,
+        "ma120": 10.1,
+        "ma200": 9.9,
         "is_live": True,
     }
     assert repo.latest_asset_calls == 0
@@ -224,6 +228,51 @@ def test_live_candle_stale_vs_beijing_today(monkeypatch) -> None:
         _request(_frame_on(date(2026, 3, 1)), date(2026, 3, 1)), "600000.SH", "stock",
     )
     assert row is None
+
+
+def test_remote_daily_fallback_warms_ma200(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import kline as kline_api
+
+    requested: dict[str, int] = {}
+    raw = pl.DataFrame({
+        "symbol": ["600000.SH"] * 320,
+        "date": [date(2025, 1, 1) + timedelta(days=i) for i in range(320)],
+        "open": [10.0 + i * 0.01 for i in range(320)],
+        "high": [10.1 + i * 0.01 for i in range(320)],
+        "low": [9.9 + i * 0.01 for i in range(320)],
+        "close": [10.0 + i * 0.01 for i in range(320)],
+        "volume": [1000.0 + i for i in range(320)],
+        "amount": [10_000.0 + i * 10 for i in range(320)],
+    })
+
+    def fake_sync(symbols, count):
+        requested["count"] = count
+        return raw
+
+    class _Repo:
+        def resolve_asset_type(self, symbol: str) -> str:
+            return "stock"
+
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            return pl.DataFrame()
+
+        def get_instruments(self) -> pl.DataFrame:
+            return pl.DataFrame()
+
+    monkeypatch.setattr(kline_api.kline_sync, "sync_daily_batch", fake_sync)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        repo=_Repo(), quote_service=None, capabilities=None,
+    )))
+
+    response = kline_api.get_daily(
+        request, symbol="600000.SH", days=120, start_date=None, end_date=None, ext_columns=None,
+    )
+
+    assert requested["count"] == 320
+    assert len(response["rows"]) == 120
+    assert all(row["ma200"] is not None for row in response["rows"])
 
 
 def test_get_daily_default_end_is_beijing_today(monkeypatch) -> None:

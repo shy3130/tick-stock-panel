@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import compute_indicators, compute_limit_signals, compute_signals
 
@@ -39,6 +40,17 @@ def test_compute_indicators_assume_sorted_matches_default_values():
     )
 
     assert fast.equals(default)
+
+
+def test_compute_indicators_long_moving_averages_warmup_and_values():
+    bars = _bars(220).filter(pl.col("symbol") == "600000")
+    result = compute_indicators(bars, needed={"ma120", "ma200"})
+
+    assert result["ma120"].null_count() == 119
+    assert result["ma200"].null_count() == 199
+    assert result["ma120"][119] == pytest.approx(bars["close"][:120].mean())
+    assert result["ma200"][199] == pytest.approx(bars["close"][:200].mean())
+    assert "ma60" not in result.columns
 
 
 def test_compute_signals_subset_matches_full_values():
