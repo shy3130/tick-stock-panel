@@ -5,11 +5,12 @@
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import polars as pl
 import pytest
 
+from app.market_time import CN_TZ
 from app.strategy import paper
 from app.tickflow.repository import DataStore, KlineRepository
 
@@ -507,6 +508,8 @@ def test_limit_queue_retries_next_open_then_expires(tmp_path, monkeypatch):
     """排队开启: 涨停买不进 → 转 next_open 次日重试, 连续涨停计顺延, 超限过期。"""
     day = date(2026, 9, 24)
     monkeypatch.setattr(paper, "cn_today", lambda: day)
+    # 盘中 10:00 下单并排队: 当日开盘价在排队前已打印, 当日结算不成交, 从次日开盘起重试
+    monkeypatch.setattr(paper, "cn_now", lambda: datetime.combine(day, time(10, 0), tzinfo=CN_TZ))
     paper.create_account(tmp_path, 1_000_000, queue_limit_orders=True)
     _write_daily(tmp_path, [(day - timedelta(days=1), 10.0, 10.0)])
     order, _ = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
@@ -519,11 +522,12 @@ def test_limit_queue_retries_next_open_then_expires(tmp_path, monkeypatch):
 
     # day2..day4 开盘连续一字涨停 (open == 涨停价) → 顺延到 3, 第 4 次超限过期
     _write_daily(tmp_path, [
-        (day, 12.10, 12.10),              # vs 前收 11.0 涨停 12.10
+        (day, 12.10, 12.10),              # day1 收盘 (排队当日, 结算跳过)
         (day + timedelta(days=1), 13.31, 13.31),   # vs 12.10 涨停 13.31
-        (day + timedelta(days=2), 14.64, 14.64),   # vs 13.31 涨停 14.64 → 第 4 次
+        (day + timedelta(days=2), 14.64, 14.64),   # vs 13.31 涨停 14.64
+        (day + timedelta(days=3), 16.10, 16.10),   # vs 14.64 涨停 16.10 → 第 4 次
     ])
-    for i in range(3):
+    for i in range(4):
         paper.settle_day(tmp_path, (day + timedelta(days=i)).isoformat())
     got = paper.get_order(tmp_path, order["id"])
     assert got["status"] == "expired" and "排队" in got["reason"]
@@ -534,15 +538,18 @@ def test_limit_queue_fills_when_open_below_limit(tmp_path, monkeypatch):
     """排队开启后次日开盘回落 → 按 next_open 正常成交。"""
     day = date(2026, 9, 24)
     monkeypatch.setattr(paper, "cn_today", lambda: day)
+    monkeypatch.setattr(paper, "cn_now", lambda: datetime.combine(day, time(10, 0), tzinfo=CN_TZ))
     paper.create_account(tmp_path, 1_000_000, queue_limit_orders=True)
     _write_daily(tmp_path, [
         (day - timedelta(days=1), 10.0, 10.0),
-        (day, 10.5, 10.9),  # 次日开盘 10.5 未涨停
+        (day, 10.6, 11.0),                        # 排队当日 (盘中触及涨停 11.0)
+        (day + timedelta(days=1), 10.5, 10.9),    # 次日开盘 10.5 未涨停
     ])
     order, _ = paper.create_order(tmp_path, SYM, "buy", qty=100, ref_price=10.0)
     assert paper.evaluate_intraday(tmp_path, {SYM: 11.0}) == []  # 涨停排队
     assert paper.get_order(tmp_path, order["id"])["status"] == "pending"
-    summary = paper.settle_day(tmp_path, day.isoformat())
+    assert paper.settle_day(tmp_path, day.isoformat())["filled"] == 0  # 当日开盘价在排队前已打印
+    summary = paper.settle_day(tmp_path, (day + timedelta(days=1)).isoformat())
     assert summary["filled"] == 1
     got = paper.get_order(tmp_path, order["id"])
     assert got["status"] == "filled" and got["fill_price"] == pytest.approx(paper.apply_slippage(10.5, "buy", 5.0))
