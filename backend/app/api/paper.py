@@ -52,6 +52,9 @@ class OrderModel(BaseModel):
 
 class SettingsModel(BaseModel):
     queue_limit_orders: bool | None = None
+    commission_pct: float | None = None   # 佣金率 (0.00025 = 万2.5)
+    stamp_tax_pct: float | None = None    # 印花税 (0.001 = 千1, 仅卖出)
+    slippage_bps: float | None = None     # 滑点 (5 = 5bps)
 
 
 def _resolve_asset_type(request: Request, symbol: str) -> str:
@@ -205,6 +208,45 @@ def list_nav(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
 @router.get("/stats")
 def get_stats(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
     return paper.stats(_data_dir(request), _acc(request, account))
+
+
+@router.get("/compare")
+def compare_accounts(request: Request):
+    """横向对比全部账户: 概览 + 回合统计 + 定版净值 (供对比表与净值叠加图)。
+
+    净值给全量定版序列, 前端做归一化 (起点=1) 后多账户叠加。
+    """
+    data_dir = _data_dir(request)
+    rows = []
+    for acc_id in paper.list_account_ids(data_dir):
+        acc = paper.get_account(data_dir, acc_id)
+        if acc is None:
+            continue
+        ov = paper.overview(data_dir, account_id=acc_id)
+        if not ov.get("initialized"):
+            continue  # 空壳目录 (懒创建) 不进对比
+        st = paper.stats(data_dir, acc_id)
+        initial = float(acc.get("initial_cash") or 0)
+        rows.append({
+            "account": acc_id,
+            "name": acc.get("name") or acc_id,
+            "status": acc.get("status"),
+            "initial_cash": initial,
+            "fees": {k: acc.get(k) for k in ("commission_pct", "stamp_tax_pct", "slippage_bps")},
+            "total": ov.get("total"),
+            "cash": ov.get("cash"),
+            "market_value": ov.get("market_value"),
+            "total_pnl": ov.get("total_pnl"),
+            "pnl_pct": round((ov.get("total_pnl") or 0) / initial * 100, 2) if initial > 0 else None,
+            "rounds": st.get("rounds"),
+            "win_rate": st.get("win_rate"),
+            "profit_loss_ratio": st.get("profit_loss_ratio"),
+            "avg_holding_days": st.get("avg_holding_days"),
+            "realized_pnl": st.get("realized_pnl"),
+            "max_drawdown": st.get("max_drawdown"),
+            "nav": [{"date": n["date"], "nav": n["nav"]} for n in paper.load_nav(data_dir, acc_id)],
+        })
+    return {"accounts": rows}
 
 
 @router.post("/rebuild")

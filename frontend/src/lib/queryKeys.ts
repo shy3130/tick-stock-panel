@@ -114,6 +114,7 @@ export const QK = {
   paperTrades:          (acc: string) => ['paper', 'trades', acc] as const,
   paperNav:             (acc: string) => ['paper', 'nav', acc] as const,
   paperStats:           (acc: string) => ['paper', 'stats', acc] as const,
+  paperCompare:         ['paper', 'compare'] as const,
   paperAutoRules:       (acc: string) => ['paper', 'auto-rules', acc] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 

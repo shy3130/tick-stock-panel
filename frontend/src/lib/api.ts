@@ -1061,6 +1061,27 @@ export interface PaperAccountSummary {
   created_at?: string
 }
 
+/** 多账户横向对比行 (GET /api/paper/compare): 概览 + 回合统计 + 定版净值 */
+export interface PaperCompareRow {
+  account: string
+  name: string
+  status: 'active' | 'frozen'
+  initial_cash: number
+  fees: { commission_pct: number; stamp_tax_pct: number; slippage_bps: number }
+  total: number
+  cash: number
+  market_value: number
+  total_pnl: number
+  pnl_pct: number | null
+  rounds: number
+  win_rate: number
+  profit_loss_ratio: number | null
+  avg_holding_days: number
+  realized_pnl: number
+  max_drawdown: number | null
+  nav: Array<{ date: string; nav: number }>
+}
+
 export interface PaperHolding {
   symbol: string
   asset_type: string
@@ -3731,7 +3752,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  paperSettings: (body: { queue_limit_orders?: boolean }, account?: string) =>
+  paperSettings: (body: { queue_limit_orders?: boolean; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number }, account?: string) =>
     request<{ account: PaperAccount }>(accUrl('/api/paper/settings', account), {
       method: 'POST',
       body: JSON.stringify(body),
@@ -3762,6 +3783,9 @@ export const api = {
 
   paperStats: (account?: string) =>
     request<{ rounds: number; win_rate: number; profit_loss_ratio: number | null; avg_holding_days: number; realized_pnl: number; max_drawdown: number | null }>(accUrl('/api/paper/stats', account)),
+
+  paperCompare: () =>
+    request<{ accounts: PaperCompareRow[] }>('/api/paper/compare'),
 
   paperFreeze: (frozen: boolean, account?: string) =>
     request<{ account: PaperAccount }>(accUrl('/api/paper/freeze?frozen=' + frozen, account), { method: 'POST' }),

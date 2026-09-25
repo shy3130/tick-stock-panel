@@ -125,3 +125,44 @@ def test_trades_nav_stats_empty(client: TestClient):
     assert client.get("/api/paper/nav").json() == {"nav": []}
     stats = client.get("/api/paper/stats").json()
     assert stats["rounds"] == 0 and stats["win_rate"] == 0.0
+
+
+def test_settings_updates_fees(client: TestClient):
+    """费用三参数可经 settings 端点调整; 超范围 → 400; 未知字段忽略。"""
+    client.post("/api/paper/account", json={"initial_cash": 1000000})
+    r = client.post("/api/paper/settings", json={
+        "commission_pct": 0.0003, "stamp_tax_pct": 0.0005, "slippage_bps": 8,
+    })
+    assert r.status_code == 200
+    acc = r.json()["account"]
+    assert acc["commission_pct"] == 0.0003
+    assert acc["stamp_tax_pct"] == 0.0005
+    assert acc["slippage_bps"] == 8
+    # 超范围
+    r = client.post("/api/paper/settings", json={"commission_pct": 0.5})
+    assert r.status_code == 400 and "超出合理范围" in r.json()["detail"]
+    # 部分更新: 只改滑点, 佣金不动
+    r = client.post("/api/paper/settings", json={"slippage_bps": 3})
+    acc = r.json()["account"]
+    assert acc["slippage_bps"] == 3 and acc["commission_pct"] == 0.0003
+
+
+def test_compare_accounts(client: TestClient):
+    """/compare: 逐账户概览+统计+净值; 未初始化的空壳账户不出现。"""
+    # 只有懒创建的空壳目录时 → 空列表
+    assert client.get("/api/paper/compare").json()["accounts"] == []
+
+    client.post("/api/paper/account", json={"initial_cash": 1000000, "name": "甲"})
+    client.post("/api/paper/account", json={"initial_cash": 500000, "account_id": "acc_b", "name": "乙"})
+    rows = client.get("/api/paper/compare").json()["accounts"]
+    assert [r["account"] for r in rows] == ["default", "acc_b"]
+    row = rows[0]
+    assert row["name"] == "甲" and row["initial_cash"] == 1000000
+    assert row["total"] == pytest.approx(1000000)
+    assert row["pnl_pct"] == 0.0
+    assert row["fees"]["commission_pct"] == pytest.approx(0.00025)
+    assert row["rounds"] == 0 and row["win_rate"] == 0.0
+    assert row["nav"] == []  # 尚无定版净值
+    # 字段完整性 (对比表依赖)
+    for key in ("cash", "market_value", "total_pnl", "profit_loss_ratio", "max_drawdown", "avg_holding_days", "realized_pnl"):
+        assert key in row

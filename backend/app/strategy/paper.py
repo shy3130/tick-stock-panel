@@ -228,13 +228,28 @@ def list_accounts(data_dir: Path) -> list[dict]:
 
 
 def update_settings(data_dir: Path, account_id: str = DEFAULT_ACCOUNT_ID, **fields) -> dict:
-    """更新账户设置 (当前仅 queue_limit_orders); 未知字段忽略。返回更新后账户。"""
+    """更新账户设置 (涨跌停排队 / 费用三参数); 未知字段忽略。返回更新后账户。
+
+    费用只影响之后的新成交 (与回测费用模型同口径), 已有台账不重算。
+    """
     with PAPER_LOCK:
         acc = get_account(data_dir, account_id)
         if acc is None:
             raise ValueError("尚未创建模拟账户")
         if "queue_limit_orders" in fields and fields["queue_limit_orders"] is not None:
             acc["queue_limit_orders"] = bool(fields["queue_limit_orders"])
+        for key, lo, hi in (
+            ("commission_pct", 0.0, 0.01),    # 佣金率 ≤1% (100‱)
+            ("stamp_tax_pct", 0.0, 0.05),     # 印花税 ≤5% (仅卖出)
+            ("slippage_bps", 0.0, 200.0),     # 滑点 ≤200bps
+        ):
+            v = fields.get(key)
+            if v is None:
+                continue
+            v = float(v)
+            if not (lo <= v <= hi):
+                raise ValueError(f"{key} 超出合理范围 ({lo}~{hi})")
+            acc[key] = v
         save_account(data_dir, acc, account_id)
         return acc
 
