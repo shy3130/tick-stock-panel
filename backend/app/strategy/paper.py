@@ -392,17 +392,20 @@ def create_order(
             pos = load_positions(data_dir, account_id).get(symbol)
             if pos is None or pos["qty"] <= 0:
                 return None, f"无 {symbol} 持仓, 不能卖出"
-            if qty > pos["available_qty"]:
-                return None, f"可卖数量不足 (T+1): 可卖 {pos['available_qty']}, 请求数量 {qty}"
+            # 可卖数量按当前交易日现算 (与 _fill_order / overview 同口径): 物化文件里的
+            # available_qty 是上次重建时的 T+1 口径, 跨日后不会更新, 次日仍会是 0
+            available = _available_of(pos, cn_today().isoformat())
+            if qty > available:
+                return None, f"可卖数量不足 (T+1): 可卖 {available}, 请求数量 {qty}"
             # 超卖防护: pending 卖出单占用可卖额度 — 同 symbol 的 pending 卖出合计
             # 不得超过可卖数量, 否则多张单各自通过校验、成交时逐张扣减会超额
             pending_sell = sum(
                 int(o["qty"]) for o in load_orders(data_dir, account_id)
                 if o["status"] == "pending" and o["side"] == "sell" and o["symbol"] == symbol
             )
-            if pending_sell + qty > pos["available_qty"]:
+            if pending_sell + qty > available:
                 return None, (
-                    f"可卖数量不足 (T+1): 可卖 {pos['available_qty']}, "
+                    f"可卖数量不足 (T+1): 可卖 {available}, "
                     f"已有待成交卖出 {pending_sell}, 请求数量 {qty}"
                 )
 
