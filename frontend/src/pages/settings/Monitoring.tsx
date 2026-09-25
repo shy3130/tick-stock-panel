@@ -30,6 +30,7 @@ const PAGE_LABELS: Record<string, string> = {
   'overview-market': '看板',
   watchlist: '自选页',
   'limit-ladder': '连板梯队',
+  'market-snapshot': '概念/行业分析',
 }
 
 const EMPTY_EMAIL_SMTP: EmailSmtpConfig = {
