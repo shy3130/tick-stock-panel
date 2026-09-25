@@ -228,7 +228,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
             <span className="text-[10px] text-muted">{rows.length} 个交易日</span>
             <span className="text-[10px] text-muted/60">·</span>
             <span className="text-[10px] text-muted">当前价</span>
-            <span className={`text-base font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
+            <span className={`text-[16px] leading-6 font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
               {curClose?.toFixed(2) ?? '—'}
             </span>
           </div>

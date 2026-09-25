@@ -141,7 +141,7 @@ export function SettingsExtPagesPanel() {
           </div>
           <button
             onClick={() => { resetForm(); setShowForm(true) }}
-            className="inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent/90 px-3 py-1.5 text-xs font-medium text-base hover:bg-accent transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent transition-colors"
           >
             <Plus className="h-3.5 w-3.5" />
             新建页面
@@ -241,7 +241,7 @@ export function SettingsExtPagesPanel() {
 
           <div className="flex justify-end gap-2">
             <button onClick={() => { setShowForm(false); setError('') }} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs">取消</button>
-            <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium disabled:opacity-50">
+            <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent/90 text-white text-xs font-medium disabled:opacity-50">
               <Save className="h-3.5 w-3.5" />保存
             </button>
           </div>

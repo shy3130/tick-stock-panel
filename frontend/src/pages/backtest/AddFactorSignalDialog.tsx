@@ -185,7 +185,7 @@ export function AddFactorSignalDialog({
           type="button"
           onClick={() => save.mutate()}
           disabled={save.isPending || !selected || !thresholdValid || !name.trim()}
-          className="inline-flex items-center gap-1.5 rounded-btn bg-amber-500/90 px-3 py-1.5 text-xs font-medium text-base transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-btn bg-amber-500/90 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Zap className="h-3.5 w-3.5" />
           {save.isPending ? '保存中…' : '保存信号'}

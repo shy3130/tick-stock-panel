@@ -98,7 +98,7 @@ export function StockIntradayChart({
               <div className="text-xs text-muted">暂无分钟数据</div>
               <button
                 onClick={() => setMinuteDismissed(false)}
-                className="px-4 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent transition-colors duration-150"
+                className="px-4 py-1.5 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent transition-colors duration-150"
               >
                 获取分钟K
               </button>
@@ -109,7 +109,7 @@ export function StockIntradayChart({
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => fetchMinute.mutate()}
-                  className="px-4 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent transition-colors duration-150"
+                  className="px-4 py-1.5 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent transition-colors duration-150"
                 >
                   确定
                 </button>

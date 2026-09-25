@@ -254,7 +254,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                           <button
                             onClick={generateByAI}
                             disabled={aiLoading}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-amber-500/90 text-base text-xs font-medium disabled:opacity-50 cursor-pointer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-amber-500/90 text-white text-xs font-medium disabled:opacity-50 cursor-pointer"
                           >
                             {aiLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                             {aiLoading ? '生成中…' : '生成条件'}
@@ -274,7 +274,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
 
             <div className="flex justify-end gap-2 border-t border-border/50 px-5 py-4">
               <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs">取消</button>
-              <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-amber-500/90 text-base text-xs font-medium disabled:opacity-50">
+              <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-amber-500/90 text-white text-xs font-medium disabled:opacity-50">
                 <Save className="h-3.5 w-3.5" />保存
               </button>
             </div>

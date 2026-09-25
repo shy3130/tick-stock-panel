@@ -475,7 +475,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
           <button
             onClick={handleRun}
             disabled={running || !url}
-            className="inline-flex items-center justify-center gap-1 px-2 py-2 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-1 px-2 py-2 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
           >
             {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
             立即执行
@@ -484,7 +484,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
         <button
           onClick={() => handleSave(false)}
           disabled={saving || !url}
-          className="w-full inline-flex items-center justify-center gap-1 py-2 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-1 py-2 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
         >
           {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           保存配置
@@ -513,7 +513,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
               onClick={handleBackfill}
               disabled={bfRunning || !dateParam.trim() || !bfStart || !bfEnd}
               title="按本地交易日逐日拉取写入历史分区; 已有分区自动跳过, 可重复执行"
-              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-btn bg-accent/90 text-base text-[10px] font-medium hover:bg-accent disabled:opacity-40 transition-colors"
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-btn bg-accent/90 text-white text-[10px] font-medium hover:bg-accent disabled:opacity-40 transition-colors"
             >
               {bfRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
               回补

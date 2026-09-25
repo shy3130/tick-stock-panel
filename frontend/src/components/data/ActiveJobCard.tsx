@@ -86,7 +86,7 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
         </div>
         {!isDone && (
           <div className="font-mono text-2xl font-bold tracking-tight">
-            {job.progress}<span className="text-base text-muted">%</span>
+            {job.progress}<span className="text-[16px] leading-6 text-muted">%</span>
           </div>
         )}
       </div>

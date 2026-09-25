@@ -189,7 +189,7 @@ function AuctionView({ onOpenStock }: {
           </p>
           <Link
             to="/settings?tab=data-sources"
-            className="mt-5 inline-flex h-9 items-center gap-2 rounded-btn bg-accent px-4 text-xs font-medium text-base transition-colors hover:bg-accent/90"
+            className="mt-5 inline-flex h-9 items-center gap-2 rounded-btn bg-accent px-4 text-xs font-medium text-white transition-colors hover:bg-accent/90"
           >
             前往配置数据源
             <ChevronRight className="h-3.5 w-3.5" />
@@ -711,7 +711,7 @@ function DeviationView({ onPreview }: {
             <button
               type="button"
               onClick={() => toggleEnabled(true)}
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-btn bg-accent px-4 text-xs font-medium text-base"
+              className="mt-5 inline-flex h-9 items-center gap-2 rounded-btn bg-accent px-4 text-xs font-medium text-white"
             >
               <Power className="h-4 w-4" />
               开启监控

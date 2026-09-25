@@ -661,7 +661,7 @@ export function Regime() {
         <div className="absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-accent to-accent/20" />
         <div className="flex items-center gap-3">
           <Activity className="h-5 w-5 text-accent" />
-          <h1 className="text-base font-semibold text-foreground">市场环境</h1>
+          <h1 className="text-[16px] leading-6 font-semibold text-foreground">市场环境</h1>
           <span className="text-xs text-muted">
             {view === 'phase' ? '涨停情绪 · 市场阶段 · 主线脉络' : '每日环境状态 · 赚钱效应 · 趋势分析'}
           </span>

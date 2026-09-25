@@ -1015,7 +1015,7 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <h3 className="text-base font-semibold text-foreground">{plugin.display_name}</h3>
+            <h3 className="text-[16px] leading-6 font-semibold text-foreground">{plugin.display_name}</h3>
             <span className="text-[10px] text-muted/50 uppercase tracking-wider">插件 · {plugin.runtime}</span>
             <span className="rounded bg-warning/15 px-1 py-0.5 text-[9px] font-medium leading-none text-warning">第三方</span>
             {isActive && (
@@ -1164,7 +1164,7 @@ function TickFlowDetail({ active, matrix }: { active: boolean; matrix?: Capabili
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-base font-semibold text-foreground">TickFlow</h2>
+            <h2 className="text-[16px] leading-6 font-semibold text-foreground">TickFlow</h2>
             <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">第三方</span>
             <AllTiersBadge />
             {active && (

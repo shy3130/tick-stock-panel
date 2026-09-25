@@ -756,7 +756,7 @@ function ReportPanel({
           <Sparkles className="absolute -right-1 -top-1 h-5 w-5 text-accent" />
         </div>
         <div className="text-center">
-          <div className="text-base font-semibold text-foreground">AI 大盘复盘</div>
+          <div className="text-[16px] leading-6 font-semibold text-foreground">AI 大盘复盘</div>
           <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-secondary">
             一键生成今日盘后复盘报告 —— 从一句话定调到明日交易计划,
             结构化输出可直接指导次日仓位与节奏。
@@ -774,7 +774,7 @@ function ReportPanel({
             { icon: '⚠️', label: '风险提示' },
           ].map((s) => (
             <div key={s.label} className="flex flex-col items-center gap-1 rounded-btn bg-elevated/40 px-2 py-2">
-              <span className="text-base">{s.icon}</span>
+              <span className="text-[16px] leading-6">{s.icon}</span>
               <span className="text-[10px] text-secondary">{s.label}</span>
             </div>
           ))}

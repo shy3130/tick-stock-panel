@@ -126,7 +126,7 @@ export function EnrichedRebuildPanel({
         <button
           onClick={() => rebuild.mutate()}
           disabled={!canRebuild || isRunning || rebuild.isPending}
-          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
         >
           {rebuild.isPending ? (
             <><Loader2 className="h-3 w-3 animate-spin" />计算中…</>

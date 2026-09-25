@@ -243,7 +243,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
           <button
             onClick={() => update.mutate()}
             disabled={!valid || update.isPending}
-            className="px-4 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
+            className="px-4 py-1.5 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors"
           >
             {update.isPending ? '保存中…' : '保存'}
           </button>

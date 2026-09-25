@@ -686,7 +686,7 @@ function Stat({ label, value, color }: { label: ReactNode; value: string; color?
     <div className="min-w-0 rounded-btn border border-border/70 bg-elevated/70 px-3 py-2">
       <div className="text-[11px] text-secondary">{label}</div>
       <div
-        className={`mt-1 break-words font-mono font-semibold leading-tight tracking-tight num ${compact ? 'text-xs xl:text-sm' : 'text-sm xl:text-base'}`}
+        className={`mt-1 break-words font-mono font-semibold leading-tight tracking-tight num ${compact ? 'text-xs xl:text-sm' : 'text-sm xl:text-[16px] xl:leading-6'}`}
         style={{ color: color ?? 'inherit' }}
         title={value}
       >

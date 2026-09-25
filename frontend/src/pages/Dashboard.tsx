@@ -718,7 +718,7 @@ export function Dashboard() {
       <div className="flex h-full items-center justify-center bg-base p-6">
         <div className="rounded-card border border-border bg-surface p-6 text-center">
           <div className="text-sm text-danger">看板加载失败</div>
-          <button onClick={() => overview.refetch()} className="mt-3 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base">重试</button>
+          <button onClick={() => overview.refetch()} className="mt-3 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white">重试</button>
         </div>
       </div>
     )
@@ -771,7 +771,7 @@ export function Dashboard() {
         <div className="pointer-events-none absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-accent to-accent/20" aria-hidden />
         <div className="flex items-center gap-2">
           <Gauge className="h-4 w-4 text-accent" />
-          <h1 className="text-base font-semibold text-foreground">市场看板</h1>
+          <h1 className="text-[16px] leading-6 font-semibold text-foreground">市场看板</h1>
           <span
             className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
             style={{
@@ -1064,7 +1064,7 @@ function WelcomeFetchModal({
         >
           <Sparkles className="h-7 w-7 text-accent" />
         </motion.div>
-        <h3 className="mt-4 text-base font-semibold text-foreground">首次使用,需先获取行情数据</h3>
+        <h3 className="mt-4 text-[16px] leading-6 font-semibold text-foreground">首次使用,需先获取行情数据</h3>
         <p className="mt-2 text-xs text-secondary leading-relaxed">
           {isTickflowProvider
             ? '可通过 TickFlow 免费服务器拉取近 1 年全 A 股日K'

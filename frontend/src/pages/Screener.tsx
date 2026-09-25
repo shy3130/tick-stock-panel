@@ -990,7 +990,7 @@ export function Screener() {
                         <Filter className="h-3 w-3" />
                         筛选
                         {filterActive(filter) && (
-                          <span className="bg-accent text-base rounded-full min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-bold leading-none">
+                          <span className="bg-accent text-white rounded-full min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-bold leading-none">
                             {countActiveFilters(filter)}
                           </span>
                         )}

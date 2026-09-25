@@ -137,7 +137,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
     if (hMatch) {
       const level = hMatch[1].length
       const text = hMatch[2]
-      const sizeCls = level === 1 ? 'text-base' : level === 2 ? 'text-sm' : 'text-xs'
+      const sizeCls = level === 1 ? 'text-[16px] leading-6' : level === 2 ? 'text-sm' : 'text-xs'
       const mtCls = level <= 2 ? 'mt-6' : 'mt-5'
       blocks.push(
         <div key={key++} className={`${sizeCls} ${mtCls} mb-3 font-semibold text-foreground flex items-center gap-1.5`}>

@@ -301,7 +301,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
                 <button
                   onClick={() => { onDelete(); setShowDelete(false) }}
                   disabled={deleting}
-                  className="px-3 py-1.5 rounded-btn bg-danger/90 text-base text-sm font-medium hover:bg-danger disabled:opacity-50 transition-colors"
+                  className="px-3 py-1.5 rounded-btn bg-danger/90 text-white text-sm font-medium hover:bg-danger disabled:opacity-50 transition-colors"
                 >
                   {deleting ? '删除中…' : '确认删除'}
                 </button>

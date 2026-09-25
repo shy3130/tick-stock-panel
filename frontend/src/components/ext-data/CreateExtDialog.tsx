@@ -324,7 +324,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
         <div className="px-6 pt-5 pb-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-base font-semibold text-foreground">新增扩展数据</h3>
+              <h3 className="text-[16px] leading-6 font-semibold text-foreground">新增扩展数据</h3>
               <p className="text-[11px] mt-1 inline-flex items-center gap-1 bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded-md font-medium">
                 接入自有数据，与标的自动关联（第三方接口或 CSV/Excel），支持概念、人气、资金流、舆情、研报评分标签等场景
               </p>
@@ -452,7 +452,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 <button
                   onClick={handleDetectUrl}
                   disabled={detecting || !url.trim()}
-                  className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-40 transition-colors"
+                  className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-40 transition-colors"
                 >
                   {detecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                   测试识别
@@ -656,7 +656,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 <div className="text-[11px] text-muted">手动添加字段后即可创建空表结构</div>
                 <button
                   onClick={addField}
-                  className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 transition-colors"
+                  className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 transition-colors"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   添加字段
@@ -788,7 +788,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
             <button
               onClick={() => create.mutate()}
               disabled={!valid || create.isPending}
-              className="px-5 py-2 rounded-lg bg-accent text-base text-xs font-medium hover:bg-accent/90 disabled:opacity-40 transition-colors shadow-sm shadow-accent/20"
+              className="px-5 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-40 transition-colors shadow-sm shadow-accent/20"
             >
               {create.isPending ? '创建中…' : '创建'}
             </button>
