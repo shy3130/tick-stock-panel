@@ -34,11 +34,12 @@ import threading
 import uuid
 from datetime import date as _date
 from datetime import datetime
+from datetime import time as _time
 from pathlib import Path
 
 import polars as pl
 
-from app.market_time import cn_now, cn_today
+from app.market_time import CN_TZ, cn_now, cn_today
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,10 @@ DEFAULT_STAMP_TAX_PCT = 0.001      # 印花税, 仅卖出
 DEFAULT_SLIPPAGE_BPS = 5.0         # 滑点 (bps, 万分之5)
 
 MAX_POSTPONE_DAYS = 3             # 顺延上限: 连续 N 个交易日无法成交自动过期
+# 结算价格的打印时刻 (北京墙钟): 开盘价 09:30 / 收盘价 15:00。下单晚于该时刻的单
+# 不能按当日这个价成交 (下单时价格已知), 留到下一交易日结算
+_SESSION_OPEN = _time(9, 30)
+_SESSION_CLOSE = _time(15, 0)
 LOT_SIZE = 100                     # 一手 100 股 (股票/ETF 同)
 MAX_POSITION_SYMBOLS = 50          # 持仓标的数上限 (防误操作)
 DEFAULT_ACCOUNT_ID = "default"
@@ -722,6 +727,8 @@ def _queue_or_expire(data_dir: Path, order: dict, acc: dict, reason: str, accoun
             order["order_type"] = "next_open"
             order["postponed"] = postponed + 1
             order["reason"] = f"{reason}; 排队次日重试 ({postponed + 1}/{MAX_POSTPONE_DAYS})"
+            # 排队时刻: 盘中排队的单不能按当日 (排队之前已打印的) 开盘价成交
+            order["queued_at"] = _now_iso()
             save_order(data_dir, order, account_id)
             return
         reason = f"{reason}; 排队 {MAX_POSTPONE_DAYS} 日未成交, 过期"
@@ -875,11 +882,34 @@ def _factor_on(data_dir: Path, symbol: str, asset_type: str, day: str) -> float 
 
 
 # ── 盘后结算 ────────────────────────────────────────────
+def _placed_after_price_time(order: dict, day: str) -> bool:
+    """订单 (盘中排队的按排队时刻) 是否晚于 day 结算价格的打印时刻。
+
+    next_open 用当日 09:30 开盘价, close / market 兜底用当日 15:00 收盘价。下单或
+    排队发生在同一交易日该时刻之后, 说明这个价格在下单时已经打印过, 按它成交等于
+    拿已知价格回填 (次日开盘单的口径是次一交易日 raw_open), 应留到下一交易日结算。
+    更早日期的订单不受影响; 时间戳缺失或无法解析时不拦截 (沿用原行为)。
+    """
+    stamp = order.get("queued_at") or order.get("created_at")
+    try:
+        ts = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return False
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(CN_TZ)
+    if ts.date().isoformat() != day:
+        return False
+    price_time = _SESSION_OPEN if order.get("order_type") == "next_open" else _SESSION_CLOSE
+    return ts.time() >= price_time
+
+
 def settle_day(data_dir: Path, day: str, account_id: str = DEFAULT_ACCOUNT_ID) -> dict:
     """盘后管道阶段: 撮合顺延单 → 除权调整 → 定版净值。幂等 (重跑同日安全)。
 
     撮合顺序: close 单用 raw_close; next_open 单用 raw_open; 仍 pending 的
     market 单 (当日无快照) 也按 raw_close 兜底成交 — 避免停牌外无限顺延。
+    当日开盘后才下 / 排队的 next_open 单, 以及收盘后才下的 close / market 单,
+    当日不成交也不计顺延, 留到下一交易日 (见 _placed_after_price_time)。
     """
     summary = {"filled": 0, "expired": 0, "corp_actions": 0, "nav": None, "account": account_id}
     with PAPER_LOCK:
@@ -902,6 +932,8 @@ def settle_day(data_dir: Path, day: str, account_id: str = DEFAULT_ACCOUNT_ID) -
                 else:
                     save_order(data_dir, order, account_id)
                 continue
+            if _placed_after_price_time(order, day):
+                continue  # 下单/排队时该价已打印, 留到下一交易日 (不计顺延)
             # next_open 用开盘价; close 与 market 兜底用收盘价
             raw = bar["open"] if order["order_type"] == "next_open" else bar["close"]
             before = order["status"]
