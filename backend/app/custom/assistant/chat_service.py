@@ -121,6 +121,8 @@ async def chat_stream(
     repo: Any = None,
     quote_service: Any = None,
     depth_service: Any = None,
+    capabilities: Any = None,
+    financial_scheduler: Any = None,
 ) -> AsyncIterator[str]:
     """执行一轮对话, 逐行 yield NDJSON 事件(见模块 __init__ 的协议注释)。"""
     if not ai_configured():
@@ -161,6 +163,8 @@ async def chat_stream(
         depth_service=depth_service,
         engine=engine,
         data_dir=data_dir,
+        capabilities=capabilities,
+        financial_scheduler=financial_scheduler,
     )
 
     queue: asyncio.Queue = asyncio.Queue()

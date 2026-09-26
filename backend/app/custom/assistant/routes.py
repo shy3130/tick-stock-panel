@@ -64,6 +64,8 @@ def build_router() -> APIRouter:
                 repo=repo,
                 quote_service=getattr(request.app.state, "quote_service", None),
                 depth_service=getattr(request.app.state, "depth_service", None),
+                capabilities=getattr(request.app.state, "capabilities", None),
+                financial_scheduler=getattr(request.app.state, "financial_scheduler", None),
             )):
                 yield line + "\n"
 

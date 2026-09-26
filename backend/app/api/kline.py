@@ -1209,6 +1209,23 @@ async def sync_minute(request: Request):
 
     body 可选: { "days": int } — 指定拉取天数 (不传则用偏好设置)。
     """
+    # 可选 body: { "days": int, "extend": bool }
+    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    return await trigger_minute_sync(
+        request.app.state.repo,
+        request.app.state.capabilities,
+        override_days=body.get("days"),
+        extend_flag=body.get("extend"),
+    )
+
+
+async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=None) -> dict:
+    """触发分钟K同步/向前扩展后台任务(HTTP 端点与 AI 助手共用同一条触发路径)。"""
     import asyncio
 
     from app.services.pipeline_jobs import JobCancelledError, job_store, release_run_slot, run_with_capacity, try_acquire_run_slot
@@ -1217,22 +1234,8 @@ async def sync_minute(request: Request):
     from app.tickflow.capabilities import Cap
     from app.tickflow.pools import get_pool
 
-    repo = request.app.state.repo
-    capset = request.app.state.capabilities
-
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
-
-    # 可选 body: { "days": int, "extend": bool }
-    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        pass
-    override_days = body.get("days")
-    extend_flag = body.get("extend")
-
     # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
     job_id, is_new = job_store.create(long_running=True)
     if not is_new:

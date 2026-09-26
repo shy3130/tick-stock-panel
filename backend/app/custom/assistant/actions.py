@@ -4,6 +4,7 @@
 - create_signal_strategy: 写 user_data/custom_signals/*.json 并失效多层缓存
 - run_backtest:           spawn 回测子进程(重计算, 占共享限流槽)
 - add_to_watchlist:       修改用户自选列表
+- sync_data:              触发数据补全后台任务(盘后管道/财务/分钟K扩展)
 
 实现: 进程内 PendingRegistry, call_id → PendingAction(asyncio.Event)。
 对话流(NDJSON)发出 action_confirm 事件后挂起等待; 前端确认卡 POST
@@ -23,6 +24,7 @@ ACTION_TOOLS: frozenset[str] = frozenset({
     "create_signal_strategy",
     "run_backtest",
     "add_to_watchlist",
+    "sync_data",
 })
 
 # 确认卡展示元数据: label=动作名, risk=一句话影响说明。
@@ -38,6 +40,10 @@ ACTION_META: dict[str, dict[str, str]] = {
     "add_to_watchlist": {
         "label": "加入自选股",
         "risk": "将修改你的自选股列表",
+    },
+    "sync_data": {
+        "label": "数据补全/同步",
+        "risk": "将从外部数据源拉取数据并写入本地(后台执行, 耗时视网络而定; 已有任务会复用)",
     },
 }
 

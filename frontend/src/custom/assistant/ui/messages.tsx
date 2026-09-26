@@ -106,6 +106,9 @@ const TOOL_LABELS: Record<string, string> = {
   get_factor_values: '查询因子排名',
   create_signal_strategy: '创建自定义信号',
   add_to_watchlist: '加入自选股',
+  check_data_coverage: '检查数据完整性',
+  get_sync_status: '查询同步进度',
+  sync_data: '数据补全/同步',
 }
 
 function toolLabel(name: string): string {

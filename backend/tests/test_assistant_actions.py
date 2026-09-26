@@ -272,3 +272,175 @@ def test_summarize_action_results() -> None:
         "add_to_watchlist", {"ok": False, "error": "用户已拒绝该操作, 未执行。"},
     )
     assert "拒绝" in denied
+
+
+# ── 数据完整性检查 + 数据补全 ─────────────────────────────────────
+
+def _make_partitions(data_dir: Path, subdir: str, dates: list[str]) -> None:
+    for d in dates:
+        (data_dir / subdir / f"date={d}").mkdir(parents=True, exist_ok=True)
+
+
+def test_check_data_coverage_reports_gaps(tmp_path: Path) -> None:
+    from datetime import date as date_cls
+    from datetime import timedelta
+
+    today = date_cls.today()
+    old = today - timedelta(days=7)
+    _make_partitions(tmp_path, "kline_daily", [str(old - timedelta(days=2)), str(old)])
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path)
+
+    result = assistant_tools._check_data_coverage({}, ctx)
+
+    assert result["daily"]["present"] is True
+    assert result["daily"]["latest_date"] == str(old)
+    assert result["enriched"]["present"] is False
+    issues_text = "\n".join(result["issues"])
+    assert "日线停留在" in issues_text and "落后" in issues_text
+    assert "enriched" in issues_text or "指标" in issues_text
+    assert "财务" in issues_text
+
+
+def test_check_data_coverage_fresh_data_has_few_issues(tmp_path: Path) -> None:
+    import polars as pl
+
+    today_str = assistant_tools.cn_today().isoformat()
+    _make_partitions(tmp_path, "kline_daily", [today_str])
+    _make_partitions(tmp_path, "kline_daily_enriched", [today_str])
+    _make_partitions(tmp_path, "kline_minute", [today_str])
+    fin = tmp_path / "financials" / "metrics" / "part.parquet"
+    fin.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"symbol": ["600519.SH"], "period_end": ["2026-06-30"]}).write_parquet(fin)
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path)
+
+    result = assistant_tools._check_data_coverage({}, ctx)
+
+    assert result["issues"] == []
+    assert result["financials"]["metrics"]["latest_period"] == "2026-06-30"
+
+
+class _StubRepo:
+    """只实现覆盖检查所需的最小仓储接口。"""
+
+    def resolve_asset_type(self, symbol: str) -> str:
+        return "stock"
+
+    def get_daily_asset(self, asset_type: str, symbol: str, start, end):
+        import polars as pl
+
+        return pl.DataFrame({"symbol": [symbol] * 3, "date": ["2026-09-22", "2026-09-23", "2026-09-24"]})
+
+
+def test_check_data_coverage_symbol_lagging(tmp_path: Path) -> None:
+    _make_partitions(tmp_path, "kline_daily", ["2026-09-26"])
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path, repo=_StubRepo())
+
+    result = assistant_tools._check_data_coverage({"symbol": "600519.SH"}, ctx)
+
+    sym = result["symbol"]
+    assert sym["symbol"] == "600519.SH"
+    assert sym["latest_daily"] == "2026-09-24"
+    assert sym["daily_missing"] is True
+    assert any("600519.SH 本地日线缺失" in issue for issue in result["issues"])
+
+
+async def test_sync_data_pipeline_reuses_shared_trigger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """sync_data 必须走数据页同一条触发路径(单飞语义由该路径保证)。"""
+    from app.api import kline as kline_module
+    from app.api import pipeline as pipeline_module
+
+    triggered: list[dict] = []
+
+    async def fake_pipeline(repo, capset, quote_service=None):
+        triggered.append({"kind": "pipeline"})
+        return {"job_id": "job_p1", "reused": False}
+
+    async def fake_minute(repo, capset, *, override_days=None, extend_flag=None):
+        triggered.append({"kind": "minute", "days": override_days, "extend": extend_flag})
+        return {"status": "started", "job_id": "job_m1"}
+
+    monkeypatch.setattr(pipeline_module, "trigger_pipeline_job", fake_pipeline)
+    monkeypatch.setattr(kline_module, "trigger_minute_sync", fake_minute)
+    ctx = assistant_tools.ToolContext.build(
+        data_dir=tmp_path, repo=object(), capabilities=object(),
+    )
+
+    payload = await assistant_tools._sync_data({"kind": "pipeline"}, ctx)
+    assert payload["started"] is True and payload["job_id"] == "job_p1"
+
+    payload = await assistant_tools._sync_data({"kind": "minute_extend", "days": 500}, ctx)
+    assert payload["job_id"] == "job_m1"
+    assert triggered[1]["days"] == 500 and triggered[1]["extend"] is True
+    # days 超上限被钳制
+    await assistant_tools._sync_data({"kind": "minute_extend", "days": 9999}, ctx)
+    assert triggered[2]["days"] == 1095
+
+
+class _StubFinScheduler:
+    def __init__(self) -> None:
+        self.calls: list[str | None] = []
+        self.is_syncing = True
+        self.last_sync = {"metrics": "2026-09-26T10:00:00"}
+
+    def trigger(self, table: str | None = None) -> dict:
+        self.calls.append(table)
+        return {"started": 1}
+
+
+async def test_sync_data_financials_and_validation(tmp_path: Path) -> None:
+    fs = _StubFinScheduler()
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path, financial_scheduler=fs)
+
+    payload = await assistant_tools._sync_data({"kind": "financials", "table": "metrics"}, ctx)
+    assert payload["started"] is True and payload["table"] == "metrics"
+    assert fs.calls == ["metrics"]
+
+    bad = await assistant_tools.execute_assistant_tool("sync_data", {"kind": "nope"}, ctx)
+    assert bad["ok"] is False and "kind" in bad["error"]
+
+    bad_table = await assistant_tools.execute_assistant_tool(
+        "sync_data", {"kind": "financials", "table": "nope"}, ctx)
+    assert bad_table["ok"] is False and "table" in bad_table["error"]
+
+
+async def test_sync_data_gated_as_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """sync_data 属于动作工具: 拒绝后不得触发任何同步。"""
+    from app.api import pipeline as pipeline_module
+
+    async def fail_trigger(*args, **kwargs):
+        raise AssertionError("sync_data must not execute when denied")
+
+    monkeypatch.setattr(pipeline_module, "trigger_pipeline_job", fail_trigger)
+    assert "sync_data" in assistant_actions.ACTION_TOOLS
+
+    executed: list[str] = []
+
+    async def fake_execute(name, args, ctx):
+        executed.append(name)
+        return {"ok": True, "result": {"started": True}}
+
+    events = await _run_chat(
+        monkeypatch,
+        [{"id": "c1", "name": "sync_data", "arguments": '{"kind": "pipeline"}'}],
+        fake_execute,
+        lambda ev: assistant_actions.registry.resolve(ev["call_id"], False),
+    )
+    assert executed == []
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert results[0]["ok"] is False and "拒绝" in results[0]["summary"]
+    confirms = [e for e in events if e["type"] == "action_confirm"]
+    assert confirms[0]["label"] == "数据补全/同步"
+
+
+def test_sync_status_and_summaries(tmp_path: Path) -> None:
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path, financial_scheduler=_StubFinScheduler())
+    status = assistant_tools._get_sync_status({}, ctx)
+    assert status["financial_syncing"] is True
+    assert isinstance(status["recent_jobs"], list)
+
+    assert "数据缺口" in assistant_tools.summarize_tool_result(
+        "check_data_coverage", {"ok": True, "result": {"issues": ["x"]}})
+    assert "无缺口" in assistant_tools.summarize_tool_result(
+        "check_data_coverage", {"ok": True, "result": {"issues": []}})
+    assert "已启动" in assistant_tools.summarize_tool_result(
+        "sync_data", {"ok": True, "result": {"kind": "pipeline", "job_id": "j1", "reused": False}})
