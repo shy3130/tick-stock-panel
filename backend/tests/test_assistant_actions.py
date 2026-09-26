@@ -444,3 +444,78 @@ def test_sync_status_and_summaries(tmp_path: Path) -> None:
         "check_data_coverage", {"ok": True, "result": {"issues": []}})
     assert "已启动" in assistant_tools.summarize_tool_result(
         "sync_data", {"ok": True, "result": {"kind": "pipeline", "job_id": "j1", "reused": False}})
+
+
+# ── 轮次检查点: 到达 _TOOL_ROUND_CHECKPOINT 时询问「继续/停止」 ─────
+
+async def _run_rounds_chat(
+    monkeypatch: pytest.MonkeyPatch,
+    n_rounds: int,
+    on_rounds_confirm,
+    checkpoint: int = 2,
+) -> list[dict[str, Any]]:
+    """每轮都请求一个查询工具, 第 n_rounds+1 轮产出纯文本收尾。"""
+    monkeypatch.setattr(chat_service, "ai_configured", lambda: True)
+    monkeypatch.setattr(chat_service, "is_codex_cli_provider", lambda provider=None: False)
+    monkeypatch.setattr(chat_service, "_TOOL_ROUND_CHECKPOINT", checkpoint)
+    script = [
+        {"tool_calls": [{"id": f"c{i}", "name": "get_indices", "arguments": "{}"}]}
+        for i in range(n_rounds)
+    ]
+    script.append({"text_pieces": ["完成"]})
+    monkeypatch.setattr(chat_service, "stream_openai_round", _script_round(script))
+
+    async def fake_execute(name: str, args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+        return {"ok": True, "result": {"rows": []}}
+
+    monkeypatch.setattr(assistant_tools, "execute_assistant_tool", fake_execute)
+    events: list[dict[str, Any]] = []
+    async for line in chat_service.chat_stream(history=[{"role": "user", "content": "跑"}]):
+        event = json.loads(line)
+        events.append(event)
+        if event.get("type") == "rounds_confirm":
+            await on_rounds_confirm(event)
+    return events
+
+
+async def test_rounds_checkpoint_continue_resets_and_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = await _run_rounds_chat(
+        monkeypatch, 2,
+        lambda ev: assistant_actions.registry.resolve(ev["call_id"], True),
+    )
+    confirms = [e for e in events if e["type"] == "rounds_confirm"]
+    assert len(confirms) == 1 and confirms[0]["reached"] == 2 and confirms[0]["expires_in"] > 0
+    # 继续后: 两轮工具都执行(tool_call 的 call_id 由后端重新生成), 最终正常收尾
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert len(results) == 2 and all(r["ok"] for r in results)
+    assert any(e["type"] == "delta" for e in events)
+    assert events[-1]["type"] == "done"
+
+
+async def test_rounds_checkpoint_stop_ends_with_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = await _run_rounds_chat(
+        monkeypatch, 2,
+        lambda ev: assistant_actions.registry.resolve(ev["call_id"], False),
+    )
+    assert [e for e in events if e["type"] == "rounds_confirm"]
+    # 停止: 优雅收尾(notice + done), 只执行了检查点前的第一轮, 不产错误事件
+    notices = [e for e in events if e["type"] == "notice"]
+    assert notices and "停止" in notices[-1]["message"]
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert len(results) == 1
+    assert not any(e["type"] == "error" for e in events)
+    assert events[-1]["type"] == "done"
+
+
+async def test_rounds_checkpoint_timeout_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        assistant_actions, "registry", assistant_actions.PendingRegistry(timeout_s=0.05),
+    )
+
+    async def no_decision(event: dict[str, Any]) -> None:
+        return None
+
+    events = await _run_rounds_chat(monkeypatch, 2, no_decision)
+    assert [e for e in events if e["type"] == "rounds_confirm"]
+    assert any(e["type"] == "notice" and "停止" in e["message"] for e in events)
+    assert not any(e["type"] == "error" for e in events)

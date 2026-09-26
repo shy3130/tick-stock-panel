@@ -107,6 +107,7 @@ const TOOL_LABELS: Record<string, string> = {
   create_signal_strategy: '创建自定义信号',
   add_to_watchlist: '加入自选股',
   check_data_coverage: '检查数据完整性',
+  __rounds: '轮次检查点',
   list_ext_tables: '检索扩展数据表',
   query_ext_table: '读取扩展数据表',
   get_sync_status: '查询同步进度',
@@ -229,11 +230,12 @@ function ToolCallRow({ call }: { call: ToolCallRecord }) {
  */
 function ConfirmCard({ call }: { call: ToolCallRecord }) {
   const confirm = call.confirm!
+  const isRounds = call.name === '__rounds'
   return (
     <div className="mt-1 ml-5 rounded-card border border-border bg-elevated/60 p-2">
       <div className="flex items-center gap-1.5 text-foreground">
         <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-danger" />
-        <span className="font-medium">{confirm.label} · 需要你的确认</span>
+        <span className="font-medium">{confirm.label}{isRounds ? ' · 需要你的选择' : ' · 需要你的确认'}</span>
       </div>
       <div className="mt-1 leading-relaxed text-secondary">{confirm.risk}</div>
       {Object.keys(call.args ?? {}).length > 0 && (
@@ -247,16 +249,18 @@ function ConfirmCard({ call }: { call: ToolCallRecord }) {
           onClick={() => { void decideAction(call.callId, true) }}
           className="cursor-pointer rounded-btn bg-accent/15 px-2.5 py-1 font-medium text-accent transition-colors duration-150 ease-smooth hover:bg-accent/25"
         >
-          确认执行
+          {isRounds ? '继续' : '确认执行'}
         </button>
         <button
           type="button"
           onClick={() => { void decideAction(call.callId, false) }}
           className="cursor-pointer rounded-btn px-2.5 py-1 text-secondary transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground"
         >
-          取消
+          {isRounds ? '停止' : '取消'}
         </button>
-        <span className="text-[10px] text-muted">120 秒内未确认将自动取消</span>
+        <span className="text-[10px] text-muted">
+          {isRounds ? '120 秒内未选择将自动停止' : '120 秒内未确认将自动取消'}
+        </span>
       </div>
     </div>
   )

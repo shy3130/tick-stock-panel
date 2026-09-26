@@ -46,6 +46,7 @@ export type AssistantEvent =
   | { type: 'tool_call'; call_id: string; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; call_id: string; name: string; ok: boolean; summary: string; elapsed_ms: number; charts?: AssistantChart[] }
   | { type: 'action_confirm'; call_id: string; name: string; label: string; risk: string; expires_in: number }
+  | { type: 'rounds_confirm'; call_id: string; reached: number; expires_in: number }
   | { type: 'delta'; content: string }
   | { type: 'error'; kind: string; message: string; hint?: string }
   | { type: 'done' }

@@ -240,6 +240,27 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
           : m),
       }))
       break
+    case 'rounds_confirm':
+      // 轮次检查点: 以合成足迹记录承载「继续/停止」卡, 决策走同一端点。
+      patchActiveSession(session => ({
+        ...session,
+        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+          ? {
+              ...m,
+              calls: [...m.calls, {
+                callId: event.call_id,
+                name: '__rounds',
+                args: { reached: event.reached },
+                status: 'awaiting' as ToolCallStatus,
+                confirm: {
+                  label: `已连续 ${event.reached} 轮工具调用仍未完成`,
+                  risk: '继续将再运行一个周期(至多再 100 轮), 消耗更多时间与 token; 停止则保留已生成内容。',
+                },
+              }],
+            }
+          : m),
+      }))
+      break
     case 'delta':
       // 逐字流式高频到达: 只更新内存态, 由生成结束时的 setState({sending:false}) 统一落盘。
       patchActiveSession(session => ({
@@ -254,6 +275,15 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
       break
     case 'notice':
       appendMessage({ id: uid(), role: 'notice', content: event.message, ts: Date.now() })
+      break
+    case 'done':
+      // 流结束: 仍处于 awaiting 的确认(后端超时未执行)收敛为已取消, 卡片不再悬挂。
+      patchActiveSession(session => ({
+        ...session,
+        messages: session.messages.map(m => m.role === 'footprint'
+          ? { ...m, calls: m.calls.map(c => (c.status === 'awaiting' ? { ...c, status: 'denied' as ToolCallStatus } : c)) }
+          : m),
+      }))
       break
     default:
       break
