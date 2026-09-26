@@ -72,6 +72,11 @@ class HealthWatchdog:
                     asyncio.to_thread(self._probe), timeout=self._probe_timeout_s
                 )
                 self._consecutive_failures = 0
+            except asyncio.CancelledError:
+                # 取消必须穿透: stop() 靠 task.cancel() 结束本循环, 若被下面的
+                # BaseException 分支吞掉, 取消会被误计为一次"探测失败"且循环
+                # 继续运行 — stop() 的 await self._task 永久等待 (关闭死锁)。
+                raise
             except BaseException as exc:  # 探测任何异常都算失败 (含 to_thread 超时)
                 self._consecutive_failures += 1
                 logger.error(
