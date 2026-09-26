@@ -654,6 +654,16 @@ def _run_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     strategy_id = str(args.get("strategy_id") or "").strip()
     if not strategy_id:
         raise ValueError("strategy_id 不能为空, 可先用 list_strategies 查看。")
+    if not ctx.engine.has(strategy_id):
+        # 与 run_backtest 同口径: 附带可用 id, 模型一次即可自行修正
+        try:
+            available = ", ".join(
+                str(s.get("id")) for s in ctx.engine.list_strategies()[:12] if s.get("id")
+            )
+        except Exception:  # 列举失败不影响错误本身
+            available = ""
+        hint = f"; 可用策略: {available}" if available else "; 可先用 list_strategies 查询"
+        raise ValueError(f"策略 {strategy_id} 不存在{hint}")
     svc = ScreenerService(repo)
     as_of = svc.latest_date()
     if as_of is None:
