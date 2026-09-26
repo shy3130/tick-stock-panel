@@ -16,19 +16,7 @@ import {
   listZhVoices, previewVoice, activateVoice, getCurrentVoiceURI,
 } from '@/lib/voiceBroadcast'
 import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
-
-// 检查更新的目标仓库 (Release 清单来源)
-const UPDATE_REPO = 'shy3130/tickflow-stock-panel'
-
-/** 语义版本比较: a<b → -1, 相等 → 0, a>b → 1; 无法解析按 0.0.0 处理 */
-function compareVersion(a: string, b: string): number {
-  const parse = (v: string) => (v.trim().replace(/^v/i, '').match(/\d+/g) ?? []).slice(0, 3).map(Number)
-  const [a1 = 0, a2 = 0, a3 = 0] = parse(a)
-  const [b1 = 0, b2 = 0, b3 = 0] = parse(b)
-  if (a1 !== b1) return Math.sign(a1 - b1)
-  if (a2 !== b2) return Math.sign(a2 - b2)
-  return Math.sign(a3 - b3)
-}
+import { useUpdateCheck } from '@/lib/updateCheck'
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
@@ -40,38 +28,12 @@ export function SettingsSystemPanel() {
   const [extTpl, setExtTpl] = useState(() => loadStockExternalTemplate())
   const [clearing, setClearing] = useState(false)
 
-  // ===== 检查更新 =====
-  // 优先 api.github.com (官方带 CORS, 浏览器可直连; 未认证限额 60 次/时, 手动触发足够);
-  // latest.json 清单 (release.yml 产物) 作兜底 — API 限流或字段变动时仍可取到版本号。
-  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'latest' | 'found' | 'error'>('idle')
-  const [updateInfo, setUpdateInfo] = useState<{ latest: string; url: string } | null>(null)
-  const checkUpdate = useCallback(async () => {
-    const current = (versionData?.version ?? '').trim()
-    setUpdateState('checking')
-    try {
-      let latest = ''
-      let url = `https://github.com/${UPDATE_REPO}/releases/latest`
-      const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { cache: 'no-store' })
-      if (r.ok) {
-        const rel = await r.json()
-        latest = String(rel.tag_name ?? '')
-        url = rel.html_url || url
-      }
-      if (!latest) {
-        const m = await fetch(`https://github.com/${UPDATE_REPO}/releases/latest/download/latest.json`, { cache: 'no-store' })
-        if (m.ok) {
-          const manifest = await m.json()
-          latest = String(manifest.tag ?? '')
-          url = manifest.notes_url || url
-        }
-      }
-      if (!latest) throw new Error('no release info')
-      setUpdateInfo({ latest, url })
-      setUpdateState(compareVersion(current, latest) < 0 ? 'found' : 'latest')
-    } catch {
-      setUpdateState('error')
-    }
-  }, [versionData?.version])
+  // ===== 检查更新 (共享单例 store: 与侧栏左下角 NEW 徽标同源, 手动检查绕过缓存) =====
+  const {
+    status: updateState,
+    info: updateInfo,
+    check: checkUpdate,
+  } = useUpdateCheck()
   const [toastEnabled, setToastEnabled] = useState(() => {
     try { return localStorage.getItem('alert_toast_enabled') !== '0' } catch { return true }
   })

@@ -16,6 +16,7 @@ import {
   useQuoteStatus,
   useVersion,
 } from '@/lib/useSharedQueries'
+import { useUpdateCheck } from '@/lib/updateCheck'
 import {
   useToggleRealtimeQuotes,
 } from '@/lib/useSharedMutations'
@@ -354,6 +355,9 @@ export function Layout() {
   const { data: settingsState } = useSettings()
   const { data: matrix } = useCapabilityMatrix()
   const { data: versionData } = useVersion()
+  // 更新检查 (单例 store): 启动静默查一次 GitHub Releases, 供左下角版本号徽标
+  const update = useUpdateCheck()
+  const hasUpdate = update.status === 'found'
   const { data: prefs } = usePreferences()
   // 数据源列表 (用于实时行情状态显示当前数据源名称)
   const { data: dataSources } = useQuery({
@@ -1017,7 +1021,35 @@ export function Layout() {
                   {!railMode && version && (
                     <span className="ml-auto font-mono text-[10px] text-muted/50 select-none shrink-0">
                       {version}
+                      {hasUpdate && update.info && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          title={`发现新版本 ${update.info.latest}，点击前往检查更新`}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            navigate('/settings?tab=system')
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              navigate('/settings?tab=system')
+                            }
+                          }}
+                          className="ml-1.5 inline-flex cursor-pointer items-center rounded-full bg-accent px-1.5 py-px text-[9px] font-semibold leading-none text-white transition-colors hover:bg-accent/90"
+                        >
+                          NEW
+                        </span>
+                      )}
                     </span>
+                  )}
+                  {railMode && hasUpdate && (
+                    <span
+                      className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_rgba(59,130,246,0.8)]"
+                      title="发现新版本"
+                    />
                   )}
                 </>
               )}
