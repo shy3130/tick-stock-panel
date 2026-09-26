@@ -231,23 +231,24 @@ APScheduler 默认 15:35 CST 自动:拉日 K → 重算 enriched 表 → 跑监�
 
 ## 🌐 开放接口(Open API · Tier A)
 
-外部程序(自己的看板/脚本/量化服务)无需面板密码,凭 **API Token** 直接调用核心只读与任务接口 —— 这是「核心能力开放」的第一层出口。总体设计与后续 Tier 见 [open-platform-plan.md](./open-platform-plan.md)。
+外部程序(自己的看板/脚本/量化服务)无需面板密码,凭 **API Token** 直接调用核心读取、写入与任务接口 —— 「核心能力开放」的出口层。总体设计与后续 Tier 见 [open-platform-plan.md](./open-platform-plan.md),可运行示例见 [examples/open-api](../examples/open-api/README.md)。
 
 ### Token 管理
 
 **设置 → 开放接口**: 新建 Token(名称 + 权限勾选),明文 `tsp_` 前缀只显示一次;可随时吊销,吊销立即生效。服务端只存 SHA-256 哈希(`data/user_data/api_tokens.json`,权限 0600)。
 
-### 五个权限(scope)
+### 六个权限(scope)
 
 | scope | 能力 |
 | :--- | :--- |
 | `read:market` | 标的搜索 / 日K / 分时 / 指数 / 市场快照 (默认勾选) |
 | `read:ext` | 扩展表 rows / values / schema 查询 |
+| `write:ext` | 向**已配置的**扩展表程序化写入行数据 (`POST /api/ext-data/{id}/ingest`) |
 | `read:analysis` | 策略清单与结果 / 回测报告 / 市场环境 / 告警 |
 | `run:backtest` | 提交回测 / 选股 / 因子检验任务 |
 | `paper:trade` | 模拟盘读取与下单/撤单 (最高敏感) |
 
-管理接口(数据同步 / 扩展表写入 / 设置)**永不开放给 Token**;数据同步等写操作只能通过面板密码会话进行。
+管理面**永不开放给 Token**: 数据同步、扩展表的**结构**配置(建表/字段/拉取/上传)、设置等只能通过面板密码会话。`write:ext` 只写行数据 —— 外部程序能把数据喂进来,但不能改写表结构;写入的数据会进入策略/回测数据面,谨慎授予。
 
 ### 调用方式
 
@@ -261,13 +262,30 @@ curl -H "Authorization: Bearer tsp_xxxx" \
 - **错误语义**: 401 Token 无效或已吊销 / 403 权限不足或该接口未开放 / 429 超限;
 - **CORS 全开**(自托管场景),浏览器直连亦可。
 
+### 事件流(SSE,实时推送)
+
+EventSource 无法携带 Authorization 头,外部程序走**短期票据**两步接入:
+
+```bash
+# ① Bearer 换一次性票据 (60 秒, 任意 scope 的 Token 皆可)
+curl -X POST -H "Authorization: Bearer tsp_xxxx" http://localhost:8398/api/events/ticket
+# → {"ticket":"tse_xxx","expires_in":60,"stream":"/api/events?ticket=tse_xxx"}
+
+# ② 订阅事件流 (浏览器: new EventStream(stream); 脚本: 逐行读)
+curl -N "http://localhost:8398/api/events?ticket=tse_xxx"
+```
+
+- 当前事件源:**告警触发**(`event: alert`,需票据含 `read:analysis`);心跳 15s;
+- 票据**一次性**且短时效 —— 泄漏最多损失一次事件订阅,不能调任何 REST 端点;断线重连需重新换票;
+- 事件总线是进程内广播(`app/services/events.py`),新的核心事件源在域模块里 `bus.publish(...)` 即可挂上。
+
 ### 契约文档(机器可读)
 
 ```bash
 curl "http://localhost:8398/api/openapi.json?tier=a"
 ```
 
-返回按网关规则表过滤后的 OpenAPI 3 规范(`x-tier: a`)—— 哪些路径对外开放、需要什么 scope,**规则表是唯一契约源**,生成代码 / Postman 导入即用。
+返回按网关规则表过滤后的 OpenAPI 3 规范(`x-tier: a`)—— 哪些路径对外开放、需要什么 scope,**规则表是唯一契约源**,生成代码 / Postman 导入即用。开放面有**契约快照测试**守护(`test_openapi_contract.py`):增删开放端点必须显式更新快照,CI 会拦下无意识的契约变更。
 
 ### 桌面客户端版本清单
 

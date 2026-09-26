@@ -78,11 +78,12 @@
 | `read:market` | 行情/指数/标的搜索/分时/日K 读取 | ✅ 新 Token 默认 |
 | `read:analysis` | 策略列表与运行结果、回测报告与候选、市场环境、监控事件读取 | ❌ 显式勾选 |
 | `read:ext` | 扩展数据 rows/values/schema 读取 | ❌ 显式勾选 |
+| `write:ext` | 扩展表**行数据**程序化写入（`POST /api/ext-data/{id}/ingest`, 0.3.2 增） | ❌ 显式勾选 |
 | `run:backtest` | 触发回测/挖掘任务（受重活并发器约束） | ❌ 显式勾选 |
 | `paper:trade` | 模拟盘下单/撤单/建户（写操作, 最高敏感级） | ❌ 显式勾选 |
 | `admin` | 管理接口 | ❌ **永不签发给 Token**, 仅 UI 会话可用 |
 
-写敏感端点（扩展表 upload/ingest/backfill/delete、数据同步、设置）一律不进 Token scope —— 外部只读 + 指定的两类写（回测任务、模拟盘）。
+结构管理端点（扩展表建表/字段/上传/拉取/回补/删除、数据同步、设置）一律不进 Token scope —— 外部可读 + 三类受控写（扩展表**行数据**、回测任务、模拟盘）; 行数据写入复用管理端同一校验与落盘路径, 表结构不可被外部改写。
 
 ### 4.3 限流与 CORS
 
@@ -170,8 +171,8 @@
 ### V2 契约化 + 示例仓库
 
 - ✅ Tier A 已含策略/回测/监控事件/模拟盘; `GET /api/openapi.json?tier=a` 契约视图（规则表单源）。
-- 组织下建 `api-examples` 示例仓库: 「拉行情 → 跑策略 → 取结果 → 模拟盘跟单」三个可运行脚本 + README。
-- SSE 短期票据（query token）方案落地。
+- ✅ 示例脚本（0.3.2）: `examples/open-api/` 四个零依赖可运行示例（行情 / 写入扩展数据 / 回测 / 事件流）+ README; 独立示例仓库待有真实用户再拆。
+- ✅ SSE 短期票据落地（0.3.2）: `POST /api/events/ticket` 换 60s 一次性票据 → `GET /api/events?ticket=…`（`services/event_tickets.py` + `api/events.py`, 事件源已接告警触发）。
 
 ### V3 钩子契约 + 模拟盘拆分试点
 

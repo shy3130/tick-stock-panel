@@ -55,6 +55,19 @@ _RULES: list[tuple[str, str, str]] = [
     ("POST", "/api/backtest/strategy/run", "run:backtest"),
     # paper:trade — 模拟盘全部 (读+写一体, 单一 scope 简化心智)
     ("*", "/api/paper", "paper:trade"),
+    # events — 换取 SSE 短期票据: 任意有效 Token 即可 (票据只继承已有 scope,
+    # 不放大权限, 故此处用 "*" 表示"仅需认证", 不做 scope 校验)
+    ("POST", "/api/events/ticket", "*"),
+    # SSE 流本体: 网关只做标记 (契约可见); 真正凭证是 query 里的票据,
+    # 由端点内校验 (EventSource 带不了 Authorization 头)
+    ("GET", "/api/events", "*"),
+]
+
+# 后缀规则表 — 路径中段含动态段 (如 config_id), 前缀表表达不了"以 X 结尾"语义。
+# 限定在 /api/ext-data/ 下, 防止误伤其他路由的巧合后缀。
+_SUFFIX_RULES: list[tuple[str, str, str]] = [
+    # write:ext — 程序化行数据写入 (结构配置/上传/拉取等管理端点仍不开放)
+    ("POST", "/ingest", "write:ext"),
 ]
 
 _RATE_WINDOW_S = 60.0
@@ -70,13 +83,20 @@ def rate_limit_per_min() -> int:
 
 
 def required_scope(method: str, path: str) -> str | None:
-    """路径+方法 → 所需 scope; None = 该端点不对外开放。"""
+    """路径+方法 → 所需 scope; None = 该端点不对外开放。
+
+    返回 "*" 表示仅需有效 Token (不做特定 scope 校验)。
+    """
     for m, prefix, scope in _RULES:
         if (m == "*" or m == method) and (path == prefix or path.startswith(prefix.rstrip("/") + "/")):
             # read:ext 域内的拉取 Key 状态子路径属管理面 (脱敏也不外露)
             if scope == "read:ext" and path.endswith("/api-key"):
                 return None
             return scope
+    if path.startswith("/api/ext-data/"):
+        for m, suffix, scope in _SUFFIX_RULES:
+            if (m == "*" or m == method) and path.endswith(suffix):
+                return scope
     return None
 
 
@@ -112,7 +132,9 @@ def evaluate(data_dir: Path, method: str, path: str, plaintext: str) -> dict:
             "detail": f"该端点 ({method} {path}) 未对外开放; 开放清单见 /api/openapi.json?tier=a",
             "headers": {},
         }
-    if scope not in record.get("scopes", []):
+    if scope == "*":
+        pass  # 仅需有效 Token (票据签发): 已通过认证, 不校验具体 scope
+    elif scope not in record.get("scopes", []):
         return {
             "status": 403,
             "detail": f"Token 缺少所需 scope: {scope} (持有: {record.get('scopes', [])})",

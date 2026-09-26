@@ -47,6 +47,7 @@ def append(data_dir: Path, event: dict) -> None:
         if _write_count >= PRUNE_EVERY:
             _write_count = 0
             _prune_locked(p)
+    _publish_events([event])
 
 
 def append_many(data_dir: Path, events: list[dict]) -> None:
@@ -63,6 +64,18 @@ def append_many(data_dir: Path, events: list[dict]) -> None:
         if _write_count >= PRUNE_EVERY:
             _write_count = 0
             _prune_locked(p)
+    _publish_events(events)
+
+
+def _publish_events(events: list[dict]) -> None:
+    """落盘成功后广播到事件总线 (SSE 出口); 广播失败不影响落盘。"""
+    try:
+        from app.services.events import bus
+
+        for ev in events:
+            bus.publish("alert", ev, scope="read:analysis")
+    except Exception:  # noqa: BLE001 — 事件通道绝不反噬主流程
+        logger.debug("alert 事件广播失败 (忽略)", exc_info=True)
 
 
 def list_recent(

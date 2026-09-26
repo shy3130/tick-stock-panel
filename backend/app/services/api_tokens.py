@@ -25,7 +25,14 @@ from app.services.fs_utils import atomic_write_text
 logger = logging.getLogger(__name__)
 
 # 对外开放的 scope 全集 (admin 刻意不存在 — 管理面永不开放给 Token)
-SCOPES = ("read:market", "read:ext", "read:analysis", "run:backtest", "paper:trade")
+SCOPES = (
+    "read:market",
+    "read:ext",
+    "write:ext",
+    "read:analysis",
+    "run:backtest",
+    "paper:trade",
+)
 
 TOKEN_PREFIX = "tsp_"
 
