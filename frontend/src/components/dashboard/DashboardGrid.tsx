@@ -110,8 +110,10 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
               <div
                 key={it.i}
                 className={cn(
+                  // overflow-hidden 根除内容溢出压盖相邻组件(卡片内容自然高度可能大于格子);
                   editing && 'cursor-grab select-none rounded-card ring-1 ring-accent/30 hover:ring-accent/60 active:cursor-grabbing',
                 )}
+                style={{ overflow: 'hidden' }}
               >
                 {editing && (
                   <div className="absolute inset-x-0 top-0 z-10 flex h-6 items-center justify-between rounded-t-card bg-surface/95 pl-2 pr-5 text-[10px] text-secondary shadow-sm">
@@ -129,8 +131,9 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
                     </button>
                   </div>
                 )}
-                {/* 编辑态阻断组件内部交互(点击/悬停/iframe), 拖拽由外层网格项接管 */}
-                <div className={cn(editing && 'pointer-events-none')}>{renderWidget(it)}</div>
+                {/* 编辑态阻断组件内部交互(点击/悬停/iframe), 拖拽由外层网格项接管;
+                    卡片撑满格子(h-full), 内容超出格子时在本组件边界内裁切 */}
+                <div className={cn('h-full [&>div]:h-full', editing && 'pointer-events-none')}>{renderWidget(it)}</div>
               </div>
             )
           })}

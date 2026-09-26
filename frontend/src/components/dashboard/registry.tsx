@@ -260,19 +260,20 @@ export function minSizeOf(t: WidgetType): { w: number; h: number } {
   return { w: d?.minW ?? 2, h: d?.minH ?? 4 }
 }
 
-/** 默认布局 — 复刻抽离前排布: 顶部通栏 → 三列中段 → 双热度+梯队 → 左侧四榜单 + 右侧监控(原 20rem 右栏) */
+/** 默认布局 — 复刻抽离前排布: 顶部通栏 → 三列中段 → 双热度+梯队 → 左侧四榜单 + 右侧监控(原 20rem 右栏)。
+ * 高度按实测内容校准(溢出会在格子内裁切): 热度 9 行(内容 333px)、榜单 13 行(462px)、监控 14 行(520px)。 */
 export const DEFAULT_LAYOUT: DashboardItem[] = [
   { i: 'indices', t: 'indices', x: 0, y: 0, w: 12, h: 2 },
   { i: 'kpi', t: 'kpi', x: 0, y: 2, w: 12, h: 2 },
   { i: 'distribution', t: 'distribution', x: 0, y: 4, w: 4, h: 8 },
   { i: 'radar', t: 'radar', x: 4, y: 4, w: 4, h: 8 },
   { i: 'trend', t: 'trend', x: 8, y: 4, w: 4, h: 8 },
-  { i: 'concept-rank', t: 'concept-rank', x: 0, y: 12, w: 4, h: 8 },
-  { i: 'industry-rank', t: 'industry-rank', x: 4, y: 12, w: 4, h: 8 },
+  { i: 'concept-rank', t: 'concept-rank', x: 0, y: 12, w: 4, h: 9 },
+  { i: 'industry-rank', t: 'industry-rank', x: 4, y: 12, w: 4, h: 9 },
   { i: 'ladder', t: 'ladder', x: 8, y: 12, w: 4, h: 8 },
-  { i: 'gainers', t: 'gainers', x: 0, y: 20, w: 2, h: 10 },
-  { i: 'losers', t: 'losers', x: 2, y: 20, w: 2, h: 10 },
-  { i: 'turnover', t: 'turnover', x: 4, y: 20, w: 2, h: 10 },
-  { i: 'activity', t: 'activity', x: 6, y: 20, w: 2, h: 10 },
-  { i: 'monitor', t: 'monitor', x: 8, y: 20, w: 4, h: 10 },
+  { i: 'gainers', t: 'gainers', x: 0, y: 21, w: 2, h: 13 },
+  { i: 'losers', t: 'losers', x: 2, y: 21, w: 2, h: 13 },
+  { i: 'turnover', t: 'turnover', x: 4, y: 21, w: 2, h: 13 },
+  { i: 'activity', t: 'activity', x: 6, y: 21, w: 2, h: 13 },
+  { i: 'monitor', t: 'monitor', x: 8, y: 21, w: 4, h: 14 },
 ]
