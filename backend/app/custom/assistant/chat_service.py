@@ -34,7 +34,18 @@ _MAX_HISTORY_MESSAGES = 16
 
 # 工具轮次检查点(非硬限): 到达后弹「是否继续」卡(与动作确认卡同机制),
 # 继续则重置计数再跑一个周期, 停止或超时优雅收尾 — 防失控展开的同时不掐断复杂编排。
+# 实际值在设置页 AI 配置里可调(ai_round_checkpoint, 0=不检查), 此处仅兜底默认。
 _TOOL_ROUND_CHECKPOINT = 100
+
+
+def _round_checkpoint() -> int:
+    """本次对话的轮次检查点(0=不检查)。"""
+    from app.services.ai_provider import current_ai_round_checkpoint
+
+    try:
+        return max(0, int(current_ai_round_checkpoint()))
+    except Exception:  # 配置异常时退回默认, 不因配置问题掐断对话
+        return _TOOL_ROUND_CHECKPOINT
 
 _SETTINGS_HINT = "/settings?tab=ai"
 
@@ -234,6 +245,7 @@ async def chat_stream(
             _guard_input_budget(req_messages)
             text_seen = False
             tool_rounds = 0
+            round_checkpoint = _round_checkpoint()
             while True:
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
@@ -250,7 +262,7 @@ async def chat_stream(
                     return
 
                 tool_rounds += 1
-                if tool_rounds >= _TOOL_ROUND_CHECKPOINT:
+                if round_checkpoint and tool_rounds >= round_checkpoint:
                     # 轮次检查点: 复用动作确认闸门(PendingRegistry + 决策端点)。
                     # 批准 → 重置计数继续; 拒绝/超时 → 保留已生成内容, 优雅收尾。
                     checkpoint_id = assistant_actions.new_call_id()

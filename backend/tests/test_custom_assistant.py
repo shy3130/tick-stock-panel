@@ -176,7 +176,7 @@ async def test_chat_stream_rounds_checkpoint_prompts_and_stops(monkeypatch: pyte
     monkeypatch.setattr(chat_service, "ai_configured", lambda: True)
     monkeypatch.setattr(chat_service, "is_codex_cli_provider", lambda provider=None: False)
     monkeypatch.setattr(chat_service, "stream_openai_round", _stream_script(script))
-    monkeypatch.setattr(chat_service, "_TOOL_ROUND_CHECKPOINT", 2)
+    monkeypatch.setattr(chat_service, "_round_checkpoint", lambda: 2)
     # list_factors 走核心目录且无需引擎; 简化起见用本地工具拦截执行。
     monkeypatch.setattr(
         assistant_tools,

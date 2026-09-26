@@ -20,6 +20,12 @@ const toPositiveInt = (v: string) => {
   return Number.isInteger(n) && n > 0 ? n : undefined
 }
 
+// 允许 0 (0=关闭): 轮次检查点等"0 有语义"的数值输入
+const toIntAllowZero = (v: string) => {
+  const n = parseInt(v, 10)
+  return Number.isInteger(n) && n >= 0 ? n : undefined
+}
+
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai'
 const OPENAI_COMPAT_PROVIDER = 'openai_compat'
@@ -88,6 +94,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
   const [userAgent, setUserAgent] = useState('')
   const [maxOutputTokens, setMaxOutputTokens] = useState('')
   const [contextWindow, setContextWindow] = useState('')
+  const [roundCheckpoint, setRoundCheckpoint] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [saved, setSaved] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -167,6 +174,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     setUserAgent(ua)
     setMaxOutputTokens(String(s?.ai_max_output_tokens ?? 16384))
     setContextWindow(String(s?.ai_context_window ?? 128000))
+    setRoundCheckpoint(String(s?.ai_round_checkpoint ?? 100))
   }, [s])
 
   const payload = () => ({
@@ -180,6 +188,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     user_agent: customUa ? userAgent : '',
     max_output_tokens: toPositiveInt(maxOutputTokens),
     context_window: toPositiveInt(contextWindow),
+    round_checkpoint: toIntAllowZero(roundCheckpoint),
   })
 
   const save = useMutation({
@@ -200,6 +209,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
         ai_max_output_tokens: result.ai_max_output_tokens ?? toPositiveInt(maxOutputTokens),
         ai_context_window: result.ai_context_window ?? toPositiveInt(contextWindow),
+        ai_round_checkpoint: result.ai_round_checkpoint ?? toIntAllowZero(roundCheckpoint),
         ...(apiKey ? {
           has_ai_key: true,
           ai_api_key_masked: `${apiKey.slice(0, 4)}......${apiKey.slice(-4)}`,
@@ -229,6 +239,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       }
       setMaxOutputTokens('16384')
       setContextWindow('128000')
+      setRoundCheckpoint('100')
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
@@ -546,6 +557,9 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
               </Field>
               <Field label="上下文窗口 (输入上限)" hint="输入估算超出此窗口时会报错并提示调大; 默认 128000">
                 <input type="number" min={1} value={contextWindow} onChange={e => setContextWindow(e.target.value)} placeholder="128000" className={INPUT_CLS} />
+              </Field>
+              <Field label="助手工具轮数检查点" hint="AI 助手连续 N 轮工具调用未完成时询问是否继续; 0 = 不检查(无限轮); 最小 5, 默认 100">
+                <input type="number" min={0} value={roundCheckpoint} onChange={e => setRoundCheckpoint(e.target.value)} placeholder="100" className={INPUT_CLS} />
               </Field>
             </div>
           </div>

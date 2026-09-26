@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     # 上下文 128000 对齐当前主流模型底线 (GPT/Claude/GLM/DeepSeek/Kimi 均 ≥128k); 可在 AI 设置里调整。
     ai_max_output_tokens: int = 16384
     ai_context_window: int = 128000
+    # AI 助手工具轮次检查点: 连续 N 轮工具调用未完成时弹「继续/停止」卡; 0=不检查。
+    ai_round_checkpoint: int = 100
 
     # Server
     host: str = "0.0.0.0"

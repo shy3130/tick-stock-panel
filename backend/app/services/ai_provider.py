@@ -161,6 +161,11 @@ def current_ai_context_window() -> int:
     return secrets_store.get_ai_config_int("ai_context_window", settings.ai_context_window)
 
 
+def current_ai_round_checkpoint() -> int:
+    """AI 助手工具轮次检查点 (0=不检查): secrets.json 优先, 否则 config 默认。"""
+    return secrets_store.get_ai_config_int("ai_round_checkpoint", settings.ai_round_checkpoint)
+
+
 def _resolve_max_tokens(max_tokens: int | None) -> int | None:
     """显式传入的 max_tokens 钳制到配置输出上限; None 保持 None。
 

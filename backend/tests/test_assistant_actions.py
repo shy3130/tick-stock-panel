@@ -457,7 +457,7 @@ async def _run_rounds_chat(
     """每轮都请求一个查询工具, 第 n_rounds+1 轮产出纯文本收尾。"""
     monkeypatch.setattr(chat_service, "ai_configured", lambda: True)
     monkeypatch.setattr(chat_service, "is_codex_cli_provider", lambda provider=None: False)
-    monkeypatch.setattr(chat_service, "_TOOL_ROUND_CHECKPOINT", checkpoint)
+    monkeypatch.setattr(chat_service, "_round_checkpoint", lambda: checkpoint)
     script = [
         {"tool_calls": [{"id": f"c{i}", "name": "get_indices", "arguments": "{}"}]}
         for i in range(n_rounds)
@@ -519,3 +519,16 @@ async def test_rounds_checkpoint_timeout_stops(monkeypatch: pytest.MonkeyPatch) 
     assert [e for e in events if e["type"] == "rounds_confirm"]
     assert any(e["type"] == "notice" and "停止" in e["message"] for e in events)
     assert not any(e["type"] == "error" for e in events)
+
+
+async def test_rounds_checkpoint_zero_disables_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """检查点设为 0 (设置页「不检查」): 任意轮次都不弹卡、不中断。"""
+    async def fail_on_confirm(event: dict[str, Any]) -> None:
+        raise AssertionError("checkpoint=0 不应弹 rounds_confirm")
+
+    events = await _run_rounds_chat(monkeypatch, 3, fail_on_confirm, checkpoint=0)
+    assert not any(e["type"] == "rounds_confirm" for e in events)
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert len(results) == 3
+    assert any(e["type"] == "delta" for e in events)
+    assert events[-1]["type"] == "done"

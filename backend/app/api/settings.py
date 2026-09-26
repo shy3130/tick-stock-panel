@@ -65,6 +65,7 @@ def get_settings() -> dict:
         current_openai_reasoning_effort,
         current_ai_context_window,
         current_ai_max_output_tokens,
+        current_ai_round_checkpoint,
     )
 
     key = secrets_store.get_tickflow_key()
@@ -95,6 +96,7 @@ def get_settings() -> dict:
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
         "ai_max_output_tokens": current_ai_max_output_tokens(),
         "ai_context_window": current_ai_context_window(),
+        "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
 
 
@@ -257,6 +259,7 @@ class AiSettingsIn(BaseModel):
     user_agent: str = ""
     max_output_tokens: int | None = None   # 输出上限, 钳制所有任务的 max_tokens
     context_window: int | None = None      # 输入上下文窗口上限 (约 token)
+    round_checkpoint: int | None = None    # 助手工具轮次检查点; 0=不检查
 
 
 @router.post("/ai")
@@ -275,6 +278,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         current_openai_reasoning_effort,
         current_ai_context_window,
         current_ai_max_output_tokens,
+        current_ai_round_checkpoint,
         normalize_codex_command,
         normalize_codex_model,
         normalize_codex_reasoning_effort,
@@ -326,6 +330,12 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
             raise HTTPException(status_code=400, detail="上下文窗口必须为正整数")
         updates["ai_context_window"] = req.context_window
         settings.ai_context_window = req.context_window
+    if req.round_checkpoint is not None:
+        # 0=关闭检查点(不询问), 正值须 ≥5 防误填 1/2 造成每轮都弹卡
+        if req.round_checkpoint != 0 and req.round_checkpoint < 5:
+            raise HTTPException(status_code=400, detail="轮次检查点须为 0(不检查)或不小于 5 的整数")
+        updates["ai_round_checkpoint"] = req.round_checkpoint
+        settings.ai_round_checkpoint = req.round_checkpoint
 
     if updates:
         secrets_store.save(updates)
@@ -343,6 +353,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ai_configured": ai_configured(provider),
         "ai_max_output_tokens": current_ai_max_output_tokens(),
         "ai_context_window": current_ai_context_window(),
+        "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
 
 
