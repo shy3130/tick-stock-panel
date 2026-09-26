@@ -1,8 +1,11 @@
-"""AI 助手工具层 — 核心工具目录透传 + 面向各页面能力的本地查询工具。
+"""AI 助手工具层 — 核心工具目录透传 + 面向各页面能力的本地查询/动作工具。
 
-设计原则(为项目服务、只读、有界):
-- 每个工具对应一个页面的核心查询能力(行情/自选/看板/指数/板块轮动/市场
+设计原则(为项目服务、有界):
+- 查询工具对应页面核心查询能力(行情/自选/看板/指数/板块轮动/市场
   环境/异动/持仓提醒/信号库/财务/个股分析/因子值/跑策略), 全部只读。
+- 动作工具(create_signal_strategy/add_to_watchlist, 及核心目录的
+  run_backtest)有写副作用或重计算, 由 chat_service 的确认闸门把守
+  (actions.py), 未经用户确认不会执行。
 - 返回体有界: rows 全部带 limit 钳制, 大表(enriched/财务)先 filter 再取
   少量行; 数值统一四舍五入 4 位, 日期转 ISO 字符串, 保证 JSON 可序列化。
 - 未知的工具名回退到核心 services.tool_catalog(因子/策略/数据能力/回测)。
@@ -16,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -49,7 +53,12 @@ QUICK_SUGGESTS: list[dict[str, str]] = [
     {
         "id": "backtest-pick",
         "label": "回测我的策略",
-        "prompt": "先用工具看看我有哪些策略, 然后挑一个回测最近半年, 给出收益、回撤、夏普和胜率的解读。",
+        "prompt": "先用工具看看我有哪些策略, 然后挑一个回测最近半年(执行前请在确认卡上点「确认」), 给出收益、回撤、夏普和胜率的解读。",
+    },
+    {
+        "id": "create-signal",
+        "label": "帮我生成一个信号",
+        "prompt": "帮我在信号库里创建一个「放量站上20日线」的信号: 收盘价高于 ma20、1 日前收盘价不高于 1 日前的 ma20, 且成交量高于 5 日均量的 1.5 倍。先说明条件设计, 我确认后再执行。",
     },
     {
         "id": "stock-analyze",
@@ -275,7 +284,7 @@ def _intraday_chart_payload(
         # 最近交易日, 按服务器本地 date.today() 查分钟分区会永远为空; 无快照日期时按北京日期。
         _, trade_date = ctx.repo.get_enriched_latest_asset(asset_type, refresh=False)
         df = ctx.repo.get_minute(symbol, trade_date or cn_today(), asset_type)
-    except Exception:  # noqa: BLE001  分钟分区缺失/损坏时降级为无图
+    except Exception:
         return None
     if df is None or df.is_empty() or "close" not in df.columns or "datetime" not in df.columns:
         return None
@@ -606,6 +615,105 @@ def _get_factor_values(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     return {"factor": factor, "as_of": _clean_value(as_of), "count": len(rows), "rows": rows}
 
 
+# ----------------------------------------------------------------
+# 动作工具实现 (写操作; 由 chat_service 的确认闸门把守, 未经确认不会到达这里)。
+# ----------------------------------------------------------------
+def _invalidate_custom_signals(data_dir: Path, repo: Any) -> None:
+    """与 api/signals.py 的 _invalidate 同一条失效链, 保证创建后立即可回测。"""
+    from app.indicators.pipeline import invalidate_custom_signals
+    from app.services import strategy_cache
+    from app.strategy import custom_signals
+
+    custom_signals.invalidate_intraday_cache()
+    invalidate_custom_signals()
+    strategy_cache.clear_cache(data_dir)
+    if repo is not None and hasattr(repo, "clear_cache"):
+        repo.clear_cache()
+
+
+_SIGNAL_FIELD_HINT = (
+    "常用字段: close/open/high/low/volume/amount/change_pct/turnover_rate/"
+    "ma5/ma10/ma20/ma30/ma60/ema5-ema60/macd_dif/macd_dea/macd_hist/"
+    "boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/rsi_24/atr_14/"
+    "vol_ma5/vol_ma10/vol_ratio_5d/high_60d/low_60d/momentum_5d-60d/"
+    "annual_vol_20d/consecutive_limit_ups; 右值数字直接写, 字段引用写 'field:字段名'"
+)
+
+
+def _create_signal_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from app.strategy import custom_signals
+
+    if ctx.data_dir is None:
+        raise ValueError("数据目录未就绪。")
+    name = str(args.get("name") or "").strip()
+    kind = str(args.get("kind") or "entry")
+    raw_conditions = args.get("conditions")
+    if not isinstance(raw_conditions, list) or not raw_conditions:
+        raise ValueError("conditions 不能为空, 每条形如 {left, op, right, leftDays?, rightDays?}。")
+    conditions: list[dict[str, Any]] = []
+    for i, cond in enumerate(raw_conditions[:8]):
+        if not isinstance(cond, dict):
+            raise ValueError(f"第 {i + 1} 个条件必须是 {{left, op, right}} 对象。")
+        right = cond.get("right")
+        if isinstance(right, bool) or right is None or str(right).strip() == "":
+            raise ValueError(f"第 {i + 1} 个条件: right 不能为空 (数字或 'field:字段名')。")
+        try:
+            left_days = int(cond.get("leftDays") or 0)
+            right_days = int(cond.get("rightDays") or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"第 {i + 1} 个条件: leftDays/rightDays 必须是整数。") from None
+        conditions.append({
+            "left": str(cond.get("left") or "").strip(),
+            "op": str(cond.get("op") or ""),
+            "right": str(right),
+            "leftDays": left_days,
+            "rightDays": right_days,
+        })
+    # id 由助手生成而非模型给定: 不会覆盖用户已有的同名/同 id 信号
+    sig = {
+        "id": f"csg_a{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "kind": kind,
+        "conditions": conditions,
+        "enabled": True,
+        "timeframe": "daily",
+        "min_bars": 0,
+    }
+    try:
+        custom_signals.validate(sig)
+    except ValueError as exc:
+        raise ValueError(f"{exc}。{_SIGNAL_FIELD_HINT}") from exc
+    custom_signals.save_one(ctx.data_dir, sig)
+    _invalidate_custom_signals(ctx.data_dir, ctx.repo)
+    return {
+        "created": True,
+        "signal": {"id": sig["id"], "name": name, "kind": kind, "conditions": conditions},
+        "note": "已写入信号库并默认启用, 可在「信号库」页面查看/编辑/删除; 创建成功后可让用户在策略里引用。",
+    }
+
+
+def _add_to_watchlist(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from app.services import watchlist as watchlist_service
+
+    symbol = _validate_symbol(args.get("symbol"))
+    note = str(args.get("note") or "").strip()[:80]
+    current = watchlist_service.list_symbols()
+    if symbol in {str(r.get("symbol")) for r in current}:
+        return {
+            "added": False,
+            "symbol": symbol,
+            "total": len(current),
+            "note": f"{symbol} 已在自选列表中, 未重复添加。",
+        }
+    rows = watchlist_service.add(symbol, note=note)
+    return {
+        "added": True,
+        "symbol": symbol,
+        "total": len(rows),
+        "note": f"已把 {symbol} 加入自选列表(当前共 {len(rows)} 只)。",
+    }
+
+
 _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "get_stock_quote": _get_stock_quote,
     "get_stock_daily": _get_stock_daily,
@@ -621,6 +729,8 @@ _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "list_signals": _list_signals,
     "run_strategy": _run_strategy,
     "get_factor_values": _get_factor_values,
+    "create_signal_strategy": _create_signal_strategy,
+    "add_to_watchlist": _add_to_watchlist,
 }
 
 
@@ -748,6 +858,45 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
             },
             ["factor"],
         ),
+        _schema(
+            "create_signal_strategy",
+            "在信号库创建一个自定义信号(动作工具, 须用户在确认卡上确认后才执行)。"
+            "把交易思路翻译成声明式条件: 白名单字段 + 比较运算符, 多条件之间为 AND。"
+            "字段如 close/open/high/low/volume/change_pct/turnover_rate/ma5/ma10/ma20/ma60/"
+            "macd_dif/macd_dea/macd_hist/boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/"
+            "vol_ratio_5d/high_60d/low_60d/momentum_5d 等; 上穿/下穿用天数偏移表达"
+            "(如 close>field:ma20 且 1 日前 close<=field:ma20 即金叉)。",
+            {
+                "name": {"type": "string", "description": "信号名称, 简洁中文 (如 放量突破20日线)"},
+                "kind": {"type": "string", "enum": ["entry", "exit", "both"], "description": "entry=入场信号, exit=出场信号, both=两者"},
+                "conditions": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": "条件列表 (1-8 条, 之间 AND)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "left": {"type": "string", "description": "左字段名 (白名单内)"},
+                            "op": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="], "description": "比较运算符"},
+                            "right": {"type": "string", "description": "数字 (如 1.5) 或字段引用 'field:字段名'"},
+                            "leftDays": {"type": "integer", "description": "左字段取 N 个交易日前 (0-60, 默认 0)"},
+                            "rightDays": {"type": "integer", "description": "右字段取 N 个交易日前 (仅 right 为字段时有效, 默认 0)"},
+                        },
+                        "required": ["left", "op", "right"],
+                    },
+                },
+            },
+            ["name", "kind", "conditions"],
+        ),
+        _schema(
+            "add_to_watchlist",
+            "把一只标的加入用户自选列表(动作工具, 须用户在确认卡上确认后才执行)。",
+            {
+                "symbol": {"type": "string", "description": "证券代码, 如 600519.SH"},
+                "note": {"type": "string", "description": "备注 (可选, ≤80 字)"},
+            },
+            ["symbol"],
+        ),
     ]
 
 
@@ -841,5 +990,10 @@ def summarize_tool_result(name: str, payload: dict[str, Any]) -> str:
         return f"命中 {result.get('total', 0)} 只 · 耗时 {result.get('elapsed_ms', '-')}ms"
     if name == "get_factor_values":
         return f"返回因子 {result.get('factor', '-')} Top{_count()}"
+    if name == "create_signal_strategy":
+        signal = result.get("signal") or {}
+        return f"创建信号 {signal.get('name', '-')} ({signal.get('id', '-')})"
+    if name == "add_to_watchlist":
+        return result.get("note") or "已加入自选"
 
     return f"返回 {_count()} 行" if _count() else "完成"

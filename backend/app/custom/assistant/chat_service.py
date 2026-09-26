@@ -18,6 +18,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import tools as assistant_tools
 from app.custom.assistant.prompt import build_system_prompt
 from app.custom.assistant.streaming import stream_openai_round
@@ -166,7 +167,7 @@ async def chat_stream(
     sentinel: object = object()
 
     async def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
-        call_id = uuid.uuid4().hex[:8]
+        call_id = assistant_actions.new_call_id()
         await queue.put({
             "type": "tool_call",
             "call_id": call_id,
@@ -174,6 +175,37 @@ async def chat_stream(
             "args": _compact_args(args),
         })
         started = time.monotonic()
+
+        # 动作工具确认闸门: 先发确认卡事件并挂起, 用户点确认后才真正执行。
+        # 拒绝/超时按工具错误契约回填(ok=False), 模型据此改走文字建议而非重试。
+        if name in assistant_actions.ACTION_TOOLS:
+            action = await assistant_actions.registry.register(call_id, name, args)
+            meta = assistant_actions.ACTION_META.get(name, {"label": name, "risk": ""})
+            await queue.put({
+                "type": "action_confirm",
+                "call_id": call_id,
+                "name": name,
+                "label": meta["label"],
+                "risk": meta["risk"],
+                "expires_in": int(assistant_actions.registry.timeout_s),
+            })
+            decision = await assistant_actions.registry.await_decision(action)
+            if decision != "approved":
+                denied = (
+                    "用户已拒绝该操作, 未执行。不要重复尝试同一操作。"
+                    if decision == "denied"
+                    else f"确认超时({int(assistant_actions.registry.timeout_s)} 秒未确认), 未执行。"
+                )
+                result = {"ok": False, "error": denied}
+                await queue.put({
+                    "type": "tool_result",
+                    "call_id": call_id,
+                    "name": name,
+                    "ok": False,
+                    "summary": assistant_tools.summarize_tool_result(name, result),
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                })
+                return result
         result = await assistant_tools.execute_assistant_tool(name, args, tool_ctx)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         event = {
@@ -273,14 +305,21 @@ async def chat_stream(
 
 
 def _compact_args(args: dict[str, Any]) -> dict[str, Any]:
-    """足迹事件的 args 预览: 截断超长值, 防单行事件过大。"""
-    compact: dict[str, Any] = {}
-    for key, value in args.items():
-        text = value if isinstance(value, (int, float, bool)) else str(value)
-        if isinstance(text, str) and len(text) > 120:
-            text = text[:120] + "…"
-        compact[str(key)] = text
-    return compact
+    """足迹事件的 args 预览: 递归保留 dict/list 结构(动作确认卡需要展示完整
+    待执行参数), 截断超长字符串与超大集合, 防单行事件过大。"""
+    def compact(value: Any, depth: int = 0) -> Any:
+        if isinstance(value, dict) and depth < 3:
+            return {str(k): compact(v, depth + 1) for k, v in list(value.items())[:20]}
+        if isinstance(value, (list, tuple)) and depth < 3:
+            return [compact(v, depth + 1) for v in list(value)[:20]]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value)
+        return text[:120] + "…" if len(text) > 120 else text
+
+    return {str(k): compact(v) for k, v in args.items()}
 
 
 def _line(event: dict[str, Any]) -> str:
