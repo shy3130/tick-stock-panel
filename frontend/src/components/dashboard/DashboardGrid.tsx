@@ -1,12 +1,16 @@
 /**
- * 看板网格 — react-grid-layout v2 封装: 12 列吸附网格, 编辑态拖拽换位/角柄调宽高。
+ * 看板网格 — react-grid-layout v2 封装: 12 列吸附网格, 编辑态拖拽换位/八向调宽高。
  *
  * 设计要点:
  * - 编辑入口与编辑控制组(添加组件/恢复默认/完成)在页面头部「重载」右侧,
  *   由 Dashboard 页持有 editing 状态传入; 本组件只负责网格渲染与编辑态覆盖层。
- * - 浏览态零编辑元素(视觉与固定布局时代一致); 编辑态在每个组件顶部叠加
- *   半透明把手条(拖拽手柄 + 删除), dragConfig.handle 限定只有把手可拖,
- *   组件内部链接/点击在编辑态不受影响。
+ * - 编辑态整卡可拖(不限定把手, 顶部被遮挡也能从任意位置拖起);
+ *   组件内容 pointer-events:none 阻断内部点击/悬停(编辑时不误触行情链接),
+ *   外链 iframe 同样被阻断 — 拖拽不会被 iframe 吞掉。
+ * - 缩放八向: 四边通长细条 + 四角直角标线(样式在 grid.css, 挂 .dash-grid-editing);
+ *   西/北向缩放由 RGL 联动平移 x/y 固定对侧边。
+ * - 吸附: 拖拽/缩放全程按网格单元吸附, 拖动时占位格实时标出落点(grid.css 美化),
+ *   松手按 200ms 过渡滑入格子。
  * - <768px 不挂网格, 组件按顺序纵排(RGL 只服务桌面宽度)。
  * - onLayoutChange 仅编辑态提交(挂载期 RGL 的规范化回调被忽略, 避免
  *   非编辑状态下布局意外写回)。
@@ -14,6 +18,7 @@
 import { useCallback, useMemo, type ReactNode } from 'react'
 import GridLayout, { useContainerWidth, type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
+import './grid.css'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, compactLayout, normalizeLayout, type DashboardItem } from './layout'
@@ -67,11 +72,11 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
   const isMobile = mounted && width < 768
 
   return (
-    <div ref={containerRef as unknown as React.RefObject<HTMLDivElement>} className="relative">
+    <div ref={containerRef as unknown as React.RefObject<HTMLDivElement>} className={cn('dash-grid relative', editing && 'dash-grid-editing')}>
       {/* 编辑态操作提示 (入口与控制组在页面头部「重载」右侧) */}
       {editing && (
         <div className="mb-1.5 text-[11px] text-muted">
-          拖动顶部把手移动 · 右下角柄调宽高, 自动吸附网格 · 改动自动保存
+          拖动组件任意位置移动 · 悬停卡片四边/四角调宽高 · 自动吸附网格 · 改动自动保存
         </div>
       )}
 
@@ -89,17 +94,27 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
           width={width}
           layout={rglLayout}
           gridConfig={{ cols: GRID_COLS, rowHeight: GRID_ROW_HEIGHT, margin: [GRID_MARGIN, GRID_MARGIN], containerPadding: null, maxRows: Infinity }}
-          dragConfig={{ enabled: editing, handle: '.dash-widget-handle', threshold: 3 }}
-          resizeConfig={{ enabled: editing, handles: ['se'] }}
+          dragConfig={{
+            enabled: editing,
+            // 整卡可拖(不限把手); ✕ 移除钮不触发拖拽 — RGL 自动并入 .react-resizable-handle
+            cancel: '.dash-widget-remove',
+            threshold: 3,
+          }}
+          resizeConfig={{ enabled: editing, handles: ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'] }}
           onLayoutChange={editing ? handleLayoutChange : undefined}
         >
           {items.map(it => {
             const def = widgetDef(it.t)
             const Icon = def?.icon
             return (
-              <div key={it.i} className={cn(editing && 'rounded-card ring-1 ring-accent/25')}>
+              <div
+                key={it.i}
+                className={cn(
+                  editing && 'cursor-grab select-none rounded-card ring-1 ring-accent/30 hover:ring-accent/60 active:cursor-grabbing',
+                )}
+              >
                 {editing && (
-                  <div className="dash-widget-handle absolute inset-x-0 top-0 z-10 flex h-6 cursor-grab items-center justify-between rounded-t-card bg-surface/95 px-2 text-[10px] text-secondary shadow-sm active:cursor-grabbing">
+                  <div className="absolute inset-x-0 top-0 z-10 flex h-6 items-center justify-between rounded-t-card bg-surface/95 pl-2 pr-5 text-[10px] text-secondary shadow-sm">
                     <span className="flex min-w-0 items-center gap-1">
                       {Icon && <Icon className="h-3 w-3 shrink-0 text-accent" />}
                       <span className="truncate">{def?.label ?? it.t}{it.t === 'ext-link' && it.p?.title ? ` · ${it.p.title}` : ''}</span>
@@ -107,14 +122,15 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
                     <button
                       type="button"
                       onClick={() => removeItem(it.i)}
-                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted hover:bg-danger/15 hover:text-danger"
+                      className="dash-widget-remove flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted hover:bg-danger/15 hover:text-danger"
                       title="移除组件"
                     >
                       <X className="h-3 w-3" />
                     </button>
                   </div>
                 )}
-                {renderWidget(it)}
+                {/* 编辑态阻断组件内部交互(点击/悬停/iframe), 拖拽由外层网格项接管 */}
+                <div className={cn(editing && 'pointer-events-none')}>{renderWidget(it)}</div>
               </div>
             )
           })}
