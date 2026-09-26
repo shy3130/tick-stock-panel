@@ -48,3 +48,28 @@ it('leaves signed pct inside inline code untouched', async () => {
   expect(html).not.toContain('text-bull')
   expect(html).toContain('<code')
 })
+
+it('wide tables (>4 cols) use auto layout, nowrap cells and horizontal scroll', async () => {
+  const html = await renderToHtml(
+    '| # | 标的 | 收盘 | 当日 | 换手率 | 评分 |\n' +
+    '|---|---|---|---|---|---|\n' +
+    '| 1 | 金健米业 600127.SH | 7.72 | +1.05% | 3.66% | 82 |',
+  )
+  // 宽表: 按内容取宽 + 可横向滚动, 单元格不折行(标的/代码不再断行)
+  expect(html).toContain('overflow-x-auto')
+  expect(html).toContain('table-auto')
+  expect(html).toContain('whitespace-nowrap')
+  expect(html).not.toContain('table-fixed')
+  expect(html).not.toContain('break-words')
+})
+
+it('narrow tables (<=4 cols) keep fixed layout with breakable cells', async () => {
+  const html = await renderToHtml(
+    '| 维度 | 数值 | 判断 |\n' +
+    '|---|---|---|\n' +
+    '| 营收 | 12.3亿元 | 同比上涨 |\n',
+  )
+  expect(html).toContain('table-fixed')
+  expect(html).toContain('break-words')
+  expect(html).not.toContain('overflow-x-auto')
+})

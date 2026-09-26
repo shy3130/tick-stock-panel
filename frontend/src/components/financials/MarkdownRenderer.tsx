@@ -169,16 +169,24 @@ export function MarkdownRenderer({ content }: { content: string }) {
       if (table) {
         const [header, ...body] = table.rows
         const ncol = header.length
+        // 宽表(>4 列, 如筛选结果)与窄表(财务报告的 维度/判断 表)分开处理:
+        // 窄表 table-fixed + 末列加宽, 单元格可折行; 宽表列多而内容短,
+        // 挤压会把标的/代码折成多行(600127.S / H), 改为按内容取宽 + 单元格不折行 + 横向滚动。
+        const wide = ncol > 4
         blocks.push(
-          <div key={key++} className="my-5 overflow-hidden rounded-btn border border-border/30">
-            <table className="w-full text-xs border-collapse table-fixed">
-              <colgroup>
-                {/* 首列(维度)较窄;末列(判断/说明)最宽并允许折行 */}
-                <col className="w-auto" />
-                {Array.from({ length: ncol - 1 }).map((_, ci) => (
-                  <col key={ci} className={ci === ncol - 2 ? 'w-1/2' : 'w-auto'} />
-                ))}
-              </colgroup>
+          <div key={key++} className={`my-5 rounded-btn border border-border/30 ${wide ? 'overflow-x-auto' : 'overflow-hidden'}`}>
+            <table className={wide
+              ? 'min-w-full w-max text-xs border-collapse table-auto'
+              : 'w-full text-xs border-collapse table-fixed'}>
+              {!wide && (
+                <colgroup>
+                  {/* 首列(维度)较窄;末列(判断/说明)最宽并允许折行 */}
+                  <col className="w-auto" />
+                  {Array.from({ length: ncol - 1 }).map((_, ci) => (
+                    <col key={ci} className={ci === ncol - 2 ? 'w-1/2' : 'w-auto'} />
+                  ))}
+                </colgroup>
+              )}
               <thead>
                 <tr className="bg-elevated/50">
                   {header.map((cell, ci) => (
@@ -192,7 +200,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
                 {body.map((row, ri) => (
                   <tr key={ri} className="border-b border-border/20 last:border-0 hover:bg-elevated/20">
                     {row.map((cell, ci) => (
-                      <td key={ci} className="px-2.5 py-1.5 text-foreground align-top break-words">
+                      <td key={ci} className={`px-2.5 py-1.5 text-foreground align-top ${wide ? 'whitespace-nowrap' : 'break-words'}`}>
                         {renderInline(cell, `td-${key}-${ri}-${ci}`)}
                       </td>
                     ))}

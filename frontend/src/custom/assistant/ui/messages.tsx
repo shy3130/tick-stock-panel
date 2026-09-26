@@ -121,7 +121,12 @@ function toolLabel(name: string): string {
 /** 足迹组: 工具足迹卡 + 附带可绘图数据的走势小卡(始终可见, 不藏在展开区)。 */
 export const FootprintGroup = memo(function FootprintGroup({ calls }: { calls: ToolCallRecord[] }) {
   if (!calls.length) return null
-  const charts = calls.filter(c => c.status === 'ok' && c.charts).flatMap(c => c.charts!)
+  const charts = calls
+    .filter(c => c.status === 'ok' && c.charts)
+    .flatMap(c => c.charts!)
+    // 固定 日K 左 / 分时 右: 图表顺序原本跟随工具调用顺序(分时行情往往先查),
+    // 稳定排序把日K挪到最前, 其余相对顺序不变
+    .sort((a, b) => Number(a.kind !== 'daily_kline') - Number(b.kind !== 'daily_kline'))
   if (!charts.length) return <FootprintCard calls={calls} />
   return (
     <div className="space-y-2">
