@@ -16,7 +16,7 @@ import GridLayout, { useContainerWidth, type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
-import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, normalizeLayout, type DashboardItem } from './layout'
+import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, compactLayout, normalizeLayout, type DashboardItem } from './layout'
 import { DEFAULT_LAYOUT, isKnownWidgetType, minSizeOf, widgetDef } from './registry'
 import type { WidgetCtx } from './registry'
 
@@ -44,13 +44,15 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
   )
 
   const handleLayoutChange = useCallback((layout: Layout) => {
-    // RGL 回传全量布局(含 compact 后坐标); props 不在 layout 里, 从当前 items 续接
+    // RGL 回传全量布局(含 compact 后坐标); props 不在 layout 里, 从当前 items 续接。
+    // compactLayout 兜底消重叠后再写回持久化(与 normalizeLayout 加载侧同一防线),
+    // 确保存进后端的坐标永不互相压盖。
     const map = new Map(layout.map(l => [l.i, l]))
     const next = items.map(it => {
       const l = map.get(it.i)
       return l ? { ...it, x: l.x, y: l.y, w: l.w, h: l.h } : it
     })
-    onItemsChange(next)
+    onItemsChange(compactLayout(next))
   }, [items, onItemsChange])
 
   const removeItem = useCallback((id: string) => {

@@ -102,11 +102,35 @@ export function normalizeLayout(
     }
     out.push(item)
   }
-  return out.length > 0 ? out : cloneItems(defaults)
+  // 已保存 blob 可能含重叠坐标(旧版本残留/异常保存), 渲染前消解, 避免组件互相压盖
+  return out.length > 0 ? compactLayout(out) : cloneItems(defaults)
 }
 
 export function cloneItems(items: DashboardItem[]): DashboardItem[] {
   return items.map(it => ({ ...it, p: it.p ? { ...it.p } : undefined }))
+}
+
+/**
+ * 碰撞消解 — 对含重叠坐标的布局做兜底(异常保存的 blob / 拖拽回传边界情况)。
+ * 按 (y,x) 行序放置, 与已放置项碰撞者整体下沉到首个不冲突行:
+ * 只下沉不上浮, 用户刻意留的空隙不被吞掉。返回顺序与入参一致。
+ */
+export function compactLayout<T extends { i: string; x: number; y: number; w: number; h: number }>(
+  items: T[],
+): T[] {
+  const placed: Array<{ x: number; y: number; w: number; h: number }> = []
+  const settled = [...items]
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+    .map((it) => {
+      let y = it.y
+      const hits = (yy: number) => placed.some((p) =>
+        !(p.x + p.w <= it.x || p.x >= it.x + it.w || p.y + p.h <= yy || p.y >= yy + it.h))
+      while (hits(y)) y += 1
+      placed.push({ x: it.x, y, w: it.w, h: it.h })
+      return { ...it, y }
+    })
+  const order = new Map(items.map((it, idx) => [it.i, idx]))
+  return settled.sort((a, b) => (order.get(a.i) ?? 0) - (order.get(b.i) ?? 0))
 }
 
 /** items → 持久化 blob */
