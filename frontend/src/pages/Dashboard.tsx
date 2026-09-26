@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, Database, Gauge, Info, Loader2, Play, RefreshCw, Sparkles, Timer } from 'lucide-react'
+import { ArrowUpRight, Check, Database, Gauge, GripVertical, Info, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -15,8 +15,10 @@ import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { scoreColor, quoteAge } from '@/components/dashboard/shared'
 import { DashboardGrid } from '@/components/dashboard/DashboardGrid'
+import { AddWidgetPanel } from '@/components/dashboard/AddWidgetPanel'
 import { useDashboardLayout } from '@/components/dashboard/useDashboardLayout'
-import type { WidgetCtx } from '@/components/dashboard/registry'
+import { DEFAULT_LAYOUT, widgetDef, type WidgetCtx } from '@/components/dashboard/registry'
+import { cloneItems, GRID_COLS, type WidgetType } from '@/components/dashboard/layout'
 
 /** 打开个股预览的来源榜 (用于行高亮与切股导航列表) */
 type PreviewSource = 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
@@ -39,6 +41,22 @@ export function Dashboard() {
   // 自定义网格布局(持久化 hook: 后端偏好加载 + 本地改动防抖落盘);
   // 注意必须在早退 return 之前 — Hooks 顺序不可随数据加载状态变化。
   const { items: dashItems, setItems: setDashItems } = useDashboardLayout()
+  // 布局编辑态: 入口与控制组(添加组件/恢复默认/完成)在头部「重载」右侧
+  const [dashEditing, setDashEditing] = useState(false)
+  const placedTypes = useMemo(() => new Set(dashItems.map(it => it.t)), [dashItems])
+  const resetDashLayout = useCallback(() => {
+    setDashItems(cloneItems(DEFAULT_LAYOUT))
+  }, [setDashItems])
+  /** 追加组件: 放到当前布局最底部; ext-link 用唯一 id 支持多实例 */
+  const addDashWidget = useCallback((t: WidgetType, props?: Record<string, string>) => {
+    const def = widgetDef(t)
+    if (!def) return
+    // 内置组件单实例: 已存在则忽略
+    if (t !== 'ext-link' && dashItems.some(it => it.t === t)) return
+    const maxY = dashItems.reduce((m, it) => Math.max(m, it.y + it.h), 0)
+    const id = t === 'ext-link' ? `ext-link-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}` : t
+    setDashItems([...dashItems, { i: id, t, x: 0, y: maxY, w: Math.min(def.defW, GRID_COLS), h: def.defH, p: props }])
+  }, [dashItems, setDashItems])
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -256,6 +274,31 @@ export function Dashboard() {
           >
             <RefreshCw className={`h-3 w-3 ${manualFetching ? 'animate-spin' : ''}`} />重载
           </button>
+          {!dashEditing ? (
+            <button
+              onClick={() => setDashEditing(true)}
+              title="拖拽调整组件位置与宽高"
+              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground hover:border-accent/40"
+            >
+              <GripVertical className="h-3 w-3" />自定义布局
+            </button>
+          ) : (
+            <>
+              <AddWidgetPanel placedTypes={placedTypes} onAdd={addDashWidget} />
+              <button
+                onClick={resetDashLayout}
+                className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground"
+              >
+                <RotateCcw className="h-3 w-3" />恢复默认
+              </button>
+              <button
+                onClick={() => setDashEditing(false)}
+                className="inline-flex items-center gap-1 rounded-btn bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent/90"
+              >
+                <Check className="h-3 w-3" />完成
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -271,7 +314,7 @@ export function Dashboard() {
         </div>
       )}
 
-      <DashboardGrid ctx={widgetCtx} items={dashItems} onItemsChange={setDashItems} />
+      <DashboardGrid ctx={widgetCtx} items={dashItems} onItemsChange={setDashItems} editing={dashEditing} />
 
       <StockPreviewDialog
         symbol={previewStock?.symbol ?? null}

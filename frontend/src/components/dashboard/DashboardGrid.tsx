@@ -2,6 +2,8 @@
  * 看板网格 — react-grid-layout v2 封装: 12 列吸附网格, 编辑态拖拽换位/角柄调宽高。
  *
  * 设计要点:
+ * - 编辑入口与编辑控制组(添加组件/恢复默认/完成)在页面头部「重载」右侧,
+ *   由 Dashboard 页持有 editing 状态传入; 本组件只负责网格渲染与编辑态覆盖层。
  * - 浏览态零编辑元素(视觉与固定布局时代一致); 编辑态在每个组件顶部叠加
  *   半透明把手条(拖拽手柄 + 删除), dragConfig.handle 限定只有把手可拖,
  *   组件内部链接/点击在编辑态不受影响。
@@ -9,15 +11,14 @@
  * - onLayoutChange 仅编辑态提交(挂载期 RGL 的规范化回调被忽略, 避免
  *   非编辑状态下布局意外写回)。
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, type ReactNode } from 'react'
 import GridLayout, { useContainerWidth, type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
-import { Check, GripVertical, RotateCcw, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
-import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, cloneItems, normalizeLayout, type DashboardItem, type WidgetType } from './layout'
+import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, normalizeLayout, type DashboardItem } from './layout'
 import { DEFAULT_LAYOUT, isKnownWidgetType, minSizeOf, widgetDef } from './registry'
 import type { WidgetCtx } from './registry'
-import { AddWidgetPanel } from './AddWidgetPanel'
 
 export function normalizeDashboardLayout(blob: unknown): DashboardItem[] {
   return normalizeLayout(blob, DEFAULT_LAYOUT, isKnownWidgetType, minSizeOf)
@@ -27,10 +28,11 @@ export interface DashboardGridProps {
   ctx: WidgetCtx
   items: DashboardItem[]
   onItemsChange: (items: DashboardItem[]) => void
+  /** 编辑态由 Dashboard 页头部控制组持有, 受控传入 */
+  editing: boolean
 }
 
-export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps) {
-  const [editing, setEditing] = useState(false)
+export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardGridProps) {
   const { width, containerRef, mounted } = useContainerWidth({ measureBeforeMount: true })
 
   const rglLayout = useMemo(
@@ -55,23 +57,6 @@ export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps)
     onItemsChange(items.filter(it => it.i !== id))
   }, [items, onItemsChange])
 
-  const resetDefault = useCallback(() => {
-    onItemsChange(cloneItems(DEFAULT_LAYOUT))
-  }, [onItemsChange])
-
-  /** 追加组件: 放到当前布局最底部; ext-link 用唯一 id 支持多实例 */
-  const addItem = useCallback((t: WidgetType, props?: Record<string, string>) => {
-    const def = widgetDef(t)
-    if (!def) return
-    // 内置组件单实例: 已存在则忽略
-    if (t !== 'ext-link' && items.some(it => it.t === t)) return
-    const maxY = items.reduce((m, it) => Math.max(m, it.y + it.h), 0)
-    const id = t === 'ext-link' ? `ext-link-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}` : t
-    onItemsChange([...items, { i: id, t, x: 0, y: maxY, w: Math.min(def.defW, GRID_COLS), h: def.defH, p: props }])
-  }, [items, onItemsChange])
-
-  const placedTypes = useMemo(() => new Set(items.map(it => it.t)), [items])
-
   const renderWidget = (it: DashboardItem): ReactNode => {
     const def = widgetDef(it.t)
     return def ? def.render(ctx, it) : null
@@ -81,39 +66,12 @@ export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps)
 
   return (
     <div ref={containerRef as unknown as React.RefObject<HTMLDivElement>} className="relative">
-      {/* 编辑入口/工具条: 浏览态常驻一个低强调入口按钮(可发现性优先) */}
-      <div className="mb-1.5 flex items-center gap-2">
-        {!editing ? (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground hover:border-accent/40"
-            title="拖拽调整组件位置与宽高"
-          >
-            <GripVertical className="h-3 w-3" />自定义布局
-          </button>
-        ) : (
-          <>
-            <span className="text-[11px] text-muted">拖动顶部把手移动 · 右下角柄调宽高, 自动吸附网格</span>
-            <span className="flex-1" />
-            <AddWidgetPanel placedTypes={placedTypes} onAdd={addItem} />
-            <button
-              type="button"
-              onClick={resetDefault}
-              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground"
-            >
-              <RotateCcw className="h-3 w-3" />恢复默认
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="inline-flex items-center gap-1 rounded-btn bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent/90"
-            >
-              <Check className="h-3 w-3" />完成
-            </button>
-          </>
-        )}
-      </div>
+      {/* 编辑态操作提示 (入口与控制组在页面头部「重载」右侧) */}
+      {editing && (
+        <div className="mb-1.5 text-[11px] text-muted">
+          拖动顶部把手移动 · 右下角柄调宽高, 自动吸附网格 · 改动自动保存
+        </div>
+      )}
 
       {!mounted ? (
         <div className="h-32" />
