@@ -18,10 +18,24 @@ fields = [f["name"] for f in cfg["fields"]]
 print(f"目标表: {cfg.get('label', cid)} ({cid}) | 模式: {cfg.get('mode')} | 字段: {fields}")
 
 # 2. 写入一行 (date 不传按北京当天落盘; 时序表自动进当日分区)
+#    示例按字段名给合理演示值 — 实际接入时换成你的数据
+from datetime import date
+
+today = date.today().isoformat()
 row = {"symbol": "600519.SH"}
 for f in fields:
-    if f not in row:
-        row[f] = 1  # 示例值 — 实际接入时换成你的数据
+    if f in row:
+        continue
+    if f == "date":
+        row[f] = today
+    elif f == "name":
+        row[f] = "演示标的"
+    elif f == "code":
+        row[f] = "600519"
+    elif f.startswith("rank") or f == "heat":
+        row[f] = 1
+    else:
+        row[f] = 0
 resp = call("POST", f"/api/ext-data/{cid}/ingest", {"rows": [row]})
 print("写入:", resp)
 

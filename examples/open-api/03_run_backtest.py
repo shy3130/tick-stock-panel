@@ -1,9 +1,11 @@
 """示例 3 — 策略与回测 (scope: read:analysis + run:backtest)。
 
-列出策略清单 → 对单标的跑一次信号回测 → 读关键指标。
-可用信号名以面板「信号库」/ GET /api/strategies 为准;
-策略全周期回测走 POST /api/backtest/strategy/run (body 详见契约)。
+列出策略清单 → 用纯 Polars 引擎跑一次策略回测 (所有安装自带, 无需 vectorbt)
+→ 读关键指标。GET /api/backtest/status 可查历史任务;
+POST /api/backtest/run 是 vectorbt 信号回测, 需 `uv sync --extra backtest`。
 """
+from datetime import date, timedelta
+
 from common import call
 
 # 1. 策略清单 (read:analysis)
@@ -11,14 +13,16 @@ strategies = call("GET", "/api/strategies")["strategies"]
 for s in strategies[:5]:
     print(f"策略: {s['id']}  {s['name']}  [{','.join(s.get('tags', []))}]")
 if not strategies:
-    print("(无策略)")
+    raise SystemExit("(无策略)")
 
-# 2. 信号回测 (run:backtest): 贵州茅台, 5/20 均线金叉入场
-result = call("POST", "/api/backtest/run", {
+# 2. 策略回测 (run:backtest): 第一个策略, 近 90 天, 限定单标的控制耗时
+sid = strategies[0]["id"]
+result = call("POST", "/api/backtest/strategy/run", {
+    "strategy_id": sid,
     "symbols": ["600519.SH"],
-    "entries": ["signal_ma_golden_5_20"],   # 内置信号; 更多见 信号库 页面
-    "exits": [],
+    "start": (date.today() - timedelta(days=90)).isoformat(),
+    "end": date.today().isoformat(),
 })
-for key in ("total_return", "win_rate", "trades", "max_drawdown"):
-    if key in result:
-        print(f"回测 {key}: {result[key]}")
+print(f"回测完成 ({sid}):", {k: v for k, v in result.items() if k in (
+    "total_return", "annual_return", "max_drawdown", "trades", "win_rate", "sharpe",
+)})
