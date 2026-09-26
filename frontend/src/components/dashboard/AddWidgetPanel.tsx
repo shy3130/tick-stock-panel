@@ -2,13 +2,18 @@
  * 看板「添加组件」面板 — 内置组件列表 + 外部链接表单。
  *
  * 内置组件单实例: 已在布局中的禁用; 外部链接可加多个实例(URL 经消毒)。
- * 弹层用 fixed 定位锚定按钮下方, 点击面板外/Esc 关闭。
+ * 弹层 portal 到 body + fixed 定位锚定按钮下方 — 按钮位于页面头部时,
+ * absolute 会被祖先容器的层叠上下文/裁剪压住, portal 后彻底脱离;
+ * 左缘按视口钳位避免右置按钮的弹层溢出屏外。点击面板外/Esc/滚动 关闭。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Plus } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { sanitizeExtUrl, type WidgetType } from './layout'
 import { WIDGET_DEFS } from './registry'
+
+const PANEL_W = 288 // w-72
 
 export function AddWidgetPanel({
   placedTypes,
@@ -21,19 +26,46 @@ export function AddWidgetPanel({
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
   const [urlError, setUrlError] = useState('')
-  const wrapRef = useRef<HTMLDivElement>(null)
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // 锚定位置在打开时与视口尺寸变化时重算
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect()
+      if (!r) return
+      // 右缘钳位: 面板不溢出视口 (留 8px 余量)
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - PANEL_W - 8))
+      setAnchor({ left, top: r.bottom + 6 })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     const onDocMouseDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    // 视口滚动即关: 面板是 fixed 锚定, 页面滚动后位置失去意义;
+    // 面板内部列表的滚动除外 (capture 捕获任意滚动容器)
+    const onScroll = (e: Event) => {
+      if (panelRef.current && e.target instanceof Node && panelRef.current.contains(e.target)) return
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDocMouseDown)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onScroll, true)
     return () => {
       document.removeEventListener('mousedown', onDocMouseDown)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
     }
   }, [open])
 
@@ -51,8 +83,9 @@ export function AddWidgetPanel({
   }
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div className="relative">
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpen(v => !v)}
         className={cn(
@@ -65,8 +98,12 @@ export function AddWidgetPanel({
         <Plus className="h-3 w-3" />添加组件
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-7 z-50 w-72 rounded-card border border-border bg-surface p-2 shadow-2xl shadow-black/40">
+      {open && anchor && createPortal(
+        <div
+          ref={panelRef}
+          style={{ left: anchor.left, top: anchor.top, width: PANEL_W }}
+          className="fixed z-[9999] rounded-card border border-border bg-surface p-2 shadow-2xl shadow-black/40"
+        >
           <div className="mb-1.5 px-0.5 text-[10px] font-medium text-muted">内置组件</div>
           <div className="max-h-56 space-y-0.5 overflow-y-auto">
             {WIDGET_DEFS.filter(d => d.id !== 'ext-link').map(d => {
@@ -119,7 +156,8 @@ export function AddWidgetPanel({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
