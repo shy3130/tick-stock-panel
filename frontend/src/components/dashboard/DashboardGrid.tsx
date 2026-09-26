@@ -14,9 +14,10 @@ import GridLayout, { useContainerWidth, type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import { Check, GripVertical, RotateCcw, X } from 'lucide-react'
 import { cn } from '@/lib/cn'
-import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, cloneItems, normalizeLayout, type DashboardItem } from './layout'
+import { GRID_COLS, GRID_MARGIN, GRID_ROW_HEIGHT, cloneItems, normalizeLayout, type DashboardItem, type WidgetType } from './layout'
 import { DEFAULT_LAYOUT, isKnownWidgetType, minSizeOf, widgetDef } from './registry'
 import type { WidgetCtx } from './registry'
+import { AddWidgetPanel } from './AddWidgetPanel'
 
 export function normalizeDashboardLayout(blob: unknown): DashboardItem[] {
   return normalizeLayout(blob, DEFAULT_LAYOUT, isKnownWidgetType, minSizeOf)
@@ -58,6 +59,19 @@ export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps)
     onItemsChange(cloneItems(DEFAULT_LAYOUT))
   }, [onItemsChange])
 
+  /** 追加组件: 放到当前布局最底部; ext-link 用唯一 id 支持多实例 */
+  const addItem = useCallback((t: WidgetType, props?: Record<string, string>) => {
+    const def = widgetDef(t)
+    if (!def) return
+    // 内置组件单实例: 已存在则忽略
+    if (t !== 'ext-link' && items.some(it => it.t === t)) return
+    const maxY = items.reduce((m, it) => Math.max(m, it.y + it.h), 0)
+    const id = t === 'ext-link' ? `ext-link-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}` : t
+    onItemsChange([...items, { i: id, t, x: 0, y: maxY, w: Math.min(def.defW, GRID_COLS), h: def.defH, p: props }])
+  }, [items, onItemsChange])
+
+  const placedTypes = useMemo(() => new Set(items.map(it => it.t)), [items])
+
   const renderWidget = (it: DashboardItem): ReactNode => {
     const def = widgetDef(it.t)
     return def ? def.render(ctx, it) : null
@@ -67,12 +81,8 @@ export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps)
 
   return (
     <div ref={containerRef as unknown as React.RefObject<HTMLDivElement>} className="relative">
-      {/* 编辑入口/工具条: 非编辑态淡出悬浮, hover 显现 */}
-      <div className={cn(
-        'group/edit mb-1.5 flex items-center gap-2 transition-opacity',
-        !editing && 'opacity-0 pointer-events-none hover:opacity-100 focus-within:opacity-100',
-        !editing && 'group-hover/edit:opacity-100 group-hover/edit:pointer-events-auto',
-      )}>
+      {/* 编辑入口/工具条: 浏览态常驻一个低强调入口按钮(可发现性优先) */}
+      <div className="mb-1.5 flex items-center gap-2">
         {!editing ? (
           <button
             type="button"
@@ -86,6 +96,7 @@ export function DashboardGrid({ ctx, items, onItemsChange }: DashboardGridProps)
           <>
             <span className="text-[11px] text-muted">拖动顶部把手移动 · 右下角柄调宽高, 自动吸附网格</span>
             <span className="flex-1" />
+            <AddWidgetPanel placedTypes={placedTypes} onAdd={addItem} />
             <button
               type="button"
               onClick={resetDefault}

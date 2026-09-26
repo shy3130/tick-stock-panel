@@ -585,6 +585,7 @@ def get_preferences() -> dict:
         "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
         "nav_hidden": preferences.get_nav_hidden(),
+        "dashboard_layout": preferences.get_dashboard_layout(),
         "screener_auto_run": preferences.get_screener_auto_run(),
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
@@ -901,6 +902,22 @@ def update_nav_hidden(req: NavHiddenIn) -> dict:
     from app.services import preferences
     saved = preferences.set_nav_hidden(req.nav_hidden)
     return {"nav_hidden": saved}
+
+
+class DashboardLayoutIn(BaseModel):
+    """看板自定义布局; layout=null 恢复默认。"""
+    layout: dict | None = None
+
+
+@router.put("/preferences/dashboard-layout")
+def update_dashboard_layout(req: DashboardLayoutIn) -> dict:
+    """保存看板自定义布局(网格 blob); null = 清除回默认布局。"""
+    from app.services import preferences
+    try:
+        saved = preferences.set_dashboard_layout(req.layout)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"dashboard_layout": saved}
 
 
 @router.put("/preferences/watchlist-columns")

@@ -1107,3 +1107,61 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
+
+
+# ---------------------------------------------------------------- 看板自定义布局
+# blob 形如 {"v": 1, "items": [{"i","t","x","y","w","h","p?"}, ...]}; None = 未自定义(前端用内置默认布局)。
+_DASHBOARD_LAYOUT_MAX_ITEMS = 40
+_DASHBOARD_LAYOUT_MAX_JSON = 64 * 1024
+
+
+def get_dashboard_layout() -> dict | None:
+    """看板自定义布局 blob; None = 未自定义。"""
+    raw = load().get("dashboard_layout")
+    return raw if isinstance(raw, dict) else None
+
+
+def _clamp_int(v: object, lo: int, hi: int, fallback: int) -> int:
+    try:
+        n = int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    return max(lo, min(hi, n))
+
+
+def set_dashboard_layout(value: dict | None) -> dict | None:
+    """保存看板布局; None = 清除(回默认布局)。
+
+    护栏: items 数量、字段类型/取值范围、整体 JSON 体积;
+    前端渲染前还会再做一轮规范化(未知组件剔除等), 此处只防脏数据写盘。
+    """
+    if value is None:
+        save({"dashboard_layout": None})
+        return None
+    items = value.get("items") if isinstance(value, dict) else None
+    if not isinstance(items, list) or not items:
+        raise ValueError("布局须为 {v:1, items:[...]}; 恢复默认请传 null")
+    cleaned: list[dict] = []
+    for it in items[:_DASHBOARD_LAYOUT_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        row: dict = {
+            "i": str(it.get("i") or "")[:64],
+            "t": str(it.get("t") or "")[:32],
+            "x": _clamp_int(it.get("x"), 0, 11, 0),
+            "y": _clamp_int(it.get("y"), 0, 100_000, 0),
+            "w": _clamp_int(it.get("w"), 1, 12, 4),
+            "h": _clamp_int(it.get("h"), 1, 30, 8),
+        }
+        if not row["i"] or not row["t"]:
+            continue
+        if isinstance(it.get("p"), dict):
+            row["p"] = {str(k)[:32]: str(v)[:500] for k, v in it["p"].items()}
+        cleaned.append(row)
+    if not cleaned:
+        raise ValueError("布局 items 无有效项")
+    blob = {"v": 1, "items": cleaned}
+    if len(json.dumps(blob, ensure_ascii=False)) > _DASHBOARD_LAYOUT_MAX_JSON:
+        raise ValueError("布局数据过大 (>64KB)")
+    save({"dashboard_layout": blob})
+    return blob

@@ -14,8 +14,8 @@ import { SettingsModal } from '@/components/data/SettingsModal'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { scoreColor, quoteAge } from '@/components/dashboard/shared'
-import { DashboardGrid, normalizeDashboardLayout } from '@/components/dashboard/DashboardGrid'
-import type { DashboardItem } from '@/components/dashboard/layout'
+import { DashboardGrid } from '@/components/dashboard/DashboardGrid'
+import { useDashboardLayout } from '@/components/dashboard/useDashboardLayout'
 import type { WidgetCtx } from '@/components/dashboard/registry'
 
 /** 打开个股预览的来源榜 (用于行高亮与切股导航列表) */
@@ -36,9 +36,9 @@ export function Dashboard() {
   } | null>(null)
   // 板块成分股弹窗 (概念/行业热度卡片行点击)
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
-  // 自定义网格布局(默认布局在注册表; 持久化链路接入前的会话内状态)。
+  // 自定义网格布局(持久化 hook: 后端偏好加载 + 本地改动防抖落盘);
   // 注意必须在早退 return 之前 — Hooks 顺序不可随数据加载状态变化。
-  const [dashItems, setDashItems] = useState<DashboardItem[]>(() => normalizeDashboardLayout(undefined))
+  const { items: dashItems, setItems: setDashItems } = useDashboardLayout()
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })

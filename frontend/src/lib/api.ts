@@ -2041,6 +2041,8 @@ export interface Preferences {
   webhook_default_channels?: string[]
   nav_order: string[]
   nav_hidden: string[]
+  /** 看板自定义布局; null/缺省 = 未自定义(前端内置默认布局) */
+  dashboard_layout: { v: number; items: Array<{ i: string; t: string; x: number; y: number; w: number; h: number; p?: Record<string, string> }> } | null
   screener_auto_run: boolean
   minute_intraday_refresh: boolean
   minute_intraday_refresh_interval: number
@@ -2530,6 +2532,12 @@ export const api = {
     request<{ nav_hidden: string[] }>('/api/settings/preferences/nav-hidden', {
       method: 'PUT',
       body: JSON.stringify({ nav_hidden }),
+    }),
+  /** 保存看板自定义布局; layout=null 恢复默认布局 */
+  saveDashboardLayout: (layout: Preferences['dashboard_layout']) =>
+    request<{ dashboard_layout: Preferences['dashboard_layout'] }>('/api/settings/preferences/dashboard-layout', {
+      method: 'PUT',
+      body: JSON.stringify({ layout }),
     }),
   updateInstrumentsSchedule: (hour: number, minute: number) =>
     request<{ hour: number; minute: number }>('/api/settings/preferences/instruments-schedule', {

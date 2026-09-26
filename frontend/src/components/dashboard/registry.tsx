@@ -18,6 +18,7 @@ import {
   stockListNav, rankNav,
 } from './widgets'
 import type { DashboardItem, WidgetType } from './layout'
+import { ExternalLinkWidget } from './ExternalLinkWidget'
 
 /** 渲染上下文: 数据切片与交互回调(由 Dashboard 页提供, 组件不自取数据) */
 export interface WidgetCtx {
@@ -130,14 +131,7 @@ function MonitorSection({ ctx }: { ctx: WidgetCtx }) {
   )
 }
 
-/** 外链占位 — Commit C 提供 iframe 实现, 注册表先行占位保证类型完整 */
-function ExtLinkPlaceholder({ item }: { item: DashboardItem }) {
-  return (
-    <section className="flex h-full flex-col overflow-hidden rounded-card border border-border bg-surface/80 p-1.5">
-      <div className="text-xs text-muted">外部链接 · {item.p?.title}</div>
-    </section>
-  )
-}
+/** 外链渲染见 ExternalLinkWidget (registry ext-link 项) */
 
 export const WIDGET_DEFS: WidgetDef[] = [
   {
@@ -247,7 +241,7 @@ export const WIDGET_DEFS: WidgetDef[] = [
   },
   {
     id: 'ext-link', label: '外部链接', icon: Link2, minW: 2, minH: 5, defW: 6, defH: 10,
-    render: (_ctx, item) => <ExtLinkPlaceholder item={item} />,
+    render: (_ctx, item) => <ExternalLinkWidget title={item.p?.title ?? '外部链接'} url={item.p?.url ?? 'about:blank'} />,
   },
 ]
 
