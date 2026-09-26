@@ -19,6 +19,7 @@ from app.api import (
     backtest,
     data,
     ext_data,
+    events,
     factors,
     financials,
     indices,
@@ -431,7 +432,18 @@ app.add_middleware(
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
-_AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/api/openapi.json", "/docs", "/redoc")
+_AUTH_WHITELIST_EXACT = (
+    "/health",
+    "/api/health",
+    "/openapi.json",
+    "/api/openapi.json",
+    "/docs",
+    "/redoc",
+    # SSE 事件流: EventSource 带不了 Authorization 头, 凭证即 query 里的
+    # 一次性票据, 端点内校验 (api/events.py); POST /api/events/ticket 不在
+    # 白名单, 仍走网关 Bearer 通道
+    "/api/events",
+)
 
 
 @app.middleware("http")
@@ -515,6 +527,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
+app.include_router(events.router)
 app.include_router(rps.router)
 app.include_router(sector_rotation.router)
 

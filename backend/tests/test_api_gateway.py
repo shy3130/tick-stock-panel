@@ -53,7 +53,14 @@ def test_required_scope_mapping():
     assert f("POST", "/api/kline/daily-batch") is None          # 管理面
     assert f("GET", "/api/ext-data/ext_fuyao_hot/rows") == "read:ext"
     assert f("GET", "/api/ext-data/ext_fuyao_hot/api-key") is None  # Key 状态不外露
-    assert f("POST", "/api/ext-data/ext_fuyao_hot/ingest") is None   # 写不开放
+    assert f("POST", "/api/ext-data/ext_fuyao_hot/ingest") == "write:ext"  # 程序化写入
+    assert f("POST", "/api/ext-data/ext_fuyao_hot/upload") is None   # 文件上传仍属管理面
+    assert f("POST", "/api/ext-data/ext_fuyao_hot/pull/test") is None
+    assert f("POST", "/api/ext-data") is None                       # 建表不开放
+    assert f("PUT", "/api/ext-data/x/ingest") is None               # 仅 POST
+    assert f("GET", "/api/events/ticket") == "*"                    # 票据签发: 任意有效 Token
+    assert f("POST", "/api/events/ticket") == "*"
+    assert f("GET", "/api/events") == "*"                           # SSE 流本体 (票据认证)
     assert f("GET", "/api/backtest/candidates") == "read:analysis"
     assert f("POST", "/api/backtest/run") == "run:backtest"
     assert f("POST", "/api/backtest/strategy/run") == "run:backtest"
@@ -78,19 +85,27 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     app = FastAPI()
 
     @app.get("/api/kline/daily")
-    def market():  # noqa: ANN001
+    def market():
         return {"ok": True}
 
     @app.get("/api/ext-data/x/rows")
-    def ext():  # noqa: ANN001
+    def ext():
         return {"ok": True}
 
+    @app.post("/api/ext-data/x/ingest")
+    def ingest():
+        return {"status": "ok", "rows": 1}
+
+    @app.post("/api/events/ticket")
+    def ticket():
+        return {"ticket": "tse_x"}
+
     @app.post("/api/paper/orders")
-    def paper():  # noqa: ANN001
+    def paper():
         return {"ok": True}
 
     @app.get("/api/settings/api-tokens")
-    def admin():  # noqa: ANN001
+    def admin():
         return {"ok": True}
 
     from app.config import Settings
@@ -98,7 +113,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     object.__setattr__(fake_settings, "data_dir", tmp_path)
 
     @app.middleware("http")
-    async def token_gate(request, call_next):  # noqa: ANN001
+    async def token_gate(request, call_next):
         path = request.url.path
         if not path.startswith("/api/"):
             return await call_next(request)
@@ -124,17 +139,17 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 def test_gateway_401_403_200_matrix(client: TestClient, tmp_path: Path):
     _, market_token = api_tokens.create_token(tmp_path, "只读行情", ["read:market"])
-    H = {"Authorization": f"Bearer {market_token}"}
+    hdr = {"Authorization": f"Bearer {market_token}"}
 
     # 401: 伪造 Token
     r = client.get("/api/kline/daily", headers={"Authorization": "Bearer tsp_deadbeef"})
     assert r.status_code == 401
     # 403: scope 不足 (read:market 调 ext)
-    assert client.get("/api/ext-data/x/rows", headers=H).status_code == 403
+    assert client.get("/api/ext-data/x/rows", headers=hdr).status_code == 403
     # 403: 未开放端点 (管理)
-    assert client.get("/api/settings/api-tokens", headers=H).status_code == 403
+    assert client.get("/api/settings/api-tokens", headers=hdr).status_code == 403
     # 200: 命中 scope + 限流头
-    r = client.get("/api/kline/daily", headers=H)
+    r = client.get("/api/kline/daily", headers=hdr)
     assert r.status_code == 200
     assert r.headers.get("X-RateLimit-Limit") == "120"
     assert int(r.headers["X-RateLimit-Remaining"]) < 120
@@ -146,13 +161,41 @@ def test_gateway_scope_grants_endpoint(client: TestClient, tmp_path: Path):
     assert r.status_code == 200
 
 
+def test_gateway_write_ext_ingest(client: TestClient, tmp_path: Path):
+    """write:ext — 程序化写入扩展表; 其余写端点仍不开放。"""
+    _, w = api_tokens.create_token(tmp_path, "数据写入", ["write:ext"])
+    _, r = api_tokens.create_token(tmp_path, "只读", ["read:ext", "read:market"])
+    hdr_w = {"Authorization": f"Bearer {w}"}
+    hdr_r = {"Authorization": f"Bearer {r}"}
+
+    # 持有 write:ext → ingest 200
+    assert client.post("/api/ext-data/x/ingest", headers=hdr_w).status_code == 200
+    # 只读 Token → 403 (缺 scope)
+    resp = client.post("/api/ext-data/x/ingest", headers=hdr_r)
+    assert resp.status_code == 403
+    assert "write:ext" in resp.json()["detail"]
+    # write:ext 不能读 (rows 是 read:ext)
+    assert client.get("/api/ext-data/x/rows", headers=hdr_w).status_code == 403
+    # 管理面写端点对 write:ext 也不开 (结构/上传/拉取)
+    assert client.post("/api/ext-data/x/upload", headers=hdr_w).status_code == 403
+
+
+def test_gateway_ticket_any_token(client: TestClient, tmp_path: Path):
+    """票据签发只要求 Token 有效, 不要求特定 scope (票据继承 scope, 不放大)。"""
+    _, tok = api_tokens.create_token(tmp_path, "任意", ["read:market"])
+    r = client.post("/api/events/ticket", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    # 无效 Token → 401
+    assert client.post("/api/events/ticket", headers={"Authorization": "Bearer tsp_bad"}).status_code == 401
+
+
 def test_gateway_rate_limit_429(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(api_gateway, "rate_limit_per_min", lambda: 3)
     _, tok = api_tokens.create_token(tmp_path, "限流", ["read:market"])
-    H = {"Authorization": f"Bearer {tok}"}
+    hdr = {"Authorization": f"Bearer {tok}"}
     for _ in range(3):
-        assert client.get("/api/kline/daily", headers=H).status_code == 200
-    r = client.get("/api/kline/daily", headers=H)
+        assert client.get("/api/kline/daily", headers=hdr).status_code == 200
+    r = client.get("/api/kline/daily", headers=hdr)
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) >= 1
     # 无 Bearer 的 UI 会话路径不受 Token 桶影响
@@ -161,7 +204,7 @@ def test_gateway_rate_limit_429(client: TestClient, tmp_path: Path, monkeypatch:
 
 def test_revoked_token_rejected_immediately(client: TestClient, tmp_path: Path):
     record, tok = api_tokens.create_token(tmp_path, "待吊销", ["read:market"])
-    H = {"Authorization": f"Bearer {tok}"}
-    assert client.get("/api/kline/daily", headers=H).status_code == 200
+    hdr = {"Authorization": f"Bearer {tok}"}
+    assert client.get("/api/kline/daily", headers=hdr).status_code == 200
     api_tokens.revoke_token(tmp_path, record["id"])
-    assert client.get("/api/kline/daily", headers=H).status_code == 401
+    assert client.get("/api/kline/daily", headers=hdr).status_code == 401

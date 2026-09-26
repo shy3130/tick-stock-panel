@@ -46,11 +46,42 @@ const BUILTIN_PAGES: NavEntry[] = [
   { id: '/regime', label: '市场环境', type: 'builtin', visible: true },
   { id: '/abnormal', label: '异动监控', type: 'builtin', visible: true },
   { id: '/lots', label: '持仓提醒', type: 'builtin', visible: true },
+  { id: '/paper', label: '模拟盘', type: 'builtin', visible: true },
   { id: '/signals', label: '信号库', type: 'builtin', visible: true },
   { id: '/review', label: '复盘', type: 'builtin', visible: true },
   { id: '/indices', label: '指数', type: 'builtin', visible: true },
   { id: '/data', label: '数据', type: 'builtin', visible: true },
 ]
+
+// ── 架构归属标注 (docs/open-platform-plan.md §2 核心域/扩展域边界) ──
+// 核心 = 页面承载核心域能力 (数据底座/订阅锚点/策略回测/环境生产);
+// 扩展 = 核心数据的消费页, 二开可用「扩展页面」平行实现替换 UI 而不伤核心。
+// 与「类型」列的区别: 类型标注页面来源 (内置/自定义), 归属标注架构分层。
+type ArchKind = 'core' | 'ext'
+const ARCH_CLASS: Record<string, { kind: ArchKind; reason: string }> = {
+  '/':               { kind: 'core', reason: '总览页 — 聚合核心数据的多维视图' },
+  '/watchlist':      { kind: 'core', reason: '订阅锚点 — 监控/提醒/看板的数据范围基准' },
+  '/screener':       { kind: 'core', reason: '策略引擎 — 选股/评分/信号定义' },
+  '/factors':        { kind: 'core', reason: '因子平台 — 因子检验与回测联动' },
+  '/backtest':       { kind: 'core', reason: '回测引擎 — 矩阵回测与优化' },
+  '/regime':         { kind: 'core', reason: '环境数据生产 — 回测/挖掘/归因共用的市场状态口径' },
+  '/indices':        { kind: 'core', reason: '行情数据底座 — 指数日K/分时出口' },
+  '/data':           { kind: 'core', reason: '数据底座 — 同步管道与数据源路由' },
+  '/stock-analysis': { kind: 'ext', reason: '个股分析视图 — 消费核心数据, 可由扩展页面替换' },
+  '/limit-ladder':   { kind: 'ext', reason: '连板梯队视图 — 消费核心数据, 可由扩展页面替换' },
+  '/concept-analysis': { kind: 'ext', reason: '概念分析视图 — 消费核心数据, 可由扩展页面替换' },
+  '/industry-analysis': { kind: 'ext', reason: '行业分析视图 — 消费核心数据, 可由扩展页面替换' },
+  '/financials':     { kind: 'ext', reason: '财务分析视图 — 消费核心数据, 可由扩展页面替换' },
+  '/monitor':        { kind: 'ext', reason: '监控消费页 (规则引擎与推送管道属核心), 页面可替换' },
+  '/abnormal':       { kind: 'ext', reason: '异动监控视图 — 消费核心数据, 可由扩展页面替换' },
+  '/lots':           { kind: 'ext', reason: '持仓提醒视图 — 消费核心数据, 可由扩展页面替换' },
+  '/paper':          { kind: 'ext', reason: '模拟盘 — 官方插件化拆分候选 (V3)' },
+  '/signals':        { kind: 'ext', reason: '信号库视图 — 消费核心数据, 可由扩展页面替换' },
+  '/review':         { kind: 'ext', reason: '大盘复盘视图 — 消费核心数据, 可由扩展页面替换' },
+}
+/** 自定义分析页天然属于扩展域 */
+const archOf = (entry: NavEntry): { kind: ArchKind; reason: string } =>
+  ARCH_CLASS[entry.id] ?? { kind: 'ext', reason: '自定义分析页 — 扩展域' }
 
 // ── Sortable row ──
 
@@ -96,6 +127,21 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
         <span className={`truncate text-sm font-medium ${!hidden ? 'text-foreground' : 'text-muted line-through'}`}>
           {entry.label}
         </span>
+        {(() => {
+          const arch = archOf(entry)
+          return (
+            <span
+              title={arch.reason}
+              className={`shrink-0 cursor-help rounded px-1 py-px text-[9px] leading-4 ${
+                arch.kind === 'core'
+                  ? 'bg-accent/10 text-accent'
+                  : 'border border-border text-muted'
+              }`}
+            >
+              {arch.kind === 'core' ? '核心' : '扩展'}
+            </span>
+          )
+        })()}
         {hidden && (
           <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted shrink-0">已隐藏</span>
         )}
@@ -294,6 +340,17 @@ export function SettingsMenuSettingsPanel() {
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">调整左侧菜单顺序</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
           拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
+        </p>
+        <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
+          <span>架构归属 (悬停看原因):</span>
+          <span className="inline-flex items-center gap-1">
+            <span className="rounded bg-accent/10 px-1 py-px text-[9px] leading-4 text-accent">核心</span>
+            页面承载核心域能力 (数据底座 / 订阅锚点 / 策略回测 / 环境生产)
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="rounded border border-border px-1 py-px text-[9px] leading-4 text-muted">扩展</span>
+            核心数据的消费页 — 二次开发可用「扩展页面」平行实现替换, 不伤核心
+          </span>
         </p>
       </section>
 
