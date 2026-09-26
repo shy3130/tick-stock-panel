@@ -2,26 +2,24 @@ import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
+import { ArrowUpRight, Database, Gauge, Info, Loader2, Play, RefreshCw, Sparkles, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { fmtBigNum } from '@/lib/format'
 import { DimensionMembersDialog, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
-import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import type { NavItem } from '@/lib/listNav'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
-import {
-  scoreColor, fmtPrice, fmtStockPct, pctClass, quoteAge, compactCount, SectionTitle, MiniMetric, KpiCell,
-} from '@/components/dashboard/shared'
-import {
-  IndexTicker, BreadthBar, DistributionBars, EmotionRadar, LadderMini, StockList, HotRankCard, MonitorWidget,
-  stockListNav, rankNav,
-} from '@/components/dashboard/widgets'
+import { scoreColor, quoteAge } from '@/components/dashboard/shared'
+import { DashboardGrid, normalizeDashboardLayout } from '@/components/dashboard/DashboardGrid'
+import type { DashboardItem } from '@/components/dashboard/layout'
+import type { WidgetCtx } from '@/components/dashboard/registry'
+
+/** 打开个股预览的来源榜 (用于行高亮与切股导航列表) */
+type PreviewSource = 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
 
 export function Dashboard() {
   const qc = useQueryClient()
@@ -32,12 +30,15 @@ export function Dashboard() {
     name?: string
     alert?: AlertEvent
     /** 打开来源榜: 仅高亮来源榜的行 */
-    source?: 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
+    source?: PreviewSource
     /** 切股导航列表 (来自来源榜) */
     navList?: NavItem[]
   } | null>(null)
   // 板块成分股弹窗 (概念/行业热度卡片行点击)
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
+  // 自定义网格布局(默认布局在注册表; 持久化链路接入前的会话内状态)。
+  // 注意必须在早退 return 之前 — Hooks 顺序不可随数据加载状态变化。
+  const [dashItems, setDashItems] = useState<DashboardItem[]>(() => normalizeDashboardLayout(undefined))
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -162,14 +163,28 @@ export function Dashboard() {
   }
 
   const score = data.emotion?.score ?? 50
-  const strongUp = data.breadth.strong_up ?? 0
-  const strongDown = data.breadth.strong_down ?? 0
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
   const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
   // 实时模式: none / watchlist / full_market。
   // watchlist 模式仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
+
+  // 网格组件渲染上下文: 数据切片 + 交互回调统一由页面层供给
+  const widgetCtx: WidgetCtx = {
+    data,
+    score,
+    hasDepth,
+    sealedReady,
+    isSealedDegrade,
+    activeSymbol: source => (previewStock?.source === source ? previewStock.symbol : undefined),
+    openStock: (source, symbol, name, navList) =>
+      setPreviewStock({ symbol, name, navList, source: source as PreviewSource }),
+    openDimension: setDimensionTarget,
+    openAlert: (event, navList) => {
+      if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event, source: 'alert', navList })
+    },
+  }
 
   return (
     <div className="min-h-full bg-base p-1.5">
@@ -256,115 +271,7 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="mb-1.5 grid grid-cols-4 gap-1">
-        {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
-      </div>
-
-      <div className="mb-1.5 grid grid-cols-6 gap-1">
-        <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
-        <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
-        <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-        <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
-          const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
-          const stocks = top?.stocks ?? []
-          if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
-          return `梯队 ${data.limit.tiers.length}`
-        })()} tone="accent" />
-        <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
-        <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
-      </div>
-
-      <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-w-0 space-y-1.5">
-          <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-3">
-            <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-              <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只`} />
-              <DistributionBars rows={data.distribution} />
-              <div className="mt-2">
-                <BreadthBar data={data.breadth} />
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
-                <MiniMetric label="平均涨跌" value={fmtStockPct(data.breadth.avg_pct)} cls={pctClass(data.breadth.avg_pct)} />
-                <MiniMetric label="中位涨跌" value={fmtStockPct(data.breadth.median_pct)} cls={pctClass(data.breadth.median_pct)} />
-              </div>
-            </section>
-
-            <section
-              className="rounded-card border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]"
-              style={{ borderColor: `${scoreColor(score)}40` }}
-            >
-              <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score}`} />
-              <EmotionRadar radar={data.radar} score={score} />
-            </section>
-
-            <section className="flex flex-col rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-              <div>
-                <SectionTitle icon={LineChart} title="趋势强度" hint="均线/新高低" />
-                <div className="grid grid-cols-3 gap-1.5">
-                  <MiniMetric label="站上MA5" value={`${data.trend.above_ma5_pct.toFixed(0)}%`} cls="text-accent" />
-                  <MiniMetric label="站上MA20" value={`${data.trend.above_ma20_pct.toFixed(0)}%`} cls="text-accent" />
-                  <MiniMetric label="站上MA60" value={`${data.trend.above_ma60_pct.toFixed(0)}%`} cls="text-accent" />
-                  <MiniMetric label="60日新高" value={compactCount(data.trend.new_high)} cls="text-bull" />
-                  <MiniMetric label="60日新低" value={compactCount(data.trend.new_low)} cls="text-bear" />
-                  <MiniMetric label="高低比" value={`${data.trend.new_high + data.trend.new_low > 0 ? Math.round(data.trend.new_high / (data.trend.new_high + data.trend.new_low) * 100) : 50}%`} cls={data.trend.new_high >= data.trend.new_low ? 'text-bull' : 'text-bear'} />
-                </div>
-              </div>
-              <div className="mt-1.5 border-t border-border pt-1.5">
-                <SectionTitle icon={Target} title="实用监控" hint="盘中观察" />
-                <div className="grid grid-cols-3 gap-1.5">
-                  <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" />
-                  <MiniMetric label="跌停" value={`${data.limit.limit_down ?? 0}`} cls="text-bear" />
-                  <MiniMetric label="站上MA60" value={`${data.trend.above_ma60_pct.toFixed(0)}%`} cls="text-accent" />
-                  <MiniMetric label="新高/新低" value={`${compactCount(data.trend.new_high)}/${compactCount(data.trend.new_low)}`} cls={data.trend.new_high >= data.trend.new_low ? 'text-bull' : 'text-bear'} />
-                  <MiniMetric label="高换手数" value={`${data.activity.high_turnover}`} cls="text-accent" />
-                  <MiniMetric label="放量占比" value={`${fmtPrice(data.activity.high_vol_ratio, 1)}%`} cls="text-accent" />
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
-            <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" activeSymbol={previewStock?.source === 'concept' ? previewStock.symbol : undefined}
-              onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'concept', navList: rankNav(data.concept_rank) })}
-              onDimensionClick={setDimensionTarget} />
-            <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" activeSymbol={previewStock?.source === 'industry' ? previewStock.symbol : undefined}
-              onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'industry', navList: rankNav(data.industry_rank) })}
-              onDimensionClick={setDimensionTarget} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-            <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" activeSymbol={previewStock?.source === 'gain' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'gain', navList: stockListNav(data.top_gainers) })} />
-            <StockList title="跌幅榜" rows={data.top_losers} mode="loss" activeSymbol={previewStock?.source === 'loss' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'loss', navList: stockListNav(data.top_losers) })} />
-            <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" activeSymbol={previewStock?.source === 'amount' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'amount', navList: stockListNav(data.turnover_leaders) })} />
-            <StockList title="活跃换手" rows={data.active_leaders} mode="active" activeSymbol={previewStock?.source === 'active' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'active', navList: stockListNav(data.active_leaders) })} />
-          </div>
-        </main>
-
-        <aside className="min-w-0 space-y-1.5">
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-            <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
-            <LadderMini limit={data.limit} />
-          </section>
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <BellRing className="h-3.5 w-3.5 text-accent" />
-                <h2 className="text-xs font-semibold text-foreground">监控中心</h2>
-                <span className="font-mono text-[10px] text-muted">实时信号</span>
-              </div>
-              <Link to="/monitor" className="inline-flex items-center justify-center h-5 w-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors" title="进入监控中心">
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-            <MonitorWidget
-              activeSymbol={previewStock?.source === 'alert' ? previewStock.symbol : undefined}
-              onStockClick={(event, navList) => {
-                if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event, source: 'alert', navList })
-              }}
-            />
-          </section>
-        </aside>
-      </div>
+      <DashboardGrid ctx={widgetCtx} items={dashItems} onItemsChange={setDashItems} />
 
       <StockPreviewDialog
         symbol={previewStock?.symbol ?? null}
