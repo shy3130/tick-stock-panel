@@ -499,13 +499,13 @@ function EmptyState({ status, suggests }: { status: AssistantStatus | null; sugg
               <GroupIcon className="h-3.5 w-3.5" />
               {group}
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-wrap gap-2">
               {items.map(suggest => (
                 <button
                   key={suggest.id}
                   type="button"
                   onClick={() => sendMessage(suggest.prompt)}
-                  className="cursor-pointer rounded-card border border-border bg-base/60 px-3 py-2.5 text-left text-xs text-secondary transition-all duration-150 ease-smooth hover:border-accent/40 hover:bg-elevated hover:text-foreground"
+                  className="max-w-full shrink-0 cursor-pointer rounded-card border border-border bg-base/60 px-3 py-2 text-left text-xs text-secondary transition-all duration-150 ease-smooth hover:border-accent/40 hover:bg-elevated hover:text-foreground"
                 >
                   {suggest.label}
                 </button>

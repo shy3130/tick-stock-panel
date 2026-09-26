@@ -171,5 +171,8 @@ def test_quick_suggests_grouped() -> None:
         assert {"id", "label", "prompt", "group"} <= set(item)
     ids = {item["id"] for item in assistant_tools.QUICK_SUGGESTS}
     assert {"ext-tables", "data-coverage", "market-overview"} <= ids
+    # 对比类建议: 策略横向对比 + 个股横向对比
+    assert {"strategy-compare", "stock-compare"} <= ids
     groups = {item["group"] for item in assistant_tools.QUICK_SUGGESTS}
     assert len(groups) >= 4  # 行情与大盘 / 我的与个股 / 策略与信号 / 数据与扩展
+    assert len(ids) == len(assistant_tools.QUICK_SUGGESTS)  # id 无重复
