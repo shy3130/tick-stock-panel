@@ -18,6 +18,8 @@ export interface QuickSuggest {
   id: string
   label: string
   prompt: string
+  /** 分组标题 — 空会话页按组分区展示 */
+  group?: string
 }
 
 /** 工具附带的可绘图数据 — 来自工具真实返回, 非模型生成(结果可核对)。 */

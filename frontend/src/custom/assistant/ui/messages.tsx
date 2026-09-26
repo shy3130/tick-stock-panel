@@ -107,6 +107,8 @@ const TOOL_LABELS: Record<string, string> = {
   create_signal_strategy: '创建自定义信号',
   add_to_watchlist: '加入自选股',
   check_data_coverage: '检查数据完整性',
+  list_ext_tables: '检索扩展数据表',
+  query_ext_table: '读取扩展数据表',
   get_sync_status: '查询同步进度',
   sync_data: '数据补全/同步',
 }

@@ -32,48 +32,85 @@ from app.market_time import cn_today
 from app.services import tool_catalog
 
 # ----------------------------------------------------------------
-# 快捷指令: label 展示、prompt 为点击后直接发送的完整问题。
+# 快捷指令: label 展示、prompt 为点击后直接发送的完整问题;
+# group 为前端空会话页的分组标题(同组相邻展示)。
 # ----------------------------------------------------------------
 QUICK_SUGGESTS: list[dict[str, str]] = [
+    # — 行情与大盘 —
     {
         "id": "market-overview",
+        "group": "行情与大盘",
         "label": "今天市场怎么样？",  # noqa: RUF001 — 面向用户中文文案含全角问号
         "prompt": "帮我看看今天的市场总览: 涨跌家数、成交额、涨停与连板梯队、情绪雷达, 以及领涨领跌板块。",
     },
     {
+        "id": "sector-rotation",
+        "group": "行情与大盘",
+        "label": "板块在怎么轮动",
+        "prompt": "看看今天概念/行业板块的轮动: 领涨领跌板块、盘中切换事件和资金排名, 简要总结主线。",
+    },
+    {
+        "id": "abnormal-check",
+        "group": "行情与大盘",
+        "label": "今天有什么异动",
+        "prompt": "今天市场上有哪些异动? 快速拉升、大笔买卖、涨跌停开板等都列一下, 按重要程度总结。",
+    },
+    {
+        "id": "regime-check",
+        "group": "行情与大盘",
+        "label": "当前市场环境",
+        "prompt": "最近一个月市场环境(regime)状态如何演变？今天是强势还是弱势, 情绪周期处于什么阶段？",  # noqa: RUF001
+    },
+    # — 我的与个股 —
+    {
         "id": "watchlist-check",
+        "group": "我的与个股",
         "label": "我的自选表现如何",
         "prompt": "查一下我的自选股列表, 按今日涨跌幅排序, 标出表现最好和最差的, 并简要点评。",
     },
     {
+        "id": "stock-analyze",
+        "group": "我的与个股",
+        "label": "分析一只个股",
+        "prompt": "帮我分析 600519.SH: 结合分时与日K看最新走势, 给出关键价位(支撑/压力)、趋势状态和量价特征。",
+    },
+    {
+        "id": "quote-batch",
+        "group": "我的与个股",
+        "label": "查几只股票的行情",
+        "prompt": "查一下 600519.SH、000001.SZ、300750.SZ 的实时行情快照, 按涨跌幅排序并点评一句。",
+    },
+    # — 策略与信号 —
+    {
         "id": "list-strategies",
+        "group": "策略与信号",
         "label": "我有哪些策略？",  # noqa: RUF001
         "prompt": "我目前有哪些策略？分别简述每个策略是做什么的、适用什么资产。",  # noqa: RUF001
     },
     {
         "id": "backtest-pick",
+        "group": "策略与信号",
         "label": "回测我的策略",
         "prompt": "先用工具看看我有哪些策略, 然后挑一个回测最近半年(执行前请在确认卡上点「确认」), 给出收益、回撤、夏普和胜率的解读。",
     },
     {
         "id": "create-signal",
+        "group": "策略与信号",
         "label": "帮我生成一个信号",
         "prompt": "帮我在信号库里创建一个「放量站上20日线」的信号: 收盘价高于 ma20、1 日前收盘价不高于 1 日前的 ma20, 且成交量高于 5 日均量的 1.5 倍。先说明条件设计, 我确认后再执行。",
     },
-    {
-        "id": "stock-analyze",
-        "label": "分析一只个股",
-        "prompt": "帮我分析 600519.SH: 结合分时与日K看最新走势, 给出关键价位(支撑/压力)、趋势状态和量价特征。",
-    },
-    {
-        "id": "regime-check",
-        "label": "当前市场环境",
-        "prompt": "最近一个月市场环境(regime)状态如何演变？今天是强势还是弱势, 情绪周期处于什么阶段？",  # noqa: RUF001
-    },
+    # — 数据与扩展 —
     {
         "id": "data-coverage",
+        "group": "数据与扩展",
         "label": "数据是最新的吗",
         "prompt": "帮我检查本地数据完整性: 日线/指标/分钟K/财务是不是最新、有没有缺口, 有问题告诉我怎么补全, 需要执行时先给我确认。",
+    },
+    {
+        "id": "ext-tables",
+        "group": "数据与扩展",
+        "label": "我的扩展数据表",
+        "prompt": "列出我配置的扩展数据表: 每张表的模式、字段和数据日期; 挑数据最新的一张看看前 10 行内容。",
     },
 ]
 
@@ -882,6 +919,110 @@ def _check_data_coverage(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     return result
 
 
+# ── 扩展数据表只读问答: 复用数据页 ext_data 的同一条读取链 ──────────
+
+def _ext_table_freshness(data_dir: Path, table_id: str, mode: str) -> dict[str, Any]:
+    """扫描分区目录给出数据新鲜度(轻量, 不读 parquet 内容)。
+
+    timeseries: 最新分区日期 + 分区数; snapshot: part.parquet 是否存在。
+    """
+    if mode == "snapshot":
+        exists = (data_dir / "ext_data" / table_id / "part.parquet").exists()
+        return {"has_data": exists}
+    base = data_dir / "ext_data" / table_id / "timeseries"
+    if not base.exists():
+        return {"has_data": False}
+    dates = sorted(
+        d.name[5:] for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    )
+    if not dates:
+        return {"has_data": False}
+    return {"has_data": True, "latest_date": dates[-1], "earliest_date": dates[0], "days": len(dates)}
+
+
+def _list_ext_tables(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """列出用户配置的扩展数据表: 模式、字段、说明与数据日期。"""
+    if ctx.data_dir is None:
+        raise ValueError("数据目录不可用")
+    from app.services.ext_data import ExtConfigStore
+
+    configs = ExtConfigStore(Path(ctx.data_dir)).load_all()
+    tables: list[dict[str, Any]] = []
+    for c in configs:
+        item: dict[str, Any] = {
+            "id": c.id,
+            "label": c.label,
+            "mode": c.mode,
+            "market_level": c.market_level,
+            "description": c.description,
+            "fields": [{"name": f.name, "dtype": f.dtype, "label": f.label} for f in c.fields],
+        }
+        item.update(_ext_table_freshness(Path(ctx.data_dir), c.id, c.mode))
+        tables.append(item)
+    tables.sort(key=lambda t: (not t.get("has_data"), t["id"]))
+    result: dict[str, Any] = {"tables": tables, "count": len(tables)}
+    if not tables:
+        result["note"] = "还没有配置任何扩展数据表; 可在数据页的扩展数据里创建或上传。"
+    return result
+
+
+def _query_ext_table(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """读取一张扩展数据表的行: 支持等值过滤、排序、日期范围, limit 封顶 100。"""
+    if ctx.data_dir is None:
+        raise ValueError("数据目录不可用")
+    from fastapi import HTTPException
+
+    from app.api.ext_data import _apply_row_filters, _apply_row_sort, _read_ext_dataframe
+    from app.services.ext_data import ExtConfigStore
+
+    table = str(args.get("table") or "").strip()
+    if not table:
+        raise ValueError("缺少参数 table (扩展表 id, 可先用 list_ext_tables 查询)")
+    config = ExtConfigStore(Path(ctx.data_dir)).get(table)
+    if config is None:
+        raise ValueError(f"扩展表不存在: {table} (可先用 list_ext_tables 查看全部表)")
+
+    try:
+        df, active_date = _read_ext_dataframe(
+            config,
+            Path(ctx.data_dir),
+            str(args["date"]) if args.get("date") else None,
+            str(args["start_date"]) if args.get("start_date") else None,
+            str(args["end_date"]) if args.get("end_date") else None,
+        )
+        if args.get("filter"):
+            df = _apply_row_filters(df, [str(args["filter"])])
+        if args.get("sort"):
+            df = _apply_row_sort(df, str(args["sort"]))
+    except HTTPException as exc:  # 复用的过滤/排序/日期校验按契约转错误文案
+        raise ValueError(str(exc.detail)) from exc
+
+    total = df.height
+    limit = max(1, min(100, int(args.get("limit") or 20)))
+    rows = [
+        {k: _clean_value(v) for k, v in row.items()}
+        for row in df.head(limit).to_dicts()
+    ]
+    result: dict[str, Any] = {
+        "id": config.id,
+        "label": config.label,
+        "mode": config.mode,
+        "date": active_date,
+        "total": total,
+        "returned": len(rows),
+        "limit": limit,
+        "columns": df.columns,
+        "rows": rows,
+    }
+    if total > len(rows):
+        result["note"] = (
+            f"共 {total} 行, 只返回前 {len(rows)} 行; 可用 filter=字段:值1|值2 过滤、"
+            "sort=字段:desc 排序后再查。"
+        )
+    return result
+
+
 def _get_sync_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import contextlib
 
@@ -999,6 +1140,8 @@ _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "create_signal_strategy": _create_signal_strategy,
     "add_to_watchlist": _add_to_watchlist,
     "check_data_coverage": _check_data_coverage,
+    "list_ext_tables": _list_ext_tables,
+    "query_ext_table": _query_ext_table,
     "get_sync_status": _get_sync_status,
     "sync_data": _sync_data,
 }
@@ -1176,6 +1319,29 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
             [],
         ),
         _schema(
+            "list_ext_tables",
+            "列出用户配置的扩展数据表(二开扩展内容): 每张表的模式(快照/时序)、字段、说明"
+            "与最新数据日期。用户问到扩展表/自定义数据/上传的数据时先调它。",
+            {},
+            [],
+        ),
+        _schema(
+            "query_ext_table",
+            "读取一张扩展数据表的行数据。table 为表 id(先用 list_ext_tables 查); "
+            "filter=字段:值1|值2 等值过滤(值间 OR); sort=字段 或 字段:desc 排序; "
+            "时序表支持 start_date/end_date(YYYY-MM-DD)或 date 单日。limit 默认 20, 上限 100。",
+            {
+                "table": {"type": "string", "description": "扩展表 id"},
+                "filter": {"type": "string", "description": "等值过滤: 字段:值1|值2"},
+                "sort": {"type": "string", "description": "排序字段, 降序加 :desc"},
+                "date": {"type": "string", "description": "时序表单日 YYYY-MM-DD"},
+                "start_date": {"type": "string", "description": "时序表起始日期(含)"},
+                "end_date": {"type": "string", "description": "时序表结束日期(含)"},
+                "limit": {"type": "integer", "description": "返回行数上限 (默认 20, 最大 100)"},
+            },
+            ["table"],
+        ),
+        _schema(
             "get_sync_status",
             "查询数据同步任务进度: 活跃任务的阶段/百分比/消息、最近 5 个任务、财务同步状态。"
             "sync_data 触发后用它轮询(建议间隔数秒, 不要高频轮询)。",
@@ -1300,6 +1466,11 @@ def summarize_tool_result(name: str, payload: dict[str, Any]) -> str:
     if name == "check_data_coverage":
         issue_count = len(result.get("issues") or [])
         return f"发现 {issue_count} 项数据缺口" if issue_count else "数据完整, 无缺口"
+    if name == "list_ext_tables":
+        count = result.get("count", 0)
+        return f"返回 {count} 张扩展表" if count else "暂无扩展数据表"
+    if name == "query_ext_table":
+        return f"读取扩展表 {result.get('label', '-')} {result.get('returned', 0)}/{result.get('total', 0)} 行"
     if name == "get_sync_status":
         active = result.get("active_job")
         if active:
