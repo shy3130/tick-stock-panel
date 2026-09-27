@@ -1,0 +1,64 @@
+name: CI
+
+# 持续集成: 后端全量测试 + 前端构建。
+# 与 release.yml 的分工: 这里不打包, 只守质量门 —
+# 后端含 Tier A 开放契约快照测试 (test_openapi_contract.py),
+# 开放面的任何变化都会在这里被拦下, 须有意识地更新快照。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: 设置 Python
+        run: uv python install 3.12
+
+      - name: 安装依赖 (含 dev 测试链)
+        run: uv sync --extra dev --frozen
+
+      - name: 后端全量测试
+        run: uv run pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 设置 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 (tsc + vite)
+        run: pnpm build
