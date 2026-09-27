@@ -1464,12 +1464,16 @@ def test_release_of_extracts_from_presigned_url():
 
 
 def test_test_dataset_daily_preview(monkeypatch):
-    bars = {"000001.SZ": [_bar(date(2026, 8, 27), 11.05), _bar(date(2026, 8, 28), 11.65)]}
+    # 实现窗口为 now-30天..now, 数据日期必须相对今天生成; 硬编码日期会随时间
+    # 滑出窗口 (2026-09-27 起原硬编码 8/27 的版本必然失败)。
+    d1 = date.today() - timedelta(days=2)
+    d2 = date.today() - timedelta(days=1)
+    bars = {"000001.SZ": [_bar(d1, 11.05), _bar(d2, 11.65)]}
     provider = _hist_provider(monkeypatch, _FakeHistClient(bars))
     out = provider.test_dataset("daily", ["000001.SZ"])
     assert out["provider"] == "fuyao" and out["dataset"] == "daily"
     assert out["rows"] == 2
-    assert out["preview"][0]["date"] == "2026-08-27"  # date → ISO 字符串
+    assert out["preview"][0]["date"] == d1.isoformat()  # date → ISO 字符串
 
 
 def test_test_dataset_adj_factor_preview(monkeypatch):
