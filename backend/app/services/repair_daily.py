@@ -18,6 +18,7 @@ import logging
 from collections.abc import Callable
 from datetime import date
 
+from app.market_time import cn_today
 from app.tickflow.capabilities import CapabilitySet
 from app.tickflow.repository import KlineRepository
 
@@ -46,7 +47,7 @@ def run_repair_daily(
     Returns:
         run_now() 的完整结果 dict。
     """
-    today = date.today()
+    today = cn_today()
     if start_date > today:
         return {"error": "起始日期不能晚于今天"}
 
