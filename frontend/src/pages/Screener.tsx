@@ -48,7 +48,9 @@ export function Screener() {
   const [tfFilter, setTfFilter] = useState<'all' | '1d' | '1m'>('all')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
-  const [asOf, setAsOf] = useState<string>('')
+  // 回看日期与看板共用持久化值 (tf-dashboard-date); 空串 = 当天
+  const [asOf, setAsOf] = useState<string>(() => storage.dashboardDate.get(''))
+  const restoredDateRef = useRef(!!storage.dashboardDate.get(''))
   const [batchMsg, setBatchMsg] = useState<string>('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
@@ -194,10 +196,10 @@ export function Screener() {
 
   const dataStatus = useDataStatus({ staleTime: 0 })
 
-  // 默认日期 = enriched 最新日期（始终跟随最新）
+  // 默认日期 = enriched 最新日期（始终跟随最新）; 恢复了历史回看日期时不自动跟随
   useEffect(() => {
     const latest = dataStatus.data?.enriched?.latest_date
-    if (latest) setAsOf(latest)
+    if (latest && !restoredDateRef.current) setAsOf(latest)
   }, [dataStatus.data?.enriched?.latest_date])
 
   const strategyPresets = useMemo(
@@ -633,6 +635,7 @@ export function Screener() {
   // 日期变化交给统一 effect 计算一次，避免这里与 effect 重复请求。
   const handleDateChange = (newDate: string) => {
     setAsOf(newDate)
+    storage.dashboardDate.set(newDate)
     runAllDateRef.current = null
     setResult(null)
   }

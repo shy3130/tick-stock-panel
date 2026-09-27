@@ -1457,7 +1457,12 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
 // ===== 主页面 =====
 
 export function LimitUpLadder() {
-  const [asOf, setAsOf] = useState('')
+  // 回看日期与看板共用持久化值 (tf-dashboard-date); 空串 = 当天
+  const [asOf, setAsOf] = useState(() => storage.dashboardDate.get(''))
+  const handleAsOfChange = useCallback((v: string) => {
+    setAsOf(v)
+    storage.dashboardDate.set(v)
+  }, [])
   const [direction, setDirection] = useState<Direction>(() => storage.limitLadderDirection.get('up'))
   const [sealMode, setSealMode] = useState<'vol' | 'amount'>(() => storage.limitLadderSealMode.get('vol'))
   const [filterKeys, setFilterKeys] = useState<Set<FilterKey>>(loadFilterKeys)
@@ -1746,7 +1751,7 @@ export function LimitUpLadder() {
       />
 
       {/* 总览条 + 日期 */}
-      <OverviewBar tiers={tiers} dateValue={dateValue} onDateChange={setAsOf} filterKeys={filterKeys} bf={extFields.bf} direction={direction} />
+      <OverviewBar tiers={tiers} dateValue={dateValue} onDateChange={handleAsOfChange} filterKeys={filterKeys} bf={extFields.bf} direction={direction} />
 
       {/* 概念统计 */}
       {(extFields.showConceptStats ?? true) && (

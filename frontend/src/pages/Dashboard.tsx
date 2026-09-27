@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react'
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -6,6 +6,7 @@ import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, 
 import { DatePicker } from '@/components/DatePicker'
 import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct } from '@/lib/format'
 import { DimensionMembersDialog, dimensionKindForSourceField, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
@@ -588,7 +589,15 @@ function rankNav(rank?: OverviewMarket['concept_rank']): NavItem[] {
 
 export function Dashboard() {
   const qc = useQueryClient()
-  const [selectedDate, setSelectedDate] = useState<string | undefined>()
+  // 回看日期持久化: 新会话恢复上次选定的日期, 而非回到当天
+  const [selectedDate, setSelectedDate] = useState<string | undefined>(() => {
+    const saved = storage.dashboardDate.get('')
+    return saved || undefined
+  })
+  const handleDateChange = useCallback((v: string) => {
+    setSelectedDate(v)
+    storage.dashboardDate.set(v)
+  }, [])
   const [manualFetching, setManualFetching] = useState(false)
   const [previewStock, setPreviewStock] = useState<{
     symbol: string
@@ -787,7 +796,7 @@ export function Dashboard() {
           {currentDate ? (
             <DatePicker
               value={currentDate}
-              onChange={setSelectedDate}
+              onChange={handleDateChange}
               min={dataStatus.data?.enriched?.earliest_date ?? undefined}
               max={latestDate ?? undefined}
               className="w-32"

@@ -41,6 +41,9 @@ export const storage = {
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
+  /** 看板回看日期 (YYYY-MM-DD); 空串 = 回到当天 */
+  dashboardDate:        kv<string>('tf-dashboard-date'),
+
   /** 策略池 (screener) — 统一池 (日线+分钟共用, 执行按各自声明周期路由) */
   strategyPool:         kv<string[]>('strategy-pool'),
   /** 旧分钟隔离池 — 仅作一次性迁移读取源, 迁移完成后移除该 key */
