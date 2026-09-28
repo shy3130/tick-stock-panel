@@ -319,6 +319,32 @@ def test_check_data_coverage_fresh_data_has_few_issues(tmp_path: Path) -> None:
     assert result["financials"]["metrics"]["latest_period"] == "2026-06-30"
 
 
+def test_biz_days_behind_counts_workdays_after_latest_up_to_today() -> None:
+    from datetime import date as date_cls
+
+    fri, sat, sun, mon = (date_cls(2026, 9, d) for d in (25, 26, 27, 28))
+    assert assistant_tools._biz_days_behind("2026-09-25", sat) == 0  # 周五数据, 周六不落后
+    assert assistant_tools._biz_days_behind("2026-09-25", sun) == 0
+    assert assistant_tools._biz_days_behind("2026-09-25", mon) == 1  # 周一的日K还没有
+    assert assistant_tools._biz_days_behind("2026-09-24", sat) == 1  # 缺周五
+    assert assistant_tools._biz_days_behind("2026-09-25", fri) == 0
+
+
+def test_check_data_coverage_weekend_with_friday_data_has_no_lag_issue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from datetime import date as date_cls
+
+    monkeypatch.setattr(assistant_tools, "cn_today", lambda: date_cls(2026, 9, 26))  # 周六
+    for sub in ("kline_daily", "kline_daily_enriched", "kline_minute"):
+        _make_partitions(tmp_path, sub, ["2026-09-24", "2026-09-25"])  # 截至周五
+    ctx = assistant_tools.ToolContext.build(data_dir=tmp_path)
+
+    result = assistant_tools._check_data_coverage({}, ctx)
+
+    assert not any("日线停留在" in issue for issue in result["issues"])
+
+
 class _StubRepo:
     """只实现覆盖检查所需的最小仓储接口。"""
 
