@@ -1,0 +1,17 @@
+<!-- Tick Stock Panel · 场景底卡 — 深色圆角卡 + 亮紫渐变主标
+     规格: 64 网格; 圆角 12.5%; 描边 #232838; 对应 logo-tile-dark-*.png -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Tick Stock Panel">
+  <defs>
+    <linearGradient id="tsp-tile-dark" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <rect x="0.3" y="0.3" width="63.4" height="63.4" rx="7.7" fill="#191C25" stroke="#232838" stroke-width="0.6"/>
+  <g transform="translate(12 12) scale(0.625)">
+    <path d="M20 9 H11 V55 H20" stroke="url(#tsp-tile-dark)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+    <path d="M44 9 H53 V55 H44" stroke="url(#tsp-tile-dark)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
+    <line x1="32" y1="15" x2="32" y2="49" stroke="url(#tsp-tile-dark)" stroke-width="3.5" stroke-linecap="butt" stroke-opacity="0.55"/>
+    <rect x="26.5" y="19.5" width="11" height="17" fill="url(#tsp-tile-dark)"/>
+  </g>
+</svg>

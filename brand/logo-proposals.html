@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TSP · Logo 设计提案 · Tick Stock Panel</title>
+<style>
+  :root{
+    --bg:#0e1015; --bg2:#13161d; --card:#161923; --line:#262b38;
+    --txt:#e8eaf2; --txt2:#9aa3b8; --txt3:#5f6980;
+    --vio-300:#c4b5fd; --vio-400:#a78bfa; --vio-500:#8b5cf6; --vio-600:#7c3aed; --vio-800:#5b21b6;
+    --tile-light:#f6f6f8; --tile-dark:#191c25;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.6;padding-bottom:80px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+
+  /* ---------- header ---------- */
+  header{background:linear-gradient(180deg,#141726 0%,var(--bg) 100%);border-bottom:1px solid var(--line);padding:64px 0 44px;margin-bottom:44px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.35em;color:var(--vio-400);text-transform:uppercase;margin-bottom:14px}
+  h1{font-size:40px;font-weight:800;letter-spacing:-.02em}
+  h1 em{font-style:normal;color:var(--vio-400)}
+  .sub{margin-top:12px;color:var(--txt2);font-size:15px;max-width:760px}
+  .sub b{color:var(--txt);font-weight:600}
+
+  /* ---------- section head ---------- */
+  .sec{margin:64px 0 24px;display:flex;align-items:baseline;gap:14px}
+  .sec .no{font-family:var(--mono);font-size:13px;color:var(--vio-500);letter-spacing:.2em}
+  .sec h2{font-size:22px;font-weight:700;letter-spacing:-.01em}
+  .sec .hint{color:var(--txt3);font-size:13px}
+
+  /* ---------- brief ---------- */
+  .brief{display:grid;grid-template-columns:1.15fr .85fr;gap:20px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px}
+  .panel h3{font-size:13px;font-family:var(--mono);letter-spacing:.18em;color:var(--txt3);text-transform:uppercase;margin-bottom:14px}
+  .kw{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+  .kw span{font-size:13px;padding:5px 12px;border:1px solid #34305a;border-radius:999px;color:var(--vio-300);background:rgba(124,58,237,.10)}
+  .principles{list-style:none}
+  .principles li{display:flex;gap:10px;font-size:13.5px;color:var(--txt2);padding:5px 0}
+  .principles li b{color:var(--txt);font-weight:600}
+  .principles li::before{content:"—";color:var(--vio-500);font-family:var(--mono)}
+  .baseline{display:flex;gap:22px;align-items:center;margin-top:6px}
+  .b-tile{width:96px;height:96px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+  .b-tile.lt{background:var(--tile-light)} .b-tile.dk{background:var(--tile-dark);border:1px solid var(--line)}
+  .b-note{font-size:12.5px;color:var(--txt3);line-height:1.7}
+  .swatches{display:flex;gap:10px;margin-top:14px}
+  .sw{flex:1;border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:10.5px;color:#fff9}
+  .sw i{display:block;font-style:normal;color:#fff;font-size:11px;margin-bottom:2px}
+
+  /* ---------- concept card ---------- */
+  .concept{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px;margin-top:26px}
+  .c-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+  .c-badge{font-family:var(--mono);font-size:13px;font-weight:700;color:#0e1015;background:linear-gradient(135deg,var(--vio-400),var(--vio-600));border-radius:6px;padding:3px 10px;letter-spacing:.08em}
+  .c-head h2{font-size:21px;font-weight:700}
+  .c-head .en{font-family:var(--mono);font-size:12px;color:var(--txt3);letter-spacing:.12em;text-transform:uppercase}
+  .c-tag{font-size:13.5px;color:var(--vio-300);margin-bottom:20px}
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .tile{border-radius:12px;padding:26px;display:flex;flex-direction:column;align-items:center;gap:20px}
+  .tile.lt{background:var(--tile-light)} .tile.dk{background:var(--tile-dark);border:1px solid #232838}
+  .tile .big{display:flex;align-items:center;justify-content:center;height:150px}
+  .lockup{display:flex;align-items:center;gap:13px}
+  .lockup .wm-tsp{font-size:26px;font-weight:800;letter-spacing:.02em;line-height:1.1}
+  .lockup .wm-sub{font-family:var(--mono);font-size:10px;letter-spacing:.3em;color:#8b8fa3;margin-top:3px}
+  .tile.lt .wm-tsp{color:#23262e}
+  .strip{display:flex;gap:26px;align-items:flex-end;margin-top:18px;flex-wrap:wrap}
+  .s-group{display:flex;gap:8px;align-items:flex-end}
+  .chip{border-radius:10px;display:flex;align-items:center;justify-content:center}
+  .chip.lt{background:var(--tile-light)} .chip.dk{background:var(--tile-dark);border:1px solid #232838}
+  .s-label{font-family:var(--mono);font-size:10.5px;color:var(--txt3);margin-bottom:6px;letter-spacing:.1em}
+  .notes{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 34px;margin-top:20px;padding-top:18px;border-top:1px dashed var(--line)}
+  .notes div{display:flex;gap:10px;font-size:13px;color:var(--txt2)}
+  .notes b{color:var(--txt);font-weight:600;flex:none}
+  .notes i{font-style:normal;color:var(--vio-500);font-family:var(--mono);flex:none}
+
+  /* ---------- table ---------- */
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:13.5px}
+  th,td{padding:13px 16px;text-align:left;border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--txt3);background:#12141c}
+  tr:last-child td{border-bottom:none}
+  td b{color:var(--txt)} td{color:var(--txt2)}
+  .star{color:var(--vio-400);letter-spacing:2px;font-size:12px}
+  .best td{background:rgba(124,58,237,.07)}
+  .reco{margin-top:22px;background:linear-gradient(135deg,rgba(124,58,237,.14),rgba(139,92,246,.05));border:1px solid #3b2d68;border-radius:14px;padding:22px 26px;font-size:14px;color:var(--txt2)}
+  .reco b{color:var(--txt)} .reco .rk{color:var(--vio-300);font-weight:700}
+
+  .chapter{margin:56px 0 2px;border:1px solid #2c2547;background:linear-gradient(135deg,rgba(124,58,237,.12),rgba(124,58,237,.02));border-radius:16px;padding:26px 30px}
+  .chapter .ch-no{font-family:var(--mono);font-size:11px;letter-spacing:.35em;color:var(--vio-400);text-transform:uppercase}
+  .chapter .ch-tt{font-size:24px;font-weight:800;margin-top:6px}
+  .chapter .ch-sub{font-size:13.5px;color:var(--txt2);margin-top:6px;max-width:860px}
+  .t-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--txt3);margin:0 0 8px;text-transform:uppercase}
+  .isys{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+  .icell{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
+  .icell .irow{display:flex;gap:8px}
+  .chip2{border-radius:8px;display:flex;align-items:center;justify-content:center;flex:1;height:64px}
+  .chip2.lt{background:var(--tile-light)} .chip2.dk{background:var(--tile-dark);border:1px solid #232838}
+  .iname{font-size:13px;font-weight:600}
+  .iname .ien{color:var(--txt3);font-family:var(--mono);font-size:10px;margin-left:5px;font-weight:400;letter-spacing:.06em}
+  .sizerow{display:flex;align-items:flex-end;gap:24px;margin-top:14px;flex-wrap:wrap}
+  .sizeitem{display:flex;flex-direction:column;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--txt3)}
+  .vgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+  .vcard{border-radius:12px;border:1px solid var(--line);padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px;font-size:11.5px;color:var(--txt2);text-align:center;line-height:1.5}
+  .vcard.lt{background:var(--tile-light)} .vcard.dk{background:var(--tile-dark)}
+  .dock{margin-top:14px;background:var(--tile-dark);border:1px solid #232838;border-radius:12px;padding:14px 18px;display:flex;gap:8px;align-items:center;overflow-x:auto}
+  .ditem{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:var(--txt2);padding:8px 12px;border-radius:8px;flex:none}
+  .ditem.on{background:rgba(124,58,237,.22);color:#d9ccff}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--txt3);letter-spacing:.06em}
+  @media (max-width:860px){.brief,.duo,.notes{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- 全局渐变定义：页面内所有 logo 共享，保证明/暗两套渐变一致 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lg-light" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A78BFA"/><stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="lg-dark" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C4B5FD"/><stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="lg-white" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Brand Identity Proposal</div>
+    <h1>TSP · Logo 设计提案 <em>/ 19 个方向</em></h1>
+    <p class="sub"><b>Tick Stock Panel</b> — A股智能量化工作台。自托管 · 插件化数据源 · 选股 / 回测 / 监控 / 因子挖掘 / AI 助手。
+    双辑呈报：<b>核心七向</b>延续品牌资产正统演进，<b>扩展十二向</b>放宽图形类型边界。每个方案均给出<b>明 / 暗双底展示、字标组合（Lockup）、48/24/16px 小尺寸验证</b>，可直接对比评审。</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 00 设计简报 ============ -->
+  <div class="sec"><span class="no">00</span><h2>设计简报</h2><span class="hint">先对齐品牌定位，再谈图形</span></div>
+  <div class="brief">
+    <div class="panel">
+      <h3>Brand Brief</h3>
+      <div class="kw">
+        <span>Tick · 跳动的数据</span><span>Panel · 工作台/面板</span><span>Quant · 量化</span>
+        <span>自托管 · 极客</span><span>专业 · 可信</span><span>终端感</span>
+      </div>
+      <ul class="principles">
+        <li><b>延续品牌资产</b>：以现有品牌紫 #7C3AED 为锚，不另起炉灶。</li>
+        <li><b>全直角几何语言</b>：呼应现有「无圆角 / 无圆笔帽」的终端气质。</li>
+        <li><b>16px 可读性</b>：favicon 是第一战场，形状必须经得起最小尺寸。</li>
+        <li><b>单色系紫</b>：刻意不引入红涨绿跌等行情色，避免语义歧义、保持专业中性。</li>
+        <li><b>几何成立</b>：去掉渐变后图形依然成立，渐变只是锦上添花。</li>
+      </ul>
+      <div class="swatches">
+        <div class="sw" style="background:#7C3AED"><i>#7C3AED</i>Brand</div>
+        <div class="sw" style="background:#A78BFA;color:#1a1d28"><i>#A78BFA</i>Light</div>
+        <div class="sw" style="background:#5B21B6"><i>#5B21B6</i>Deep</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>现有 Logo · 评估基线</h3>
+      <div class="baseline">
+        <div class="b-tile lt" data-icon="CUR" data-grad="lg-light" data-size="60"></div>
+        <div class="b-tile dk" data-icon="CUR" data-grad="lg-dark" data-size="60"></div>
+        <div class="b-note">方括号 [ ] = 终端 / 量化边界<br>中央 K 线 = 行情本体<br><br>评估：<b style="color:var(--txt2)">语义准确、品牌辨识已建立</b>，但单根 K 线偏静态，「工作台 / 多面板」属性未表达，差异化空间有限。<br>本设计已转正为本页 <b style="color:var(--vio-300)">方案 0 · 原版直出</b>。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 方案卡片（由模板渲染） ============ -->
+  <div id="concepts"></div>
+
+  <!-- ============ 20 对比与推荐 ============ -->
+  <div class="sec"><span class="no">20</span><h2>对比评审</h2><span class="hint">五维打分 · ★☆ 满分 5</span></div>
+  <div class="t-label">Series 01 · 核心七向</div>
+  <table>
+    <tr><th>方案</th><th>语义直接</th><th>独特性</th><th>16px 表现</th><th>品牌延续</th><th>一句话点评</th></tr>
+    <tr class="best"><td><b>0 · 原版直出</b></td><td class="star">★★★★★</td><td class="star">★★☆☆☆</td><td class="star">★★★★★</td><td class="star">★★★★★</td><td>现有资产原样转正，零迁移成本，独特性最弱</td></tr>
+    <tr class="best"><td><b>A · 双阳括号</b></td><td class="star">★★★★★</td><td class="star">★★★☆☆</td><td class="star">★★★★★</td><td class="star">★★★★★</td><td>现有 logo 的正统进化，品牌资产零浪费</td></tr>
+    <tr><td><b>B · Tick 脉冲</b></td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td>最「活」的一个，实时感拉满，细节较多</td></tr>
+    <tr><td><b>C · 三连阳</b></td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★★★★</td><td class="star">★★☆☆☆</td><td>最简单凶悍，通用金融符号，独占性弱</td></tr>
+    <tr><td><b>D · T 字 K 线</b></td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★★★★</td><td class="star">★★★☆☆</td><td>字母标路线，品牌名绑定最强，行业感稍弱</td></tr>
+    <tr class="best"><td><b>E · 突破面板</b></td><td class="star">★★★★☆</td><td class="star">★★★★★</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td>故事性最强：数据冲破面板，双关「突破」</td></tr>
+    <tr><td><b>F · 数据括号</b></td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★★★★</td><td class="star">★★★★☆</td><td>终端数据感最纯粹，比 A 更冷静克制</td></tr>
+  </table>
+  <div class="t-label" style="margin-top:26px">Series 02 · 扩展十二向</div>
+  <table>
+    <tr><th>方案</th><th>语义直接</th><th>独特性</th><th>16px 表现</th><th>品牌延续</th><th>一句话点评</th></tr>
+    <tr class="best"><td><b>G · 印章实底</b></td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★★★</td><td class="star">★★★★☆</td><td>实底负空间，App 图标场景的最强解</td></tr>
+    <tr><td><b>H · 行情钟</b></td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★☆☆☆</td><td>tick=滴答的时间叙事，气质独特但需解释</td></tr>
+    <tr><td><b>I · 层叠面板</b></td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td>对 Panel 最忠实的图解，景深层次感</td></tr>
+    <tr><td><b>J · 数据矩阵</b></td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★☆☆☆</td><td>数据库与网格扫描的像素化表达</td></tr>
+    <tr><td><b>K · 缎带箭头</b></td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★☆☆☆</td><td>线条与体块合一的纯向上动势</td></tr>
+    <tr><td><b>L · 盾卫 K 线</b></td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td>安全与风控语义，自托管叙事补位</td></tr>
+    <tr><td><b>M · 信号站</b></td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td>实时触达的具象化，监控场景天选</td></tr>
+    <tr><td><b>N · 行情纸带</b></td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td>复古纸带 + 现代负空间，内容品牌佳</td></tr>
+    <tr><td><b>O · 数据流水线</b></td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★☆☆☆</td><td>主数据流的工程图解，PCB 走线感</td></tr>
+    <tr class="best"><td><b>P · 选股准星</b></td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★★★☆</td><td class="star">★★★☆☆</td><td>取景角锁定标的，选股语义最锋利</td></tr>
+    <tr><td><b>Q · 旗形</b></td><td class="star">★★★☆☆</td><td class="star">★★★★★</td><td class="star">★★★★☆</td><td class="star">★★☆☆☆</td><td>交易员彩蛋，圈层认同感拉满</td></tr>
+    <tr><td><b>R · 数据立方</b></td><td class="star">★★★☆☆</td><td class="star">★★★☆☆</td><td class="star">★★★★☆</td><td class="star">★★☆☆☆</td><td>单容器自托管的体块表达</td></tr>
+  </table>
+
+  <div class="reco">
+    <b>设计师推荐（19 案总评）</b> — 主标三选一：<span class="rk">0 原版直出</span>（零迁移成本，语义与辨识已验证，最稳的选择）；
+    <span class="rk">A 双阳括号</span>（在 0 之上注入趋势感，正统进化，上线成本同样极低）；
+    <span class="rk">E 突破面板</span>（差异化与故事性最强，适合品牌升级）。
+    扩展辑补位：<span class="rk">G 印章实底</span>做 App 图标，与主标组成「图形标 + 印章标」双形态体系；
+    <span class="rk">P 选股准星</span> 与 <span class="rk">M 信号站</span> 适合选股器、监控中心等功能子品牌；
+    <span class="rk">L 盾卫</span>承接安全叙事；<span class="rk">Q 旗形</span>留给社区徽章与周边彩蛋。
+  </div>
+
+  <!-- ============ 21 方案 0 图标系统 ============ -->
+  <div class="sec"><span class="no">21</span><h2>方案 0 · 图标系统落地</h2><span class="hint">主标尺寸规范 + 功能图标族 + 场景模拟</span></div>
+
+  <div class="panel">
+    <h3>A · 主标尺寸与变体</h3>
+    <div class="sizerow">
+      <div class="sizeitem"><span data-icon="0" data-grad="lg-light" data-size="64"></span>64px</div>
+      <div class="sizeitem"><span data-icon="0" data-grad="lg-light" data-size="48"></span>48px</div>
+      <div class="sizeitem"><span data-icon="0" data-grad="lg-light" data-size="32"></span>32px</div>
+      <div class="sizeitem"><span data-icon="0" data-grad="lg-light" data-size="24"></span>24px</div>
+      <div class="sizeitem"><span data-icon="0" data-grad="lg-light" data-size="16"></span>16px</div>
+    </div>
+    <p style="font-size:12px;color:var(--txt3);margin-top:12px">出图规格：SVG 为源文件；PNG 按 512 / 256 / 128 / 64 / 48 / 32 / 24 / 16 八档导出。浅底用品牌渐变，深底换亮渐变。</p>
+    <div class="vgrid">
+      <div class="vcard lt"><span data-icon="0" data-grad="lg-light" data-size="56"></span>渐变 · 浅底<br>默认场景</div>
+      <div class="vcard dk"><span data-icon="0" data-grad="lg-dark" data-size="56"></span>渐变 · 深底<br>终端 / 暗色 UI</div>
+      <div class="vcard dk"><span data-icon="0" data-grad="lg-white" data-size="56"></span>反白 · 深底<br>页头 / 启动页</div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:20px">
+    <h3>B · 功能图标族 —— 方案 0 的视觉 DNA 延展</h3>
+    <p style="font-size:12.5px;color:var(--txt2)">同一套语言：直角方括号边界 + K 线元素 + 4.5px 等宽线幅，覆盖产品核心功能，可直接用于导航、空状态与文档。</p>
+    <div class="isys">
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="DASH" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="DASH" data-grad="lg-dark" data-size="40"></div></div><div class="iname">看板<span class="ien">Dashboard</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="SCAN" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="SCAN" data-grad="lg-dark" data-size="40"></div></div><div class="iname">选股<span class="ien">Screener</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="BACK" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="BACK" data-grad="lg-dark" data-size="40"></div></div><div class="iname">回测<span class="ien">Backtest</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="MON" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="MON" data-grad="lg-dark" data-size="40"></div></div><div class="iname">监控<span class="ien">Monitor</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="ALERT" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="ALERT" data-grad="lg-dark" data-size="40"></div></div><div class="iname">异动<span class="ien">Alert</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="FAC" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="FAC" data-grad="lg-dark" data-size="40"></div></div><div class="iname">因子挖掘<span class="ien">Factors</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="REV" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="REV" data-grad="lg-dark" data-size="40"></div></div><div class="iname">复盘<span class="ien">Review</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="SYNC" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="SYNC" data-grad="lg-dark" data-size="40"></div></div><div class="iname">数据源<span class="ien">Data Sync</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="API" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="API" data-grad="lg-dark" data-size="40"></div></div><div class="iname">开放 API<span class="ien">Open API</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="AI" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="AI" data-grad="lg-dark" data-size="40"></div></div><div class="iname">AI 助手<span class="ien">AI Assist</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="FAV" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="FAV" data-grad="lg-dark" data-size="40"></div></div><div class="iname">自选<span class="ien">Watchlist</span></div></div>
+      <div class="icell"><div class="irow"><div class="chip2 lt" data-icon="PLUG" data-grad="lg-light" data-size="40"></div><div class="chip2 dk" data-icon="PLUG" data-grad="lg-dark" data-size="40"></div></div><div class="iname">插件 / MCP<span class="ien">Plugins</span></div></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:20px">
+    <h3>C · 导航场景模拟</h3>
+    <div class="dock">
+      <div class="ditem on"><span data-icon="DASH" data-grad="lg-white" data-size="22"></span>看板</div>
+      <div class="ditem"><span data-icon="SCAN" data-grad="lg-dark" data-size="22"></span>选股</div>
+      <div class="ditem"><span data-icon="BACK" data-grad="lg-dark" data-size="22"></span>回测</div>
+      <div class="ditem"><span data-icon="MON" data-grad="lg-dark" data-size="22"></span>监控</div>
+      <div class="ditem"><span data-icon="ALERT" data-grad="lg-dark" data-size="22"></span>异动</div>
+      <div class="ditem"><span data-icon="FAC" data-grad="lg-dark" data-size="22"></span>因子</div>
+      <div class="ditem"><span data-icon="REV" data-grad="lg-dark" data-size="22"></span>复盘</div>
+      <div class="ditem"><span data-icon="SYNC" data-grad="lg-dark" data-size="22"></span>数据源</div>
+      <div class="ditem"><span data-icon="API" data-grad="lg-dark" data-size="22"></span>开放 API</div>
+      <div class="ditem"><span data-icon="AI" data-grad="lg-dark" data-size="22"></span>AI 助手</div>
+    </div>
+    <p style="font-size:12px;color:var(--txt3);margin-top:10px">选中态：品牌紫底 + 反白图标；默认态：亮紫线幅。图标 22px 网格、4.5px 线幅等比缩放。</p>
+  </div>
+
+  <footer>brand/logo-proposals.html · self-contained · 19 logos (7+12) × light/dark × 48/24/16px + icon system · TSP Brand Review</footer>
+</div>
+
+<script>
+/* ============ 图形注册表：viewBox 0 0 64 64，g 为渐变引用 ============ */
+var BR = 'stroke-linejoin="miter" stroke-linecap="butt" fill="none"';
+var ST = 'stroke-width="4.5" stroke-linejoin="miter" stroke-linecap="butt" fill="none"';
+var ICONS = {
+  /* 基线：现有 logo（brand/logo.svg） */
+  CUR: function(g){return ''
+    +'<path d="M20 9H11V55H20" stroke="url(#'+g+')" stroke-width="5" '+BR+'/>'
+    +'<path d="M44 9H53V55H44" stroke="url(#'+g+')" stroke-width="5" '+BR+'/>'
+    +'<line x1="32" y1="15" x2="32" y2="49" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="26.5" y="19.5" width="11" height="17" fill="url(#'+g+')"/>';},
+
+  /* 0 · 原版直出：与基线同一图形，转正为正式方案 */
+  0: function(g){return ''
+    +'<path d="M20 9H11V55H20" stroke="url(#'+g+')" stroke-width="5" '+BR+'/>'
+    +'<path d="M44 9H53V55H44" stroke="url(#'+g+')" stroke-width="5" '+BR+'/>'
+    +'<line x1="32" y1="15" x2="32" y2="49" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="26.5" y="19.5" width="11" height="17" fill="url(#'+g+')"/>';},
+
+  /* A · 双阳括号：括号内两根 bullish K 线拾级而上 */
+  A: function(g){return ''
+    +'<path d="M20 9H11V55H20" stroke="url(#'+g+')" stroke-width="5.5" '+BR+'/>'
+    +'<path d="M44 9H53V55H44" stroke="url(#'+g+')" stroke-width="5.5" '+BR+'/>'
+    +'<line x1="28" y1="26" x2="28" y2="51" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="23.5" y="30" width="9" height="14" fill="url(#'+g+')"/>'
+    +'<line x1="40" y1="12" x2="40" y2="41" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="35.5" y="16" width="9" height="18" fill="url(#'+g+')"/>';},
+
+  /* B · Tick 脉冲：行情每次跳动都被捕获，尾段 45° 突破向上 */
+  B: function(g){return ''
+    +'<circle cx="9" cy="46" r="3.5" fill="url(#'+g+')"/>'
+    +'<path d="M9 46H21L27 38L33 46L41 26L55 12" stroke="url(#'+g+')" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+    +'<path d="M45 12H55V22" stroke="url(#'+g+')" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>';},
+
+  /* C · 三连阳：三根渐次抬升的 K 线 */
+  C: function(g){return ''
+    +'<line x1="14" y1="33" x2="14" y2="54" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="9.5" y="37" width="9" height="13" fill="url(#'+g+')"/>'
+    +'<line x1="32" y1="21" x2="32" y2="46" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="27.5" y="25" width="9" height="17" fill="url(#'+g+')"/>'
+    +'<line x1="50" y1="9" x2="50" y2="38" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="45.5" y="13" width="9" height="21" fill="url(#'+g+')"/>';},
+
+  /* D · T 字 K 线：字母 T 与 bullish K 线的合体字标 */
+  D: function(g){return ''
+    +'<rect x="12" y="10" width="40" height="9" fill="url(#'+g+')"/>'
+    +'<line x1="32" y1="19" x2="32" y2="31" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="25.5" y="31" width="13" height="21" fill="url(#'+g+')"/>';},
+
+  /* E · 突破面板：面板开口，走势线破框而出 */
+  E: function(g){return ''
+    +'<path d="M46 12H18Q10 12 10 20V46Q10 54 18 54H46Q54 54 54 46V34" stroke="url(#'+g+')" stroke-width="5" stroke-opacity=".5" stroke-linecap="round" fill="none"/>'
+    +'<circle cx="16" cy="45" r="3.5" fill="url(#'+g+')"/>'
+    +'<path d="M16 45L28 37L34 41L46 27L56 17" stroke="url(#'+g+')" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+    +'<path d="M48 17H56V25" stroke="url(#'+g+')" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>';},
+
+  /* F · 数据括号：括号内三根底对齐上升数据柱 */
+  F: function(g){return ''
+    +'<path d="M20 9H11V55H20" stroke="url(#'+g+')" stroke-width="5.5" '+BR+'/>'
+    +'<path d="M44 9H53V55H44" stroke="url(#'+g+')" stroke-width="5.5" '+BR+'/>'
+    +'<rect x="22" y="36" width="7" height="14" fill="url(#'+g+')"/>'
+    +'<rect x="31" y="28" width="7" height="22" fill="url(#'+g+')"/>'
+    +'<rect x="40" y="20" width="7" height="30" fill="url(#'+g+')"/>'},
+
+  /* G · 印章实底：实底方块以负空间凿出 bullish K 线 */
+  G: function(g){return ''
+    +'<path fill-rule="evenodd" d="M8 8H56V56H8Z M30 16H34V22H30Z M22 22H42V38H22Z M30 38H34V48H30Z" fill="url(#'+g+')"/>';},
+
+  /* H · 行情钟：12 刻度钟环 + 45° 上行指针，tick=滴答 */
+  H: function(g){return ''
+    +'<line x1="32" y1="12" x2="32" y2="6" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<line x1="52" y1="32" x2="58" y2="32" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<line x1="32" y1="52" x2="32" y2="58" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<line x1="12" y1="32" x2="6" y2="32" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<line x1="42" y1="14.7" x2="45" y2="9.5" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="49.3" y1="22" x2="54.5" y2="19" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="49.3" y1="42" x2="54.5" y2="45" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="42" y1="49.3" x2="45" y2="54.5" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="22" y1="49.3" x2="19" y2="54.5" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="14.7" y1="42" x2="9.5" y2="45" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="14.7" y1="22" x2="9.5" y2="19" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="22" y1="14.7" x2="19" y2="9.5" stroke="url(#'+g+')" stroke-width="3" stroke-opacity=".4"/>'
+    +'<line x1="32" y1="32" x2="47" y2="17" stroke="url(#'+g+')" stroke-width="5"/>'
+    +'<rect x="29" y="29" width="6" height="6" fill="url(#'+g+')"/>';},
+
+  /* I · 层叠面板：三块直角面板沿对角线退后，前板负空间 K 线 */
+  I: function(g){return ''
+    +'<rect x="30" y="8" width="26" height="26" stroke="url(#'+g+')" stroke-width="4.5" stroke-opacity=".3" fill="none"/>'
+    +'<rect x="19" y="19" width="26" height="26" stroke="url(#'+g+')" stroke-width="4.5" stroke-opacity=".55" fill="none"/>'
+    +'<path fill-rule="evenodd" d="M8 30H34V56H8Z M19 36H22.5V40H19Z M14.5 40H27V48H14.5Z M19 48H22.5V52H19Z" fill="url(#'+g+')"/>';},
+
+  /* J · 数据矩阵：3×3 弱网格，左下→右上对角线三格实心 */
+  J: function(g){return ''
+    +'<g stroke="url(#'+g+')" stroke-width="2" stroke-opacity=".18" fill="none">'
+    +'<rect x="11" y="11" width="12" height="12"/><rect x="25" y="11" width="12" height="12"/>'
+    +'<rect x="11" y="25" width="12" height="12"/><rect x="25" y="39" width="12" height="12"/>'
+    +'<rect x="39" y="25" width="12" height="12"/><rect x="39" y="39" width="12" height="12"/></g>'
+    +'<rect x="11" y="39" width="12" height="12" fill="url(#'+g+')"/>'
+    +'<rect x="25" y="25" width="12" height="12" fill="url(#'+g+')"/>'
+    +'<rect x="39" y="11" width="12" height="12" fill="url(#'+g+')"/>';},
+
+  /* K · 缎带箭头：粗折线（尖角转折）承接实心箭镞 */
+  K: function(g){return ''
+    +'<path d="M8 46L22 46L32 34L40 40L52 26" stroke="url(#'+g+')" stroke-width="9" stroke-linejoin="miter" stroke-linecap="butt" fill="none"/>'
+    +'<path d="M58.5 18.4L56.9 30.2L47.1 21.8Z" fill="url(#'+g+')"/>';},
+
+  /* L · 盾卫 K 线：直线切割六边盾，中央 bullish K 线 */
+  L: function(g){return ''
+    +'<path d="M12 10H52V32L32 56L12 32Z" stroke="url(#'+g+')" stroke-width="5" stroke-linejoin="miter" fill="none"/>'
+    +'<line x1="32" y1="18" x2="32" y2="46" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="25.5" y="24" width="13" height="12" fill="url(#'+g+')"/>';},
+
+  /* M · 信号站：K 线即天线杆，顶部 45° 扇区双弧波 */
+  M: function(g){return ''
+    +'<line x1="32" y1="26" x2="32" y2="54" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<rect x="26" y="32" width="12" height="16" fill="url(#'+g+')"/>'
+    +'<path d="M26.34 20.34A8 8 0 0 1 37.66 20.34" stroke="url(#'+g+')" stroke-width="4" stroke-linecap="round" fill="none" stroke-opacity=".9"/>'
+    +'<path d="M21.4 15.4A15 15 0 0 1 42.6 15.4" stroke="url(#'+g+')" stroke-width="4" stroke-linecap="round" fill="none" stroke-opacity=".5"/>';},
+
+  /* N · 行情纸带：实心纸带负空间凿出三根抬升 K 线 */
+  N: function(g){return ''
+    +'<path fill-rule="evenodd" d="M8 22H56V42H8Z M18 28H21V31H18Z M14 31H25V36H14Z M18 36H21V38H18Z M30.5 26H33.5V29H30.5Z M26.5 29H37.5V36H26.5Z M30.5 36H33.5V38H30.5Z M43 24H46V27H43Z M39 27H50V36H39Z" fill="url(#'+g+')"/>';},
+
+  /* O · 数据流水线：三级方块阶梯 + 直角肘形连接线 */
+  O: function(g){return ''
+    +'<path d="M15 40V34H25" stroke="url(#'+g+')" stroke-width="4" fill="none"/>'
+    +'<path d="M32 27V21H42" stroke="url(#'+g+')" stroke-width="4" fill="none"/>'
+    +'<rect x="8" y="40" width="14" height="14" fill="url(#'+g+')"/>'
+    +'<rect x="25" y="27" width="14" height="14" fill="url(#'+g+')"/>'
+    +'<rect x="42" y="14" width="14" height="14" fill="url(#'+g+')"/>';},
+
+  /* P · 选股准星：四枚取景角锁定中央 K 线 */
+  P: function(g){return ''
+    +'<path d="M10 22V10H22" stroke="url(#'+g+')" stroke-width="4.5" fill="none"/>'
+    +'<path d="M42 10H54V22" stroke="url(#'+g+')" stroke-width="4.5" fill="none"/>'
+    +'<path d="M54 42V54H42" stroke="url(#'+g+')" stroke-width="4.5" fill="none"/>'
+    +'<path d="M22 54H10V42" stroke="url(#'+g+')" stroke-width="4.5" fill="none"/>'
+    +'<line x1="32" y1="22" x2="32" y2="44" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".55"/>'
+    +'<rect x="26" y="27" width="12" height="11" fill="url(#'+g+')"/>';},
+
+  /* Q · 旗形：垂直旗杆 + 下斜楔形旗面 = bull flag 图样 */
+  Q: function(g){return ''
+    +'<line x1="34" y1="54" x2="34" y2="12" stroke="url(#'+g+')" stroke-width="5"/>'
+    +'<path d="M34 12L50 15L47 23L34 20Z" fill="url(#'+g+')"/>'
+    +'<line x1="20" y1="54" x2="48" y2="54" stroke="url(#'+g+')" stroke-width="4" stroke-opacity=".3"/>';},
+
+  /* R · 数据立方：等距立方三面三阶紫，容器/存储 */
+  R: function(g){return ''
+    +'<path d="M32 12L52 23L32 34L12 23Z" fill="url(#'+g+')"/>'
+    +'<path d="M12 23L32 34V56L12 45Z" fill="url(#'+g+')" fill-opacity=".78"/>'
+    +'<path d="M52 23L32 34V56L52 45Z" fill="url(#'+g+')" fill-opacity=".5"/>'},
+
+  /* ===== 功能图标族：直角括号 + K 线 DNA，4.5px 等宽线幅 ===== */
+
+  /* 看板：2×2 面板，前板内置 mini K 线 */
+  DASH: function(g){return ''
+    +'<rect x="10" y="10" width="20" height="20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="34" y="10" width="20" height="20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="10" y="34" width="20" height="20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="34" y="34" width="20" height="20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<line x1="44" y1="39" x2="44" y2="50" stroke="url(#'+g+')" stroke-width="2.5" stroke-opacity=".6"/>'
+    +'<rect x="41" y="42" width="6" height="6" fill="url(#'+g+')"/>';},
+
+  /* 选股：直角漏斗内置 K 线 */
+  SCAN: function(g){return ''
+    +'<path d="M10 12H54L38 30V52L26 46V30Z" stroke="url(#'+g+')" '+ST+'/>'
+    +'<line x1="32" y1="16" x2="32" y2="26" stroke="url(#'+g+')" stroke-width="2.5" stroke-opacity=".6"/>'
+    +'<rect x="28.5" y="18" width="7" height="6" fill="url(#'+g+')"/>';},
+
+  /* 回测：倒放三角 + K 线立柱，把行情倒回去重放 */
+  BACK: function(g){return ''
+    +'<line x1="14.5" y1="18" x2="14.5" y2="46" stroke="url(#'+g+')" stroke-width="2.5" stroke-opacity=".6"/>'
+    +'<rect x="12" y="24" width="5" height="16" fill="url(#'+g+')"/>'
+    +'<path d="M38 22L22 32L38 42Z" fill="url(#'+g+')"/>'
+    +'<path d="M56 22L40 32L56 42Z" fill="url(#'+g+')"/>';},
+
+  /* 监控：取景角 + 盘中脉冲线 */
+  MON: function(g){return ''
+    +'<path d="M10 20V10H20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M44 10H54V20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M54 44V54H44" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M20 54H10V44" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M16 34H26L30 26L34 40L38 30H48" stroke="url(#'+g+')" stroke-width="4" fill="none"/>';},
+
+  /* AI 助手：双四角星 */
+  AI: function(g){return ''
+    +'<path d="M30 14L35 27L48 32L35 37L30 50L25 37L12 32L25 27Z" fill="url(#'+g+')"/>'
+    +'<path d="M48 10L50.5 16L56.5 18.5L50.5 21L48 27L45.5 21L39.5 18.5L45.5 16Z" fill="url(#'+g+')"/>';},
+
+  /* 数据源/同步：三层数据柱 + 上行箭头 */
+  SYNC: function(g){return ''
+    +'<rect x="10" y="14" width="32" height="10" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="10" y="28" width="32" height="10" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="10" y="42" width="32" height="10" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M50 42V24" stroke="url(#'+g+')" stroke-width="4"/>'
+    +'<path d="M44 30L50 24L56 30" stroke="url(#'+g+')" stroke-width="4" fill="none"/>';},
+
+  /* 复盘：文档 + 内页走势 */
+  REV: function(g){return ''
+    +'<path d="M16 8H40L50 18V56H16Z" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M40 8V18H50" stroke="url(#'+g+')" stroke-width="4" fill="none"/>'
+    +'<path d="M24 44L32 36L36 39L44 28" stroke="url(#'+g+')" stroke-width="3.5" fill="none"/>'
+    +'<rect x="22" y="42" width="5" height="5" fill="url(#'+g+')"/>';},
+
+  /* 因子挖掘：散点 + 趋势线 */
+  FAC: function(g){return ''
+    +'<path d="M12 46L52 18" stroke="url(#'+g+')" stroke-width="3.5" stroke-opacity=".5"/>'
+    +'<rect x="12" y="42" width="6" height="6" fill="url(#'+g+')"/>'
+    +'<rect x="24" y="34" width="6" height="6" fill="url(#'+g+')"/>'
+    +'<rect x="34" y="38" width="6" height="6" fill="url(#'+g+')"/>'
+    +'<rect x="44" y="22" width="6" height="6" fill="url(#'+g+')"/>';},
+
+  /* 开放 API：直角代码括号 + 斜杠 */
+  API: function(g){return ''
+    +'<path d="M22 18L10 32L22 46" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M42 18L54 32L42 46" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M36 12L28 52" stroke="url(#'+g+')" stroke-width="4"/>';},
+
+  /* 异动：取景角 + 感叹号 [!] */
+  ALERT: function(g){return ''
+    +'<path d="M8 18V8H18" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M46 8H56V18" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M56 46V56H46" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M18 56H8V46" stroke="url(#'+g+')" '+ST+'/>'
+    +'<line x1="32" y1="18" x2="32" y2="37" stroke="url(#'+g+')" stroke-width="5"/>'
+    +'<rect x="29.5" y="42" width="5" height="5" fill="url(#'+g+')"/>';},
+
+  /* 自选：完整括号 + 收藏星 */
+  FAV: function(g){return ''
+    +'<path d="M20 8H10V56H20" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M44 8H54V56H44" stroke="url(#'+g+')" '+ST+'/>'
+    +'<path d="M32 20L35.5 28.5L44 32L35.5 35.5L32 44L28.5 35.5L20 32L28.5 28.5Z" fill="url(#'+g+')"/>';},
+
+  /* 插件/MCP：2×2 模块，活动块可插拔 */
+  PLUG: function(g){return ''
+    +'<rect x="12" y="12" width="18" height="18" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="34" y="12" width="18" height="18" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="12" y="34" width="18" height="18" stroke="url(#'+g+')" '+ST+'/>'
+    +'<rect x="38" y="38" width="16" height="16" fill="url(#'+g+')"/>';}
+};
+
+/* ============ 方案元数据 ============ */
+var CONCEPTS = [
+  {k:'0', zh:'原版直出', en:'Classic Mark', tag:'第零方案 —— 现有 logo 原样转正：方括号 [ ] 内单根 bullish K 线，语义准确、辨识已建立，零迁移成本。',
+   notes:[['造型逻辑','方括号 = 终端 / 量化边界，中央单根 K 线 = 行情本体，上影短 / 下影长的 bullish 姿态'],
+          ['品牌延续','100% 现有资产：README、favicon、packaging 已在用，老用户零认知成本'],
+          ['小尺寸','单 K 线 + 双括号明暗对比清晰，16px 表现稳定'],
+          ['适用','不想折腾时的最优解 —— 直接作为正式主标，配套使用规范固化即可']]},
+  {k:'A', zh:'双阳括号', en:'Bracket Bulls', tag:'现有 logo 的正统进化 —— 括号边界里，两根 bullish K 线拾级而上，静态符号第一次有了「趋势」。',
+   notes:[['造型逻辑','单 K 线 → 双 K 阶梯，小 K 让位、大 K 领涨，构成视线上扬的对角线'],
+          ['品牌延续','完全保留方括号 + K 线 + 品牌紫资产，老用户零认知成本'],
+          ['小尺寸','两根实体 K 线体量大，16px 下依然清晰可辨'],
+          ['适用','官方主标 · GitHub 头像 · favicon，可平替现有 logo 直接上线']]},
+  {k:'B', zh:'Tick 脉冲', en:'Tick Pulse', tag:'项目名里的 Tick 是「每一次数据跳动」—— 一段心电图式的脉冲线，尾巴以 45° 破位上攻。',
+   notes:[['造型逻辑','起点数据点 → 平滑 → 脉冲抖动 → 45° 直线突破，"实时行情"被画成一条生命线'],
+          ['语义','唯一同时表达 Tick（跳动）与上涨（箭头）的方案'],
+          ['小尺寸','折线细节在 16px 会简化成闪电感，需接受细节损失'],
+          ['适用','实时监控 / 异动推送等场景的品牌露出、开屏动画']]},
+  {k:'C', zh:'三连阳', en:'Triple Bull', tag:'三根渐次抬升的 K 线 —— 选股、回测、监控三条产品主线，也是最直白的「向上」。',
+   notes:[['造型逻辑','三根 K 线实体高度 13/17/21 递增、顶部抬升，纯粹的上涨韵律'],
+          ['语义','红涨绿跌文化下用紫色表达涨势，专业且中性'],
+          ['小尺寸','全场最耐缩，16px 仍是三根清晰的柱'],
+          ['适用','独立 App 图标 / 社区徽章；作为公司主标则独占性偏弱']]},
+  {k:'D', zh:'T 字 K 线', en:'T Monogram', tag:'把字母 T 画成一根 K 线 —— 横画是价格压杠，竖画是影线与实体，名字与图形互为一笔。',
+   notes:[['造型逻辑','T 的竖笔 = K 线（影线 + 实体），横笔压顶，一个字形同时是字母与行情符号'],
+          ['语义','品牌名 TSP 首字母绑定，记忆成本低'],
+          ['小尺寸','大色块构成，16px 极稳'],
+          ['适用','需要「字母标」体系的场合：文档站、CLI 工具、开源组织头像']]},
+  {k:'E', zh:'突破面板', en:'Panel Breakout', tag:'一块工作台面板，走势线从开口处破框而出 —— Panel 是产品，Breakout 是交易者共同的执念。',
+   notes:[['造型逻辑','圆角面板开右上天窗，走势线在框内蓄力两折后穿框而上，负空间即出口'],
+          ['语义','「突破」双关：价格突破 + 数据冲出面板的能力边界（Open API / MCP）'],
+          ['小尺寸','元素最多的一案，16px 下面板弱化为圆角方、线条仍可读'],
+          ['适用','品牌升级主张：从工具到平台，故事性与独特性最强']]},
+  {k:'F', zh:'数据括号', en:'Data Brackets', tag:'沿用方括号资产，但把 K 线换成三根底对齐的上升数据柱 —— 更冷静、更「终端」。',
+   notes:[['造型逻辑','[ ▂ ▄ ▆ ]：括号 = 终端边界，柱体 = 数据序列，像一个正在执行的量化语句'],
+          ['语义','强调数据 / 工作台属性，弱化单笔交易感'],
+          ['小尺寸','三个实心矩形对比强烈，16px 几乎无损'],
+          ['适用','偏好极简与工程气质时的主标备选，与 A 二选一']]},
+
+  {k:'G', zh:'印章实底', en:'Solid Seal', tag:'把图形压成一枚实底印章 —— 方形实体内以负空间凿出 bullish K 线，去掉一切线条，只剩体块。',
+   notes:[['造型逻辑','实底方块 + evenodd 负空间凿刻，K 线呈「上影短 / 下影长」bullish 姿态'],
+          ['语义','印章 = 印信与确权，呼应「数据本地自主、自托管可控」'],
+          ['小尺寸','全场最耐缩 —— 16px 下是一枚清晰的紫色方块徽记'],
+          ['适用','App 图标 / 桌面快捷方式 / 社交头像，可与 A 或 E 组成「图形标 + 印章标」双形态体系']]},
+  {k:'H', zh:'行情钟', en:'Market Clock', tag:'Tick 的本义是钟表的「滴答」—— 十二刻度的行情钟环，指针坚定指向东北方。',
+   notes:[['造型逻辑','钟环 12 刻度（四正刻加粗、四隅刻弱化），指针 45° 上行，时间与趋势同构'],
+          ['语义','时间序列是量化的第一性原料；tick = 滴答，双关项目名'],
+          ['小尺寸','16px 下细刻度退化为质感，指针与四方刻仍在'],
+          ['适用','品牌「时间 / 实时」叙事场景、开盘收盘定时任务的图标体系']]},
+  {k:'I', zh:'层叠面板', en:'Layered Panels', tag:'选股、回测、监控、复盘 —— 一层层工作台面板向后堆叠，最前一块凿出 K 线。',
+   notes:[['造型逻辑','三块直角面板沿对角线退后，透明度递减形成景深，前板负空间 K 线'],
+          ['语义','直接图解 Panel / 多页面工作台，是 18 案中对产品名最忠实的表达'],
+          ['小尺寸','16px 收敛为两三个叠置方块，层次仍在'],
+          ['适用','主工作台产品线、多窗口客户端的启动图标']]},
+  {k:'J', zh:'数据矩阵', en:'Data Matrix', tag:'3×3 数据栅格里，一条对角线亮起 —— 底层是 Parquet / DuckDB 的方块宇宙。',
+   notes:[['造型逻辑','九宫格弱网格铺底，左下 → 右上三格实心，像素级「上涨对角线」'],
+          ['语义','矩阵 = 数据库 / 网格扫描 / 因子面板，工程感最强'],
+          ['小尺寸','16px 弱网格消失，剩三格对角阶梯，依然成立'],
+          ['适用','开放 API / MCP / 数据工程语境的子品牌标识']]},
+  {k:'K', zh:'缎带箭头', en:'Ribbon Arrow', tag:'把上涨折线加粗成一条缎带，末端翻出箭头 —— 一次完成的价格运动。',
+   notes:[['造型逻辑','9px 粗折线（尖角转折）承接实心箭镞，线条与体块二合一'],
+          ['语义','最纯粹的「向上」动势，无行业符号堆砌'],
+          ['小尺寸','粗线体在 16px 依然锐利'],
+          ['适用','追求简洁动势的主标备选、营销物料主视觉']]},
+  {k:'L', zh:'盾卫 K 线', en:'Shield Candle', tag:'盾形轮廓内置 bullish K 线 —— 自托管、数据不出本地，是量化人的安全感。',
+   notes:[['造型逻辑','直线切割的六边盾（无弧线，守直角语言），中央 K 线为盾心'],
+          ['语义','盾 = 安全 / 风控 / 本地私有化，补足其他方案缺失的「可信」维度'],
+          ['小尺寸','盾形轮廓 + 中央实体，16px 稳定'],
+          ['适用','安全 / 权限 / Token 相关场景、企业自托管发行版徽标']]},
+  {k:'M', zh:'信号站', en:'Signal Beacon', tag:'K 线化身信号天线，两道弧波向外广播 —— 盘中异动，一秒触达。',
+   notes:[['造型逻辑','中央 K 线即天线杆，顶部 45° 扇区发出双弧波，静与动对比'],
+          ['语义','图解「实时监控 / 弹窗 / 语音播报 / 飞书推送」的触达能力'],
+          ['小尺寸','16px 双弧并为一点一线，信号感仍在'],
+          ['适用','监控中心、异动推送等实时功能子品牌']]},
+  {k:'N', zh:'行情纸带', en:'Ticker Tape', tag:'老交易所的纸带行情机 —— 一条纸带上凿出三根抬升的 K 线，复古而克制。',
+   notes:[['造型逻辑','实心横带为「纸带」，负空间 K 线底沿对齐、顶沿抬升，纸带即时间轴'],
+          ['语义','Ticker Tape 是百年轻量化符号，致敬的同时用负空间保持现代'],
+          ['小尺寸','16px 纸带 = 紫条 + 三缺口，辨识良好'],
+          ['适用','行情快讯 / 复盘日报等内容品牌、周边物料']]},
+  {k:'O', zh:'数据流水线', en:'Pipeline', tag:'三块方糖由电路线相连、逐级抬升 —— 数据源到策略，一条流水线走完。',
+   notes:[['造型逻辑','14px 方块三级阶梯 + 直角肘形连接线，像 PCB 走线又像数据处理链'],
+          ['语义','图解主数据流「数据源 → 标准化 → enriched → 策略」'],
+          ['小尺寸','三实块 + 简洁连线，16px 清晰'],
+          ['适用','自动化 / 定时任务 / 数据同步等工程功能标识']]},
+  {k:'P', zh:'选股准星', en:'Scanner Focus', tag:'四枚取景角锁定中央 K 线 —— 全市场五千只票，一按快门只留目标。',
+   notes:[['造型逻辑','相机取景框的四角括号 + 中心 K 线，负空间即「聚焦」'],
+          ['语义','与 A 的完整括号区分：角标 = 锁定 / 筛选，图解「选股」'],
+          ['小尺寸','四角 + 中央实体，16px 干净利落'],
+          ['适用','选股器 / 条件筛选 / 截图导出等功能场景']]},
+  {k:'Q', zh:'旗形', en:'Bull Flag', tag:'旗杆是主升浪，旗面是向下楔形整理 —— 交易员一眼会心的看涨旗形。',
+   notes:[['造型逻辑','垂直旗杆 + 下斜平行四边形旗面，正是技术分析的 bull flag 图样'],
+          ['语义','彩蛋型符号：懂的人秒懂，构成圈层认同'],
+          ['小尺寸','杆 + 旗两元素，16px 简洁有力'],
+          ['适用','社区徽章、交易大赛、周边贴纸与徽章']]},
+  {k:'R', zh:'数据立方', en:'Data Cube', tag:'一枚等距立方体，三面三阶紫 —— Docker 单容器，整个工作台装进去。',
+   notes:[['造型逻辑','标准等距投影，三面以 1 / .78 / .5 三阶明度分面，纯直角线构成'],
+          ['语义','立方 = 容器 / 存储 / 一次性部署，图解「零运维自托管」'],
+          ['小尺寸','实心三面体块，16px 稳定'],
+          ['适用','Docker 镜像 / 打包发行版 / 安装器的标识']]}
+];
+
+/* ============ 渲染 ============ */
+function icon(k,g,s){
+  return '<svg viewBox="0 0 64 64" width="'+s+'" height="'+s+'" fill="none" aria-hidden="true">'+ICONS[k](g)+'</svg>';
+}
+function lockup(k,g,txt,cls){
+  return '<div class="lockup">'+icon(k,g,46)
+    +'<div><div class="wm-tsp" style="color:'+(cls==='lt'?'#23262e':'#e8eaf2')+'">TSP</div>'
+    +'<div class="wm-sub">TICK STOCK PANEL</div></div></div>';
+}
+function chip(k,g,s,pad){
+  return '<div class="chip '+g.split('-')[1]+'" style="width:'+(s+pad*2)+'px;height:'+(s+pad*2)+'px">'+icon(k,g,s)+'</div>';
+}
+
+var CH = {
+  1:{no:'Series 01', tt:'核心七向 · 品牌资产延续', sub:'以现有「方括号 + K 线 + 品牌紫」为锚，做克制而正统的演进 —— 每一案都能看到上一版的影子。'},
+  2:{no:'Series 02', tt:'扩展十二向 · 放宽类型边界', sub:'守住「单色紫 / 16px 可读 / 直角几何」底线，放宽图形类型学：实底负空间、径向钟环、层叠面板、徽章盾形、信号波、容器立方 —— 字标以外的类型各给一案。'}
+};
+var html = '', lastCh = 0;
+CONCEPTS.forEach(function(c,i){
+  var cch = i < 7 ? 1 : 2;
+  if(cch !== lastCh){
+    lastCh = cch;
+    html += '<div class="chapter"><div class="ch-no">'+CH[cch].no+'</div><div class="ch-tt">'+CH[cch].tt+'</div><div class="ch-sub">'+CH[cch].sub+'</div></div>';
+  }
+  var gL='lg-light', gD='lg-dark';
+  var num = (i+1) < 10 ? '0'+(i+1) : ''+(i+1);
+  html += '<div class="sec"><span class="no">'+num+'</span><h2>方案 '+c.k+' · '+c.zh+'</h2><span class="hint">'+c.en+'</span></div>';
+  html += '<section class="concept">';
+  html += '<div class="c-head"><span class="c-badge">'+c.k+'</span><h2>'+c.zh+'</h2><span class="en">'+c.en+'</span></div>';
+  html += '<div class="c-tag">'+c.tag+'</div>';
+  html += '<div class="duo">'
+       +   '<div class="tile lt"><div class="big">'+icon(c.k,gL,128)+'</div>'+lockup(c.k,gL,'','lt')+'</div>'
+       +   '<div class="tile dk"><div class="big">'+icon(c.k,gD,128)+'</div>'+lockup(c.k,gD,'','dk')+'</div>'
+       + '</div>';
+  html += '<div class="s-label">小尺寸验证 · 48 / 24 / 16 px（左浅底 · 右深底）</div>';
+  html += '<div class="strip"><div class="s-group">';
+  [48,24,16].forEach(function(s){ html += chip(c.k,gL,s,10); });
+  html += '</div><div class="s-group">';
+  [48,24,16].forEach(function(s){ html += chip(c.k,gD,s,10); });
+  html += '</div></div>';
+  html += '<div class="notes">';
+  c.notes.forEach(function(n){ html += '<div><i>§</i><span><b>'+n[0]+' — </b>'+n[1]+'</span></div>'; });
+  html += '</div></section>';
+});
+document.getElementById('concepts').innerHTML = html;
+
+/* 简报区基线 logo */
+document.querySelectorAll('[data-icon]').forEach(function(el){
+  el.innerHTML = icon(el.dataset.icon, el.dataset.grad, el.dataset.size);
+});
+</script>
+</body>
+</html>
