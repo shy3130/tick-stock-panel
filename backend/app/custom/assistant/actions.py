@@ -58,7 +58,7 @@ class PendingAction:
     args: dict[str, Any]
     created: float = field(default_factory=time.monotonic)
     event: asyncio.Event = field(default_factory=asyncio.Event)
-    decision: str | None = None  # approved / denied(超时回收也置 denied)
+    decision: str | None = None  # approved / denied / expired(超时或溢出回收, 用户未作答)
 
 
 class PendingRegistry:
@@ -76,7 +76,7 @@ class PendingRegistry:
         overflow = len(self._pending) - _MAX_PENDING
         for stale_id in list(self._pending)[:max(overflow, 0)]:
             stale = self._pending.pop(stale_id)
-            stale.decision = "denied"
+            stale.decision = "expired"
             stale.event.set()
         return action
 
@@ -90,12 +90,16 @@ class PendingRegistry:
         return action
 
     async def await_decision(self, action: PendingAction) -> str:
-        """返回 'approved' | 'denied'(拒绝或超时, 均不执行)。"""
+        """返回 'approved' | 'denied'(用户拒绝) | 'expired'(超时未作答); 后两者均不执行。
+
+        超时与拒绝分开: 调用方回填给模型的说法不同 — 拒绝是用户不要这个操作,
+        超时只是没人点, 不能说成用户拒绝。
+        """
         try:
             await asyncio.wait_for(action.event.wait(), timeout=self.timeout_s)
         except TimeoutError:
             self._pending.pop(action.call_id, None)
-            return "denied"
+            return "expired"
         return action.decision or "denied"
 
     def _sweep_expired(self) -> None:
