@@ -31,6 +31,7 @@ class EventBus:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._subscribers: list[queue.Queue[dict[str, Any]]] = []
+        self._last_id = 0
 
     def subscribe(self) -> queue.Queue[dict[str, Any]]:
         q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=_QUEUE_MAX)
@@ -46,6 +47,10 @@ class EventBus:
         """广播事件; scope = 订阅方票据需持有的最小 scope。"""
         event = _serialize(event_type, payload, scope)
         with self._lock:
+            # SSE id 取毫秒时间戳但严格递增: 同一毫秒发布的多条 (如 append_many 一批告警)
+            # 各得不同 id, 时钟回拨也不倒退, 客户端按 lastEventId 去重不会误丢事件。
+            self._last_id = max(int(event["ts"] * 1000), self._last_id + 1)
+            event["id"] = self._last_id
             subscribers = list(self._subscribers)
         for q in subscribers:
             try:
@@ -60,8 +65,9 @@ class EventBus:
 
 
 def sse_format(event: dict[str, Any]) -> str:
-    """事件 → SSE 帧 (id 用单调时间戳, EventSource lastEventId 可用于去重)。"""
-    return f"id: {int(event['ts'] * 1000)}\nevent: {event['type']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
+    """事件 → SSE 帧 (id 用总线分配的单调毫秒时间戳, EventSource lastEventId 可用于去重)。"""
+    event_id = event.get("id", int(event["ts"] * 1000))
+    return f"id: {event_id}\nevent: {event['type']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
 
 
 # 进程级单例 — 域模块与 API 层共用同一总线
