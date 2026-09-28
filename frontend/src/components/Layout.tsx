@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
@@ -22,31 +22,13 @@ import {
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import {
-  Siren,
-  Star,
-  ScanSearch,
-  History,
-  Sigma,
-  FileText,
   Settings,
   DatabaseZap,
-  Database,
   Loader2,
-  LayoutDashboard,
   Tags,
-  TrendingUp,
-  Flame,
   BarChart3,
-  Gauge,
   Sparkles,
-  Layers2,
-  Wallet,
-  Layers3,
-  Zap,
-  Landmark,
-  RadioTower,
   CheckCircle2,
-  BookOpenCheck,
   ChevronRight,
   ChevronDown,
   Sun,
@@ -58,6 +40,28 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
+import {
+  IconDashboard,
+  IconWatchlist,
+  IconStrategy,
+  IconFactors,
+  IconBacktest,
+  IconStockFocus,
+  IconLadder,
+  IconConcept,
+  IconIndustry,
+  IconFinancials,
+  IconMonitor,
+  IconRegime,
+  IconAlert,
+  IconLots,
+  IconPaper,
+  IconSignals,
+  IconReview,
+  IconIndices,
+  IconData,
+  type BrandIconProps,
+} from './BrandIcons'
 import { Logo } from './Logo'
 import { api, type CapabilityMatrix, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -86,25 +90,25 @@ export const CORE_INDEXES = [
 type CoreIndex = (typeof CORE_INDEXES)[number]
 
 const nav = [
-  { to: '/',                label: '看板',     icon: LayoutDashboard },
-  { to: '/watchlist',  label: '自选',   icon: Star },
-  { to: '/screener',   label: '策略',   icon: ScanSearch },
-  { to: '/factors',    label: '因子', icon: Sigma },
-  { to: '/backtest',   label: '回测', icon: History },
-  { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
-  { to: '/limit-ladder', label: '连板梯队', icon: Flame },
-  { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
-  { to: '/industry-analysis', label: '行业分析', icon: Landmark },
-  { to: '/financials', label: '财务分析', icon: FileText },
-  { to: '/monitor', label: '监控中心', icon: RadioTower },
-  { to: '/regime', label: '市场环境', icon: Gauge },
-  { to: '/abnormal', label: '异动监控', icon: Siren },
-  { to: '/lots',       label: '持仓提醒', icon: Layers2 },
-  { to: '/paper',      label: '模拟盘',   icon: Wallet },
-  { to: '/signals',    label: '信号库',   icon: Zap },
-  { to: '/review',      label: '复盘',   icon: BookOpenCheck },
-  { to: '/indices', label: '指数', icon: BarChart3 },
-  { to: '/data',       label: '数据',   icon: Database },
+  { to: '/',                 label: '看板',     icon: IconDashboard },
+  { to: '/watchlist',        label: '自选',     icon: IconWatchlist },
+  { to: '/screener',         label: '策略',     icon: IconStrategy },
+  { to: '/factors',          label: '因子',     icon: IconFactors },
+  { to: '/backtest',         label: '回测',     icon: IconBacktest },
+  { to: '/stock-analysis',   label: '个股分析', icon: IconStockFocus },
+  { to: '/limit-ladder',     label: '连板梯队', icon: IconLadder },
+  { to: '/concept-analysis', label: '概念分析', icon: IconConcept },
+  { to: '/industry-analysis', label: '行业分析', icon: IconIndustry },
+  { to: '/financials',       label: '财务分析', icon: IconFinancials },
+  { to: '/monitor',          label: '监控中心', icon: IconMonitor },
+  { to: '/regime',           label: '市场环境', icon: IconRegime },
+  { to: '/abnormal',         label: '异动监控', icon: IconAlert },
+  { to: '/lots',             label: '持仓提醒', icon: IconLots },
+  { to: '/paper',            label: '模拟盘',   icon: IconPaper },
+  { to: '/signals',          label: '信号库',   icon: IconSignals },
+  { to: '/review',           label: '复盘',     icon: IconReview },
+  { to: '/indices',          label: '指数',     icon: IconIndices },
+  { to: '/data',             label: '数据',     icon: IconData },
 ] as const
 
 /** 亮/暗主题切换 — 状态存 localStorage, 生效见 lib/theme.ts */
@@ -549,7 +553,8 @@ export function Layout() {
   }, [alertsTotal])
 
   // 合并内置页面 + 可见的扩展分析菜单
-  type NavItem = { to: string; label: string; icon: typeof Gauge; badge?: string }
+  type NavIcon = (props: BrandIconProps) => ReactNode
+  type NavItem = { to: string; label: string; icon: NavIcon; badge?: string }
   const analysisNav: NavItem[] = (analysisMenus?.items ?? [])
     .filter(m => m.visible)
     .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3 }))
