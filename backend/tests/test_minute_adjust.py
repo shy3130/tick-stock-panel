@@ -203,6 +203,39 @@ def test_migration_missing_daily_anchor_skipped(tmp_path):
     assert stats2["marked"] is True
 
 
+def test_migration_partial_missing_anchor_not_marked(tmp_path):
+    """部分分区缺日K锚点: 其余分区照常换算, 但不建标记; 日K补齐后续跑换算剩余分区并收敛。"""
+    _write_factor_table(tmp_path, [(AA, EX_DATE, EX_FACTOR)])
+    day1, day2 = date(2026, 6, 29), date(2026, 6, 30)
+    raw_price = 10.0
+    # 两个分区都是旧架构落盘形态 (拉取时前复权), 日K锚点只有 day1
+    for day in (day1, day2):
+        _write_minute_partition(
+            tmp_path, day,
+            _minute_frame(AA, day, raw_price).with_columns(
+                [pl.col(c) * RATIO_BEFORE for c in ("open", "high", "low", "close")]
+            ),
+        )
+    _write_daily_partition(tmp_path, day1, {AA: raw_price})
+
+    stats = minute_adjust.migrate_minute_to_raw(tmp_path)
+    assert stats["skipped_no_daily"] == 1
+    assert stats["converted_symbols"] == 1
+    assert stats["marked"] is False
+    assert minute_adjust.minute_basis_is_raw(tmp_path) is False
+
+    # 补齐 day2 日K锚点后续跑 → day2 换算为原始价并建标记
+    _write_daily_partition(tmp_path, day2, {AA: raw_price})
+    stats2 = minute_adjust.migrate_minute_to_raw(tmp_path)
+    assert stats2["marked"] is True
+    assert stats2["converted_symbols"] == 1
+    stored = pl.read_parquet(tmp_path / "kline_minute" / f"date={day2.isoformat()}" / "part.parquet")
+    assert abs(stored["close"][0] - raw_price) < 1e-9
+    # 读取投影只复权一次: 除权日前 = 原始价 * 1/1.25
+    shown = minute_adjust.apply_minute_adjustment(stored, tmp_path)
+    assert abs(shown["close"][0] - raw_price * RATIO_BEFORE) < 1e-9
+
+
 def test_migration_anchor_out_of_sane_range_rejected(tmp_path):
     """锚点偏离合理界 (数据异常) 不换算, 不产生破坏性写入。"""
     _write_factor_table(tmp_path, [(AA, EX_DATE, EX_FACTOR)])

@@ -272,9 +272,10 @@ def migrate_minute_to_raw(
                 progress_cb(stats)
 
     if stats["failed"] == 0:
-        # 有分区但全部缺日K锚点时不下标记 (数据未真正收敛), 空库可直接切换
-        total_actionable = stats["partitions"] - stats["skipped_no_daily"]
-        if total_actionable == 0 and stats["partitions"] > 0:
+        # 任一分区缺日K锚点即不下标记 (数据未真正收敛): 标记一旦存在本函数即短路,
+        # 被跳过的分区 (仍是拉取时前复权) 再也换算不到, 读取时却会被复权投影第二次。
+        # 空库 (无分区) 可直接切换。
+        if stats["skipped_no_daily"] > 0:
             return stats
         mark_minute_basis_raw(data_dir)
         stats["marked"] = True
