@@ -1,8 +1,11 @@
-"""AI 助手工具层 — 核心工具目录透传 + 面向各页面能力的本地查询工具。
+"""AI 助手工具层 — 核心工具目录透传 + 面向各页面能力的本地查询/动作工具。
 
-设计原则(为项目服务、只读、有界):
-- 每个工具对应一个页面的核心查询能力(行情/自选/看板/指数/板块轮动/市场
+设计原则(为项目服务、有界):
+- 查询工具对应页面核心查询能力(行情/自选/看板/指数/板块轮动/市场
   环境/异动/持仓提醒/信号库/财务/个股分析/因子值/跑策略), 全部只读。
+- 动作工具(create_signal_strategy/add_to_watchlist, 及核心目录的
+  run_backtest)有写副作用或重计算, 由 chat_service 的确认闸门把守
+  (actions.py), 未经用户确认不会执行。
 - 返回体有界: rows 全部带 limit 钳制, 大表(enriched/财务)先 filter 再取
   少量行; 数值统一四舍五入 4 位, 日期转 ISO 字符串, 保证 JSON 可序列化。
 - 未知的工具名回退到核心 services.tool_catalog(因子/策略/数据能力/回测)。
@@ -16,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -28,38 +32,121 @@ from app.market_time import cn_today
 from app.services import tool_catalog
 
 # ----------------------------------------------------------------
-# 快捷指令: label 展示、prompt 为点击后直接发送的完整问题。
+# 快捷指令: label 展示、prompt 为点击后直接发送的完整问题;
+# group 为前端空会话页的分组标题(同组相邻展示)。
 # ----------------------------------------------------------------
 QUICK_SUGGESTS: list[dict[str, str]] = [
+    # — 行情与大盘 —
     {
         "id": "market-overview",
+        "group": "行情与大盘",
         "label": "今天市场怎么样？",  # noqa: RUF001 — 面向用户中文文案含全角问号
         "prompt": "帮我看看今天的市场总览: 涨跌家数、成交额、涨停与连板梯队、情绪雷达, 以及领涨领跌板块。",
     },
     {
+        "id": "sector-rotation",
+        "group": "行情与大盘",
+        "label": "板块在怎么轮动",
+        "prompt": "看看今天概念/行业板块的轮动: 领涨领跌板块、盘中切换事件和资金排名, 简要总结主线。",
+    },
+    {
+        "id": "abnormal-check",
+        "group": "行情与大盘",
+        "label": "今天有什么异动",
+        "prompt": "今天市场上有哪些异动? 快速拉升、大笔买卖、涨跌停开板等都列一下, 按重要程度总结。",
+    },
+    {
+        "id": "regime-check",
+        "group": "行情与大盘",
+        "label": "当前市场环境",
+        "prompt": "最近一个月市场环境(regime)状态如何演变？今天是强势还是弱势, 情绪周期处于什么阶段？",  # noqa: RUF001
+    },
+    {
+        "id": "indices-check",
+        "group": "行情与大盘",
+        "label": "主要指数表现",
+        "prompt": "查一下主要指数今天的行情: 上证指数、深证成指、创业板指的涨跌幅与成交额, 对比一下谁强谁弱。",
+    },
+    # — 我的与个股 —
+    {
         "id": "watchlist-check",
+        "group": "我的与个股",
         "label": "我的自选表现如何",
         "prompt": "查一下我的自选股列表, 按今日涨跌幅排序, 标出表现最好和最差的, 并简要点评。",
     },
     {
-        "id": "list-strategies",
-        "label": "我有哪些策略？",  # noqa: RUF001
-        "prompt": "我目前有哪些策略？分别简述每个策略是做什么的、适用什么资产。",  # noqa: RUF001
-    },
-    {
-        "id": "backtest-pick",
-        "label": "回测我的策略",
-        "prompt": "先用工具看看我有哪些策略, 然后挑一个回测最近半年, 给出收益、回撤、夏普和胜率的解读。",
-    },
-    {
         "id": "stock-analyze",
+        "group": "我的与个股",
         "label": "分析一只个股",
         "prompt": "帮我分析 600519.SH: 结合分时与日K看最新走势, 给出关键价位(支撑/压力)、趋势状态和量价特征。",
     },
     {
-        "id": "regime-check",
-        "label": "当前市场环境",
-        "prompt": "最近一个月市场环境(regime)状态如何演变？今天是强势还是弱势, 情绪周期处于什么阶段？",  # noqa: RUF001
+        "id": "stock-compare",
+        "group": "我的与个股",
+        "label": "横向对比几只股票",
+        "prompt": "横向对比 600519.SH、000858.SZ、603288.SH: 实时行情与换手率放一张表, 结合关键价位分析说说各自强弱和更适合关注哪只。",
+    },
+    {
+        "id": "quote-batch",
+        "group": "我的与个股",
+        "label": "查几只股票的行情",
+        "prompt": "查一下 600519.SH、000001.SZ、300750.SZ 的实时行情快照, 按涨跌幅排序并点评一句。",
+    },
+    {
+        "id": "financials-check",
+        "group": "我的与个股",
+        "label": "个股财务速览",
+        "prompt": "看看 600519.SH 的财务: 最新一期的营收、净利润与同比变化, ROE 和毛利率处于什么水平。",
+    },
+    # — 策略与信号 —
+    {
+        "id": "list-strategies",
+        "group": "策略与信号",
+        "label": "我有哪些策略？",  # noqa: RUF001
+        "prompt": "我目前有哪些策略？分别简述每个策略是做什么的、适用什么资产。",  # noqa: RUF001
+    },
+    {
+        "id": "strategy-compare",
+        "group": "策略与信号",
+        "label": "对比两个策略",
+        "prompt": "列出我的策略, 挑两个有代表性的各回测最近一年(每次执行前请在确认卡上点「确认」), 然后横向对比收益、回撤、夏普、胜率, 给出各自适合的市场场景。",
+    },
+    {
+        "id": "run-strategy-today",
+        "group": "策略与信号",
+        "label": "跑一个选股策略",
+        "prompt": "执行我的第一个选股策略, 看看按最新数据选出哪些标的, 并简要点评排在前面的几只。",
+    },
+    {
+        "id": "backtest-pick",
+        "group": "策略与信号",
+        "label": "回测我的策略",
+        "prompt": "先用工具看看我有哪些策略, 然后挑一个回测最近半年(执行前请在确认卡上点「确认」), 给出收益、回撤、夏普和胜率的解读。",
+    },
+    {
+        "id": "create-signal",
+        "group": "策略与信号",
+        "label": "帮我生成一个信号",
+        "prompt": "帮我在信号库里创建一个「放量站上20日线」的信号: 收盘价高于 ma20、1 日前收盘价不高于 1 日前的 ma20, 且成交量高于 5 日均量的 1.5 倍。先说明条件设计, 我确认后再执行。",
+    },
+    # — 数据与扩展 —
+    {
+        "id": "data-coverage",
+        "group": "数据与扩展",
+        "label": "数据是最新的吗",
+        "prompt": "帮我检查本地数据完整性: 日线/指标/分钟K/财务是不是最新、有没有缺口, 有问题告诉我怎么补全, 需要执行时先给我确认。",
+    },
+    {
+        "id": "ext-tables",
+        "group": "数据与扩展",
+        "label": "我的扩展数据表",
+        "prompt": "列出我配置的扩展数据表: 每张表的模式、字段和数据日期; 挑数据最新的一张看看前 10 行内容。",
+    },
+    {
+        "id": "sync-status",
+        "group": "数据与扩展",
+        "label": "有没有任务在跑",
+        "prompt": "现在有数据同步任务在跑吗? 有的话看看是什么任务、进度到哪了, 顺便告诉我数据是否完整。",
     },
 ]
 
@@ -74,6 +161,8 @@ class ToolContext:
     depth_service: Any = None
     engine: Any = None
     data_dir: Path | None = None
+    capabilities: Any = None
+    financial_scheduler: Any = None
 
     @classmethod
     def build(
@@ -84,6 +173,8 @@ class ToolContext:
         depth_service: Any = None,
         engine: Any = None,
         data_dir: str | Path | None = None,
+        capabilities: Any = None,
+        financial_scheduler: Any = None,
     ) -> ToolContext:
         return cls(
             repo=repo,
@@ -91,6 +182,8 @@ class ToolContext:
             depth_service=depth_service,
             engine=engine,
             data_dir=Path(data_dir) if data_dir else None,
+            capabilities=capabilities,
+            financial_scheduler=financial_scheduler,
         )
 
 
@@ -275,7 +368,7 @@ def _intraday_chart_payload(
         # 最近交易日, 按服务器本地 date.today() 查分钟分区会永远为空; 无快照日期时按北京日期。
         _, trade_date = ctx.repo.get_enriched_latest_asset(asset_type, refresh=False)
         df = ctx.repo.get_minute(symbol, trade_date or cn_today(), asset_type)
-    except Exception:  # noqa: BLE001  分钟分区缺失/损坏时降级为无图
+    except Exception:
         return None
     if df is None or df.is_empty() or "close" not in df.columns or "datetime" not in df.columns:
         return None
@@ -561,6 +654,16 @@ def _run_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     strategy_id = str(args.get("strategy_id") or "").strip()
     if not strategy_id:
         raise ValueError("strategy_id 不能为空, 可先用 list_strategies 查看。")
+    if not ctx.engine.has(strategy_id):
+        # 与 run_backtest 同口径: 附带可用 id, 模型一次即可自行修正
+        try:
+            available = ", ".join(
+                str(s.get("id")) for s in ctx.engine.list_strategies()[:12] if s.get("id")
+            )
+        except Exception:  # 列举失败不影响错误本身
+            available = ""
+        hint = f"; 可用策略: {available}" if available else "; 可先用 list_strategies 查询"
+        raise ValueError(f"策略 {strategy_id} 不存在{hint}")
     svc = ScreenerService(repo)
     as_of = svc.latest_date()
     if as_of is None:
@@ -606,6 +709,465 @@ def _get_factor_values(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     return {"factor": factor, "as_of": _clean_value(as_of), "count": len(rows), "rows": rows}
 
 
+# ----------------------------------------------------------------
+# 动作工具实现 (写操作; 由 chat_service 的确认闸门把守, 未经确认不会到达这里)。
+# ----------------------------------------------------------------
+def _invalidate_custom_signals(data_dir: Path, repo: Any) -> None:
+    """与 api/signals.py 的 _invalidate 同一条失效链, 保证创建后立即可回测。"""
+    from app.indicators.pipeline import invalidate_custom_signals
+    from app.services import strategy_cache
+    from app.strategy import custom_signals
+
+    custom_signals.invalidate_intraday_cache()
+    invalidate_custom_signals()
+    strategy_cache.clear_cache(data_dir)
+    if repo is not None and hasattr(repo, "clear_cache"):
+        repo.clear_cache()
+
+
+_SIGNAL_FIELD_HINT = (
+    "常用字段: close/open/high/low/volume/amount/change_pct/turnover_rate/"
+    "ma5/ma10/ma20/ma30/ma60/ema5-ema60/macd_dif/macd_dea/macd_hist/"
+    "boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/rsi_24/atr_14/"
+    "vol_ma5/vol_ma10/vol_ratio_5d/high_60d/low_60d/momentum_5d-60d/"
+    "annual_vol_20d/consecutive_limit_ups; 右值数字直接写, 字段引用写 'field:字段名'"
+)
+
+
+def _create_signal_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from app.strategy import custom_signals
+
+    if ctx.data_dir is None:
+        raise ValueError("数据目录未就绪。")
+    name = str(args.get("name") or "").strip()
+    kind = str(args.get("kind") or "entry")
+    raw_conditions = args.get("conditions")
+    if not isinstance(raw_conditions, list) or not raw_conditions:
+        raise ValueError("conditions 不能为空, 每条形如 {left, op, right, leftDays?, rightDays?}。")
+    conditions: list[dict[str, Any]] = []
+    for i, cond in enumerate(raw_conditions[:8]):
+        if not isinstance(cond, dict):
+            raise ValueError(f"第 {i + 1} 个条件必须是 {{left, op, right}} 对象。")
+        right = cond.get("right")
+        if isinstance(right, bool) or right is None or str(right).strip() == "":
+            raise ValueError(f"第 {i + 1} 个条件: right 不能为空 (数字或 'field:字段名')。")
+        try:
+            left_days = int(cond.get("leftDays") or 0)
+            right_days = int(cond.get("rightDays") or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"第 {i + 1} 个条件: leftDays/rightDays 必须是整数。") from None
+        conditions.append({
+            "left": str(cond.get("left") or "").strip(),
+            "op": str(cond.get("op") or ""),
+            "right": str(right),
+            "leftDays": left_days,
+            "rightDays": right_days,
+        })
+    # id 由助手生成而非模型给定: 不会覆盖用户已有的同名/同 id 信号
+    sig = {
+        "id": f"csg_a{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "kind": kind,
+        "conditions": conditions,
+        "enabled": True,
+        "timeframe": "daily",
+        "min_bars": 0,
+    }
+    try:
+        custom_signals.validate(sig)
+    except ValueError as exc:
+        raise ValueError(f"{exc}。{_SIGNAL_FIELD_HINT}") from exc
+    custom_signals.save_one(ctx.data_dir, sig)
+    _invalidate_custom_signals(ctx.data_dir, ctx.repo)
+    return {
+        "created": True,
+        "signal": {"id": sig["id"], "name": name, "kind": kind, "conditions": conditions},
+        "note": "已写入信号库并默认启用, 可在「信号库」页面查看/编辑/删除; 创建成功后可让用户在策略里引用。",
+    }
+
+
+def _add_to_watchlist(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from app.services import watchlist as watchlist_service
+
+    symbol = _validate_symbol(args.get("symbol"))
+    note = str(args.get("note") or "").strip()[:80]
+    current = watchlist_service.list_symbols()
+    if symbol in {str(r.get("symbol")) for r in current}:
+        return {
+            "added": False,
+            "symbol": symbol,
+            "total": len(current),
+            "note": f"{symbol} 已在自选列表中, 未重复添加。",
+        }
+    rows = watchlist_service.add(symbol, note=note)
+    return {
+        "added": True,
+        "symbol": symbol,
+        "total": len(rows),
+        "note": f"已把 {symbol} 加入自选列表(当前共 {len(rows)} 只)。",
+    }
+
+
+# ----------------------------------------------------------------
+# 数据完整性与补全 — 检查只读, 补全是动作工具(确认闸门把守)。
+# 同步触发复用数据页同一条路径: 盘后管道 / 分钟K扩展 / 财务表调度器,
+# 全部后台执行、单飞去重, 工具立即返回, 进度用 get_sync_status 轮询。
+# ----------------------------------------------------------------
+def _partition_dates(data_dir: Path, subdir: str) -> list[str]:
+    """date=YYYY-MM-DD 分区目录扫描 — 与 /api/data/status 同款轻量口径, 不读 parquet。"""
+    root = data_dir / subdir
+    if not root.exists():
+        return []
+    dates = [d.name[5:] for d in root.iterdir() if d.is_dir() and d.name.startswith("date=")]
+    return sorted(dates)
+
+
+def _biz_days_behind(latest_iso: str | None, today: date) -> int:
+    """数据最新日落后今天约多少个工作日 — 无交易日历, 按周一~周五近似, 节假日会高估。"""
+    if not latest_iso:
+        return 0
+    try:
+        latest = date.fromisoformat(str(latest_iso)[:10])
+    except ValueError:
+        return 0
+    count = 0
+    cur = today
+    while cur > latest:
+        cur -= timedelta(days=1)
+        if cur.weekday() < 5:
+            count += 1
+    return count
+
+
+def _coverage_section(dates: list[str]) -> dict[str, Any]:
+    if not dates:
+        return {"present": False}
+    return {"present": True, "earliest_date": dates[0], "latest_date": dates[-1], "trading_days": len(dates)}
+
+
+def _symbol_coverage(
+    ctx: ToolContext, symbol: str, global_daily_latest: str | None, today: date,
+) -> dict[str, Any]:
+    """单标的覆盖: 近 30 日日K行数/最新日 + 财务报告期, 用于「为什么这只没数据」。"""
+    out: dict[str, Any] = {"symbol": symbol}
+    if ctx.repo is not None:
+        try:
+            asset_type = ctx.repo.resolve_asset_type(symbol)
+            df = ctx.repo.get_daily_asset(asset_type, symbol, today - timedelta(days=30), today)
+            if df is None or df.is_empty():
+                out["daily_missing"] = True
+                out["latest_daily"] = None
+            else:
+                last = df.sort("date").tail(1).to_dicts()[0] if "date" in df.columns else {}
+                latest = _clean_value(last.get("date"))
+                out["latest_daily"] = latest
+                out["daily_rows_30d"] = df.height
+                out["daily_missing"] = bool(global_daily_latest and latest and str(latest)[:10] < global_daily_latest)
+        except Exception as exc:
+            out["daily_error"] = str(exc)[:80]
+    if ctx.data_dir is not None:
+        try:
+            from app.services.financial_sync import get_financial_df
+
+            df = get_financial_df(ctx.data_dir, "metrics")
+            if df is None or df.is_empty() or "symbol" not in df.columns:
+                out["has_financials"] = False
+            else:
+                sub = df.filter(pl.col("symbol") == symbol)
+                out["has_financials"] = not sub.is_empty()
+                period = next((c for c in ("period_end", "report_date", "end_date") if c in sub.columns), None)
+                if period and sub.height:
+                    out["latest_financial_period"] = _clean_value(sub[period].max())
+        except Exception:
+            pass
+    return out
+
+
+def _check_data_coverage(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
+    from app.services.pipeline_jobs import job_store
+
+    if ctx.data_dir is None:
+        raise ValueError("数据目录未就绪。")
+    today = cn_today()
+    daily = _partition_dates(ctx.data_dir, "kline_daily")
+    enriched = _partition_dates(ctx.data_dir, "kline_daily_enriched")
+    minute = _partition_dates(ctx.data_dir, "kline_minute")
+    daily_latest = daily[-1] if daily else None
+    enriched_latest = enriched[-1] if enriched else None
+
+    issues: list[str] = []
+    if not daily:
+        issues.append("本地没有任何股票日线数据, 请先执行数据同步(盘后管道)。")
+    elif _biz_days_behind(daily_latest, today) >= 1:
+        behind = _biz_days_behind(daily_latest, today)
+        issues.append(f"日线停留在 {daily_latest}, 落后最近工作日约 {behind} 天(节假日可能高估), 建议补全。")
+    if daily and not enriched:
+        issues.append("指标数据(enriched)尚未生成, 多数分析页与策略依赖它, 建议运行盘后管道。")
+    elif daily and enriched and enriched_latest < daily_latest:
+        issues.append(f"指标(enriched)停留在 {enriched_latest}, 落后日线 {daily_latest}, 建议重跑盘后管道。")
+    if not minute:
+        issues.append("本地无分钟K数据(分时图/盘中信号依赖; 未开启分钟同步可忽略)。")
+
+    financials: dict[str, Any] = {}
+    any_financial = False
+    for table in FINANCIAL_TABLES:
+        try:
+            df = get_financial_df(ctx.data_dir, table)
+        except Exception:
+            df = None
+        if df is None or df.is_empty():
+            financials[table] = {"present": False}
+            continue
+        any_financial = True
+        period = next((c for c in ("period_end", "report_date", "end_date") if c in df.columns), None)
+        financials[table] = {
+            "present": True,
+            "rows": df.height,
+            "latest_period": _clean_value(df[period].max()) if period else None,
+        }
+    if not any_financial:
+        issues.append("本地没有任何财务数据, 财务问答需先同步财务表。")
+
+    result: dict[str, Any] = {
+        "today": today.isoformat(),
+        "daily": _coverage_section(daily),
+        "enriched": _coverage_section(enriched),
+        "minute": _coverage_section(minute),
+        "financials": financials,
+        "issues": issues,
+    }
+
+    try:
+        job_store.reap_stale()
+        active_id = job_store.active_id()
+    except Exception:
+        active_id = None
+    if active_id:
+        job = job_store.get(active_id) or {}
+        result["active_job"] = {
+            "job_id": active_id,
+            "stage": job.get("stage"),
+            "progress": job.get("progress"),
+            "status": job.get("status"),
+        }
+
+    symbol = str(args.get("symbol") or "").strip()
+    if symbol:
+        symbol = _validate_symbol(symbol)
+        info = _symbol_coverage(ctx, symbol, daily_latest, today)
+        result["symbol"] = info
+        if info.get("daily_missing"):
+            issues.append(
+                f"{symbol} 本地日线缺失或停更(最新 {info.get('latest_daily') or '无数据'}), "
+                "可先补全数据再分析。"
+            )
+    return result
+
+
+# ── 扩展数据表只读问答: 复用数据页 ext_data 的同一条读取链 ──────────
+
+def _ext_table_freshness(data_dir: Path, table_id: str, mode: str) -> dict[str, Any]:
+    """扫描分区目录给出数据新鲜度(轻量, 不读 parquet 内容)。
+
+    timeseries: 最新分区日期 + 分区数; snapshot: part.parquet 是否存在。
+    """
+    if mode == "snapshot":
+        exists = (data_dir / "ext_data" / table_id / "part.parquet").exists()
+        return {"has_data": exists}
+    base = data_dir / "ext_data" / table_id / "timeseries"
+    if not base.exists():
+        return {"has_data": False}
+    dates = sorted(
+        d.name[5:] for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    )
+    if not dates:
+        return {"has_data": False}
+    return {"has_data": True, "latest_date": dates[-1], "earliest_date": dates[0], "days": len(dates)}
+
+
+def _list_ext_tables(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """列出用户配置的扩展数据表: 模式、字段、说明与数据日期。"""
+    if ctx.data_dir is None:
+        raise ValueError("数据目录不可用")
+    from app.services.ext_data import ExtConfigStore
+
+    configs = ExtConfigStore(Path(ctx.data_dir)).load_all()
+    tables: list[dict[str, Any]] = []
+    for c in configs:
+        item: dict[str, Any] = {
+            "id": c.id,
+            "label": c.label,
+            "mode": c.mode,
+            "market_level": c.market_level,
+            "description": c.description,
+            "fields": [{"name": f.name, "dtype": f.dtype, "label": f.label} for f in c.fields],
+        }
+        item.update(_ext_table_freshness(Path(ctx.data_dir), c.id, c.mode))
+        tables.append(item)
+    tables.sort(key=lambda t: (not t.get("has_data"), t["id"]))
+    result: dict[str, Any] = {"tables": tables, "count": len(tables)}
+    if not tables:
+        result["note"] = "还没有配置任何扩展数据表; 可在数据页的扩展数据里创建或上传。"
+    return result
+
+
+def _query_ext_table(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """读取一张扩展数据表的行: 支持等值过滤、排序、日期范围, limit 封顶 100。"""
+    if ctx.data_dir is None:
+        raise ValueError("数据目录不可用")
+    from fastapi import HTTPException
+
+    from app.api.ext_data import _apply_row_filters, _apply_row_sort, _read_ext_dataframe
+    from app.services.ext_data import ExtConfigStore
+
+    table = str(args.get("table") or "").strip()
+    if not table:
+        raise ValueError("缺少参数 table (扩展表 id, 可先用 list_ext_tables 查询)")
+    config = ExtConfigStore(Path(ctx.data_dir)).get(table)
+    if config is None:
+        raise ValueError(f"扩展表不存在: {table} (可先用 list_ext_tables 查看全部表)")
+
+    try:
+        df, active_date = _read_ext_dataframe(
+            config,
+            Path(ctx.data_dir),
+            str(args["date"]) if args.get("date") else None,
+            str(args["start_date"]) if args.get("start_date") else None,
+            str(args["end_date"]) if args.get("end_date") else None,
+        )
+        if args.get("filter"):
+            df = _apply_row_filters(df, [str(args["filter"])])
+        if args.get("sort"):
+            df = _apply_row_sort(df, str(args["sort"]))
+    except HTTPException as exc:  # 复用的过滤/排序/日期校验按契约转错误文案
+        raise ValueError(str(exc.detail)) from exc
+
+    total = df.height
+    limit = max(1, min(100, int(args.get("limit") or 20)))
+    rows = [
+        {k: _clean_value(v) for k, v in row.items()}
+        for row in df.head(limit).to_dicts()
+    ]
+    result: dict[str, Any] = {
+        "id": config.id,
+        "label": config.label,
+        "mode": config.mode,
+        "date": active_date,
+        "total": total,
+        "returned": len(rows),
+        "limit": limit,
+        "columns": df.columns,
+        "rows": rows,
+    }
+    if total > len(rows):
+        result["note"] = (
+            f"共 {total} 行, 只返回前 {len(rows)} 行; 可用 filter=字段:值1|值2 过滤、"
+            "sort=字段:desc 排序后再查。"
+        )
+    return result
+
+
+def _get_sync_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    import contextlib
+
+    from app.services.pipeline_jobs import job_store
+
+    keys = ("id", "status", "stage", "progress", "error", "started_at", "finished_at", "duration_s")
+    with contextlib.suppress(Exception):
+        job_store.reap_stale()
+    out: dict[str, Any] = {"recent_jobs": []}
+    active_id = None
+    with contextlib.suppress(Exception):
+        active_id = job_store.active_id()
+    if active_id:
+        job = job_store.get(active_id) or {}
+        out["active_job"] = {k: _clean_value(job.get(k)) for k in keys if job.get(k) is not None}
+    with contextlib.suppress(Exception):
+        out["recent_jobs"] = [
+            {k: _clean_value(j.get(k)) for k in keys if j.get(k) is not None}
+            for j in job_store.list_recent(limit=5)
+        ]
+    fs = ctx.financial_scheduler
+    if fs is not None:
+        out["financial_syncing"] = bool(getattr(fs, "is_syncing", False))
+        out["financial_last_sync"] = _clean_obj(getattr(fs, "last_sync", None) or {})
+    if not active_id and not out.get("financial_syncing"):
+        out["note"] = "当前没有正在运行的数据任务。"
+    return out
+
+
+async def _sync_data(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """数据补全(动作工具): 触发后台同步任务并立即返回, 不等待完成。
+
+    kind=pipeline 复用 POST /api/pipeline/run 的触发路径(单飞),
+    kind=minute_extend 复用 POST /api/kline/sync_minute 的向前扩展模式,
+    kind=financials 复用 POST /api/financials/sync/{table} 的调度器。
+    """
+    from fastapi import HTTPException
+
+    kind = str(args.get("kind") or "pipeline")
+    if kind not in {"pipeline", "financials", "minute_extend"}:
+        raise ValueError("kind 必须是 pipeline(盘后管道) / financials(财务表) / minute_extend(扩展分钟K历史) 之一。")
+    if ctx.data_dir is None:
+        raise ValueError("数据目录未就绪。")
+
+    if kind == "pipeline":
+        if ctx.repo is None or ctx.capabilities is None:
+            raise ValueError("数据仓库或数据源能力未就绪, 无法启动同步。")
+        from app.api.pipeline import trigger_pipeline_job
+
+        trigger = await trigger_pipeline_job(ctx.repo, ctx.capabilities, ctx.quote_service)
+        return {
+            "started": True,
+            "kind": kind,
+            "reused": bool(trigger.get("reused")),
+            "job_id": trigger.get("job_id"),
+            "note": "盘后管道已在后台执行(日K/指标/复权因子/名单, 含已启用的分钟K), "
+                    "可用 get_sync_status 查进度; 完成前部分数据会停留在旧交易日。",
+        }
+
+    if kind == "minute_extend":
+        if ctx.repo is None or ctx.capabilities is None:
+            raise ValueError("数据仓库或数据源能力未就绪, 无法启动同步。")
+        from app.api.kline import trigger_minute_sync
+
+        days = _clamp(args.get("days"), 30, 1095, 365)
+        try:
+            trigger = await trigger_minute_sync(
+                ctx.repo, ctx.capabilities, override_days=days, extend_flag=True,
+            )
+        except HTTPException as exc:  # 权限不足等 4xx → 工具错误契约
+            raise ValueError(str(getattr(exc, "detail", "") or exc)) from exc
+        return {
+            "started": True,
+            "kind": kind,
+            "days": days,
+            "reused": trigger.get("status") == "reused",
+            "job_id": trigger.get("job_id"),
+            "note": f"分钟K向前扩展已启动(目标 {days} 天), 全市场拉取耗时较长, 可用 get_sync_status 轮询进度。",
+        }
+
+    fs = ctx.financial_scheduler
+    if fs is None:
+        raise ValueError("财务同步调度器未就绪(需要数据源的财务数据能力)。")
+    from app.services.financial_sync import FINANCIAL_TABLES
+
+    table = str(args.get("table") or "all")
+    if table not in {*FINANCIAL_TABLES, "all"}:
+        raise ValueError(f"table 必须是 {sorted(FINANCIAL_TABLES)} 之一或 all。")
+    target = None if table == "all" else table
+    detail = await asyncio.to_thread(fs.trigger, target)
+    return {
+        "started": True,
+        "kind": kind,
+        "table": table,
+        "detail": _clean_obj(detail),
+        "note": "财务表同步已在后台执行(全量需数分钟), 可用 get_sync_status 查看进度。",
+    }
+
+
 _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "get_stock_quote": _get_stock_quote,
     "get_stock_daily": _get_stock_daily,
@@ -621,6 +1183,13 @@ _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "list_signals": _list_signals,
     "run_strategy": _run_strategy,
     "get_factor_values": _get_factor_values,
+    "create_signal_strategy": _create_signal_strategy,
+    "add_to_watchlist": _add_to_watchlist,
+    "check_data_coverage": _check_data_coverage,
+    "list_ext_tables": _list_ext_tables,
+    "query_ext_table": _query_ext_table,
+    "get_sync_status": _get_sync_status,
+    "sync_data": _sync_data,
 }
 
 
@@ -748,6 +1317,96 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
             },
             ["factor"],
         ),
+        _schema(
+            "create_signal_strategy",
+            "在信号库创建一个自定义信号(动作工具, 须用户在确认卡上确认后才执行)。"
+            "把交易思路翻译成声明式条件: 白名单字段 + 比较运算符, 多条件之间为 AND。"
+            "字段如 close/open/high/low/volume/change_pct/turnover_rate/ma5/ma10/ma20/ma60/"
+            "macd_dif/macd_dea/macd_hist/boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/"
+            "vol_ratio_5d/high_60d/low_60d/momentum_5d 等; 上穿/下穿用天数偏移表达"
+            "(如 close>field:ma20 且 1 日前 close<=field:ma20 即金叉)。",
+            {
+                "name": {"type": "string", "description": "信号名称, 简洁中文 (如 放量突破20日线)"},
+                "kind": {"type": "string", "enum": ["entry", "exit", "both"], "description": "entry=入场信号, exit=出场信号, both=两者"},
+                "conditions": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": "条件列表 (1-8 条, 之间 AND)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "left": {"type": "string", "description": "左字段名 (白名单内)"},
+                            "op": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="], "description": "比较运算符"},
+                            "right": {"type": "string", "description": "数字 (如 1.5) 或字段引用 'field:字段名'"},
+                            "leftDays": {"type": "integer", "description": "左字段取 N 个交易日前 (0-60, 默认 0)"},
+                            "rightDays": {"type": "integer", "description": "右字段取 N 个交易日前 (仅 right 为字段时有效, 默认 0)"},
+                        },
+                        "required": ["left", "op", "right"],
+                    },
+                },
+            },
+            ["name", "kind", "conditions"],
+        ),
+        _schema(
+            "add_to_watchlist",
+            "把一只标的加入用户自选列表(动作工具, 须用户在确认卡上确认后才执行)。",
+            {
+                "symbol": {"type": "string", "description": "证券代码, 如 600519.SH"},
+                "note": {"type": "string", "description": "备注 (可选, ≤80 字)"},
+            },
+            ["symbol"],
+        ),
+        _schema(
+            "check_data_coverage",
+            "检查本地数据完整性: 日线/指标(enriched)/分钟K的覆盖区间与新旧、财务表覆盖、"
+            "正在运行的同步任务, 返回问题清单 issues(为空即数据完整)。"
+            "发现『数据停留在旧交易日』『指标落后日线』『无财务数据』等缺口时, 建议用户补全。",
+            {"symbol": {"type": "string", "description": "可选: 顺带检查单只标的的日线/财务覆盖"}},
+            [],
+        ),
+        _schema(
+            "list_ext_tables",
+            "列出用户配置的扩展数据表(二开扩展内容): 每张表的模式(快照/时序)、字段、说明"
+            "与最新数据日期。用户问到扩展表/自定义数据/上传的数据时先调它。",
+            {},
+            [],
+        ),
+        _schema(
+            "query_ext_table",
+            "读取一张扩展数据表的行数据。table 为表 id(先用 list_ext_tables 查); "
+            "filter=字段:值1|值2 等值过滤(值间 OR); sort=字段 或 字段:desc 排序; "
+            "时序表支持 start_date/end_date(YYYY-MM-DD)或 date 单日。limit 默认 20, 上限 100。",
+            {
+                "table": {"type": "string", "description": "扩展表 id"},
+                "filter": {"type": "string", "description": "等值过滤: 字段:值1|值2"},
+                "sort": {"type": "string", "description": "排序字段, 降序加 :desc"},
+                "date": {"type": "string", "description": "时序表单日 YYYY-MM-DD"},
+                "start_date": {"type": "string", "description": "时序表起始日期(含)"},
+                "end_date": {"type": "string", "description": "时序表结束日期(含)"},
+                "limit": {"type": "integer", "description": "返回行数上限 (默认 20, 最大 100)"},
+            },
+            ["table"],
+        ),
+        _schema(
+            "get_sync_status",
+            "查询数据同步任务进度: 活跃任务的阶段/百分比/消息、最近 5 个任务、财务同步状态。"
+            "sync_data 触发后用它轮询(建议间隔数秒, 不要高频轮询)。",
+            {},
+            [],
+        ),
+        _schema(
+            "sync_data",
+            "数据补全(动作工具, 须用户在确认卡上确认后才执行; 后台执行, 立即返回)。"
+            "kind=pipeline 盘后管道(日K/指标/复权/名单, 含已启用的分钟K, 补最新交易日); "
+            "kind=financials 财务表(table 可选 metrics/income/balance_sheet/cash_flow/shares/all); "
+            "kind=minute_extend 扩展分钟K历史(days 30-1095, 默认 365, 用于回测深度)。",
+            {
+                "kind": {"type": "string", "enum": ["pipeline", "financials", "minute_extend"], "description": "补全类型"},
+                "table": {"type": "string", "enum": ["metrics", "income", "balance_sheet", "cash_flow", "shares", "all"], "description": "仅 kind=financials: 同步哪张表, 默认 all"},
+                "days": {"type": "integer", "description": "仅 kind=minute_extend: 目标天数 (30-1095, 默认 365)"},
+            },
+            ["kind"],
+        ),
     ]
 
 
@@ -764,7 +1423,11 @@ async def execute_assistant_tool(name: str, args: dict[str, Any], ctx: ToolConte
     handler = _LOCAL_TOOLS.get(name)
     if handler is not None:
         try:
-            result = await asyncio.to_thread(handler, dict(args or {}), ctx)
+            if asyncio.iscoroutinefunction(handler):
+                # async 工具(sync_data)需要在事件循环上调度后台任务, 不挪线程
+                result = await handler(dict(args or {}), ctx)
+            else:
+                result = await asyncio.to_thread(handler, dict(args or {}), ctx)
             return {"ok": True, "result": result}
         except Exception as exc:  # 工具失败按契约回填给模型, 不打断对话流
             return {"ok": False, "error": str(exc) or exc.__class__.__name__}
@@ -841,5 +1504,33 @@ def summarize_tool_result(name: str, payload: dict[str, Any]) -> str:
         return f"命中 {result.get('total', 0)} 只 · 耗时 {result.get('elapsed_ms', '-')}ms"
     if name == "get_factor_values":
         return f"返回因子 {result.get('factor', '-')} Top{_count()}"
+    if name == "create_signal_strategy":
+        signal = result.get("signal") or {}
+        return f"创建信号 {signal.get('name', '-')} ({signal.get('id', '-')})"
+    if name == "add_to_watchlist":
+        return result.get("note") or "已加入自选"
+    if name == "check_data_coverage":
+        issue_count = len(result.get("issues") or [])
+        return f"发现 {issue_count} 项数据缺口" if issue_count else "数据完整, 无缺口"
+    if name == "list_ext_tables":
+        count = result.get("count", 0)
+        return f"返回 {count} 张扩展表" if count else "暂无扩展数据表"
+    if name == "query_ext_table":
+        return f"读取扩展表 {result.get('label', '-')} {result.get('returned', 0)}/{result.get('total', 0)} 行"
+    if name == "get_sync_status":
+        active = result.get("active_job")
+        if active:
+            return f"进行中: {active.get('stage', '-')} {active.get('progress', 0)}%"
+        if result.get("financial_syncing"):
+            return "财务表同步中"
+        return "当前无同步任务"
+    if name == "sync_data":
+        job_id = result.get("job_id")
+        reused = result.get("reused")
+        label = {"pipeline": "盘后管道", "financials": "财务表同步", "minute_extend": "分钟K扩展"}.get(
+            result.get("kind"), "同步")
+        if reused:
+            return f"复用进行中的{label}任务 {job_id or '-'}"
+        return f"已启动{label}任务 {job_id or '-'}"
 
     return f"返回 {_count()} 行" if _count() else "完成"

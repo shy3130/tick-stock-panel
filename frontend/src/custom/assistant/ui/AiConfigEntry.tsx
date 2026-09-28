@@ -1,10 +1,12 @@
 /**
  * AI 配置徽标右侧的助手入口 — DOM 锚定实现, 不改核心文件。
  *
- * 核心侧栏头部没有扩展槽位; 为保持「零核心修改」, 此处以
+ * 核心侧栏头部没有扩展槽位; 为保持「零核心修改」, 此以
  * a[href='/settings?tab=ai'](核心 AIConfigBadge) 为锚点, 把一个
  * fixed 小按钮 portal 到 document.body, 定位到徽标行最右侧,
  * 用 ResizeObserver(徽标 + aside) 与 window resize 跟随布局。
+ * 并给锚点行注入右内边距(RESERVED_PR), 让模型名 truncate 提前收尾、
+ * 状态点与按钮互不覆盖 — 否则长模型名会延伸到按钮下面。
  * 锚点不存在或不可见(侧栏收起/隐藏、核心改版)时不渲染 — fail-closed。
  */
 import { useEffect, useState } from 'react'
@@ -15,6 +17,8 @@ import { toggleAssistant, useAssistantStore } from '../store'
 
 const ANCHOR_SELECTOR = "a[href='/settings?tab=ai']"
 const BTN = 22 // 按钮边长(px)
+// 徽标行右侧预留的按钮位: 按钮贴 rect.right-8, 宽 BTN, 留 2px 间隔
+const RESERVED_PR = `${BTN + 10}px`
 
 interface AnchorSpot {
   left: number
@@ -44,6 +48,7 @@ export function AiConfigEntry() {
   useEffect(() => {
     let frame = 0
     let pollTimer = 0
+    let styledAnchor: HTMLElement | null = null
     const observer = new ResizeObserver(() => sync())
 
     const sync = () => {
@@ -58,9 +63,18 @@ export function AiConfigEntry() {
       })
     }
 
+    /** 给锚点行预留按钮位; 锚点更换/卸载时还原(行内样式不与核心类冲突)。 */
+    const reserveSpace = (el: HTMLElement | null) => {
+      if (styledAnchor === el) return
+      if (styledAnchor) styledAnchor.style.paddingRight = ''
+      styledAnchor = el
+      if (el) el.style.paddingRight = RESERVED_PR
+    }
+
     const attach = (): boolean => {
       const anchorEl = document.querySelector(ANCHOR_SELECTOR)
       if (!anchorEl) return false
+      reserveSpace(anchorEl as HTMLElement)
       observer.observe(anchorEl)
       const aside = anchorEl.closest('aside')
       if (aside) observer.observe(aside)
@@ -76,6 +90,7 @@ export function AiConfigEntry() {
     sync()
 
     return () => {
+      reserveSpace(null)
       observer.disconnect()
       window.removeEventListener('resize', sync)
       cancelAnimationFrame(frame)

@@ -276,7 +276,15 @@ async def execute_tool(
             if not strategy_id:
                 return {"ok": False, "error": "run_backtest 缺少 strategy_id"}
             if engine is not None and not engine.has(strategy_id):
-                return {"ok": False, "error": f"策略 {strategy_id} 不存在"}
+                # 附带可用 id, 模型一次即可自行修正(先列再选), 不必再来回试探
+                try:
+                    available = ", ".join(
+                        str(s.get("id")) for s in engine.list_strategies()[:12] if s.get("id")
+                    )
+                except Exception:  # 列举失败不影响错误本身
+                    available = ""
+                hint = f"; 可用策略: {available}" if available else "; 可先用 list_strategies 查询"
+                return {"ok": False, "error": f"策略 {strategy_id} 不存在{hint}"}
             result = await asyncio.to_thread(
                 run_backtest,
                 data_dir,

@@ -9,6 +9,10 @@ docs/secondary-development.md 的扩展契约。
     {"type":"tool_call","call_id","name","args"}            工具调用开始(前端足迹卡)
     {"type":"tool_result","call_id","name","ok","summary","elapsed_ms","charts?"}
                                                             charts=可绘图数据列表(分时/日K, 前端自动附图)
+    {"type":"action_confirm","call_id","name","label","risk","expires_in"}
+                                                            动作工具确认卡(创建信号/回测/加自选);
+                                                            前端按钮 POST /actions/{call_id}/decision
+                                                            {approve:bool}, 超时视为拒绝
     {"type":"delta","content":"..."}                        最终正文(M1 整段一次)
     {"type":"error","kind","message","hint?"}               no_key/provider/input_too_long/rounds/model
     {"type":"done"}                                         本轮结束(含失败)

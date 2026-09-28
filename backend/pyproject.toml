@@ -1,6 +1,6 @@
 [project]
 name = "tickflow-stock-panel-backend"
-version = "0.3.1"
+version = "0.3.2"
 description = "A 股选股 + 监控 + 回测面板 — TickFlow 适配"
 requires-python = ">=3.11"
 license = { text = "MIT" }

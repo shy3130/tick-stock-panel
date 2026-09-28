@@ -205,13 +205,19 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
             )
 
 
-async def _request_json(pull: PullConfig, config_id: str, day: date | None = None) -> Any:
+async def _request_json(
+    pull: PullConfig, config_id: str, day: date | None = None,
+    extra_params: dict[str, str] | None = None,
+) -> Any:
     """发起一次拉取请求并返回解析后的 JSON。
 
     正式拉取 (带日期参数) 与设置页"测试" (不带) 共用同一实现,
     保证 UA 标识头与 API Key 鉴权注入只有一套口径。
+    extra_params: 追加的 query 参数 (分页页码/每页条数), 值经 URL 编码。
     """
     url = _with_date_param(pull.url, pull.date_param, day, pull.date_format) if day else pull.url
+    if extra_params:
+        url = _append_query_params(url, extra_params)
     # 每配置超时 (PullConfig.timeout_seconds, 默认 30 与历史行为一致);
     # getattr 兜底测试用的简化 pull 对象
     timeout = getattr(pull, "timeout_seconds", None)
@@ -234,19 +240,18 @@ async def _request_json(pull: PullConfig, config_id: str, day: date | None = Non
             raise ValueError(f"响应不是有效 JSON: {e}") from e
 
 
-async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
-    """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    """把追加参数并入 URL query (值经编码, 保留既有参数与 fragment)。"""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-    与 fetch_and_ingest 共用同一解析链 (response_path/预设转换/字段映射/
-    关联字段校验), 历史回补与当日拉取不产生第二套口径。
-    """
-    pull = config.pull
-    if not pull or not pull.url:
-        raise ValueError("拉取未配置或 URL 为空")
+    parts = urlsplit(url)
+    merged = dict(parse_qsl(parts.query, keep_blank_values=True))
+    merged.update({str(k): str(v) for k, v in params.items()})
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(merged), parts.fragment))
 
-    data = await _request_json(pull, config.id, day=target_date)
 
-    # 提取行
+def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[dict]:
+    """单次响应 → 行列表 (提取/预设转换/字段映射)。与写入链共用, 不含日期校验。"""
     rows = _extract_rows(data, pull.response_path)
 
     # 内置预设 (概念/行业): 应用结构转换, 让产出 schema 与分析页一致。
@@ -256,9 +261,51 @@ async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict
     rows = _apply_preset_flatten(config.id, rows)
 
     # 字段映射
-    rows = _apply_field_map(rows, pull.field_map)
+    return _apply_field_map(rows, pull.field_map)
+
+
+async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+    """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
+
+    与 fetch_and_ingest 共用同一解析链 (response_path/预设转换/字段映射/
+    关联字段校验), 历史回补与当日拉取不产生第二套口径。
+    配置了 pull.page_param 时按页循环拉取 (仅 GET), 空页/短页/达 max_pages 停。
+    """
+    pull = config.pull
+    if not pull or not pull.url:
+        raise ValueError("拉取未配置或 URL 为空")
+
+    if pull.page_param and pull.method.upper() == "GET":
+        collected: list[dict] = []
+        page = pull.page_start
+        for _ in range(pull.max_pages):
+            extra: dict[str, str] = {pull.page_param: str(page)}
+            if pull.page_size_param and pull.page_size > 0:
+                extra[pull.page_size_param] = str(pull.page_size)
+            data = await _request_json(pull, config.id, day=target_date, extra_params=extra)
+            page_rows = _parse_rows_payload(config, pull, data)
+            if not page_rows:
+                break
+            collected.extend(page_rows)
+            # 短页 (不足一页) 说明已是最后一页, 免去再一次空请求
+            if pull.page_size > 0 and len(page_rows) < pull.page_size:
+                break
+            page += 1
+        else:
+            logger.warning(
+                "ext pull %s: 分页拉取达到 max_pages=%d 上限, 结果可能不完整",
+                config.id, pull.max_pages,
+            )
+        rows = collected
+    else:
+        data = await _request_json(pull, config.id, day=target_date)
+        rows = _parse_rows_payload(config, pull, data)
 
     # 校验可关联标的的字段：直接 symbol/code，或配置里声明的映射源列。
+    # 市场级表 (market_level, 行=全市场一条, 无标的列) 跳过该校验。
+    if config.market_level:
+        _assert_rows_date(rows, target_date)
+        return rows
     row_keys = set(rows[0]) if rows else set()
     mapped_cols = {
         m.get("col")

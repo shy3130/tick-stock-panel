@@ -3,15 +3,18 @@
 POST /api/custom/assistant/chat      NDJSON 事件流(协议见模块 __init__)
 GET  /api/custom/assistant/status     供应商配置状态(前端门控展示)
 GET  /api/custom/assistant/suggests   空会话快捷指令
+POST /api/custom/assistant/actions/{call_id}/decision
+                                     动作工具确认/拒绝(确认卡按钮回调)
 """
 from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import tools as assistant_tools
 from app.custom.assistant.chat_service import chat_stream
 from app.services.ai_provider import (
@@ -38,6 +41,10 @@ class ChatRequest(BaseModel):
     context: AssistantContext | None = None
 
 
+class ActionDecisionRequest(BaseModel):
+    approve: bool
+
+
 def build_router() -> APIRouter:
     router = APIRouter(prefix="/api/custom/assistant", tags=["custom-assistant"])
 
@@ -57,6 +64,8 @@ def build_router() -> APIRouter:
                 repo=repo,
                 quote_service=getattr(request.app.state, "quote_service", None),
                 depth_service=getattr(request.app.state, "depth_service", None),
+                capabilities=getattr(request.app.state, "capabilities", None),
+                financial_scheduler=getattr(request.app.state, "financial_scheduler", None),
             )):
                 yield line + "\n"
 
@@ -79,5 +88,13 @@ def build_router() -> APIRouter:
     @router.get("/suggests")
     def suggests() -> dict:
         return {"suggests": assistant_tools.QUICK_SUGGESTS}
+
+    @router.post("/actions/{call_id}/decision")
+    async def action_decision(call_id: str, req: ActionDecisionRequest) -> dict:
+        """确认卡回调: 唤醒挂起中的动作工具(批准执行或拒绝)。"""
+        action = await assistant_actions.registry.resolve(call_id, req.approve)
+        if action is None:
+            raise HTTPException(status_code=404, detail="确认请求不存在或已过期")
+        return {"ok": True, "call_id": call_id, "decision": "approved" if req.approve else "denied"}
 
     return router

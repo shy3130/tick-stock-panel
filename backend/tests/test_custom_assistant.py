@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import chat_service
 from app.custom.assistant import tools as assistant_tools
 from app.extensions.loader import configure_backend_extensions
@@ -166,14 +167,16 @@ async def test_chat_stream_emits_tool_events_in_order(monkeypatch: pytest.Monkey
     assert json.loads(second_round[-1]["content"])["ok"] is True
 
 
-async def test_chat_stream_stops_at_rounds_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_chat_stream_rounds_checkpoint_prompts_and_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+    """轮次检查点(取代旧 6 轮硬限): 到点弹 rounds_confirm, 拒绝则优雅收尾。"""
     script = [
         {"tool_calls": [{"id": f"c{i}", "name": "list_factors", "arguments": "{}"}]}
-        for i in range(99)
+        for i in range(3)
     ]
     monkeypatch.setattr(chat_service, "ai_configured", lambda: True)
     monkeypatch.setattr(chat_service, "is_codex_cli_provider", lambda provider=None: False)
     monkeypatch.setattr(chat_service, "stream_openai_round", _stream_script(script))
+    monkeypatch.setattr(chat_service, "_round_checkpoint", lambda: 2)
     # list_factors 走核心目录且无需引擎; 简化起见用本地工具拦截执行。
     monkeypatch.setattr(
         assistant_tools,
@@ -181,12 +184,18 @@ async def test_chat_stream_stops_at_rounds_limit(monkeypatch: pytest.MonkeyPatch
         _fake_execute_tool,
     )
 
-    events = await _collect(await _drain(chat_service.chat_stream(
-        history=[{"role": "user", "content": "hi"}],
-    )))
+    events: list[dict[str, Any]] = []
+    async for line in chat_service.chat_stream(history=[{"role": "user", "content": "hi"}]):
+        event = json.loads(line)
+        events.append(event)
+        if event.get("type") == "rounds_confirm":
+            await assistant_actions.registry.resolve(event["call_id"], False)
 
-    error = next(e for e in events if e["type"] == "error")
-    assert error["kind"] == "rounds"
+    confirm = next(e for e in events if e["type"] == "rounds_confirm")
+    assert confirm["reached"] == 2 and confirm["expires_in"] > 0
+    notices = [e for e in events if e["type"] == "notice"]
+    assert notices and "停止" in notices[-1]["message"]
+    assert not any(e["type"] == "error" for e in events)
     assert events[-1]["type"] == "done"
 
 

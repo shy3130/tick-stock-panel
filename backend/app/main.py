@@ -19,6 +19,7 @@ from app.api import (
     backtest,
     data,
     ext_data,
+    events,
     factors,
     financials,
     indices,
@@ -431,7 +432,18 @@ app.add_middleware(
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
-_AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
+_AUTH_WHITELIST_EXACT = (
+    "/health",
+    "/api/health",
+    "/openapi.json",
+    "/api/openapi.json",
+    "/docs",
+    "/redoc",
+    # SSE 事件流: EventSource 带不了 Authorization 头, 凭证即 query 里的
+    # 一次性票据, 端点内校验 (api/events.py); POST /api/events/ticket 不在
+    # 白名单, 仍走网关 Bearer 通道
+    "/api/events",
+)
 
 
 @app.middleware("http")
@@ -440,9 +452,29 @@ async def auth_middleware(request: Request, call_next):
     # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
         return await call_next(request)
+    # CORS 预检不带凭据, 直接放行 (CORSMiddleware 在外层应答)
+    if request.method == "OPTIONS":
+        return await call_next(request)
     # 白名单放行(设密码/登录/探活本身不拦)
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
+
+    # ── API Token 通道 (外部调用方; 与密码会话并行, 见 open-platform-plan §4) ──
+    authz = request.headers.get("authorization", "")
+    if authz.startswith("Bearer "):
+        from app.services import api_gateway
+        verdict = api_gateway.evaluate(
+            settings.data_dir, request.method, path, authz[len("Bearer "):].strip(),
+        )
+        if verdict["status"] is not None:
+            return JSONResponse(
+                status_code=verdict["status"], content={"detail": verdict["detail"]},
+                headers=verdict["headers"],
+            )
+        response = await call_next(request)
+        for k, v in verdict["headers"].items():
+            response.headers[k] = v
+        return response
 
     from app.services import auth as auth_service
     # 情况 1+2: 未设密码
@@ -495,6 +527,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
+app.include_router(events.router)
 app.include_router(rps.router)
 app.include_router(sector_rotation.router)
 
@@ -510,6 +543,32 @@ app.state.extension_load_errors = extension_load_errors
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.tickflow.capabilities import CapabilityDenied
+
+
+@app.get("/api/openapi.json", include_in_schema=False)
+async def openapi_contract_view(tier: str = "a"):
+    """Tier A 契约视图: 只保留对外开放 (Token 可达) 的端点 = 稳定承诺面。
+
+    开放清单的权威来源是 api_gateway 的规则表 — 规则表即契约, 单源维护。
+    二开方以此生成客户端; 未出现在此视图的端点属内部实现, 随时变化。
+    """
+    spec = app.openapi()
+    if tier == "a":
+        from app.services import api_gateway
+
+        kept_paths: dict = {}
+        for path, ops in spec.get("paths", {}).items():
+            kept_ops = {}
+            for method, op in ops.items():
+                if method in ("get", "post", "put", "delete", "patch") and api_gateway.required_scope(
+                    method.upper(), path,
+                ):
+                    kept_ops[method] = op
+            if kept_ops:
+                kept_paths[path] = kept_ops
+        spec["paths"] = kept_paths
+        spec["x-tier"] = "a"
+    return JSONResponse(spec)
 
 
 @app.exception_handler(CapabilityDenied)

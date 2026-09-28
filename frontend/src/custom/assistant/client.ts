@@ -18,6 +18,8 @@ export interface QuickSuggest {
   id: string
   label: string
   prompt: string
+  /** 分组标题 — 空会话页按组分区展示 */
+  group?: string
 }
 
 /** 工具附带的可绘图数据 — 来自工具真实返回, 非模型生成(结果可核对)。 */
@@ -43,6 +45,8 @@ export type AssistantEvent =
   | { type: 'notice'; message: string }
   | { type: 'tool_call'; call_id: string; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; call_id: string; name: string; ok: boolean; summary: string; elapsed_ms: number; charts?: AssistantChart[] }
+  | { type: 'action_confirm'; call_id: string; name: string; label: string; risk: string; expires_in: number }
+  | { type: 'rounds_confirm'; call_id: string; reached: number; expires_in: number }
   | { type: 'delta'; content: string }
   | { type: 'error'; kind: string; message: string; hint?: string }
   | { type: 'done' }
@@ -71,6 +75,16 @@ export function fetchAssistantStatus(): Promise<AssistantStatus> {
 export function fetchAssistantSuggests(): Promise<QuickSuggest[]> {
   return requestJson<{ suggests: QuickSuggest[] }>('/api/custom/assistant/suggests')
     .then(body => body.suggests)
+}
+
+/** 动作工具确认卡回调: approve=false 拒绝执行(后端超时同样视为拒绝)。 */
+export async function decideAssistantAction(callId: string, approve: boolean): Promise<void> {
+  const res = await fetch(`/api/custom/assistant/actions/${callId}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approve }),
+  })
+  if (!res.ok) throw new Error(`确认请求失败: ${res.status}`)
 }
 
 /** 对话主入口: POST NDJSON, 逐行 yield 事件; signal 支持中断。 */

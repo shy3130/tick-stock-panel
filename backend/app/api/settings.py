@@ -65,6 +65,7 @@ def get_settings() -> dict:
         current_openai_reasoning_effort,
         current_ai_context_window,
         current_ai_max_output_tokens,
+        current_ai_round_checkpoint,
     )
 
     key = secrets_store.get_tickflow_key()
@@ -95,6 +96,7 @@ def get_settings() -> dict:
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
         "ai_max_output_tokens": current_ai_max_output_tokens(),
         "ai_context_window": current_ai_context_window(),
+        "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
 
 
@@ -257,6 +259,7 @@ class AiSettingsIn(BaseModel):
     user_agent: str = ""
     max_output_tokens: int | None = None   # 输出上限, 钳制所有任务的 max_tokens
     context_window: int | None = None      # 输入上下文窗口上限 (约 token)
+    round_checkpoint: int | None = None    # 助手工具轮次检查点; 0=不检查
 
 
 @router.post("/ai")
@@ -275,6 +278,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         current_openai_reasoning_effort,
         current_ai_context_window,
         current_ai_max_output_tokens,
+        current_ai_round_checkpoint,
         normalize_codex_command,
         normalize_codex_model,
         normalize_codex_reasoning_effort,
@@ -326,6 +330,12 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
             raise HTTPException(status_code=400, detail="上下文窗口必须为正整数")
         updates["ai_context_window"] = req.context_window
         settings.ai_context_window = req.context_window
+    if req.round_checkpoint is not None:
+        # 0=关闭检查点(不询问), 正值须 ≥5 防误填 1/2 造成每轮都弹卡
+        if req.round_checkpoint != 0 and req.round_checkpoint < 5:
+            raise HTTPException(status_code=400, detail="轮次检查点须为 0(不检查)或不小于 5 的整数")
+        updates["ai_round_checkpoint"] = req.round_checkpoint
+        settings.ai_round_checkpoint = req.round_checkpoint
 
     if updates:
         secrets_store.save(updates)
@@ -343,6 +353,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ai_configured": ai_configured(provider),
         "ai_max_output_tokens": current_ai_max_output_tokens(),
         "ai_context_window": current_ai_context_window(),
+        "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
 
 
@@ -574,6 +585,7 @@ def get_preferences() -> dict:
         "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
         "nav_hidden": preferences.get_nav_hidden(),
+        "dashboard_layout": preferences.get_dashboard_layout(),
         "screener_auto_run": preferences.get_screener_auto_run(),
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
@@ -890,6 +902,22 @@ def update_nav_hidden(req: NavHiddenIn) -> dict:
     from app.services import preferences
     saved = preferences.set_nav_hidden(req.nav_hidden)
     return {"nav_hidden": saved}
+
+
+class DashboardLayoutIn(BaseModel):
+    """看板自定义布局; layout=null 恢复默认。"""
+    layout: dict | None = None
+
+
+@router.put("/preferences/dashboard-layout")
+def update_dashboard_layout(req: DashboardLayoutIn) -> dict:
+    """保存看板自定义布局(网格 blob); null = 清除回默认布局。"""
+    from app.services import preferences
+    try:
+        saved = preferences.set_dashboard_layout(req.layout)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"dashboard_layout": saved}
 
 
 @router.put("/preferences/watchlist-columns")
@@ -1955,3 +1983,41 @@ def update_review_push(req: ReviewPushIn) -> dict:
     if req.mode is not None:
         mode = preferences.set_review_push_mode(req.mode)
     return {"review_push_channels": saved, "review_push_mode": mode}
+
+
+# ================================================================
+# API Token 管理 (open-platform-plan §4) — 仅 UI 会话可达
+# (挂在 /api/settings 前缀下, 受访问密码保护; Token 通道无对应 scope,
+#  网关规则表里没有本组端点, Bearer 调用会被 403 拒绝)
+# ================================================================
+class ApiTokenCreateIn(BaseModel):
+    name: str
+    scopes: list[str]
+
+
+@router.get("/api-tokens")
+def api_tokens_list(request: Request) -> dict:
+    from app.services import api_tokens as svc
+
+    return {"tokens": svc.list_tokens(request.app.state.repo.store.data_dir)}
+
+
+@router.post("/api-tokens")
+def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
+    """创建 Token — 明文只在本次响应出现一次, 前端弹窗提示立即保存。"""
+    from app.services import api_tokens as svc
+
+    try:
+        record, plaintext = svc.create_token(request.app.state.repo.store.data_dir, body.name, body.scopes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"token": record, "plaintext": plaintext}
+
+
+@router.delete("/api-tokens/{token_id}")
+def api_tokens_revoke(token_id: str, request: Request) -> dict:
+    from app.services import api_tokens as svc
+
+    if not svc.revoke_token(request.app.state.repo.store.data_dir, token_id):
+        raise HTTPException(status_code=404, detail=f"Token '{token_id}' 不存在")
+    return {"status": "revoked", "id": token_id}

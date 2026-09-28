@@ -1,0 +1,112 @@
+/*
+ * 看板网格编辑态样式 — 覆盖 react-grid-layout 默认手柄/占位格外观。
+ * 全部规则挂在 .dash-grid-editing 下(仅编辑态挂载该类), 浏览态保持库默认。
+ * 库默认手柄为黑色角箭头(暗色主题不可见)且仅 20px 角块; 这里改为:
+ * 四边通长 8px 细条 + 四角 14px 直角标线, grip 用主题 accent 色。
+ */
+
+/* 浏览态: RGL 在 enabled=false 时仍渲染手柄 span(不卸载), 隐形元素会挡住
+ * 卡片边缘的点击与列表滚动条 — 整组 display:none 根除。 */
+.dash-grid:not(.dash-grid-editing) .react-grid-item > .react-resizable-handle {
+  display: none;
+}
+
+.dash-grid-editing .react-grid-item > .react-resizable-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  z-index: 20; /* 压过组件标题栏(z-10), 顶部边缘缩放不被栏挡住 */
+  opacity: 0;
+  transform: none;
+  transition: opacity 120ms ease;
+}
+.dash-grid-editing .react-grid-item:hover > .react-resizable-handle,
+.dash-grid-editing .react-grid-item > .react-resizable-handle:hover {
+  opacity: 1;
+}
+
+/* 四角: 直角标线 */
+.dash-grid-editing .react-grid-item > .react-resizable-handle-nw { top: 0; left: 0; cursor: nw-resize; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-ne { top: 0; right: 0; cursor: ne-resize; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-sw { bottom: 0; left: 0; cursor: sw-resize; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-se { bottom: 0; right: 0; cursor: se-resize; }
+
+/* 四边: 通长细条 (避开角块 16px) */
+.dash-grid-editing .react-grid-item > .react-resizable-handle-n,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-s {
+  left: 16px;
+  right: 16px;
+  width: auto;
+  height: 8px;
+  margin-left: 0;
+  cursor: ns-resize;
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-n { top: 0; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-s { bottom: 0; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-e,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-w {
+  top: 16px;
+  bottom: 16px;
+  width: 8px;
+  height: auto;
+  margin-top: 0;
+  cursor: ew-resize;
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-e { right: 0; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-w { left: 0; }
+
+/* grip 视觉: 边柄=短横/竖线, 角柄=直角标线 */
+.dash-grid-editing .react-grid-item > .react-resizable-handle::after {
+  content: "";
+  position: absolute;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  background: hsl(var(--accent));
+  border: none;
+  border-radius: 1px;
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-n::after,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-s::after {
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-e::after,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-w::after {
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-nw::after,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-ne::after,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-sw::after,
+.dash-grid-editing .react-grid-item > .react-resizable-handle-se::after {
+  width: 7px;
+  height: 7px;
+  border-style: solid;
+  border-color: hsl(var(--accent));
+  background: none;
+}
+.dash-grid-editing .react-grid-item > .react-resizable-handle-nw::after { top: 2px; left: 2px; border-width: 2px 0 0 2px; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-ne::after { top: 2px; right: 2px; border-width: 2px 2px 0 0; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-sw::after { bottom: 2px; left: 2px; border-width: 0 0 2px 2px; }
+.dash-grid-editing .react-grid-item > .react-resizable-handle-se::after { bottom: 2px; right: 2px; border-width: 0 2px 2px 0; }
+
+/* 拖拽/缩放时的落点占位格: accent 虚线框 = 吸附目标反馈 (库默认为红色块) */
+.dash-grid-editing .react-grid-item.react-grid-placeholder {
+  background: hsl(var(--accent) / 0.08);
+  border: 1.5px dashed hsl(var(--accent) / 0.55);
+  border-radius: 8px;
+  opacity: 1;
+}
+
+/* 拖拽中的本体轻微半透明, 突出落点 */
+.dash-grid-editing .react-grid-item.react-draggable-dragging {
+  opacity: 0.88;
+}

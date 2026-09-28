@@ -189,6 +189,27 @@ timeseries 模式的表 (如人气排行) 默认只能从开启拉取之日起�
 
 防污染契约: 若接口忽略日期参数返回当日数据 (以响应行 `date` 字段为准校验), 该日**拒绝写入**并计入失败清单 —— 否则当日值会静默污染整个历史时序。接口侧需提供: 传日期参数返回该日数据、无数据返回空数组或 404 (均视为该日无数据, 计入 empty 跳过)、每行带 `date` 字段;不传参数保持当日 (向后兼容)。
 
+##### 分页拉取协议
+
+数据量大的接口 (全市场排行、批量快照) 单次响应装不下时, 拉取配置可声明分页 (仅 GET): **页码参数名**(`page_param`, 如 `page`)、**每页条数参数名**(`page_size_param`, 如 `pageSize`)与**每页条数**(`page_size`)。配置后单次拉取按页循环请求并合并结果, 空页/不足一页自动判停; **最多页数**(`max_pages`, 默认 20, 上限 200)防止接口永远返回数据拖死循环。POST body 分页不支持 (请求体是固定模板)。
+
+##### `/rows` 查询接口 (面向二次开发)
+
+每张扩展表天然是标准 HTTP 接口 `GET /api/ext-data/{id}/rows`, 供页面之外的任意消费方调用:
+
+- `date=YYYY-MM-DD` 单日; `start_date`/`end_date` 日期范围 (可只给一端, 时序全分区合并, 快照模式不支持范围) —— 范围合并自动补行级 `date` 列 (表自带 date 列时补 `data_date`), 消费方能区分每行归属日期;
+- `filter=字段:值1|值2` 等值过滤 (值间 OR、多条件 AND, 可重复参数), 免拉全量自行筛;
+- `sort=字段` / `sort=字段:desc` 排序; `offset`+`limit` 分页 (响应含 `total` 总数);
+- `columns=a,b` 字段裁剪; 响应自带 `fields` schema 与当前数据日期。
+
+配套枚举端点 `GET /api/ext-data/{id}/values?field=X`: 字段去重取值 + 出现次数 (降序), 日期语义与 `/rows` 相同 —— 二开方先取候选值做筛选下拉, 再带 `filter` 查明细。
+
+上传/回补/删除等写端点属于管理操作, 不对外; 读端点即数据出口。
+
+##### 市场级扩展表 (无标的列)
+
+创建时勾选**市场级数据** (`market_level`): 行 = 全市场每日一条, 无 symbol/code 列 —— 适用于市场环境状态、情绪指数、择时信号等序列。上传/JSON 写入/接口拉取均跳过标的关联强制, 去重按首列; 通过 `/rows` (范围查询 + 自动 date 列) 消费完整时序。这是把"市场环境类数据发布为扩展数据"的数据底座, 策略侧的市场级过滤契约按需在此之上建设。
+
 #### 扩展字段接入信号/因子
 
 扩展表的数值字段(int/float)可直接用作**自定义信号条件**与**因子**——无需任何额外配置:
@@ -207,3 +228,77 @@ APScheduler 默认 15:35 CST 自动:拉日 K → 重算 enriched 表 → 跑监�
 ### 令牌桶限流
 
 适配各档位 rpm / batch 限制,批量合并 + 增量拉取,避免触发数据源限流。
+
+## 🌐 开放接口(Open API · Tier A)
+
+外部程序(自己的看板/脚本/量化服务)无需面板密码,凭 **API Token** 直接调用核心读取、写入与任务接口 —— 「核心能力开放」的出口层。总体设计与后续 Tier 见 [open-platform-plan.md](./open-platform-plan.md),可运行示例见 [examples/open-api](../examples/open-api/README.md)。
+
+### Token 管理
+
+**设置 → 开放接口**: 新建 Token(名称 + 权限勾选),明文 `tsp_` 前缀只显示一次;可随时吊销,吊销立即生效。服务端只存 SHA-256 哈希(`data/user_data/api_tokens.json`,权限 0600)。
+
+### 六个权限(scope)
+
+| scope | 能力 |
+| :--- | :--- |
+| `read:market` | 标的搜索 / 日K / 分时 / 指数 / 市场快照 (默认勾选) |
+| `read:ext` | 扩展表 rows / values / schema 查询 |
+| `write:ext` | 向**已配置的**扩展表程序化写入行数据 (`POST /api/ext-data/{id}/ingest`) |
+| `read:analysis` | 策略清单与结果 / 回测报告 / 市场环境 / 告警 |
+| `run:backtest` | 提交回测 / 选股 / 因子检验任务 |
+| `paper:trade` | 模拟盘读取与下单/撤单 (最高敏感) |
+
+管理面**永不开放给 Token**: 数据同步、扩展表的**结构**配置(建表/字段/拉取/上传)、设置等只能通过面板密码会话。`write:ext` 只写行数据 —— 外部程序能把数据喂进来,但不能改写表结构;写入的数据会进入策略/回测数据面,谨慎授予。
+
+### 调用方式
+
+```bash
+curl -H "Authorization: Bearer tsp_xxxx" \
+  "http://localhost:8398/api/kline/daily?symbol=600519.SH&start_date=2026-01-01"
+```
+
+- **认证通道与面板密码并行**: 带 `Authorization: Bearer` 走 Token 网关(scope 校验 + 限流),不带则走原有密码会话 —— 面板与外部调用互不影响;
+- **限流**: 每 Token 默认 120 次/分钟(滑动窗口,`OPEN_API_RATE_LIMIT_PER_MIN` 环境变量可调 1–10000),响应带 `X-RateLimit-Remaining` / `X-RateLimit-Limit` 头,超限返回 429 + `Retry-After`;
+- **错误语义**: 401 Token 无效或已吊销 / 403 权限不足或该接口未开放 / 429 超限;
+- **CORS 全开**(自托管场景),浏览器直连亦可。
+
+### 事件流(SSE,实时推送)
+
+EventSource 无法携带 Authorization 头,外部程序走**短期票据**两步接入:
+
+```bash
+# ① Bearer 换一次性票据 (60 秒, 任意 scope 的 Token 皆可)
+curl -X POST -H "Authorization: Bearer tsp_xxxx" http://localhost:8398/api/events/ticket
+# → {"ticket":"tse_xxx","expires_in":60,"stream":"/api/events?ticket=tse_xxx"}
+
+# ② 订阅事件流 (浏览器: new EventStream(stream); 脚本: 逐行读)
+curl -N "http://localhost:8398/api/events?ticket=tse_xxx"
+```
+
+- 当前事件源:**告警触发**(`event: alert`,需票据含 `read:analysis`);心跳 15s;
+- 票据**一次性**且短时效 —— 泄漏最多损失一次事件订阅,不能调任何 REST 端点;断线重连需重新换票;
+- 事件总线是进程内广播(`app/services/events.py`),新的核心事件源在域模块里 `bus.publish(...)` 即可挂上。
+
+### 契约文档(机器可读)
+
+```bash
+curl "http://localhost:8398/api/openapi.json?tier=a"
+```
+
+返回按网关规则表过滤后的 OpenAPI 3 规范(`x-tier: a`)—— 哪些路径对外开放、需要什么 scope,**规则表是唯一契约源**,生成代码 / Postman 导入即用。开放面有**契约快照测试**守护(`test_openapi_contract.py`):增删开放端点必须显式更新快照,CI 会拦下无意识的契约变更。
+
+### MCP 接入(AI 客户端)
+
+`mcp-server/` 提供 **MCP (Model Context Protocol)** 服务器,把开放接口包装成 AI 可调用工具 — Claude / ZCode / Cursor 等客户端可直接查行情、看市场环境、读策略与告警、触发回测:
+
+```
+AI 客户端 ⇄ MCP stdio (薄桥) ⇄ HTTP + Bearer Token ⇄ 开放网关
+```
+
+- 工具按 Token 的 scope 暴露(12 个:搜索/日K/指数/总览/环境/策略/告警/扩展表读/写/回测),**权限裁决仍在网关** — 桥不持有业务逻辑,面板升级自动受益;
+- 模拟盘交易类端点刻意未包装(不建议把下单交给 AI);
+- 配置方法与工具清单见 [mcp-server/README](../mcp-server/README.md),可运行冒烟测试 `smoke_test.py` 验证连通。
+
+### 桌面客户端版本清单
+
+发布流水线会在每个 Release 附带 `latest.json`(版本号、三平台下载地址、sha256),设置 → 系统设置 → 检查更新即基于它(优先 GitHub API)提示新版本。

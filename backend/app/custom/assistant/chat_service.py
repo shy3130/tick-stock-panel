@@ -18,6 +18,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import tools as assistant_tools
 from app.custom.assistant.prompt import build_system_prompt
 from app.custom.assistant.streaming import stream_openai_round
@@ -31,8 +32,20 @@ from app.services.ai_provider import (
 # 单轮最多保留的用户/助手消息条数(约 8 轮对话), 更早历史截断以控 token。
 _MAX_HISTORY_MESSAGES = 16
 
-# 工具轮次上限(与策略迭代器的预算同量级, 防失控展开)。
-_MAX_TOOL_ROUNDS = 6
+# 工具轮次检查点(非硬限): 到达后弹「是否继续」卡(与动作确认卡同机制),
+# 继续则重置计数再跑一个周期, 停止或超时优雅收尾 — 防失控展开的同时不掐断复杂编排。
+# 实际值在设置页 AI 配置里可调(ai_round_checkpoint, 0=不检查), 此处仅兜底默认。
+_TOOL_ROUND_CHECKPOINT = 100
+
+
+def _round_checkpoint() -> int:
+    """本次对话的轮次检查点(0=不检查)。"""
+    from app.services.ai_provider import current_ai_round_checkpoint
+
+    try:
+        return max(0, int(current_ai_round_checkpoint()))
+    except Exception:  # 配置异常时退回默认, 不因配置问题掐断对话
+        return _TOOL_ROUND_CHECKPOINT
 
 _SETTINGS_HINT = "/settings?tab=ai"
 
@@ -120,6 +133,8 @@ async def chat_stream(
     repo: Any = None,
     quote_service: Any = None,
     depth_service: Any = None,
+    capabilities: Any = None,
+    financial_scheduler: Any = None,
 ) -> AsyncIterator[str]:
     """执行一轮对话, 逐行 yield NDJSON 事件(见模块 __init__ 的协议注释)。"""
     if not ai_configured():
@@ -160,13 +175,15 @@ async def chat_stream(
         depth_service=depth_service,
         engine=engine,
         data_dir=data_dir,
+        capabilities=capabilities,
+        financial_scheduler=financial_scheduler,
     )
 
     queue: asyncio.Queue = asyncio.Queue()
     sentinel: object = object()
 
     async def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
-        call_id = uuid.uuid4().hex[:8]
+        call_id = assistant_actions.new_call_id()
         await queue.put({
             "type": "tool_call",
             "call_id": call_id,
@@ -174,6 +191,37 @@ async def chat_stream(
             "args": _compact_args(args),
         })
         started = time.monotonic()
+
+        # 动作工具确认闸门: 先发确认卡事件并挂起, 用户点确认后才真正执行。
+        # 拒绝/超时按工具错误契约回填(ok=False), 模型据此改走文字建议而非重试。
+        if name in assistant_actions.ACTION_TOOLS:
+            action = await assistant_actions.registry.register(call_id, name, args)
+            meta = assistant_actions.ACTION_META.get(name, {"label": name, "risk": ""})
+            await queue.put({
+                "type": "action_confirm",
+                "call_id": call_id,
+                "name": name,
+                "label": meta["label"],
+                "risk": meta["risk"],
+                "expires_in": int(assistant_actions.registry.timeout_s),
+            })
+            decision = await assistant_actions.registry.await_decision(action)
+            if decision != "approved":
+                denied = (
+                    "用户已拒绝该操作, 未执行。不要重复尝试同一操作。"
+                    if decision == "denied"
+                    else f"确认超时({int(assistant_actions.registry.timeout_s)} 秒未确认), 未执行。"
+                )
+                result = {"ok": False, "error": denied}
+                await queue.put({
+                    "type": "tool_result",
+                    "call_id": call_id,
+                    "name": name,
+                    "ok": False,
+                    "summary": assistant_tools.summarize_tool_result(name, result),
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                })
+                return result
         result = await assistant_tools.execute_assistant_tool(name, args, tool_ctx)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         event = {
@@ -197,6 +245,7 @@ async def chat_stream(
             _guard_input_budget(req_messages)
             text_seen = False
             tool_rounds = 0
+            round_checkpoint = _round_checkpoint()
             while True:
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
@@ -213,12 +262,30 @@ async def chat_stream(
                     return
 
                 tool_rounds += 1
-                if tool_rounds >= _MAX_TOOL_ROUNDS:
-                    await queue.put(_error_event(
-                        "rounds",
-                        f"本轮工具调用达到 {_MAX_TOOL_ROUNDS} 轮上限仍未产出回答, 请缩小问题范围后重试。",
-                    ))
-                    return
+                if round_checkpoint and tool_rounds >= round_checkpoint:
+                    # 轮次检查点: 复用动作确认闸门(PendingRegistry + 决策端点)。
+                    # 批准 → 重置计数继续; 拒绝/超时 → 保留已生成内容, 优雅收尾。
+                    checkpoint_id = assistant_actions.new_call_id()
+                    action = await assistant_actions.registry.register(
+                        checkpoint_id, "rounds_continue", {"reached": tool_rounds},
+                    )
+                    await queue.put({
+                        "type": "rounds_confirm",
+                        "call_id": checkpoint_id,
+                        "reached": tool_rounds,
+                        "expires_in": int(assistant_actions.registry.timeout_s),
+                    })
+                    decision = await assistant_actions.registry.await_decision(action)
+                    if decision != "approved":
+                        await queue.put({
+                            "type": "notice",
+                            "message": (
+                                f"已在 {tool_rounds} 轮工具调用的检查点停止本轮对话, "
+                                "已生成的内容保留。可缩小问题范围后重新提问。"
+                            ),
+                        })
+                        return
+                    tool_rounds = 0
 
                 # 部分兼容网关的流式 tool_calls 不带 id: 补一次并写回 call, 助手消息的
                 # tool_calls[].id 与下方 role:tool 回填的 tool_call_id 必须是同一个值。
@@ -273,14 +340,21 @@ async def chat_stream(
 
 
 def _compact_args(args: dict[str, Any]) -> dict[str, Any]:
-    """足迹事件的 args 预览: 截断超长值, 防单行事件过大。"""
-    compact: dict[str, Any] = {}
-    for key, value in args.items():
-        text = value if isinstance(value, (int, float, bool)) else str(value)
-        if isinstance(text, str) and len(text) > 120:
-            text = text[:120] + "…"
-        compact[str(key)] = text
-    return compact
+    """足迹事件的 args 预览: 递归保留 dict/list 结构(动作确认卡需要展示完整
+    待执行参数), 截断超长字符串与超大集合, 防单行事件过大。"""
+    def compact(value: Any, depth: int = 0) -> Any:
+        if isinstance(value, dict) and depth < 3:
+            return {str(k): compact(v, depth + 1) for k, v in list(value.items())[:20]}
+        if isinstance(value, (list, tuple)) and depth < 3:
+            return [compact(v, depth + 1) for v in list(value)[:20]]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value)
+        return text[:120] + "…" if len(text) > 120 else text
+
+    return {str(k): compact(v) for k, v in args.items()}
 
 
 def _line(event: dict[str, Any]) -> str:

@@ -27,14 +27,20 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 @router.post("/run")
 async def run_now(request: Request) -> dict:
-    """异步触发盘后管道,立即返回 job_id。客户端轮询 /jobs/{id} 拿进度。
+    """异步触发盘后管道,立即返回 job_id。客户端轮询 /jobs/{id} 拿进度。"""
+    return await trigger_pipeline_job(
+        request.app.state.repo,
+        request.app.state.capabilities,
+        getattr(request.app.state, "quote_service", None),
+    )
+
+
+async def trigger_pipeline_job(repo, capset, quote_service=None) -> dict:
+    """触发盘后管道后台任务(HTTP 端点与 AI 助手共用同一条触发路径)。
 
     若已有任务在跑,**返回该任务 id 而不是开新任务**(防止并发拉数据撞限流)。
     卡死判定按「进度停滞」而非总时长(慢带宽下长任务不会被误杀), 见 reap_stale。
     """
-    repo = request.app.state.repo
-    capset = request.app.state.capabilities
-
     # 检测卡死的 running job (如 reload 后孤儿 task / 网络读无限阻塞)。
     # reap_stale 会在 /run 和 /jobs/{id} 轮询端点都调用,保证卡死后能自愈。
     job_store.reap_stale()
@@ -51,7 +57,7 @@ async def run_now(request: Request) -> dict:
             job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
             return
         # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
-        qs = getattr(request.app.state, "quote_service", None)
+        qs = quote_service
         try:
             loop = asyncio.get_event_loop()
 

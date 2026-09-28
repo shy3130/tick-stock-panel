@@ -52,6 +52,7 @@ class PullConfig:
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
+        "page_param", "page_size_param", "page_size", "page_start", "max_pages",
     )
 
     def __init__(
@@ -76,6 +77,11 @@ class PullConfig:
         time_field: str | None = None,
         auth: dict | None = None,
         timeout_seconds: int = 30,
+        page_param: str | None = None,
+        page_size_param: str | None = None,
+        page_size: int = 0,
+        page_start: int = 1,
+        max_pages: int = 20,
     ) -> None:
         self.url = url
         self.method = method              # GET | POST
@@ -110,6 +116,25 @@ class PullConfig:
             int(timeout_seconds) if isinstance(timeout_seconds, (int, float))
             and 5 <= timeout_seconds <= 300 else 30
         )
+        # ── 分页协议 (仅 GET; 页码经 query 参数传递) ──
+        # page_param: 页码参数名 (如 "page"), 配置后按页循环拉取直到空页/短页/上限;
+        #             None = 单次请求 (默认, 历史行为)。POST body 分页不支持 (body 是固定模板)
+        self.page_param = (page_param or "").strip() or None
+        # page_size_param: 每页条数参数名 (如 "pageSize"/"per_page"); 配合 page_size 一起发送
+        self.page_size_param = (page_size_param or "").strip() or None
+        # page_size: 每页条数值 (>0 且 page_size_param 已配置才发送); 也用于短页判停
+        self.page_size = (
+            int(page_size) if isinstance(page_size, (int, float)) and page_size > 0 else 0
+        )
+        # page_start: 起始页码 (有的接口从 0 计数)
+        self.page_start = (
+            int(page_start) if isinstance(page_start, (int, float)) and page_start >= 0 else 1
+        )
+        # max_pages: 安全上限, 防止接口永远返回数据把拉取循环拖死; 手改非法值归一 20
+        self.max_pages = (
+            int(max_pages) if isinstance(max_pages, (int, float))
+            and 1 <= max_pages <= 200 else 20
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -133,6 +158,11 @@ class PullConfig:
             "time_field": self.time_field,
             "auth": self.auth,
             "timeout_seconds": self.timeout_seconds,
+            "page_param": self.page_param,
+            "page_size_param": self.page_size_param,
+            "page_size": self.page_size,
+            "page_start": self.page_start,
+            "max_pages": self.max_pages,
         }
 
     @classmethod
@@ -160,6 +190,11 @@ class PullConfig:
             time_field=d.get("time_field"),
             auth=d.get("auth"),
             timeout_seconds=d.get("timeout_seconds", 30),
+            page_param=d.get("page_param"),
+            page_size_param=d.get("page_size_param"),
+            page_size=d.get("page_size", 0),
+            page_start=d.get("page_start", 1),
+            max_pages=d.get("max_pages", 20),
         )
 
 
@@ -181,7 +216,7 @@ class ExtConfig:
     """一个扩展数据源的完整配置。"""
     __slots__ = (
         "id", "label", "mode", "fields", "description",
-        "symbol_map", "code_map",
+        "symbol_map", "code_map", "market_level",
         "created_at", "updated_at", "pull",
     )
 
@@ -197,6 +232,7 @@ class ExtConfig:
         created_at: str | None = None,
         updated_at: str | None = None,
         pull: PullConfig | None = None,
+        market_level: bool = False,
     ) -> None:
         self.id = id
         self.label = label
@@ -206,6 +242,10 @@ class ExtConfig:
         # 映射关系: {"type": "mapped", "col": "原始列名"} 或 {"type": "computed", "from": "symbol|code", "method": "strip_exchange|append_exchange"}
         self.symbol_map = symbol_map or {}
         self.code_map = code_map or {}
+        # 市场级表: 行 = 全市场每日一条 (无 symbol 列), 如市场环境/情绪指数/择时
+        # 状态序列。上传/写入/拉取跳过标的关联强制; 供 /rows API 与未来的
+        # "市场级过滤数据集" 契约消费 (策略 JOIN 面向 symbol, 不适用此类表)。
+        self.market_level = bool(market_level)
         self.created_at = created_at or datetime.now().isoformat()
         self.updated_at = updated_at or datetime.now().isoformat()
         self.pull = pull
@@ -219,6 +259,7 @@ class ExtConfig:
             "description": self.description,
             "symbol_map": self.symbol_map,
             "code_map": self.code_map,
+            "market_level": self.market_level,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -239,6 +280,7 @@ class ExtConfig:
             created_at=d.get("created_at"),
             updated_at=d.get("updated_at"),
             pull=PullConfig.from_dict(d["pull"]) if d.get("pull") else None,
+            market_level=bool(d.get("market_level", False)),
         )
 
 

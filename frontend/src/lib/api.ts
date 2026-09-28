@@ -1820,6 +1820,7 @@ export interface SettingsState {
   ai_user_agent: string
   ai_max_output_tokens?: number
   ai_context_window?: number
+  ai_round_checkpoint?: number
 }
 
 /** 保存 TickFlow Key 的响应(先探后存) */
@@ -1971,6 +1972,16 @@ export interface WecomBotStatus {
   last_error: string
 }
 
+/** API Token 记录 (管理视图, 不含哈希) */
+export interface ApiTokenRecord {
+  id: string
+  name: string
+  scopes: string[]
+  created_at: string
+  last_used_at?: string | null
+  revoked: boolean
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -2030,6 +2041,8 @@ export interface Preferences {
   webhook_default_channels?: string[]
   nav_order: string[]
   nav_hidden: string[]
+  /** 看板自定义布局; null/缺省 = 未自定义(前端内置默认布局) */
+  dashboard_layout: { v: number; items: Array<{ i: string; t: string; x: number; y: number; w: number; h: number; p?: Record<string, string> }> } | null
   screener_auto_run: boolean
   minute_intraday_refresh: boolean
   minute_intraday_refresh_interval: number
@@ -2184,8 +2197,8 @@ export const api = {
     ),
 
   /** 保存 AI 配置 */
-  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; reasoning_effort?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string; max_output_tokens?: number; context_window?: number }) =>
-    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number }>('/api/settings/ai', {
+  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; reasoning_effort?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string; max_output_tokens?: number; context_window?: number; round_checkpoint?: number }) =>
+    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number; ai_round_checkpoint?: number }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
@@ -2197,6 +2210,22 @@ export const api = {
   /** 赞助商(RunningHub)模型列表(后端代理, 规避其网关按 Origin 过滤) */
   sponsorModels: () =>
     request<{ models: string[] }>('/api/settings/ai/sponsor-models'),
+
+  // ===== API Token 管理 (开放层; 仅 UI 会话可达) =====
+  apiTokensList: () =>
+    request<{ tokens: ApiTokenRecord[] }>('/api/settings/api-tokens'),
+
+  /** 创建 Token — 明文只在本次响应出现一次 */
+  apiTokenCreate: (name: string, scopes: string[]) =>
+    request<{ token: ApiTokenRecord; plaintext: string }>('/api/settings/api-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name, scopes }),
+    }),
+
+  apiTokenRevoke: (id: string) =>
+    request<{ status: string; id: string }>(`/api/settings/api-tokens/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
@@ -2503,6 +2532,12 @@ export const api = {
     request<{ nav_hidden: string[] }>('/api/settings/preferences/nav-hidden', {
       method: 'PUT',
       body: JSON.stringify({ nav_hidden }),
+    }),
+  /** 保存看板自定义布局; layout=null 恢复默认布局 */
+  saveDashboardLayout: (layout: Preferences['dashboard_layout']) =>
+    request<{ dashboard_layout: Preferences['dashboard_layout'] }>('/api/settings/preferences/dashboard-layout', {
+      method: 'PUT',
+      body: JSON.stringify({ layout }),
     }),
   updateInstrumentsSchedule: (hour: number, minute: number) =>
     request<{ hour: number; minute: number }>('/api/settings/preferences/instruments-schedule', {
@@ -3223,17 +3258,29 @@ export const api = {
   analysisMenuDelete: (id: string) =>
     request<{ status: string }>(`/api/analysis-menus/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  extDataCreate: (body: { id: string; label: string; mode: 'snapshot' | 'timeseries'; fields: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string> }) =>
+  extDataCreate: (body: { id: string; label: string; mode: 'snapshot' | 'timeseries'; fields: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string>; market_level?: boolean }) =>
     request<ExtDataConfig>('/api/ext-data', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  extDataUpdate: (id: string, body: { label?: string; fields?: { name: string; dtype: string; label: string }[]; description?: string }) =>
+  extDataUpdate: (id: string, body: { label?: string; fields?: { name: string; dtype: string; label: string }[]; description?: string; symbol_map?: Record<string, string>; code_map?: Record<string, string>; market_level?: boolean }) =>
     request<ExtDataConfig>(`/api/ext-data/${id}`, {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  /** 字段取值枚举 (filter 配套): 去重 + 计数, 按出现次数降序 */
+  extDataValues: (id: string, field: string, opts?: { date?: string; start_date?: string; end_date?: string; limit?: number }) => {
+    const qs = new URLSearchParams({ field })
+    if (opts?.date) qs.set('date', opts.date)
+    if (opts?.start_date) qs.set('start_date', opts.start_date)
+    if (opts?.end_date) qs.set('end_date', opts.end_date)
+    if (opts?.limit) qs.set('limit', String(opts.limit))
+    return request<{ id: string; field: string; date: string | null; total: number; distinct: number; values: { value: string | number | null; count: number }[] }>(
+      `/api/ext-data/${id}/values?${qs.toString()}`,
+    )
+  },
 
   extDataDelete: (id: string) =>
     request<{ status: string }>(`/api/ext-data/${id}`, { method: 'DELETE' }),
@@ -3265,6 +3312,11 @@ export const api = {
     time_field?: string | null;
     auth?: ExtPullAuth;
     timeout_seconds?: number;
+    page_param?: string | null;
+    page_size_param?: string | null;
+    page_size?: number;
+    page_start?: number;
+    max_pages?: number;
   }) =>
     request<{ status: string; pull: PullConfig }>(
       `/api/ext-data/${id}/pull`,
@@ -4110,6 +4162,16 @@ export interface PullConfig {
   auth?: ExtPullAuth | null
   /** 单次拉取请求超时 (秒), 默认 30 */
   timeout_seconds?: number
+  /** 分页协议 (仅 GET): 页码参数名 (如 "page"), 配置后按页循环拉取 */
+  page_param?: string | null
+  /** 每页条数参数名 (如 "pageSize"), 配合 page_size 一起发送 */
+  page_size_param?: string | null
+  /** 每页条数值 (>0 且配置 page_size_param 才发送); 也用于短页判停 */
+  page_size?: number
+  /** 起始页码 (有的接口从 0 计数), 默认 1 */
+  page_start?: number
+  /** 分页安全上限, 默认 20 (防接口永远返回数据拖死循环) */
+  max_pages?: number
 }
 
 export interface ExtDataBackfillResult {

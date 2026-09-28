@@ -18,6 +18,7 @@ import {
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { cn } from '@/lib/cn'
 import type { ChatMessage, ToolCallRecord } from '../store'
+import { decideAction } from '../store'
 import { DailyChartCard } from './DailyChartCard'
 
 export const UserBubble = memo(function UserBubble({ content }: { content: string }) {
@@ -103,6 +104,14 @@ const TOOL_LABELS: Record<string, string> = {
   list_signals: '检索信号库',
   run_strategy: '执行选股策略',
   get_factor_values: '查询因子排名',
+  create_signal_strategy: '创建自定义信号',
+  add_to_watchlist: '加入自选股',
+  check_data_coverage: '检查数据完整性',
+  __rounds: '轮次检查点',
+  list_ext_tables: '检索扩展数据表',
+  query_ext_table: '读取扩展数据表',
+  get_sync_status: '查询同步进度',
+  sync_data: '数据补全/同步',
 }
 
 function toolLabel(name: string): string {
@@ -112,7 +121,12 @@ function toolLabel(name: string): string {
 /** 足迹组: 工具足迹卡 + 附带可绘图数据的走势小卡(始终可见, 不藏在展开区)。 */
 export const FootprintGroup = memo(function FootprintGroup({ calls }: { calls: ToolCallRecord[] }) {
   if (!calls.length) return null
-  const charts = calls.filter(c => c.status === 'ok' && c.charts).flatMap(c => c.charts!)
+  const charts = calls
+    .filter(c => c.status === 'ok' && c.charts)
+    .flatMap(c => c.charts!)
+    // 固定 日K 左 / 分时 右: 图表顺序原本跟随工具调用顺序(分时行情往往先查),
+    // 稳定排序把日K挪到最前, 其余相对顺序不变
+    .sort((a, b) => Number(a.kind !== 'daily_kline') - Number(b.kind !== 'daily_kline'))
   if (!charts.length) return <FootprintCard calls={calls} />
   return (
     <div className="space-y-2">
@@ -131,10 +145,15 @@ export const FootprintCard = memo(function FootprintCard({ calls }: { calls: Too
   const [expanded, setExpanded] = useState(false)
   if (!calls.length) return null
 
-  const done = calls.filter(c => c.status !== 'running')
+  const activeStatuses = new Set(['running', 'awaiting', 'approved'])
+  const done = calls.filter(c => !activeStatuses.has(c.status))
   const totalMs = done.reduce((sum, c) => sum + (c.elapsedMs ?? 0), 0)
   const hasError = calls.some(c => c.status === 'error')
-  const running = calls.some(c => c.status === 'running')
+  const running = calls.some(c => c.status === 'running' || c.status === 'approved')
+  const awaiting = calls.some(c => c.status === 'awaiting')
+  const active = running || awaiting
+  // 等待确认时强制展开: 确认卡(含待执行参数)必须直接可见, 不能藏在折叠区
+  const showDetails = expanded || awaiting
 
   return (
     <div className="overflow-hidden rounded-card border border-border bg-base/60">
@@ -144,20 +163,25 @@ export const FootprintCard = memo(function FootprintCard({ calls }: { calls: Too
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-secondary transition-colors duration-150 ease-smooth hover:text-foreground"
       >
         <Wrench className="h-3.5 w-3.5 shrink-0 text-muted" />
-        <span className={cn(running && 'animate-pulse')}>
-          {running ? `正在调用工具 (${done.length}/${calls.length})…` : `已调用 ${calls.length} 个工具`}
+        <span className={cn(active && 'animate-pulse')}>
+          {awaiting
+            ? `等待确认操作 (${done.length}/${calls.length})…`
+            : running
+              ? `正在调用工具 (${done.length}/${calls.length})…`
+              : `已调用 ${calls.length} 个工具`}
         </span>
-        {!running && done.length > 0 && (
+        {!active && done.length > 0 && (
           <span className="font-mono text-muted">
             · {totalMs >= 1000 ? `${(totalMs / 1000).toFixed(1)}s` : `${totalMs}ms`}
           </span>
         )}
-        {hasError && !running && <span className="text-danger">· 部分失败</span>}
+        {hasError && !active && <span className="text-danger">· 部分失败</span>}
+        {awaiting && <span className="text-danger">· 需要确认</span>}
         <ChevronDown
           className={cn('ml-auto h-3.5 w-3.5 shrink-0 text-muted transition-transform duration-150 ease-smooth', expanded && 'rotate-180')}
         />
       </button>
-      {expanded && (
+      {showDetails && (
         <div className="border-t border-border/60 px-3 py-2 space-y-2">
           {calls.map(call => (
             <ToolCallRow key={call.callId} call={call} />
@@ -173,11 +197,13 @@ function ToolCallRow({ call }: { call: ToolCallRecord }) {
   return (
     <div className="text-xs">
       <div className="flex items-center gap-2">
-        {call.status === 'running'
+        {call.status === 'running' || call.status === 'approved'
           ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-          : call.status === 'ok'
-            ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" />
-            : <AlertCircle className="h-3.5 w-3.5 shrink-0 text-danger" />}
+          : call.status === 'awaiting'
+            ? <ShieldAlert className="h-3.5 w-3.5 shrink-0 animate-pulse text-danger" />
+            : call.status === 'ok'
+              ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+              : <AlertCircle className="h-3.5 w-3.5 shrink-0 text-danger" />}
         <span className="text-foreground">{toolLabel(call.name)}</span>
         {call.elapsedMs !== undefined && (
           <span className="font-mono text-muted">
@@ -185,6 +211,7 @@ function ToolCallRow({ call }: { call: ToolCallRecord }) {
           </span>
         )}
       </div>
+      {call.status === 'awaiting' && call.confirm && <ConfirmCard call={call} />}
       {call.summary && (
         <div className={cn('mt-0.5 pl-5', call.status === 'error' ? 'text-danger' : 'text-secondary')}>
           {call.summary}
@@ -198,6 +225,48 @@ function ToolCallRow({ call }: { call: ToolCallRecord }) {
           </pre>
         </details>
       )}
+    </div>
+  )
+}
+
+/**
+ * 动作工具确认卡: 参数完整可见(用户确认前必须能核对待执行内容 —
+ * 可核对铁律), 确认/取消 POST 决策端点; 120 秒未决策后端自动拒绝。
+ */
+function ConfirmCard({ call }: { call: ToolCallRecord }) {
+  const confirm = call.confirm!
+  const isRounds = call.name === '__rounds'
+  return (
+    <div className="mt-1 ml-5 rounded-card border border-border bg-elevated/60 p-2">
+      <div className="flex items-center gap-1.5 text-foreground">
+        <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-danger" />
+        <span className="font-medium">{confirm.label}{isRounds ? ' · 需要你的选择' : ' · 需要你的确认'}</span>
+      </div>
+      <div className="mt-1 leading-relaxed text-secondary">{confirm.risk}</div>
+      {Object.keys(call.args ?? {}).length > 0 && (
+        <pre className="mt-1.5 max-h-44 overflow-auto rounded-btn bg-base/70 p-2 font-mono text-[11px] leading-relaxed text-secondary">
+          {JSON.stringify(call.args, null, 2)}
+        </pre>
+      )}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => { void decideAction(call.callId, true) }}
+          className="cursor-pointer rounded-btn bg-accent/15 px-2.5 py-1 font-medium text-accent transition-colors duration-150 ease-smooth hover:bg-accent/25"
+        >
+          {isRounds ? '继续' : '确认执行'}
+        </button>
+        <button
+          type="button"
+          onClick={() => { void decideAction(call.callId, false) }}
+          className="cursor-pointer rounded-btn px-2.5 py-1 text-secondary transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground"
+        >
+          {isRounds ? '停止' : '取消'}
+        </button>
+        <span className="text-[10px] text-muted">
+          {isRounds ? '120 秒内未选择将自动停止' : '120 秒内未确认将自动取消'}
+        </span>
+      </div>
     </div>
   )
 }

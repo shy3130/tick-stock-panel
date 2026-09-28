@@ -466,6 +466,34 @@ def test_save_ai_settings_rejects_non_positive(monkeypatch):
         settings_api.save_ai_settings(req2)
 
 
+def test_save_ai_settings_round_checkpoint(monkeypatch):
+    """轮次检查点: 0=不检查 合法, 1-4 非法(防每轮弹卡), 保存后 GET/响应可见。"""
+    from fastapi import HTTPException
+
+    from app.api import settings as settings_api
+    from app.config import settings as app_settings
+    from app.services import ai_provider
+
+    saved: dict = {}
+    monkeypatch.setattr(settings_api.secrets_store, "save", lambda updates: saved.update(updates))
+    monkeypatch.setattr(settings_api.secrets_store, "load", lambda: saved)
+    original = app_settings.ai_round_checkpoint
+    try:
+        result = settings_api.save_ai_settings(
+            settings_api.AiSettingsIn(provider="openai_compat", round_checkpoint=0),
+        )
+        assert saved["ai_round_checkpoint"] == 0
+        assert result["ai_round_checkpoint"] == 0
+        assert ai_provider.current_ai_round_checkpoint() == 0  # 0 有语义, 不落到默认
+
+        with pytest.raises(HTTPException):
+            settings_api.save_ai_settings(
+                settings_api.AiSettingsIn(provider="openai_compat", round_checkpoint=3),
+            )
+    finally:
+        app_settings.ai_round_checkpoint = original
+
+
 async def _fake_openai_stream(*chunks):
     for chunk in chunks:
         yield chunk

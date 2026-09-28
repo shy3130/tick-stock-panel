@@ -8,13 +8,23 @@
 import { useSyncExternalStore } from 'react'
 import {
   assistantChatStream,
+  decideAssistantAction,
   type AssistantChart,
   type AssistantContext,
   type AssistantEvent,
   type ChatHistoryMessage,
 } from './client'
 
-export type ToolCallStatus = 'running' | 'ok' | 'error'
+/**
+ * running=执行中; awaiting=动作工具等待用户确认; approved/denied=用户已点
+ * 确认/拒绝(短暂中间态, 后端 tool_result 随后到达并覆盖为 ok/error)。
+ */
+export type ToolCallStatus = 'running' | 'awaiting' | 'approved' | 'denied' | 'ok' | 'error'
+
+export interface ToolCallConfirm {
+  label: string
+  risk: string
+}
 
 export interface ToolCallRecord {
   callId: string
@@ -24,6 +34,7 @@ export interface ToolCallRecord {
   summary?: string
   elapsedMs?: number
   charts?: AssistantChart[]
+  confirm?: ToolCallConfirm
 }
 
 export type ChatMessage =
@@ -212,6 +223,44 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
           : m),
       }))
       break
+    case 'action_confirm':
+      patchActiveSession(session => ({
+        ...session,
+        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+          ? {
+              ...m,
+              calls: m.calls.map(c => c.callId === event.call_id
+                ? {
+                    ...c,
+                    status: 'awaiting' as ToolCallStatus,
+                    confirm: { label: event.label, risk: event.risk },
+                  }
+                : c),
+            }
+          : m),
+      }))
+      break
+    case 'rounds_confirm':
+      // 轮次检查点: 以合成足迹记录承载「继续/停止」卡, 决策走同一端点。
+      patchActiveSession(session => ({
+        ...session,
+        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+          ? {
+              ...m,
+              calls: [...m.calls, {
+                callId: event.call_id,
+                name: '__rounds',
+                args: { reached: event.reached },
+                status: 'awaiting' as ToolCallStatus,
+                confirm: {
+                  label: `已连续 ${event.reached} 轮工具调用仍未完成`,
+                  risk: '继续将再运行一个周期(至多再 100 轮), 消耗更多时间与 token; 停止则保留已生成内容。',
+                },
+              }],
+            }
+          : m),
+      }))
+      break
     case 'delta':
       // 逐字流式高频到达: 只更新内存态, 由生成结束时的 setState({sending:false}) 统一落盘。
       patchActiveSession(session => ({
@@ -226,6 +275,15 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
       break
     case 'notice':
       appendMessage({ id: uid(), role: 'notice', content: event.message, ts: Date.now() })
+      break
+    case 'done':
+      // 流结束: 仍处于 awaiting 的确认(后端超时未执行)收敛为已取消, 卡片不再悬挂。
+      patchActiveSession(session => ({
+        ...session,
+        messages: session.messages.map(m => m.role === 'footprint'
+          ? { ...m, calls: m.calls.map(c => (c.status === 'awaiting' ? { ...c, status: 'denied' as ToolCallStatus } : c)) }
+          : m),
+      }))
       break
     default:
       break
@@ -290,6 +348,26 @@ export function deleteSession(id: string) {
   const sessions = state.sessions.filter(s => s.id !== id)
   const activeId = id === state.activeId ? sessions[0]?.id ?? '' : state.activeId
   setState({ sessions, activeId })
+}
+
+/** 确认卡按钮: POST 决策并立刻反馈; 后端随后以 tool_result 终态覆盖该记录。 */
+export async function decideAction(callId: string, approve: boolean) {
+  patchConfirmStatus(callId, approve ? 'approved' : 'denied')
+  try {
+    await decideAssistantAction(callId, approve)
+  } catch {
+    // 会话已断/确认过期: 本地收敛为拒绝态, 由 tool_result(或界面)呈现结果
+    patchConfirmStatus(callId, 'denied')
+  }
+}
+
+function patchConfirmStatus(callId: string, status: ToolCallStatus) {
+  patchActiveSession(session => ({
+    ...session,
+    messages: session.messages.map(m => m.role === 'footprint'
+      ? { ...m, calls: m.calls.map(c => (c.callId === callId ? { ...c, status } : c)) }
+      : m),
+  }))
 }
 
 /** 页面上下文由插槽组件上报(仅影响后续轮次), 用户可见于足迹中由后端回显。 */
