@@ -1,8 +1,8 @@
-"""生成应用图标 — 白色 squircle 背景 + 紫色 Logo。
+"""生成应用图标 — 白色 squircle 背景 + 品牌 gradient Logo。
 
-设计 (与 frontend Logo.tsx / favicon.svg 一致):
+设计 (与 frontend favicon.svg / brand/logo.svg 一致):
   背景: 白色 squircle (macOS Big Sur+ 要求不透明 squircle 背景, 用白色填充)
-  内容: 紫色 #5B21B6 方括号 + K线 (上影短/下影长, bullish 站稳)
+  内容: 品牌渐变 (#A78BFA→#7C3AED, 亮端朝上) 方括号 + K线 (上影短/下影长, bullish 站稳)
 
 蜡烛几何 (32x32 viewBox):
   wick: y=7 ~ y=25
@@ -19,17 +19,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 OUT_ICO = Path(__file__).parent / "icon.ico"
 OUT_ICNS = Path(__file__).parent / "icon.icns"
 
 # 背景: 白色 squircle (不透明, macOS 规范)
 BG = (255, 255, 255, 255)
-# logo 线条色: 紫色 #5B21B6 (与 Logo.tsx / favicon.svg 一致)
-LOGO = (91, 33, 182, 255)       # #5B21B6
-# wick 影线: 同色不透明 (半透明在小尺寸会糊掉)
-LOGO_WICK = (91, 33, 182, 255)
+# logo 线条色: 品牌渐变 #A78BFA(亮端,左上) → #7C3AED(品牌紫,右下), 与 favicon.svg/brand/logo.svg 一致
+GRAD_A = (167, 139, 250)        # #A78BFA
+GRAD_B = (124, 58, 237)         # #7C3AED
+# wick 影线: 70% 不透明 (与 favicon.svg 一致; 16px 最小档经超采样仍可读)
+WICK_ALPHA = 0.7
+
+
+def _grad_image(size_px: int) -> Image.Image:
+    """32-viewBox 对角渐变 (4,3)→(28,29), 64px 生成后放大 (线性渐变缩放无损)。"""
+    small = 64
+    ax, ay, bx, by = 4 / 32, 3 / 32, 28 / 32, 29 / 32
+    dx, dy = bx - ax, by - ay
+    len2 = dx * dx + dy * dy
+    img = Image.new("RGB", (small, small))
+    px = img.load()
+    for y in range(small):
+        vy = (y + 0.5) / small
+        for x in range(small):
+            vx = (x + 0.5) / small
+            t = max(0.0, min(1.0, ((vx - ax) * dx + (vy - ay) * dy) / len2))
+            px[x, y] = tuple(round(a + (b - a) * t) for a, b in zip(GRAD_A, GRAD_B))
+    return img.resize((size_px, size_px), Image.BILINEAR)
 
 
 def _draw(size: int, sw_b: float, sw_w: float, body_w: float) -> Image.Image:
@@ -49,23 +67,35 @@ def _draw(size: int, sw_b: float, sw_w: float, body_w: float) -> Image.Image:
     swb = max(1, int(round(sw_b * factor)))
     sww = max(1, int(round(sw_w * factor)))
 
+    # 标记掩膜: 渐变经 alpha 通道贴入, 线条几何与旧版完全一致
+    mark = Image.new("L", (s, s), 0)
+    dm = ImageDraw.Draw(mark)
+
     # 方括号 [ ]
     for pts in [[(10, 4), (4, 4), (4, 28), (10, 28)], [(22, 4), (28, 4), (28, 28), (22, 28)]]:
         scaled = [(p(x), p(y)) for x, y in pts]
         for i in range(len(scaled) - 1):
-            d.line([scaled[i], scaled[i + 1]], fill=LOGO, width=swb, joint="curve")
-
-    # wick 影线 (上短下长)
-    d.line([(p(16), p(7)), (p(16), p(25))], fill=LOGO_WICK, width=sww)
-    wcap = sww // 2 + 1
-    for cy in [7, 25]:
-        d.ellipse([p(16) - wcap, p(cy) - wcap, p(16) + wcap, p(cy) + wcap], fill=LOGO_WICK)
+            dm.line([scaled[i], scaled[i + 1]], fill=255, width=swb, joint="curve")
 
     # body 实体 (偏上 → 上影短下影长)
-    d.rounded_rectangle(
+    dm.rounded_rectangle(
         [p(16 - body_w / 2), p(9), p(16 + body_w / 2), p(19)],
-        radius=p(0.5), fill=LOGO,
+        radius=p(0.5), fill=255,
     )
+
+    # wick 影线 (上短下长, 70% 不透明)
+    wick = Image.new("L", (s, s), 0)
+    dw = ImageDraw.Draw(wick)
+    dw.line([(p(16), p(7)), (p(16), p(25))], fill=255, width=sww)
+    wcap = sww // 2 + 1
+    for cy in [7, 25]:
+        dw.ellipse([p(16) - wcap, p(cy) - wcap, p(16) + wcap, p(cy) + wcap], fill=255)
+
+    # 渐变层: alpha = mark + WICK_ALPHA * wick
+    alpha = ImageChops.add(mark, wick.point(lambda v: round(v * WICK_ALPHA)))
+    layer = _grad_image(s).convert("RGBA")
+    layer.putalpha(alpha)
+    img.alpha_composite(layer)
 
     return img.resize((size, size), Image.LANCZOS)
 
