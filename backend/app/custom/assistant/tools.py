@@ -823,7 +823,10 @@ def _partition_dates(data_dir: Path, subdir: str) -> list[str]:
 
 
 def _biz_days_behind(latest_iso: str | None, today: date) -> int:
-    """数据最新日落后今天约多少个工作日 — 无交易日历, 按周一~周五近似, 节假日会高估。"""
+    """数据最新日落后今天约多少个工作日 — 无交易日历, 按周一~周五近似, 节假日会高估。
+
+    数的是最新日之后、截至今天 (含) 的工作日: 周五的数据在周六/周日不算落后。
+    """
     if not latest_iso:
         return 0
     try:
@@ -831,9 +834,9 @@ def _biz_days_behind(latest_iso: str | None, today: date) -> int:
     except ValueError:
         return 0
     count = 0
-    cur = today
-    while cur > latest:
-        cur -= timedelta(days=1)
+    cur = latest
+    while cur < today:
+        cur += timedelta(days=1)
         if cur.weekday() < 5:
             count += 1
     return count
