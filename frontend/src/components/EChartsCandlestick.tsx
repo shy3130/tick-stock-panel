@@ -15,6 +15,8 @@ export interface OHLC {
   ma10?: number | null
   ma20?: number | null
   ma60?: number | null
+  ma120?: number | null
+  ma200?: number | null
   macd_dif?: number | null
   macd_dea?: number | null
   macd_hist?: number | null
@@ -354,6 +356,8 @@ const THEME = {
   ma10: '#3B82F6',
   ma20: '#F97316',
   ma60: '#8B5CF6',
+  ma120: '#14B8A6',
+  ma200: '#EC4899',
   bg: 'transparent',
 }
 
@@ -483,7 +487,10 @@ function buildOption(
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
-  const hasMA = showMA && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
+  const hasMA = showMA && data.some(d => (
+    d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null
+    || d.ma120 != null || d.ma200 != null
+  ))
 
   const markPointData: any[] = []
   if (markers && markers.length > 0) {
@@ -698,6 +705,8 @@ function buildOption(
     series.push(maLine('ma10', THEME.ma10, 'MA10'))
     series.push(maLine('ma20', THEME.ma20, 'MA20'))
     series.push(maLine('ma60', THEME.ma60, 'MA60'))
+    series.push(maLine('ma120', THEME.ma120, 'MA120'))
+    series.push(maLine('ma200', THEME.ma200, 'MA200'))
   }
 
   // 加入自选日标注: 蓝色竖虚线从该根K线的下沿连到主图底端的「自选」标签。
@@ -1033,6 +1042,8 @@ export function EChartsCandlestick({
       if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
       if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
       if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if (d.ma120 != null) html += `<span style="color:${THEME.ma120}">MA120:${Number(d.ma120).toFixed(2)}</span>`
+      if (d.ma200 != null) html += `<span style="color:${THEME.ma200}">MA200:${Number(d.ma200).toFixed(2)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
         html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }
@@ -1309,6 +1320,8 @@ export function EChartsCandlestick({
       if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
       if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
       if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if (d.ma120 != null) html += `<span style="color:${THEME.ma120}">MA120:${Number(d.ma120).toFixed(2)}</span>`
+      if (d.ma200 != null) html += `<span style="color:${THEME.ma200}">MA200:${Number(d.ma200).toFixed(2)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
         html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }

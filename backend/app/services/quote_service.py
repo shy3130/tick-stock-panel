@@ -1838,19 +1838,21 @@ class QuoteService:
             if not use_incremental:
                 from datetime import timedelta
                 from app.indicators.pipeline import compute_enriched
-                from app.tickflow.repository import _live_agg_window_start
+                from app.tickflow.repository import (
+                    _LIVE_AGG_HISTORY_DAYS,
+                    _live_agg_window_start,
+                )
 
                 logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
-                cutoff = today - timedelta(days=90)
+                cutoff = today - timedelta(days=_LIVE_AGG_HISTORY_DAYS)
                 table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = guarded_collect(
                     scan_daily_parquet(daily_glob)
-                    # 多读一段自然日, 再按交易日计数确定窗口起点 (长假前后 90 个自然日不足 60 个交易日)
-                    .filter(pl.col("date") >= cutoff - timedelta(days=60))
+                    .filter(pl.col("date") >= cutoff)
                     .sort(["symbol", "date"]),
                     priority="background",
                 )
@@ -1859,7 +1861,7 @@ class QuoteService:
 
                 hist_cols = [c for c in ohlcv_cols if c in hist_df.columns]
                 hist_df = hist_df.select(hist_cols).filter(pl.col("date") != today)
-                # 与股票盘中递推窗口同口径: 至少覆盖 60 个交易日, 否则 MA60/60 日极值/60 日动量为空
+                # 与股票盘中递推窗口同口径: 至少覆盖 200 个交易日, 否则 MA200/60 日极值/60 日动量为空
                 window_start = _live_agg_window_start(hist_df["date"], today, cutoff)
                 hist_df = hist_df.filter(pl.col("date") >= window_start)
                 daily_ohlcv = daily_df.select([c for c in ohlcv_cols if c in daily_df.columns])
