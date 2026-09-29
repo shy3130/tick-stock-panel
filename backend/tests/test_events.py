@@ -66,6 +66,24 @@ def test_bus_slow_consumer_drops_oldest():
     assert q.get_nowait()["data"]["i"] == 51
 
 
+def test_bus_event_ids_distinct_within_one_millisecond(monkeypatch: pytest.MonkeyPatch):
+    # 一批告警 (append_many) 在同一毫秒内发布: 每条的 SSE id 必须不同且递增,
+    # 否则按 lastEventId 去重的客户端只收到第一条。
+    from app.services import events as events_mod
+
+    b = EventBus()
+    q = b.subscribe()
+    monkeypatch.setattr(events_mod.time, "time", lambda: 1700000000.123)
+    for i in range(3):
+        b.publish("alert", {"i": i}, scope="read:analysis")
+    # 时钟回拨: id 也不倒退
+    monkeypatch.setattr(events_mod.time, "time", lambda: 1699999999.0)
+    b.publish("alert", {"i": 3}, scope="read:analysis")
+
+    ids = [int(sse_format(q.get_nowait()).splitlines()[0].removeprefix("id: ")) for _ in range(4)]
+    assert ids == [1700000000123, 1700000000124, 1700000000125, 1700000000126]
+
+
 def test_sse_format_frame():
     frame = sse_format({"type": "alert", "scope": "read:analysis", "data": {"a": 1}, "ts": 1700000000.123})
     lines = frame.splitlines()
