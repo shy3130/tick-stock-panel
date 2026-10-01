@@ -106,7 +106,8 @@ export function useParamSweep(strategies: StrategyDetail[], onStrategyChange?: (
       if (!s?.enabled) continue
       if (p.type === 'bool') grid[p.id] = [true, false]
       else if (p.type === 'select') grid[p.id] = p.options ?? []
-      else grid[p.id] = { min: Number(s.min), max: Number(s.max), step: Number(s.step) }
+      else if (p.type === 'float' || p.type === 'int') grid[p.id] = { min: Number(s.min), max: Number(s.max), step: Number(s.step) }
+      // string 等类型不支持范围展开, 跳过不可扫描参数
     }
     return grid
   }
@@ -142,6 +143,18 @@ export function SweepParamList({ params, sweeps, updateSweep }: {
         {params.map(p => {
           const s = sweeps[p.id] ?? defaultSweep(p)
           const numeric = p.type === 'float' || p.type === 'int'
+          const sweepable = numeric || p.type === 'bool' || p.type === 'select'
+          if (!sweepable) {
+            return (
+              <div key={p.id} className="rounded-input border border-border/60 p-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium text-muted">{p.label}</span>
+                  <span className="text-muted">({p.type})</span>
+                  <span className="text-[11px] text-muted">文本参数不可扫描</span>
+                </div>
+              </div>
+            )
+          }
           return (
             <div key={p.id} className="rounded-input border border-border/60 p-2">
               <label className="flex items-center gap-2 text-xs">

@@ -35,8 +35,8 @@ META = {
     },
 
     # 策略参数 (只把用户可能调节的阈值放这里，公式常数不必参数化)
-    # type 支持: float / int / bool / select(带 options) / date(格式 "YYYY-MM-DD")
-    # float/int 可带 min/max/step；select 带 options: [{label, value}]；date 的 default 是字符串
+    # type 支持: float / int / bool / select(带 options) / date(格式 "YYYY-MM-DD") / string(自由文本)
+    # float/int 可带 min/max/step；select 带 options: [{label, value}]；date/string 的 default 是字符串
     "params": [
     ],
 

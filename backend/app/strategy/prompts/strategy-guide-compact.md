@@ -35,7 +35,7 @@ META = {
         "exclude_st": True,
         "exclude_new_days": 30,
     },
-    "params": [],  # type: float/int/bool/select/date；float/int 带 min/max/step
+    "params": [],  # type: float/int/bool/select/date/string；float/int 带 min/max/step
     "scoring": {},
     "order_by": "score",
     "descending": True,

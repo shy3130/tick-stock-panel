@@ -759,7 +759,7 @@ export interface AuctionBenchmarkPayload {
 export interface StrategyParamDef {
   id: string
   label: string
-  type: 'float' | 'int' | 'select' | 'bool'
+  type: 'float' | 'int' | 'select' | 'bool' | 'string'
   default: number | string | boolean
   min?: number
   max?: number

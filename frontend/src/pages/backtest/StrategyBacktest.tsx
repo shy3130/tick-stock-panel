@@ -747,6 +747,19 @@ function StrategyParamInput({ param, value, onChange }: {
       </label>
     )
   }
+  if (param.type === 'string') {
+    return (
+      <label className="block">
+        <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
+        <input
+          type="text"
+          value={value ?? param.default ?? ''}
+          onChange={e => onChange(e.target.value)}
+          className={INPUT_CLS}
+        />
+      </label>
+    )
+  }
   return (
     <label className="block">
       <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
