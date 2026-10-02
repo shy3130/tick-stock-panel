@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection } from '@/lib/api'
@@ -35,15 +35,22 @@ interface Props {
 }
 
 // ===== 可折叠区域 =====
-function Section({ icon: Icon, title, accent, defaultOpen = true, children, extra }: {
+function Section({ icon: Icon, title, accent, defaultOpen = true, children, extra, animateCollapse = true }: {
   icon?: React.ComponentType<{ className?: string }>
   title: string
   accent?: string
   defaultOpen?: boolean
   children: React.ReactNode
   extra?: React.ReactNode
+  /** 内容很高时置 false: 跳过 height 动画 (每帧全量 layout × backdrop-blur 重绘会卡顿), 直接显隐 */
+  animateCollapse?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const body = (
+    <div className="px-3.5 pb-3 pt-0.5 space-y-2">
+      {children}
+    </div>
+  )
   return (
     <div className="rounded-xl border border-border/15 bg-surface/20 overflow-hidden">
       <div className="flex items-center gap-2 px-3.5 py-2 hover:bg-surface/30 transition-colors">
@@ -57,21 +64,23 @@ function Section({ icon: Icon, title, accent, defaultOpen = true, children, extr
         </button>
         {extra && <div className="ml-auto flex items-center gap-1">{extra}</div>}
       </div>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="overflow-hidden"
-          >
-            <div className="px-3.5 pb-3 pt-0.5 space-y-2">
-              {children}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {animateCollapse ? (
+        <AnimatePresence initial={false}>
+          {open && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              {body}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      ) : (
+        open && body
+      )}
     </div>
   )
 }
@@ -116,10 +125,11 @@ export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, un
 export const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
 
 // 策略参数字段
-function ParamField({ def, value, onChange }: {
+// memo: 单参数修改只重渲本行 (父组件需传稳定回调, 否则 memo 失效)
+const ParamField = memo(function ParamField({ def, value, onChange }: {
   def: StrategyParamDef
   value: any
-  onChange: (v: any) => void
+  onChange: (pid: string, v: any) => void
 }) {
   if (def.type === 'bool') {
     const checked = value === true || value === 'true' || value === 'True'
@@ -128,7 +138,7 @@ function ParamField({ def, value, onChange }: {
         <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
         <button
           type="button"
-          onClick={() => onChange(!checked)}
+          onClick={() => onChange(def.id, !checked)}
           className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${
             checked ? 'bg-accent' : 'bg-elevated'
           }`}
@@ -147,7 +157,7 @@ function ParamField({ def, value, onChange }: {
         <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
         <select
           value={value ?? def.default}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => onChange(def.id, e.target.value)}
           className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -162,7 +172,7 @@ function ParamField({ def, value, onChange }: {
       <input
         type="number"
         value={value ?? def.default}
-        onChange={e => onChange(e.target.value === '' ? def.default : Number(e.target.value))}
+        onChange={e => onChange(def.id, e.target.value === '' ? def.default : Number(e.target.value))}
         step={def.step ?? 0.1}
         min={def.min}
         max={def.max}
@@ -173,7 +183,7 @@ function ParamField({ def, value, onChange }: {
       )}
     </div>
   )
-}
+})
 
 export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModify, onDeleted }: Props) {
   const [detail, setDetail] = useState<StrategyDetail | null>(null)
@@ -186,6 +196,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   const [strategyDesc, setStrategyDesc] = useState('')
   const [basicFilter, setBasicFilter] = useState<Record<string, any>>({})
   const [params, setParams] = useState<Record<string, any>>({})
+  // 稳定回调: 配合 memo(ParamField), 单参数修改只重渲对应行
+  const handleParamChange = useCallback((pid: string, v: any) => setParams(prev => ({ ...prev, [pid]: v })), [])
   const [scoring, setScoring] = useState<Record<string, number>>({})
   const [scoringDirections, setScoringDirections] = useState<Record<string, ScoringDirection>>({})
   const [stopLoss, setStopLoss] = useState<number | null>(null)
@@ -367,7 +379,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       }}
       labelledBy="strategy-settings-title"
       overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      panelClassName="w-[1200px] max-w-[95vw] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      panelClassName="w-[1200px] max-w-[95vw] max-h-[88vh] bg-surface/95 border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
     >
           {/* 标题 */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
@@ -556,9 +568,9 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   {/* 列2：策略参数 */}
                   <div className="space-y-3">
                     {detail.params.length > 0 ? (
-                      <Section icon={Settings2} title="策略参数" accent="text-muted">
+                      <Section icon={Settings2} title="策略参数" accent="text-muted" animateCollapse={false}>
                         <div className="space-y-1.5">
-                          {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
+                          {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={handleParamChange} />)}
                         </div>
                       </Section>
                     ) : (
