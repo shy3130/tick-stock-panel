@@ -36,7 +36,15 @@ META = {
 
     # 策略参数 (只把用户可能调节的阈值放这里，公式常数不必参数化)
     # type 支持: float / int / bool / select(带 options) / date(格式 "YYYY-MM-DD")
-    # float/int 可带 min/max/step；select 带 options: [{label, value}]；date 的 default 是字符串
+    # float/int 可带 min/max/step；select 带 options: ["opt1", "opt2"]；date 的 default 是字符串
+    #
+    # 可选 UI 元数据 (只影响参数面板展示, 不影响策略语义; 后端原样透传):
+    #   "group": "组名"                    — 相同组名的相邻参数归并为一节显示
+    #   "visible_if": {...}                — 级联显隐: {"param": "pid", "in": [值...]} 单条件,
+    #                                        或 {"all": [...]} / {"any": [...]} 递归组合;
+    #                                        in 值类型应与目标参数一致 (bool 用 True/False 而非字符串);
+    #                                        隐藏只是不渲染, 参数值仍按当前值随请求提交
+    #   "option_applies": {选项: {pid: 值}} — select 选中某选项时批量应用一组参数值 (如预设)
     "params": [
     ],
 

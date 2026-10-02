@@ -756,6 +756,15 @@ export interface AuctionBenchmarkPayload {
 }
 
 // ===== Strategy Engine =====
+/** 参数级联显隐条件 (UI 元数据, 后端原样透传)。三种形态可递归组合:
+ *  { param, in } — values[param] ∈ in;  { all: [...] } — 全部成立;  { any: [...] } — 任一成立 */
+export interface ParamVisibleIf {
+  param?: string
+  in?: (string | number | boolean)[]
+  all?: ParamVisibleIf[]
+  any?: ParamVisibleIf[]
+}
+
 export interface StrategyParamDef {
   id: string
   label: string
@@ -765,6 +774,12 @@ export interface StrategyParamDef {
   max?: number
   step?: number
   options?: string[]
+  /** UI 元数据: 分组节标题 (相同组名的相邻参数归并) */
+  group?: string
+  /** UI 元数据: 级联显隐 — 条件成立时显示 (见 ParamVisibleIf) */
+  visible_if?: ParamVisibleIf
+  /** UI 元数据: select 各选项被选中时批量应用的参数值 (如标的池预设 → 开关+默认值) */
+  option_applies?: Record<string, Record<string, string | number | boolean>>
 }
 
 export interface CompositeChildInfo {

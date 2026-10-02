@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { StrategyDetail, StrategyParamDef } from '@/lib/api'
+import { paramDisplayLabel, visibleParams } from '@/lib/strategyParams'
 
 /** 参数扫描配置的共享逻辑与 UI — 优化器与 walk-forward 复用。 */
 
@@ -69,7 +70,11 @@ export function useParamSweep(strategies: StrategyDetail[], onStrategyChange?: (
   const [sweeps, setSweeps] = useState<Record<string, Sweep>>({})
 
   const selected = strategies.find(s => s.id === strategyId)
-  const params = selected?.params ?? []
+  // 级联隐藏参数不参与扫描: 扫描面板未扫描参数固定为默认值, 按默认值判定显隐
+  const params = useMemo(
+    () => visibleParams(selected?.params ?? [], selected?.params_defaults ?? {}),
+    [selected],
+  )
 
   const selectStrategy = (id: string) => {
     setStrategyId(id)
@@ -111,7 +116,14 @@ export function useParamSweep(strategies: StrategyDetail[], onStrategyChange?: (
     return grid
   }
 
-  return { strategyId, selected, selectStrategy, params, sweeps, updateSweep, combos, gridError, buildGrid }
+  // 因级联规则 (visible_if) 在默认配置下隐藏、不参与扫描的参数, 供 UI 提示
+  // (paramDisplayLabel: 平铺列表无组上下文, 短标签需带组名才可区分)
+  const hiddenParamLabels = useMemo(
+    () => (selected?.params ?? []).filter(p => !params.includes(p)).map(p => paramDisplayLabel(p)),
+    [selected, params],
+  )
+
+  return { strategyId, selected, selectStrategy, params, sweeps, updateSweep, combos, gridError, buildGrid, hiddenParamLabels }
 }
 
 /** 策略选择器。 */
@@ -129,15 +141,22 @@ export function StrategySelect({ strategies, value, onChange }: {
 }
 
 /** 可扫参数列表 (勾选 + min/max/step)。 */
-export function SweepParamList({ params, sweeps, updateSweep }: {
+export function SweepParamList({ params, sweeps, updateSweep, hiddenLabels = [] }: {
   params: StrategyParamDef[]
   sweeps: Record<string, Sweep>
   updateSweep: (pid: string, patch: Partial<Sweep>) => void
+  /** 因级联规则 (visible_if) 在默认配置下隐藏的参数标签, 仅作提示 */
+  hiddenLabels?: string[]
 }) {
   if (!params.length) return null
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-secondary">扫描参数 (勾选后设范围)</div>
+      {hiddenLabels.length > 0 && (
+        <div className="mb-1.5 text-[11px] text-muted">
+          {hiddenLabels.length} 个参数因级联规则在默认配置下隐藏，不参与扫描：{hiddenLabels.join('、')}
+        </div>
+      )}
       <div className="space-y-2">
         {params.map(p => {
           const s = sweeps[p.id] ?? defaultSweep(p)
@@ -146,7 +165,7 @@ export function SweepParamList({ params, sweeps, updateSweep }: {
             <div key={p.id} className="rounded-input border border-border/60 p-2">
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={s.enabled} onChange={e => updateSweep(p.id, { enabled: e.target.checked })} />
-                <span className="font-medium text-foreground">{p.label}</span>
+                <span className="font-medium text-foreground">{paramDisplayLabel(p)}</span>
                 <span className="text-secondary">({p.type})</span>
               </label>
               {s.enabled && numeric && (
