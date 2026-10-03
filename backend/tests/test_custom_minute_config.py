@@ -324,3 +324,59 @@ def test_data_source_trial_wraps_missing_saved_provider_as_http_400(monkeypatch)
 
     assert exc_info.value.status_code == 400
     assert "not found" in exc_info.value.detail
+
+
+def test_full_minute_dataset_survives_config_and_registration(tmp_path: Path, monkeypatch):
+    """#451 回归: loader 清洗白名单含 full_minute, 而 config_from_dict 的白名单
+    漏了它 —— YAML 里的 full_minute 在配置模型构建阶段被静默丢弃, 表现为
+    provider_has_dataset 为 False、设置页试拉报 "does not configure dataset
+    'full_minute'"、分钟全量批量同步链路 (_resolve_full_minute_provider) 静默失效。
+    """
+    from app.data_providers.custom import loader as custom_loader
+
+    full_minute_fields = (
+        "symbol", "datetime", "open", "high", "low", "close", "volume", "amount",
+    )
+    raw = {
+        "name": "test_source",
+        "display_name": "Test Source",
+        "datasets": {
+            "full_minute": {
+                "url": "https://example.test/full_minute",
+                "method": "POST",
+                "field_map": {name: name for name in full_minute_fields},
+            },
+        },
+    }
+    # 编辑器保存路径的前半段: 清洗白名单本来就保留 full_minute
+    cleaned = _sanitize_for_yaml(raw)
+    assert "full_minute" in cleaned["datasets"]
+
+    # 启动加载路径: YAML 文件 → load_config → config_from_dict
+    path = tmp_path / "test_source.yaml"
+    path.write_text(
+        "name: test_source\n"
+        "display_name: Test Source\n"
+        "datasets:\n"
+        "  full_minute:\n"
+        "    url: https://example.test/full_minute\n"
+        "    method: POST\n"
+        "    field_map:\n"
+        + "".join(f"      {n}: {n}\n" for n in full_minute_fields),
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert "full_minute" in cfg.datasets
+
+    # 注册表: 真实 load_all 后 provider_has_dataset 必须为 True
+    saved_providers = dict(custom_loader._PROVIDERS)
+    saved_errors = list(custom_loader._LOAD_ERRORS)
+    monkeypatch.setattr(custom_loader, "_load_builtin_plugins", lambda: None)
+    try:
+        custom_loader.load_all(tmp_path)
+        assert not custom_loader._LOAD_ERRORS, custom_loader._LOAD_ERRORS
+        assert custom_loader.provider_has_dataset("test_source", "full_minute")
+    finally:
+        custom_loader._PROVIDERS.clear()
+        custom_loader._PROVIDERS.update(saved_providers)
+        custom_loader._LOAD_ERRORS[:] = saved_errors
