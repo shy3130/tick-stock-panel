@@ -155,6 +155,20 @@ function ParamField({ def, value, onChange }: {
       </div>
     )
   }
+  if (def.type === 'string') {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <input
+          type="text"
+          value={value ?? def.default ?? ''}
+          onChange={e => onChange(e.target.value)}
+          className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+        />
+      </div>
+    )
+  }
+
 
   return (
     <div className="flex items-center gap-2">

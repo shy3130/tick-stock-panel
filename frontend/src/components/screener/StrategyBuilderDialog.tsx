@@ -663,7 +663,9 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                                 ) : (
                                   <>
                                     <span className="text-[11px] font-mono text-foreground">{p.default}</span>
-                                    <span className="text-[10px] text-muted">{p.min} ~ {p.max}{p.type === 'float' || p.type === 'int' ? ' · 步长 ' + p.step : ''}</span>
+                                    {(p.type === 'float' || p.type === 'int') && (
+                                      <span className="text-[10px] text-muted">{p.min} ~ {p.max} · 步长 {p.step}</span>
+                                    )}
                                   </>
                                 )}
                               </div>
