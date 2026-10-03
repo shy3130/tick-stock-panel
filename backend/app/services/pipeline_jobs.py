@@ -115,15 +115,26 @@ class JobStore:
     # ===== persistence =====
 
     def _write_file(self, job: dict[str, Any]) -> None:
-        """将 job 快照写入独立 JSON 文件(create/start/终态均落盘)。"""
+        """将 job 快照写入独立 JSON 文件(create/start/终态均落盘)。
+
+        临时文件 + os.replace 原子替换: get()/list_recent() 等无锁读者
+        不会读到写一半的 JSON —— 否则 _read_file 解析失败按"文件不存在"
+        返回 None, 轮询方会瞬时看到任务凭空消失。
+        """
         path = self._store_dir / f"{job['id']}.json"
+        tmp = self._store_dir / f"{job['id']}.json.tmp"
         try:
-            path.write_text(
+            tmp.write_text(
                 json.dumps(job, ensure_ascii=False, indent=None),
                 encoding="utf-8",
             )
+            os.replace(tmp, path)
         except Exception:
             logger.warning("failed to write job file %s", path)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def _read_file(self, job_id: str) -> dict[str, Any] | None:
         """从磁盘读取单个 job 文件。"""
@@ -338,12 +349,15 @@ class JobStore:
     # ===== query =====
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        # 内存中的活跃 job 优先
-        j = self._active_jobs.get(job_id)
-        if j:
-            return j
-        # 否则从磁盘读
-        return self._read_file(job_id)
+        # 取锁与 succeed()/fail() 的「pop 出内存 → 终态落盘」串行,
+        # 避免轮询方恰好落在两者之间, 瞬时看到任务凭空消失。
+        with self._lock:
+            # 内存中的活跃 job 优先
+            j = self._active_jobs.get(job_id)
+            if j:
+                return j
+            # 否则从磁盘读
+            return self._read_file(job_id)
 
     def list_recent(self, limit: int = 20) -> list[dict[str, Any]]:
         # 合并: 内存中的活跃 job + 磁盘文件
