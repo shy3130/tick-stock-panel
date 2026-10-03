@@ -31,6 +31,9 @@ import { DatePicker } from '@/components/DatePicker'
 import { toast } from '@/components/Toast'
 import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
+import { MonthlyReturnHeatmap } from './charts/MonthlyReturnHeatmap'
+import { AnnualReturnBarChart } from './charts/AnnualReturnBarChart'
+import { analyzeReturns } from './returnsAnalysis'
 import { TradeKlineModal, type TradeNavSource } from './components/TradeKlineModal'
 import { PicksSymbolKlineModal } from './components/PicksSymbolKlineModal'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
@@ -1040,7 +1043,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     onLoadConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在切换候选时执行一次性回填
   }, [loadCandidate])
-  const [resultTab, setResultTab] = useState<'daily' | 'trades' | 'picks' | 'attribution'>('daily')
+  const [resultTab, setResultTab] = useState<'daily' | 'trades' | 'picks' | 'attribution' | 'returns'>('daily')
   // 因子归因表的 id → 中文标签 (字段视图 + 因子库合并, 自定义因子也在库内)
   const factorMetaQ = useQuery({ queryKey: QK.factorColumns, queryFn: api.factorColumns, staleTime: 300_000 })
   const factorLibQ = useQuery({ queryKey: QK.factorLibrary('all'), queryFn: () => api.factorLibrary(), staleTime: 60_000 })
@@ -1436,6 +1439,24 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
       })
       .reverse()
   }, [result?.trades])
+
+  // 收益分析（月度热力图 + 年度直方图）纯前端从净值曲线派生。
+  // 基准口径: 仓位模拟的 equity_curve 是账户总资产 → 首月基准取 initial_capital;
+  // 全量独立执行(candidate_execution)是 1.0 起点的样本收益曲线(非账户净值) → 基准取 1.0。
+  const returnsAnalysis = useMemo(() => {
+    if (!result || result.equity_curve.length === 0) return null
+    const capital = result.stats?.full_kind === 'candidate_execution'
+      ? 1.0
+      : Number(result.config?.initial_capital)
+    return analyzeReturns(result.equity_curve, Number.isFinite(capital) && capital > 0 ? capital : null)
+  }, [result])
+
+  // 结果区 tab 可见性: 交易类 tab 沿用原有条件; 收益分析只看净值曲线,
+  // 覆盖 0 交易（如纯买入持有）场景 — 此时有效 tab 回退到收益分析。
+  const attributionCount = result?.factor_attribution?.factors.length ?? 0
+  const hasTradeResultTabs = (result?.trades.length ?? 0) > 0 || (result?.per_symbol_stats.length ?? 0) > 0 || attributionCount > 0
+  const hasReturnsTab = returnsAnalysis != null
+  const effResultTab = (hasTradeResultTabs || resultTab === 'returns') ? resultTab : 'returns'
 
   const tradePageCount = sortedTrades.length
     ? Math.ceil(sortedTrades.length / tradePageSize)
@@ -2426,19 +2447,20 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
               </div>
             )}
 
-            {/* Tab: 按日期 / 交易明细 / 选股分析 / 因子归因 */}
-            {(result.trades.length > 0 || result.per_symbol_stats.length > 0 || (result.factor_attribution?.factors.length ?? 0) > 0) && (
+            {/* Tab: 按日期 / 交易明细 / 选股分析 / 因子归因 / 收益分析 */}
+            {(hasTradeResultTabs || hasReturnsTab) && (
               <div className="rounded-card border border-border overflow-hidden">
                 <div className="flex items-center gap-1 border-b border-border px-4 pt-2">
-                  {(['daily', 'trades', 'picks', 'attribution'] as const).map(t => {
-                    const attributionCount = result.factor_attribution?.factors.length ?? 0
+                  {(['daily', 'trades', 'picks', 'attribution', 'returns'] as const).map(t => {
+                    if (t === 'returns' && !hasReturnsTab) return null
+                    if (t !== 'returns' && !hasTradeResultTabs) return null
                     if (t === 'attribution' && attributionCount === 0) return null
                     return (
                       <button
                         key={t}
                         onClick={() => setResultTab(t)}
                         className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
-                          resultTab === t
+                          effResultTab === t
                             ? 'border-accent text-accent'
                             : 'border-transparent text-secondary hover:text-foreground'
                         }`}
@@ -2449,13 +2471,15 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                           ? `交易明细 (${sortedTrades.length})`
                           : t === 'picks'
                           ? `选股分析 (${result.per_symbol_stats.length})`
-                          : `因子归因 (${attributionCount})`}
+                          : t === 'attribution'
+                          ? `因子归因 (${attributionCount})`
+                          : `收益分析 (${returnsAnalysis?.years.length ?? 0})`}
                       </button>
                     )
                   })}
                 </div>
 
-                {resultTab === 'daily' && (
+                {effResultTab === 'daily' && (
                   <div>
                     <div className="overflow-x-auto">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
@@ -2541,7 +2565,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                   </div>
                 )}
 
-                {resultTab === 'trades' && (
+                {effResultTab === 'trades' && (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
                       <thead className="bg-elevated">
@@ -2652,7 +2676,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                   </div>
                 )}
 
-                {resultTab === 'picks' && (
+                {effResultTab === 'picks' && (
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr className="text-left text-secondary">
@@ -2702,7 +2726,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 )}
 
                 {/* 因子归因: 入场信号日因子值 × 成交盈亏 */}
-                {resultTab === 'attribution' && result.factor_attribution && (
+                {effResultTab === 'attribution' && result.factor_attribution && (
                   <div className="px-4 py-3">
                     <div className="mb-1 flex items-center justify-between">
                       <span className="text-xs font-medium text-secondary">入场信号日因子均值</span>
@@ -2747,6 +2771,24 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                )}
+
+                {/* 收益分析: 月度收益热力图 + 年度收益横向直方图 */}
+                {effResultTab === 'returns' && returnsAnalysis && (
+                  <div className="px-4 py-3 space-y-5">
+                    {result.stats?.full_kind === 'candidate_execution' && (
+                      <div className="text-[10px] text-muted">全量独立执行为样本收益曲线（非账户净值），下列收益为该曲线的月度/年度环比。</div>
+                    )}
+                    <MonthlyReturnHeatmap analysis={returnsAnalysis} />
+                    <AnnualReturnBarChart
+                      analysis={returnsAnalysis}
+                      benchmarkCurve={result.benchmark_curve}
+                      range={{
+                        start: String(result.config?.start ?? '').slice(0, 10),
+                        end: String(result.config?.end ?? '').slice(0, 10),
+                      }}
+                    />
                   </div>
                 )}
               </div>
