@@ -1127,8 +1127,17 @@ class StrategyBacktestService:
             0.005,
             0.5,
         )
-        if trailing_take_profit_activate is not None and trailing_take_profit_drawdown is not None:
-            trailing_take_profit_drawdown = min(trailing_take_profit_drawdown, trailing_take_profit_activate)
+        if (
+            trailing_take_profit_activate is not None
+            and trailing_take_profit_drawdown is not None
+            and trailing_take_profit_drawdown > trailing_take_profit_activate
+        ):
+            # 不再静默钳制: 旧 min() 会把用户填的回撤改写成激活值, 配置"不生效"
+            # 却无任何提示。组合无意义时显式报错, 让用户调整参数后重跑。
+            return _err(
+                f"移动止盈回撤({trailing_take_profit_drawdown:.0%})不能大于"
+                f"激活涨幅({trailing_take_profit_activate:.0%}), 请调整后再试"
+            )
         max_hold_days = self._override_value(overrides, "max_hold_days", s.max_hold_days)
         score_min, score_max = self._normalize_score_range(
             overrides.get("score_min"),

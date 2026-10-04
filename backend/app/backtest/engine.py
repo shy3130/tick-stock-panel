@@ -944,6 +944,11 @@ class BacktestEngine:
                 return False, "buy_suspended"
             if not _valid_price(entry_prices[time_id, asset_id]):
                 return False, "buy_invalid_price"
+            if config.entry_fill == "close_t" and bool(matrix.limit_up_locked[time_id, asset_id]):
+                # close_t 按信号日收盘价成交: 收盘封板(含一字)在收盘价的买队排队
+                # 现实中排不进, 一律拦截 — 旧实现只拦一字板, 尾盘封板股按涨停价
+                # "成交"导致回测收益虚高。open_t+1 按次日开盘成交, 不受此限。
+                return False, "buy_limit_up"
             if _one_price_limit(time_id, asset_id, "up"):
                 return False, "buy_limit_up"
             return True, ""
@@ -1362,6 +1367,11 @@ class BacktestEngine:
                 return False, "buy_suspended"
             if not _valid_price(entry_prices[idx]):
                 return False, "buy_invalid_price"
+            if config.entry_fill == "close_t" and bool(limit_up_flags[idx]):
+                # close_t 按信号日收盘价成交: 收盘封板(含一字)在收盘价的买队排队
+                # 现实中排不进, 一律拦截 — 旧实现只拦一字板, 尾盘封板股按涨停价
+                # "成交"导致回测收益虚高。open_t+1 按次日开盘成交, 不受此限。
+                return False, "buy_limit_up"
             if _is_one_price_limit(idx, "up"):
                 return False, "buy_limit_up"
             return True, ""
@@ -1869,6 +1879,11 @@ class BacktestEngine:
                 return False, "buy_suspended"
             if not _valid_price(entry_prices[time_id, asset_id]):
                 return False, "buy_invalid_price"
+            if config.entry_fill == "close_t" and bool(matrix.limit_up_locked[time_id, asset_id]):
+                # close_t 按信号日收盘价成交: 收盘封板(含一字)在收盘价的买队排队
+                # 现实中排不进, 一律拦截 — 旧实现只拦一字板, 尾盘封板股按涨停价
+                # "成交"导致回测收益虚高。open_t+1 按次日开盘成交, 不受此限。
+                return False, "buy_limit_up"
             if _one_price_limit(time_id, asset_id, "up"):
                 return False, "buy_limit_up"
             return True, ""
@@ -2424,6 +2439,11 @@ class BacktestEngine:
                 return False, "buy_suspended"
             if not _valid_price(entry_prices[idx]):
                 return False, "buy_invalid_price"
+            if config.entry_fill == "close_t" and bool(limit_up_flags[idx]):
+                # close_t 按信号日收盘价成交: 收盘封板(含一字)在收盘价的买队排队
+                # 现实中排不进, 一律拦截 — 旧实现只拦一字板, 尾盘封板股按涨停价
+                # "成交"导致回测收益虚高。open_t+1 按次日开盘成交, 不受此限。
+                return False, "buy_limit_up"
             if _is_one_price_limit(idx, "up"):
                 return False, "buy_limit_up"
             return True, ""
