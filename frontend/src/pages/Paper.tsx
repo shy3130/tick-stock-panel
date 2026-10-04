@@ -1001,7 +1001,7 @@ function RankBadge({ rank }: { rank: number }) {
 }
 
 /** 对比榜单可排序列 (表头点击切换) */
-type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'rounds' | 'holdings_count' | 'last_nav_date'
+type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'profit_loss_ratio' | 'rounds' | 'holdings_count' | 'last_nav_date'
 
 /** 排序取值: null 一律垫底 (数值取 -1e9, 字符串取 ''), 避免空值与数字比较出 NaN */
 function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
@@ -1011,6 +1011,7 @@ function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
     case 'pnl_pct': return r.pnl_pct ?? -1e9
     case 'day_change_pct': return r.day_change_pct ?? -1e9
     case 'win_rate': return r.win_rate ?? 0
+    case 'profit_loss_ratio': return r.profit_loss_ratio ?? -1e9
     case 'rounds': return r.rounds ?? 0
     case 'holdings_count': return r.holdings_count ?? 0
     case 'last_nav_date': return r.last_nav_date ?? ''
@@ -1179,7 +1180,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                 <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开区">数据截至最近结算日</span>
               </div>
               <div className="mt-2 overflow-x-auto">
-                <table className="w-full min-w-[860px] text-xs">
+                <table className="w-full min-w-[920px] text-xs">
                   <thead>
                     <tr className="border-b border-border text-left text-[10px] text-muted">
                       <th className="py-1.5 pr-1 font-medium">#</th>
@@ -1188,6 +1189,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                       <SortTh label="累计收益" sortKey="pnl_pct" sort={sort} onSort={onSortCmp} align="right" />
                       <SortTh label="最新日" sortKey="day_change_pct" sort={sort} onSort={onSortCmp} align="right" title="最近两个定版净值的涨跌" />
                       <SortTh label="胜率" sortKey="win_rate" sort={sort} onSort={onSortCmp} align="right" />
+                      <SortTh label="盈亏比" sortKey="profit_loss_ratio" sort={sort} onSort={onSortCmp} align="right" title="平均盈利回合 / 平均亏损回合, 无亏损回合时为空" />
                       <SortTh label="回合" sortKey="rounds" sort={sort} onSort={onSortCmp} align="right" title="FIFO 配对的完整买卖回合" />
                       <SortTh label="持仓" sortKey="holdings_count" sort={sort} onSort={onSortCmp} align="right" />
                       <th className="py-1.5 text-center font-medium">净值趋势</th>
@@ -1234,6 +1236,9 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                                 : <span className="text-muted">—</span>}
                             </td>
                             <td className="py-2 text-right font-mono tabular text-secondary">{r.win_rate.toFixed(1)}%</td>
+                            <td className="py-2 text-right font-mono tabular text-secondary">
+                              {r.profit_loss_ratio != null ? r.profit_loss_ratio : <span className="text-muted">—</span>}
+                            </td>
                             <td className="py-2 text-right font-mono tabular text-muted">{r.rounds}</td>
                             <td className="py-2 text-right font-mono tabular text-secondary">{r.holdings_count ?? 0}</td>
                             <td className="py-1.5"><NavSpark nav={r.nav} /></td>
@@ -1244,7 +1249,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                           </tr>
                           {open && (
                             <tr className="border-t border-border/50 bg-base/40">
-                              <td colSpan={11} className="px-4 py-4">
+                              <td colSpan={12} className="px-4 py-4">
                                 <AccountPanel acc={r.account} name={r.name} />
                               </td>
                             </tr>
