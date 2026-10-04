@@ -9,10 +9,10 @@
  * docs/paper-trading-plan.md)。费用/滑点参数与回测引擎同名同默认值。
  * 多账户: 所有查询按账户隔离 (queryKey 前缀 'paper'), 切换即换一套数据。
  */
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Banknote, ChevronDown, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, TrendingUp, Wallet, X } from 'lucide-react'
+import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, TrendingUp, Wallet, X } from 'lucide-react'
 import { api, type PaperCompareRow, type PaperFill, type PaperOrder } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -1000,15 +1000,79 @@ function RankBadge({ rank }: { rank: number }) {
   )
 }
 
+/** 对比榜单可排序列 (表头点击切换) */
+type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'rounds' | 'holdings_count' | 'last_nav_date'
+
+/** 排序取值: null 一律垫底 (数值取 -1e9, 字符串取 ''), 避免空值与数字比较出 NaN */
+function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
+  switch (k) {
+    case 'name': return r.name
+    case 'total': return r.total ?? 0
+    case 'pnl_pct': return r.pnl_pct ?? -1e9
+    case 'day_change_pct': return r.day_change_pct ?? -1e9
+    case 'win_rate': return r.win_rate ?? 0
+    case 'rounds': return r.rounds ?? 0
+    case 'holdings_count': return r.holdings_count ?? 0
+    case 'last_nav_date': return r.last_nav_date ?? ''
+  }
+}
+
+/** 可排序表头: 点击切换该列升降序, 活动列显方向箭头, 非活动列 hover 显淡箭头 (样式随 Review._DtTh) */
+function SortTh({ label, sortKey, sort, onSort, align = 'left', title }: {
+  label: string
+  sortKey: CmpSortKey
+  sort: { key: CmpSortKey; desc: boolean }
+  onSort: (k: CmpSortKey) => void
+  align?: 'left' | 'right'
+  title?: string
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th className={cn('group/th py-1.5 font-medium', align === 'right' && 'text-right')}>
+      <button
+        type="button"
+        title={title}
+        onClick={() => onSort(sortKey)}
+        className={cn('inline-flex items-center gap-0.5 transition-colors hover:text-foreground', active && 'text-foreground')}
+      >
+        {label}
+        {active ? (
+          sort.desc
+            ? <ChevronDown className="h-2.5 w-2.5 opacity-80" />
+            : <ChevronUp className="h-2.5 w-2.5 opacity-80" />
+        ) : (
+          <ChevronDown className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover/th:opacity-40" />
+        )}
+      </button>
+    </th>
+  )
+}
+
 function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
+  // 表头排序: 默认累计收益降序; 同列再点翻转方向, 换列时数值列默认降序、账户名默认升序
+  const [sort, setSort] = useState<{ key: CmpSortKey; desc: boolean }>({ key: 'pnl_pct', desc: true })
+  const onSortCmp = (k: CmpSortKey) =>
+    setSort(s => (s.key === k ? { key: k, desc: !s.desc } : { key: k, desc: k !== 'name' }))
   // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)
   const cmpQ = useQuery({ queryKey: QK.paperCompare, queryFn: api.paperCompare, refetchInterval: 60_000 })
 
   const rows = cmpQ.data?.accounts ?? []
-  const ranked = [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9))
-  const chartRows = ranked.filter(r => r.nav.length > 0).slice(0, 8)
+  // 收益口径固定排序: 统计卡「收益最高」与净值叠加「收益前 8 名」不受表头排序影响
+  const byPnl = useMemo(() => [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9)), [rows])
+  const sorted = useMemo(() => {
+    const dir = sort.desc ? -1 : 1
+    return [...rows].sort((a, b) => {
+      const va = cmpSortVal(sort.key, a)
+      const vb = cmpSortVal(sort.key, b)
+      const c = typeof va === 'string' || typeof vb === 'string'
+        ? String(va).localeCompare(String(vb), 'zh-Hans-CN')
+        : va - vb
+      return c * dir
+    })
+  }, [rows, sort])
+  const chartRows = byPnl.filter(r => r.nav.length > 0).slice(0, 8)
   const avgPct = rows.length > 0
     ? rows.reduce((s, r) => s + (r.pnl_pct ?? 0), 0) / rows.length
     : null
@@ -1055,7 +1119,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
             对比数据加载失败
             <button onClick={() => cmpQ.refetch()} className="ml-2 rounded-btn border border-border px-2 py-0.5 text-xs text-secondary hover:text-foreground">重试</button>
           </div>
-        ) : ranked.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="mx-auto mt-16 max-w-md rounded-card border border-dashed border-border bg-surface/50 px-6 py-14 text-center">
             <GitCompare className="mx-auto h-8 w-8 text-muted/50" />
             <div className="mt-3 text-sm font-medium">还没有对比账户</div>
@@ -1082,7 +1146,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard label="对比账户" value={String(ranked.length)} icon={Wallet} iconCls="text-accent" />
+              <StatCard label="对比账户" value={String(rows.length)} icon={Wallet} iconCls="text-accent" />
               <StatCard label="合计虚拟资产" value={fmtMoney(totalAssets, 0)} icon={Banknote} iconCls="text-muted" />
               <StatCard
                 label="平均累计收益"
@@ -1093,8 +1157,8 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
               />
               <StatCard
                 label="收益最高"
-                value={ranked[0].name}
-                sub={ranked.length > 1 ? `+${(ranked[0].pnl_pct ?? 0).toFixed(2)}% 高于第2名 ${((ranked[0].pnl_pct ?? 0) - (ranked[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
+                value={byPnl[0].name}
+                sub={byPnl.length > 1 ? `+${(byPnl[0].pnl_pct ?? 0).toFixed(2)}% 高于第2名 ${((byPnl[0].pnl_pct ?? 0) - (byPnl[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
                 valueClass="text-accent"
                 icon={TrendingUp}
                 iconCls="text-accent"
@@ -1111,7 +1175,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
             <div className="rounded-card border border-border bg-surface p-4">
               <div className="flex items-center gap-2">
                 <div className="text-sm font-medium">收益对比</div>
-                <span className="text-[10px] text-muted">按累计收益降序 · 点行展开完整账户操作</span>
+                <span className="text-[10px] text-muted">点表头排序 · 点行展开完整账户操作</span>
                 <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开区">数据截至最近结算日</span>
               </div>
               <div className="mt-2 overflow-x-auto">
@@ -1119,20 +1183,20 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                   <thead>
                     <tr className="border-b border-border text-left text-[10px] text-muted">
                       <th className="py-1.5 pr-1 font-medium">#</th>
-                      <th className="py-1.5 font-medium">账户</th>
-                      <th className="py-1.5 text-right font-medium">总资产</th>
-                      <th className="py-1.5 text-right font-medium">累计收益</th>
-                      <th className="py-1.5 text-right font-medium" title="最近两个定版净值的涨跌">最新日</th>
-                      <th className="py-1.5 text-right font-medium">胜率</th>
-                      <th className="py-1.5 text-right font-medium" title="FIFO 配对的完整买卖回合">回合</th>
-                      <th className="py-1.5 text-right font-medium">持仓</th>
+                      <SortTh label="账户" sortKey="name" sort={sort} onSort={onSortCmp} />
+                      <SortTh label="总资产" sortKey="total" sort={sort} onSort={onSortCmp} align="right" />
+                      <SortTh label="累计收益" sortKey="pnl_pct" sort={sort} onSort={onSortCmp} align="right" />
+                      <SortTh label="最新日" sortKey="day_change_pct" sort={sort} onSort={onSortCmp} align="right" title="最近两个定版净值的涨跌" />
+                      <SortTh label="胜率" sortKey="win_rate" sort={sort} onSort={onSortCmp} align="right" />
+                      <SortTh label="回合" sortKey="rounds" sort={sort} onSort={onSortCmp} align="right" title="FIFO 配对的完整买卖回合" />
+                      <SortTh label="持仓" sortKey="holdings_count" sort={sort} onSort={onSortCmp} align="right" />
                       <th className="py-1.5 text-center font-medium">净值趋势</th>
-                      <th className="py-1.5 text-right font-medium">最近结算</th>
+                      <SortTh label="最近结算" sortKey="last_nav_date" sort={sort} onSort={onSortCmp} align="right" />
                       <th className="w-14 py-1.5" />
                     </tr>
                   </thead>
                   <tbody>
-                    {ranked.map((r, i) => {
+                    {sorted.map((r, i) => {
                       const open = expanded === r.account
                       return (
                         <Fragment key={r.account}>
