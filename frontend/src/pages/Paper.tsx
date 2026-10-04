@@ -989,11 +989,11 @@ function NavSpark({ nav }: { nav: Array<{ date: string; nav: number }> }) {
   )
 }
 
-function RankBadge({ rank }: { rank: number }) {
+function RankBadge({ rank, accent }: { rank: number; accent?: boolean }) {
   return (
     <span className={cn(
       'inline-flex h-5 w-5 items-center justify-center rounded-full font-mono text-[11px] font-semibold',
-      rank === 1 ? 'bg-accent/20 text-accent' : rank <= 3 ? 'bg-elevated text-secondary' : 'text-muted',
+      accent && rank === 1 ? 'bg-accent/20 text-accent' : accent && rank <= 3 ? 'bg-elevated text-secondary' : 'text-muted',
     )}>
       {rank}
     </span>
@@ -1003,15 +1003,22 @@ function RankBadge({ rank }: { rank: number }) {
 /** 对比榜单可排序列 (表头点击切换) */
 type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'profit_loss_ratio' | 'rounds' | 'holdings_count' | 'last_nav_date'
 
-/** 排序取值: null 一律垫底 (数值取 -1e9, 字符串取 ''), 避免空值与数字比较出 NaN */
+/** 可空列: 无值行排序时恒垫底 (与方向无关), 见 sorted 比较器 */
+const CMP_NULLABLE: Partial<Record<CmpSortKey, (r: PaperCompareRow) => boolean>> = {
+  pnl_pct: r => r.pnl_pct == null,
+  day_change_pct: r => r.day_change_pct == null,
+  profit_loss_ratio: r => r.profit_loss_ratio == null,
+  last_nav_date: r => r.last_nav_date == null,
+}
+
 function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
   switch (k) {
     case 'name': return r.name
     case 'total': return r.total ?? 0
-    case 'pnl_pct': return r.pnl_pct ?? -1e9
-    case 'day_change_pct': return r.day_change_pct ?? -1e9
+    case 'pnl_pct': return r.pnl_pct ?? 0
+    case 'day_change_pct': return r.day_change_pct ?? 0
     case 'win_rate': return r.win_rate ?? 0
-    case 'profit_loss_ratio': return r.profit_loss_ratio ?? -1e9
+    case 'profit_loss_ratio': return r.profit_loss_ratio ?? 0
     case 'rounds': return r.rounds ?? 0
     case 'holdings_count': return r.holdings_count ?? 0
     case 'last_nav_date': return r.last_nav_date ?? ''
@@ -1064,7 +1071,12 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const byPnl = useMemo(() => [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9)), [rows])
   const sorted = useMemo(() => {
     const dir = sort.desc ? -1 : 1
+    const isNull = CMP_NULLABLE[sort.key]
     return [...rows].sort((a, b) => {
+      if (isNull) {
+        const na = isNull(a), nb = isNull(b)
+        if (na || nb) return na === nb ? 0 : na ? 1 : -1 // 无值行恒垫底, 不随方向翻到顶部
+      }
       const va = cmpSortVal(sort.key, a)
       const vb = cmpSortVal(sort.key, b)
       const c = typeof va === 'string' || typeof vb === 'string'
@@ -1083,7 +1095,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="模拟盘"
-        subtitle="多账户并行对比 — 同本金 · 同费率 · 收益降序, 点行展开完整账户操作"
+        subtitle="多账户并行对比 — 同本金 · 同费率 · 点表头排序, 点行展开完整账户操作"
         right={
           <div className="flex items-center gap-2">
             <button
@@ -1206,7 +1218,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                             className={cn('cursor-pointer border-t border-border/50 transition-colors hover:bg-elevated/40', open && 'bg-elevated/30')}
                             onClick={() => setExpanded(open ? null : r.account)}
                           >
-                            <td className="py-2 pr-1"><RankBadge rank={i + 1} /></td>
+                            <td className="py-2 pr-1" title="当前排序列位 (仅按累计收益降序时高亮为收益名次)"><RankBadge rank={i + 1} accent={sort.key === 'pnl_pct' && sort.desc} /></td>
                             <td className="py-2">
                               <div className="flex items-center gap-1.5">
                                 <span className="max-w-44 truncate text-xs font-medium">{r.name}</span>
