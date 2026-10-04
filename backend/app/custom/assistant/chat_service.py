@@ -124,6 +124,21 @@ def _parse_tool_arguments(raw: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _assistant_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    """把本轮累积的工具调用还原成回传给上游的 assistant.tool_calls[] 元素。
+
+    extra_content (Gemini 3 的 thought_signature) 必须原样带回, 否则上游 400。
+    """
+    item: dict[str, Any] = {
+        "id": call["id"],
+        "type": "function",
+        "function": {"name": call.get("name", ""), "arguments": call.get("arguments", "")},
+    }
+    if call.get("extra_content"):
+        item["extra_content"] = call["extra_content"]
+    return item
+
+
 async def chat_stream(
     *,
     history: list[dict[str, str]],
@@ -295,14 +310,7 @@ async def chat_stream(
 
                 assistant_message: dict[str, Any] = {
                     "role": "assistant",
-                    "tool_calls": [
-                        {
-                            "id": call["id"],
-                            "type": "function",
-                            "function": {"name": call.get("name", ""), "arguments": call.get("arguments", "")},
-                        }
-                        for call in tool_calls
-                    ],
+                    "tool_calls": [_assistant_tool_call(call) for call in tool_calls],
                 }
                 if round_text:
                     assistant_message["content"] = "".join(round_text)
