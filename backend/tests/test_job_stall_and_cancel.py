@@ -206,3 +206,87 @@ def test_manual_cancel_endpoint_contract(monkeypatch, tmp_path):
     jid2, is_new = store.create(timeout_s=60)
     assert is_new is True
     assert store.active_id() == jid2
+
+
+# ── 排队等待有上界(「分钟K同步卡死空转」修复) ──────────────────────────
+
+def test_queued_pending_job_is_reaped(monkeypatch, tmp_path):
+    """pending(排队等重任务槽)停滞超阈值 → 同样被回收: 可读错误 + 置取消标志。
+
+    旧实现只回收 running: 槽位被僵尸线程/长回测占住时, 排队任务在
+    「等待其他计算任务完成…」上无限空转, 且轮询触发的 reap 对它视而不见。
+    """
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=60)  # 不 start(): 模拟排队等槽中
+    store._active_jobs[jid]["last_progress_at"] = _iso(_now() - timedelta(minutes=5))
+
+    store.reap_stale()
+
+    j = store.get(jid)
+    assert j["status"] == "failed"
+    assert "排队等待重任务执行槽" in j["error"]
+    assert pipeline_jobs.is_cancelled(jid)
+
+
+def test_fresh_pending_job_is_not_reaped(monkeypatch, tmp_path):
+    """刚进入排队的任务(停滞未超阈值)不得误杀 — create() 锚定的心跳基准生效。"""
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=600)
+
+    store.reap_stale()
+    assert store.get(jid)["status"] == "pending"
+
+
+def test_pending_skips_hard_total_cap(monkeypatch, tmp_path):
+    """pending 无 started_at: 总时长硬上限不适用, 只按停滞判定(不会 TypeError)。"""
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=pipeline_jobs.HARD_JOB_TIMEOUT_S + 3600)
+    store._active_jobs[jid]["started_at"] = None
+    store._active_jobs[jid]["last_progress_at"] = _iso(_now() - timedelta(seconds=10))
+
+    store.reap_stale()
+    assert store.get(jid)["status"] == "pending"
+
+
+def test_run_with_capacity_fails_readably_when_slot_hogged(monkeypatch, tmp_path):
+    """独占槽被长期占住(僵尸线程/长回测) → 排队任务在自身 timeout_s 内以可读
+    错误失败并抛 JobCancelledError, 而不是无限等待。"""
+    from app.services import heavy_job_limiter as hjl
+    from app.services.heavy_job_limiter import HeavyJobLimiter
+
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    store = JobStore(store_dir=tmp_path / "jobs")
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+
+    hog = HeavyJobLimiter(capacity=2)
+    monkeypatch.setattr(hjl, "shared_heavy_job_limiter", hog)
+    assert hog.acquire("exclusive") is True  # 模拟占住全部预算的持有者
+
+    jid, _ = store.create(timeout_s=1)
+    ran: list[int] = []
+    with pytest.raises(JobCancelledError):
+        pipeline_jobs.run_with_capacity(jid, lambda: ran.append(1))
+
+    assert ran == []  # fn 从未执行, 无数据写入
+    j = store.get(jid)
+    assert j["status"] == "failed"
+    assert "排队等待重任务执行槽超时" in j["error"]
+
+
+def test_run_with_capacity_runs_when_slot_free(monkeypatch, tmp_path):
+    """槽位空闲时行为不变: 排队即时通过, fn 结果正常返回并 start。"""
+    from app.services import heavy_job_limiter as hjl
+    from app.services.heavy_job_limiter import HeavyJobLimiter
+
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    store = JobStore(store_dir=tmp_path / "jobs")
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+    monkeypatch.setattr(hjl, "shared_heavy_job_limiter", HeavyJobLimiter(capacity=2))
+
+    jid, _ = store.create(timeout_s=60)
+    assert pipeline_jobs.run_with_capacity(jid, lambda: "ok") == "ok"
+    # succeed() 由调用方(API task)负责; run_with_capacity 只负责 start
+    assert store.get(jid)["status"] == "running"

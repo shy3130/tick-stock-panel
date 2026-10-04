@@ -10,10 +10,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
+import threading
 import time
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from typing import Any
 
 import polars as pl
 
@@ -27,6 +29,42 @@ from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batch
 from app.tickflow.repository import KlineRepository, replace_with_retry
 
 logger = logging.getLogger(__name__)
+
+# ── SDK 批量调用守护 deadline ────────────────────────────────────────────
+# TickFlow SDK 自带 timeout=30s×3 重试, 但只保护其覆盖的请求阶段; 真挂死在
+# 不可中断的网络读里时调用永不返回 → 持有独占槽的重任务线程被连坐卡死,
+# 后续所有重任务无限排队(「分钟K同步卡死空转」的持有侧根因)。
+# 正常单批(限速+重试)远低于该值; 超时按分块失败处理, 心跳与协作取消照常推进。
+_SDK_CALL_DEADLINE_S = 600.0
+
+
+class SDKCallTimeoutError(TimeoutError):
+    """单次 SDK 批量调用超过守护 deadline 仍未返回(调用线程已放弃等待)。"""
+
+
+def _sdk_call_with_deadline(fn: Callable[[], Any], *, timeout_s: float = _SDK_CALL_DEADLINE_S) -> Any:
+    """在 daemon 线程执行一次 SDK 调用, join 超时即放弃并抛 SDKCallTimeoutError。
+
+    放弃后调用方按既有分块失败路径继续(记 warning / 标记本批失败), 协作式
+    取消在下一分块边界生效, 重任务槽得以释放。被放弃的线程为 daemon:
+    不阻塞进程退出, 迟到的结果被丢弃。
+    """
+    outcome: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            outcome["result"] = fn()
+        except BaseException as e:  # noqa: BLE001 — 原样转交调用方
+            outcome["error"] = e
+
+    t = threading.Thread(target=_worker, daemon=True, name="sdk-call-deadline")
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise SDKCallTimeoutError(f"SDK 调用超过 {timeout_s:.0f}s 未返回, 已放弃等待")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("result")
 
 
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
@@ -184,16 +222,26 @@ def sync_daily_batch(symbols: list[str],
         sleep_between_batches(i, rpm)
         try:
             if start_time and end_time:
-                raw = tf.klines.batch(
+                raw = _sdk_call_with_deadline(lambda: tf.klines.batch(
                     chunk, period="1d", adjust="none",
                     start_time=_datetime_to_ms(start_time),
                     end_time=_datetime_to_ms(end_time),
                     count=10000,
                     as_dataframe=False, show_progress=False,
-                )
+                ))
             else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=False, show_progress=False)
+                raw = _sdk_call_with_deadline(lambda: tf.klines.batch(
+                    chunk, period="1d", count=count or 250, adjust="none",
+                    as_dataframe=False, show_progress=False))
+        except SDKCallTimeoutError as e:
+            logger.warning("batch fetch timed out for %d symbols (chunk %d/%d): %s",
+                           len(chunk), i + 1, len(chunks), e)
+            failed_syms.extend(chunk)
+            if on_chunk_done:
+                # 心跳: 分块失败也推进进度/取消检查点, 防持续超时的同步
+                # 长时间无上报(reap 误判)且协作取消无边界可退出。
+                on_chunk_done(i + 1, len(chunks))
+            continue
         except Exception as e:  # noqa: BLE001
             logger.warning("batch fetch failed for %d symbols (chunk %d/%d): %s",
                            len(chunk), i + 1, len(chunks), e)
@@ -571,11 +619,15 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, limit.rpm)
         try:
-            raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
+            raw = _sdk_call_with_deadline(lambda: tf.klines.ex_factors(chunk, **sdk_kwargs))
             normalized = _normalize_adj_factor(raw)
             if not normalized.is_empty():
                 all_dfs.append(normalized)
             logger.debug("adj_factor chunk %d/%d: %d symbols", i + 1, len(chunks), len(chunk))
+        except SDKCallTimeoutError as e:
+            # on_chunk_done 在 try 外, 成败都会走到 → 心跳/取消检查点不缺
+            logger.warning("adj_factor chunk %d/%d timed out: %s", i + 1, len(chunks), e)
+            failed_syms.extend(chunk)
         except Exception as e:  # noqa: BLE001
             logger.warning("adj_factor chunk %d/%d failed: %s", i + 1, len(chunks), e)
             failed_syms.extend(chunk)
@@ -1020,18 +1072,26 @@ def sync_minute_batch(
             step += 1
             try:
                 if cur_start and cur_end:
-                    raw = tf.klines.batch(
+                    raw = _sdk_call_with_deadline(lambda: tf.klines.batch(
                         chunk, period="1m",
                         start_time=_datetime_to_ms(cur_start),
                         end_time=_datetime_to_ms(cur_end),
                         count=10000,
                         adjust="none" if raw_basis else "forward",
                         as_dataframe=False, show_progress=False,
-                    )
+                    ))
                 else:
-                    raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                          adjust="none" if raw_basis else "forward",
-                                          as_dataframe=False, show_progress=False)
+                    raw = _sdk_call_with_deadline(lambda: tf.klines.batch(
+                        chunk, period="1m", count=count or 1200,
+                        adjust="none" if raw_basis else "forward",
+                        as_dataframe=False, show_progress=False))
+            except SDKCallTimeoutError as e:
+                logger.warning("minute batch fetch timed out for %d symbols: %s", len(chunk), e)
+                if on_chunk_done:
+                    # 心跳: 持续超时时保留进度上报与取消检查点(分钟路径的成功
+                    # 分支才回调, 这里补齐失败分支), 防僵尸线程滞留独占槽。
+                    on_chunk_done(step, total_steps, seg_label)
+                continue
             except Exception as e:  # noqa: BLE001
                 logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
                 continue

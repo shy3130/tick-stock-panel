@@ -42,28 +42,46 @@ def capacity(monkeypatch, tmp_path):
     return store, limiter
 
 
-def test_queued_pipeline_is_cancellable_and_not_reaped(capacity):
+def test_queued_pipeline_is_cancellable_and_reaped_when_stalled(capacity):
+    """排队等槽任务: 仍可手动取消; 停滞超阈值后会被 reap 回收, 不再无限空转。
+
+    旧契约「排队任务不被 reap」正是「分钟K同步卡死空转」的排队侧根因:
+    槽位被僵尸线程/长回测占住时, 排队任务在「等待其他计算任务完成…」上
+    无任何超时兜底, 只能重启进程。
+    """
     store, limiter = capacity
-    jid, _ = store.create(timeout_s=1)
-    called = threading.Event()
-    assert limiter.acquire("normal", timeout=0)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(run_with_capacity, jid, called.set)
-        try:
+    assert limiter.acquire("normal", timeout=0)  # 占一半预算, exclusive 需全量 → 排队
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            # 1) 排队中手动取消 → 协作式退出(limiter cancel_event), fn 不执行
+            jid, _ = store.create(timeout_s=3600)
+            called = threading.Event()
+            future = pool.submit(run_with_capacity, jid, called.set)
             wait_for(lambda: waiting(store, jid))
-            assert store.get(jid)["status"] == "pending"
-            stale = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
-            store._active_jobs[jid]["started_at"] = stale
-            store._active_jobs[jid]["last_progress_at"] = stale
-            store.reap_stale()
             assert store.get(jid)["status"] == "pending"
             store.terminate(jid, "cancelled in queue")
             with pytest.raises(JobCancelledError):
                 future.result(timeout=1)
             assert not called.is_set()
+
+            # 2) 排队停滞超阈值 → reap 回收(修复点), 等待线程经取消标志退出
+            jid2, _ = store.create(timeout_s=3600)
+            called2 = threading.Event()
+            future2 = pool.submit(run_with_capacity, jid2, called2.set)
+            wait_for(lambda: waiting(store, jid2))
+            stale = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+            store._active_jobs[jid2]["started_at"] = stale
+            store._active_jobs[jid2]["last_progress_at"] = stale
+            store.reap_stale()
+            j2 = store.get(jid2)
+            assert j2["status"] == "failed"
+            assert "排队等待重任务执行槽" in j2["error"]
+            with pytest.raises(JobCancelledError):
+                future2.result(timeout=1)
+            assert not called2.is_set()
             assert limiter.in_use == 1
-        finally:
-            limiter.release("normal")
+    finally:
+        limiter.release("normal")
     assert limiter.in_use == 0
 
 
