@@ -1,14 +1,18 @@
 /**
- * 模拟盘 (虚拟账户) — 虚拟资金 + 真实行情价格的模拟撮合, 多账户隔离。
+ * 模拟盘 (虚拟账户) — 擂台主视图 + 单账户记账下钻。
+ *
+ * 擂台 (默认): 全账户收益降序榜单 (同本金同费率对比), 归一化净值叠加,
+ * 行内展开持仓与近期成交; 批量创建一次构造一批同规格账户各绑一条跟单规则。
+ * 单账户视图: 原有全部记账功能 (下单/跟单/费用/导出), 从擂台点「进入」下钻。
  *
  * 口径提示: 持仓现价用最近日线收盘价 (收盘定版一致, 盘中估算见设计方案
  * docs/paper-trading-plan.md)。费用/滑点参数与回测引擎同名同默认值。
  * 多账户: 所有查询按账户隔离 (queryKey 前缀 'paper'), 切换即换一套数据。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Banknote, CircleDollarSign, GitCompare, PieChart, Plus, Settings, TrendingUp, Wallet, X } from 'lucide-react'
+import { Banknote, ChevronDown, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, Swords, TrendingUp, Trophy, Wallet, X } from 'lucide-react'
 import { api, type PaperCompareRow, type PaperFill, type PaperOrder } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -1052,19 +1056,619 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
   )
 }
 
-export function Paper() {
+// ================================================================
+// 擂台 (V3): 模拟盘默认主视图 — 对比优先。
+// ================================================================
+
+/** 净值迷你走势 (纯 SVG polyline, 最近 ~30 个定版点; 红涨绿跌与全局口径一致) */
+function NavSpark({ nav }: { nav: Array<{ date: string; nav: number }> }) {
+  const pts = nav.map(n => n.nav).filter(v => v > 0).slice(-30)
+  if (pts.length < 2) return <span className="block text-center text-[11px] text-muted">—</span>
+  const w = 84, h = 24, pad = 2
+  const min = Math.min(...pts)
+  const max = Math.max(...pts)
+  const span = max - min || 1
+  const step = (w - pad * 2) / (pts.length - 1)
+  const up = pts[pts.length - 1] >= pts[0]
+  const d = pts
+    .map((v, i) => `${(pad + i * step).toFixed(1)},${(h - pad - ((v - min) / span) * (h - pad * 2)).toFixed(1)}`)
+    .join(' ')
+  return (
+    <svg width={w} height={h} className="mx-auto block" aria-hidden>
+      <polyline points={d} fill="none" stroke={up ? '#F04438' : '#12B76A'} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function RankBadge({ rank }: { rank: number }) {
+  return (
+    <span className={cn(
+      'inline-flex h-5 w-5 items-center justify-center rounded-full font-mono text-[11px] font-semibold',
+      rank === 1 ? 'bg-accent/20 text-accent' : rank <= 3 ? 'bg-elevated text-secondary' : 'text-muted',
+    )}>
+      {rank}
+    </span>
+  )
+}
+
+/** 行展开: 该账户持仓 + 近期成交 (仅在展开时挂载查询, 避免整表 N+1) */
+function ArenaRowDetail({ acc, onEnter }: { acc: string; onEnter: () => void }) {
+  const ovQ = useQuery({ queryKey: QK.paperOverview(acc), queryFn: () => api.paperOverview(acc) })
+  const tradesQ = useQuery({ queryKey: QK.paperTrades(acc), queryFn: () => api.paperTrades(acc) })
+  const holdings = ovQ.data?.holdings ?? []
+  const fills = (tradesQ.data?.fills ?? []).filter(f => f.kind !== 'corp_action').slice(0, 5)
+  if (ovQ.isLoading) return <div className="py-4 text-center text-[11px] text-muted">加载中…</div>
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div>
+        <div className="text-[11px] font-medium text-secondary">当前持仓{holdings.length > 0 ? ` (${holdings.length})` : ''}</div>
+        {holdings.length === 0 ? (
+          <div className="py-4 text-center text-[11px] text-muted">空仓 — 等待信号触发自动跟单</div>
+        ) : (
+          <table className="mt-1 w-full text-[11px]">
+            <thead>
+              <tr className="text-left text-[10px] text-muted">
+                <th className="py-0.5 font-normal">代码</th>
+                <th className="py-0.5 text-right font-normal">数量</th>
+                <th className="py-0.5 text-right font-normal">成本</th>
+                <th className="py-0.5 text-right font-normal">现价</th>
+                <th className="py-0.5 text-right font-normal">盈亏</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {holdings.map(h => (
+                <tr key={h.symbol} className="border-t border-border/40">
+                  <td className="py-1 font-sans">{h.symbol}</td>
+                  <td className="py-1 text-right">{h.qty}</td>
+                  <td className="py-1 text-right">{fmtMoney(h.avg_cost, 3)}</td>
+                  <td className="py-1 text-right">{fmtMoney(h.last_price, 3)}</td>
+                  <td className={cn('py-1 text-right', priceColorClass(h.pnl))}>
+                    {(h.pnl >= 0 ? '+' : '') + fmtMoney(h.pnl, 0)} ({fmtPct(h.pnl_pct / 100)})
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div>
+        <div className="text-[11px] font-medium text-secondary">近期成交</div>
+        {fills.length === 0 ? (
+          <div className="py-4 text-center text-[11px] text-muted">暂无成交</div>
+        ) : (
+          <div className="mt-1 space-y-1 font-mono text-[11px]">
+            {fills.map(f => (
+              <div key={`${f.seq}-${f.order_id ?? 'x'}`} className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-muted">{f.date}</span>
+                <span className={cn('w-7 shrink-0 font-sans font-medium', f.side === 'buy' ? 'text-bull' : 'text-bear')}>
+                  {f.side === 'buy' ? '买' : '卖'}
+                </span>
+                <span className="w-24 shrink-0">{f.symbol}</span>
+                <span className="w-14 shrink-0 text-right">{f.qty}</span>
+                <span className="flex-1 text-right text-muted">@ {fmtMoney(f.price, 3)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="lg:col-span-2">
+        <button
+          onClick={onEnter}
+          className="rounded-btn border border-border px-3 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+        >
+          进入账户详情 (下单 · 跟单规则 · 费用 · 导出) →
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ArenaView({ onEnterAccount, onCreateSingle }: {
+  onEnterAccount: (id: string) => void
+  onCreateSingle: () => void
+}) {
+  const [createOpen, setCreateOpen] = useState(false)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)
+  const cmpQ = useQuery({ queryKey: QK.paperCompare, queryFn: api.paperCompare, refetchInterval: 60_000 })
+
+  const rows = cmpQ.data?.accounts ?? []
+  const ranked = [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9))
+  const chartRows = ranked.filter(r => r.nav.length > 0).slice(0, 8)
+  const avgPct = rows.length > 0
+    ? rows.reduce((s, r) => s + (r.pnl_pct ?? 0), 0) / rows.length
+    : null
+  const totalAssets = rows.reduce((s, r) => s + (r.total ?? 0), 0)
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PageHeader
+        title="模拟盘擂台"
+        subtitle="同本金 · 同费率 · 多账户并行对比 — 收益降序, 点行展开持仓与近期成交"
+        right={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-1 rounded-btn bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:bg-accent/90"
+              title="同本金同费率批量创建一批账户, 各绑一条策略/监控规则跟单, 让信号自动下场比拼"
+            >
+              <Swords className="h-3 w-3" />
+              批量创建擂台
+            </button>
+            <button
+              onClick={onCreateSingle}
+              className="flex items-center gap-0.5 rounded-btn border border-border px-2 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+              title="新建单个虚拟账户 (原流程)"
+            >
+              <Plus className="h-3 w-3" />
+              单账户
+            </button>
+            <button
+              onClick={() => cmpQ.refetch()}
+              className="flex items-center gap-1 rounded-btn border border-border px-2 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+            >
+              <RefreshCw className={cn('h-3 w-3', cmpQ.isFetching && 'animate-spin')} />
+              刷新
+            </button>
+          </div>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        {cmpQ.isLoading ? (
+          <div className="py-16 text-center text-sm text-muted">加载中…</div>
+        ) : cmpQ.isError ? (
+          <div className="py-16 text-center text-sm text-danger">
+            擂台数据加载失败
+            <button onClick={() => cmpQ.refetch()} className="ml-2 rounded-btn border border-border px-2 py-0.5 text-xs text-secondary hover:text-foreground">重试</button>
+          </div>
+        ) : ranked.length === 0 ? (
+          <div className="mx-auto mt-16 max-w-md rounded-card border border-dashed border-border bg-surface/50 px-6 py-14 text-center">
+            <Trophy className="mx-auto h-8 w-8 text-muted/50" />
+            <div className="mt-3 text-sm font-medium">擂台还没有参赛账户</div>
+            <div className="mt-1.5 text-xs leading-relaxed text-muted">
+              同本金、同费率批量创建一批账户, 各绑一个策略或监控规则,
+              信号触发自动跟单下场比拼 — 对比才有意义。
+            </div>
+            <div className="mt-4 flex justify-center gap-2">
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:bg-accent/90"
+              >
+                <Swords className="h-3.5 w-3.5" />
+                批量创建擂台
+              </button>
+              <button
+                onClick={onCreateSingle}
+                className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+              >
+                先建一个单账户
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard label="参赛账户" value={String(ranked.length)} icon={Wallet} iconCls="text-accent" />
+              <StatCard label="合计虚拟资产" value={fmtMoney(totalAssets, 0)} icon={Banknote} iconCls="text-muted" />
+              <StatCard
+                label="平均累计收益"
+                value={avgPct == null ? '—' : fmtPct(avgPct / 100)}
+                valueClass={priceColorClass((avgPct ?? 0) / 100)}
+                icon={TrendingUp}
+                iconCls={priceColorClass((avgPct ?? 0) / 100)}
+              />
+              <StatCard
+                label="领先者"
+                value={ranked[0].name}
+                sub={ranked.length > 1 ? `+${(ranked[0].pnl_pct ?? 0).toFixed(2)}% 领先第2名 ${((ranked[0].pnl_pct ?? 0) - (ranked[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
+                valueClass="text-accent"
+                icon={Trophy}
+                iconCls="text-accent"
+              />
+            </div>
+
+            {chartRows.length > 1 && (
+              <div className="rounded-card border border-border bg-surface p-4">
+                <div className="text-sm font-medium">归一化净值叠加 <span className="ml-1 text-[10px] text-muted">起点 = 1, 收益前 8 名 · 不同本金公平对比</span></div>
+                <CompareChart rows={chartRows} />
+              </div>
+            )}
+
+            <div className="rounded-card border border-border bg-surface p-4">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-medium">收益榜</div>
+                <span className="text-[10px] text-muted">按累计收益降序 · 点行展开持仓</span>
+                <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开行">数据截至最近结算日</span>
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full min-w-[860px] text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-left text-[10px] text-muted">
+                      <th className="py-1.5 pr-1 font-medium">#</th>
+                      <th className="py-1.5 font-medium">账户</th>
+                      <th className="py-1.5 text-right font-medium">总资产</th>
+                      <th className="py-1.5 text-right font-medium">累计收益</th>
+                      <th className="py-1.5 text-right font-medium" title="最近两个定版净值的涨跌">最新日</th>
+                      <th className="py-1.5 text-right font-medium">胜率</th>
+                      <th className="py-1.5 text-right font-medium" title="FIFO 配对的完整买卖回合">回合</th>
+                      <th className="py-1.5 text-right font-medium">持仓</th>
+                      <th className="py-1.5 text-center font-medium">净值趋势</th>
+                      <th className="py-1.5 text-right font-medium">最近结算</th>
+                      <th className="w-14 py-1.5" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ranked.map((r, i) => {
+                      const open = expanded === r.account
+                      return (
+                        <Fragment key={r.account}>
+                          <tr
+                            className={cn('cursor-pointer border-t border-border/50 transition-colors hover:bg-elevated/40', open && 'bg-elevated/30')}
+                            onClick={() => setExpanded(open ? null : r.account)}
+                          >
+                            <td className="py-2 pr-1"><RankBadge rank={i + 1} /></td>
+                            <td className="py-2">
+                              <div className="flex items-center gap-1.5">
+                                <span className="max-w-44 truncate text-xs font-medium">{r.name}</span>
+                                {r.status === 'frozen' && <span className="rounded-full bg-warning/15 px-1.5 py-px text-[9px] leading-4 text-warning">冻结</span>}
+                                {(r.auto_rules ?? []).slice(0, 2).map((ar, j) => (
+                                  <span
+                                    key={`${ar.match_id}-${j}`}
+                                    className={cn('max-w-32 truncate rounded-full px-1.5 py-px text-[9px] leading-4', ar.enabled ? 'bg-accent/10 text-accent' : 'bg-elevated text-muted')}
+                                    title={`${ar.name} · ${ar.match_kind === 'strategy' ? '跟策略' : '跟规则'} ${ar.match_id}${ar.side === 'sell' ? ' · 卖出方向' : ''}`}
+                                  >
+                                    {ar.name}{ar.side === 'sell' ? '·卖' : ''}
+                                  </span>
+                                ))}
+                                {(r.auto_rules?.length ?? 0) > 2 && (
+                                  <span className="shrink-0 text-[9px] text-muted" title={r.auto_rules!.slice(2).map(a => a.name).join(' / ')}>+{r.auto_rules!.length - 2}</span>
+                                )}
+                              </div>
+                              <div className="font-mono text-[10px] text-muted">{r.account}</div>
+                            </td>
+                            <td className="py-2 text-right font-mono tabular">{fmtMoney(r.total, 0)}</td>
+                            <td className="py-2 text-right font-mono font-semibold tabular">
+                              <span className={priceColorClass((r.pnl_pct ?? 0) / 100)}>{fmtPct((r.pnl_pct ?? 0) / 100)}</span>
+                            </td>
+                            <td className="py-2 text-right font-mono tabular">
+                              {r.day_change_pct != null
+                                ? <span className={priceColorClass(r.day_change_pct / 100)}>{fmtPct(r.day_change_pct / 100)}</span>
+                                : <span className="text-muted">—</span>}
+                            </td>
+                            <td className="py-2 text-right font-mono tabular text-secondary">{r.win_rate.toFixed(1)}%</td>
+                            <td className="py-2 text-right font-mono tabular text-muted">{r.rounds}</td>
+                            <td className="py-2 text-right font-mono tabular text-secondary">{r.holdings_count ?? 0}</td>
+                            <td className="py-1.5"><NavSpark nav={r.nav} /></td>
+                            <td className="py-2 text-right font-mono text-[11px] text-muted">{r.last_nav_date ?? '—'}</td>
+                            <td className="py-2 text-right">
+                              <span className="inline-flex items-center gap-0.5">
+                                <button
+                                  onClick={e => { e.stopPropagation(); onEnterAccount(r.account) }}
+                                  className="rounded-btn border border-border px-2 py-0.5 text-[10px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+                                >
+                                  进入
+                                </button>
+                                <ChevronDown className={cn('h-3.5 w-3.5 text-muted transition-transform duration-150', open && 'rotate-180')} />
+                              </span>
+                            </td>
+                          </tr>
+                          {open && (
+                            <tr className="border-t border-border/50 bg-base/40">
+                              <td colSpan={11} className="px-3 py-3">
+                                <ArenaRowDetail acc={r.account} onEnter={() => onEnterAccount(r.account)} />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {createOpen && <ArenaCreateModal onClose={() => setCreateOpen(false)} onCreated={() => setCreateOpen(false)} />}
+    </div>
+  )
+}
+
+// ================================================================
+// 擂台批量创建弹窗: 公平性由构造保证 (同本金/同费率/同跟单参数)。
+// 来源行只带 名称+匹配目标; 方向/仓位/订单类型/冷却为全表共享参数。
+// ================================================================
+type ArenaSourceRow = { name: string; kind: 'strategy' | 'rule'; matchId: string }
+
+function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (count: number) => void }) {
   const qc = useQueryClient()
-  const [tab, setTab] = useState<'orders' | 'trades'>('orders')
+  const defaults = loadNewAccountDefaults()
+  const [cash, setCash] = useState(defaults.cash)
+  const [commissionWan, setCommissionWan] = useState(defaults.commissionWan)
+  const [stampQian, setStampQian] = useState(defaults.stampQian)
+  const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
+  const [prefix, setPrefix] = useState('')
+  const [rows, setRows] = useState<ArenaSourceRow[]>([])
+  const [quickKind, setQuickKind] = useState<'strategy' | 'rule'>('strategy')
+  const [quickId, setQuickId] = useState('')
+  // 共享跟单参数 (应用到全部来源 → 同规格对比)
+  const [side, setSide] = useState<'buy' | 'sell'>('buy')
+  const [sizeMode, setSizeMode] = useState<'fixed_amount' | 'pct_equity'>('pct_equity')
+  const [sizeValue, setSizeValue] = useState('10')
+  const [orderType, setOrderType] = useState<'market' | 'next_open' | 'close'>('next_open')
+  const [cooldown, setCooldown] = useState('5')
+
+  const strategiesQ = useQuery({
+    queryKey: QK.screenerStrategies('any', 'all'),
+    queryFn: () => api.screenerStrategies(undefined, 'all'),
+    staleTime: 60_000,
+  })
+  const rulesQ = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList, staleTime: 30_000 })
+
+  const m = useMutation({
+    mutationFn: () =>
+      api.paperArenaCreate({
+        initial_cash: Number(cash),
+        name_prefix: prefix.trim() || undefined,
+        commission_pct: Number(commissionWan) / 10000,   // 万 X → pct
+        stamp_tax_pct: Number(stampQian) / 1000,         // 千 X → pct
+        slippage_bps: Number(slippageBps),
+        sources: rows.map(r => ({
+          name: r.name.trim() || undefined,
+          match_kind: r.kind,
+          match_id: r.matchId.trim(),
+          side,
+          size_mode: sizeMode,
+          size_value: Number(sizeValue),
+          order_type: orderType,
+          cooldown_days: Number(cooldown),
+        })),
+      }),
+    onSuccess: r => {
+      qc.invalidateQueries({ queryKey: QK.paperAll })
+      try {
+        localStorage.setItem(NEW_ACCOUNT_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps }))
+      } catch { /* 存储不可用时静默 */ }
+      onCreated(r.created.length)
+    },
+  })
+
+  const addRow = (row: ArenaSourceRow) => {
+    setRows(prev => (prev.some(r => r.matchId === row.matchId) ? prev : [...prev, row]))
+  }
+  const addAllStrategies = () => {
+    const presets = (strategiesQ.data?.presets ?? []).slice(0, 20)
+    setRows(prev => {
+      const seen = new Set(prev.map(r => r.matchId))
+      return [...prev, ...presets.filter(p => !seen.has(p.id)).map(p => ({ name: p.name || p.id, kind: 'strategy' as const, matchId: p.id }))]
+    })
+  }
+
+  const valid = rows.length >= 1
+    && rows.every(r => r.matchId.trim().length > 0)
+    && Number(cash) > 0
+    && Number(sizeValue) > 0
+    && Number(commissionWan) >= 0 && Number(stampQian) >= 0 && Number(slippageBps) >= 0
+
+  const quickQuery = quickId.trim().toLowerCase()
+  const quickOptions: SuggestOption[] = quickKind === 'strategy'
+    ? (strategiesQ.data?.presets ?? [])
+        .filter(s => !quickQuery || s.name.toLowerCase().includes(quickQuery) || s.id.toLowerCase().includes(quickQuery))
+        .slice(0, 8)
+        .map(s => ({ value: s.id, label: s.name || s.id, hint: <span className="shrink-0 font-mono text-[10px] text-muted">{s.id}</span> }))
+    : (rulesQ.data?.rules ?? [])
+        .filter(r => !quickQuery || r.name.toLowerCase().includes(quickQuery) || r.id.toLowerCase().includes(quickQuery))
+        .slice(0, 8)
+        .map(r => ({ value: r.id, label: r.name || r.id, hint: <span className="shrink-0 font-mono text-[10px] text-muted">{r.id}</span> }))
+
+  const inputCls = 'w-full rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-sm outline-none focus:border-accent/50'
+  const labelCls = 'block text-[11px] text-muted'
+
+  return (
+    <Modal onClose={onClose} labelledBy="arena-create-title" panelClassName="w-[94vw] max-w-3xl bg-surface border border-border rounded-card shadow-xl">
+      <div className="max-h-[86vh] overflow-y-auto p-5">
+        <div className="flex items-center gap-2">
+          <Swords className="h-4 w-4 text-accent" />
+          <h3 id="arena-create-title" className="text-sm font-semibold text-foreground">批量创建擂台账户</h3>
+          <span className="text-[10px] text-muted">同本金 · 同费率 · 同跟单参数 — 公平对比由构造保证</span>
+        </div>
+
+        {/* 参赛来源 */}
+        <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1">
+              {(['strategy', 'rule'] as const).map(k => (
+                <button key={k} onClick={() => { setQuickKind(k); setQuickId('') }}
+                  className={cn('rounded-btn border px-2 py-1 text-[11px] transition-colors',
+                    quickKind === k ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted hover:text-secondary')}>
+                  {k === 'strategy' ? '策略' : '监控规则'}
+                </button>
+              ))}
+            </div>
+            <div className="min-w-52 flex-1">
+              <SuggestInput
+                value={quickId}
+                onChange={setQuickId}
+                options={quickOptions}
+                onSelect={opt => {
+                  addRow({ name: opt.label, kind: quickKind, matchId: opt.value })
+                  setQuickId('')
+                }}
+                loading={quickKind === 'strategy' ? strategiesQ.isPending : rulesQ.isPending}
+                placeholder={quickKind === 'strategy' ? '搜索策略加入擂台 (中文名 / ID)' : '搜索监控规则加入擂台'}
+                className="w-full rounded-btn border border-border bg-base px-3 py-1.5 text-sm outline-none focus:border-accent/50"
+              />
+            </div>
+            <button
+              onClick={() => { const opt = quickOptions[0]; if (opt) { addRow({ name: opt.label, kind: quickKind, matchId: opt.value }); setQuickId('') } }}
+              disabled={quickOptions.length === 0}
+              className="rounded-btn bg-accent/10 px-2.5 py-1 text-[11px] text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
+            >
+              添加
+            </button>
+            {quickKind === 'strategy' && (
+              <button
+                onClick={addAllStrategies}
+                disabled={(strategiesQ.data?.presets ?? []).length === 0}
+                className="rounded-btn border border-border px-2.5 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
+                title="把现有策略各开一个账户 (最多 20 个)"
+              >
+                全部策略一键加入 ({Math.min((strategiesQ.data?.presets ?? []).length, 20)})
+              </button>
+            )}
+          </div>
+
+          {rows.length === 0 ? (
+            <div className="py-6 text-center text-[11px] text-muted">还没有参赛来源 — 上面搜索添加, 或「全部策略一键加入」</div>
+          ) : (
+            <div className="mt-2 max-h-52 space-y-1 overflow-y-auto">
+              {rows.map((r, i) => (
+                <div key={r.matchId} className="flex items-center gap-2 rounded-btn px-2 py-1.5 text-xs hover:bg-elevated/40">
+                  <span className="w-16 shrink-0 text-[10px] text-muted">{r.kind === 'strategy' ? '跟策略' : '跟规则'}</span>
+                  <input
+                    value={r.name}
+                    onChange={e => setRows(prev => prev.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                    placeholder="账户名 (缺省用 ID)"
+                    className="min-w-0 flex-1 rounded-btn border border-border bg-base px-2 py-1 text-xs outline-none focus:border-accent/50"
+                  />
+                  <span className="w-44 shrink-0 truncate font-mono text-[11px] text-muted" title={r.matchId}>{r.matchId}</span>
+                  <button onClick={() => setRows(prev => prev.filter((_, j) => j !== i))} className="shrink-0 rounded p-0.5 text-muted hover:text-danger" title="移除">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 共享规格 */}
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+          <div>
+            <label className={labelCls}>每户初始资金 (元)</label>
+            <input type="number" value={cash} onChange={e => setCash(e.target.value)} className={cn(inputCls, 'mt-1')} placeholder="200000" />
+          </div>
+          <div>
+            <label className={labelCls}>账户名前缀 (可选)</label>
+            <input value={prefix} onChange={e => setPrefix(e.target.value)} className={cn(inputCls, 'mt-1 font-sans')} placeholder="如: 第一期-" />
+          </div>
+          <div>
+            <label className={labelCls}>方向 (全部来源)</label>
+            <div className="mt-1 flex gap-1.5">
+              {(['buy', 'sell'] as const).map(sd => (
+                <button key={sd} onClick={() => setSide(sd)}
+                  className={cn('flex-1 rounded-btn border py-1 text-[11px] font-medium transition-colors',
+                    side === sd ? (sd === 'buy' ? 'border-bull/50 bg-bull/10 text-bull' : 'border-bear/50 bg-bear/10 text-bear') : 'border-border text-muted')}>
+                  {sd === 'buy' ? '买入' : '卖出'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>仓位模式 (全部来源)</label>
+            <div className="mt-1 flex gap-1.5">
+              <button onClick={() => setSizeMode('fixed_amount')}
+                className={cn('flex-1 rounded-btn border py-1 text-[11px] transition-colors', sizeMode === 'fixed_amount' ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted')}>固定金额</button>
+              <button onClick={() => setSizeMode('pct_equity')}
+                className={cn('flex-1 rounded-btn border py-1 text-[11px] transition-colors', sizeMode === 'pct_equity' ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted')}>权益 %</button>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>{sizeMode === 'fixed_amount' ? '每笔金额 (元)' : '每笔占权益 %'}</label>
+            <input type="number" value={sizeValue} onChange={e => setSizeValue(e.target.value)} className={cn(inputCls, 'mt-1')} />
+          </div>
+          <div>
+            <label className={labelCls}>订单类型</label>
+            <div className="mt-1 flex gap-1">
+              {(['next_open', 'close', 'market'] as const).map(t => (
+                <button key={t} onClick={() => setOrderType(t)}
+                  className={cn('flex-1 rounded-btn border py-1 text-[10px] transition-colors',
+                    orderType === t ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted hover:text-secondary')}>
+                  {ORDER_TYPE_LABEL[t]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>冷却天数 (同标的)</label>
+            <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className={cn(inputCls, 'mt-1')} />
+          </div>
+          <div className="grid grid-cols-3 gap-2 md:col-span-2">
+            <div>
+              <label className={labelCls}>佣金 (万)</label>
+              <input type="number" step="0.1" min="0" value={commissionWan} onChange={e => setCommissionWan(e.target.value)} className={cn(inputCls, 'mt-1')} />
+            </div>
+            <div>
+              <label className={labelCls}>印花税 (千)</label>
+              <input type="number" step="0.1" min="0" value={stampQian} onChange={e => setStampQian(e.target.value)} className={cn(inputCls, 'mt-1')} />
+            </div>
+            <div>
+              <label className={labelCls}>滑点 (bps)</label>
+              <input type="number" step="1" min="0" value={slippageBps} onChange={e => setSlippageBps(e.target.value)} className={cn(inputCls, 'mt-1')} />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            onClick={() => valid && m.mutate()}
+            disabled={!valid || m.isPending}
+            className="flex-1 rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity hover:bg-accent/90 disabled:opacity-40"
+          >
+            {m.isPending ? '创建中…' : `创建 ${rows.length || ''} 个擂台账户`.replace('  ', ' ')}
+          </button>
+          <button onClick={onClose} className="rounded-btn border border-border px-4 py-2 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground">取消</button>
+        </div>
+        {m.isError && <div className="mt-2 rounded-btn bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{String((m.error as Error).message)}</div>}
+        <div className="mt-2 text-[10px] leading-relaxed text-muted">
+          创建后各账户立即参与盘中自动跟单 (规则触发 → 下单 → T+1 约束), 每交易日盘后管道统一结算定版净值, 擂台榜单自动更新。
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+export function Paper() {
+  const [view, setView] = useState<'arena' | 'account'>('arena')
   const [accId, setAccIdState] = useState(() => localStorage.getItem(ACC_STORAGE_KEY) || 'default')
   // 新建账户草稿 id: 非空 = 正在创建。点「+」只进入草稿态, 不动 accId / localStorage,
   // 取消即丢弃; 旧实现直接把生成的 id 写进 accId, 刷新后卡在无主向导上无法退出。
   const [draftId, setDraftId] = useState<string | null>(null)
-  const [feeOpen, setFeeOpen] = useState(false)
-  const [compareOpen, setCompareOpen] = useState(false)
   const setAccId = (id: string) => {
     localStorage.setItem(ACC_STORAGE_KEY, id)
     setAccIdState(id)
   }
+
+  if (view === 'arena') {
+    return (
+      <ArenaView
+        onEnterAccount={id => { setAccId(id); setView('account') }}
+        onCreateSingle={() => { setDraftId(genAccountId()); setView('account') }}
+      />
+    )
+  }
+  return (
+    <AccountView
+      accId={accId}
+      setAccId={setAccId}
+      draftId={draftId}
+      setDraftId={setDraftId}
+      onBack={() => setView('arena')}
+    />
+  )
+}
+
+/** 单账户记账视图 (原主视图全量保留, 从擂台下钻进入) */
+function AccountView({ accId, setAccId, draftId, setDraftId, onBack }: {
+  accId: string
+  setAccId: (id: string) => void
+  draftId: string | null
+  setDraftId: (id: string | null) => void
+  onBack: () => void
+}) {
+  const qc = useQueryClient()
+  const [tab, setTab] = useState<'orders' | 'trades'>('orders')
+  const [feeOpen, setFeeOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
 
   const accountsQ = useQuery({ queryKey: QK.paperAccounts, queryFn: api.paperAccounts })
   const overviewQ = useQuery({ queryKey: QK.paperOverview(accId), queryFn: () => api.paperOverview(accId) })
@@ -1104,27 +1708,39 @@ export function Paper() {
         <PageHeader
           title="模拟盘"
           subtitle="虚拟账户 · 用假钱验证你的策略"
-          right={cancellable ? (
-            <div className="flex items-center gap-1.5">
-              <select
-                value={selectedId}
-                onChange={e => { setDraftId(null); setAccId(e.target.value) }}
-                className="max-w-36 rounded-btn border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent/50"
-                title="切换虚拟账户 (切换即放弃本次创建)"
-              >
-                {accounts.map(a => (
-                  <option key={a.id} value={a.id}>{a.name || a.id}</option>
-                ))}
-              </select>
-              <button
-                onClick={cancelCreate}
-                className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-danger/40 hover:text-danger"
-                title="放弃创建, 返回原账户"
-              >
-                取消创建
-              </button>
-            </div>
-          ) : undefined}
+          right={
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+              title="返回擂台总览 (多账户收益对比)"
+            >
+              <Trophy className="h-3 w-3" />
+              擂台
+            </button>
+            {cancellable && (
+              <>
+                <select
+                  value={selectedId}
+                  onChange={e => { setDraftId(null); setAccId(e.target.value) }}
+                  className="max-w-36 rounded-btn border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent/50"
+                  title="切换虚拟账户 (切换即放弃本次创建)"
+                >
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={cancelCreate}
+                  className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-danger/40 hover:text-danger"
+                  title="放弃创建, 返回原账户"
+                >
+                  取消创建
+                </button>
+              </>
+            )}
+          </div>
+        }
         />
         <div className="flex-1 overflow-y-auto">
           <SetupCard
@@ -1191,6 +1807,14 @@ export function Paper() {
         }
         right={
           <div className="flex items-center gap-2">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+              title="返回擂台总览 (多账户收益对比)"
+            >
+              <Trophy className="h-3 w-3" />
+              擂台
+            </button>
             <div className="flex items-center gap-1.5">
               <select
                 value={accId}
