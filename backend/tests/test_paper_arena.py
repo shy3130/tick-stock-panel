@@ -1,4 +1,4 @@
-"""擂台批量创建 + compare 擂台增量字段 契约测试。
+"""对比批量创建 + compare 对比增量字段 契约测试。
 
 镜像 test_paper_api.py: 只挂 paper 路由的裸 FastAPI app; data_dir 用 tmp_path。
 """
@@ -29,7 +29,7 @@ def test_arena_batch_create_accounts_and_rules(tmp_path: Path):
     c = _client(tmp_path)
     r = c.post("/api/paper/arena/batch_create", json={
         "initial_cash": 200000,
-        "name_prefix": "擂台-",
+        "name_prefix": "对比-",
         "sources": [
             {"name": "均线多头", "match_kind": "strategy", "match_id": "sg_macd_golden"},
             {"match_kind": "rule", "match_id": "mrule_high_volume", "side": "sell", "size_value": 20},
@@ -38,9 +38,9 @@ def test_arena_batch_create_accounts_and_rules(tmp_path: Path):
     assert r.status_code == 200, r.text
     created = r.json()["created"]
     assert len(created) == 2
-    assert created[0]["name"] == "擂台-均线多头"
+    assert created[0]["name"] == "对比-均线多头"
     # 未提供 name 的来源回退 match_id
-    assert created[1]["name"] == "擂台-mrule_high_volume"
+    assert created[1]["name"] == "对比-mrule_high_volume"
     # 账户 id 服务端生成, 合法且互不相同
     ids = [row["account"] for row in created]
     assert all(i.startswith("arena_") for i in ids) and len(set(ids)) == 2
@@ -59,7 +59,7 @@ def test_arena_batch_create_accounts_and_rules(tmp_path: Path):
     r1 = c.get(f"/api/paper/auto_rules?account={ids[1]}").json()["rules"]
     assert r1[0]["side"] == "sell" and r1[0]["size_value"] == 20
 
-    # compare 聚合出新账户与擂台字段
+    # compare 聚合出新账户与对比字段
     rows = {r["account"]: r for r in c.get("/api/paper/compare").json()["accounts"]}
     assert set(ids) <= set(rows)
     row = rows[ids[0]]

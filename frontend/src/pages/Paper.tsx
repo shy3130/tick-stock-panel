@@ -1,9 +1,9 @@
 /**
- * 模拟盘 (虚拟账户) — 擂台主视图 + 单账户记账下钻。
+ * 模拟盘 (虚拟账户) — 多账户对比主视图 + 行展开账户操作。
  *
- * 擂台 (默认): 全账户收益降序榜单 (同本金同费率对比), 归一化净值叠加,
- * 行内展开持仓与近期成交; 批量创建一次构造一批同规格账户各绑一条跟单规则。
- * 单账户视图: 原有全部记账功能 (下单/跟单/费用/导出), 从擂台点「进入」下钻。
+ * 对比 (默认): 全账户收益降序榜单 (同本金同费率口径), 归一化净值叠加,
+ * 点行展开即完整账户操作 (下单/跟单规则/费用/导出), 无需跳转页面;
+ * 批量创建一次构造一批同规格账户各绑一条跟单规则。
  *
  * 口径提示: 持仓现价用最近日线收盘价 (收盘定版一致, 盘中估算见设计方案
  * docs/paper-trading-plan.md)。费用/滑点参数与回测引擎同名同默认值。
@@ -12,7 +12,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Banknote, ChevronDown, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, Swords, TrendingUp, Trophy, Wallet, X } from 'lucide-react'
+import { Banknote, ChevronDown, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, TrendingUp, Wallet, X } from 'lucide-react'
 import { api, type PaperCompareRow, type PaperFill, type PaperOrder } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -20,8 +20,6 @@ import { fmtPct, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/components/stock-table/primitives'
 import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
-
-const ACC_STORAGE_KEY = 'paper.account'
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
   market: '即时',
@@ -751,95 +749,6 @@ function CompareChart({ rows }: { rows: PaperCompareRow[] }) {
   return <div ref={elRef} className="h-56 w-full" />
 }
 
-function AccountCompareModal({ onClose }: { onClose: () => void }) {
-  const cmpQ = useQuery({ queryKey: QK.paperCompare, queryFn: api.paperCompare })
-  const rows = cmpQ.data?.accounts ?? []
-  const chartRows = rows.filter(r => r.nav.length > 0)
-  // 收益率最高的账户列头标记「领先」(单账户不标)
-  const bestAccount = rows.length > 1
-    ? rows.reduce((a, b) => ((b.pnl_pct ?? -1e9) > (a.pnl_pct ?? -1e9) ? b : a))
-    : null
-  const metrics: Array<{ label: string; render: (r: PaperCompareRow) => ReactNode }> = [
-    {
-      label: '累计收益率',
-      render: r => <span className={cn('font-semibold', priceColorClass((r.pnl_pct ?? 0) / 100))}>{fmtPct((r.pnl_pct ?? 0) / 100)}</span>,
-    },
-    { label: '总资产', render: r => fmtMoney(r.total) },
-    {
-      label: '累计盈亏',
-      render: r => <span className={priceColorClass((r.total_pnl ?? 0) / (r.initial_cash || 1))}>{fmtMoney(r.total_pnl)}</span>,
-    },
-    { label: '最大回撤', render: r => (r.max_drawdown != null ? <span className="text-warning">{fmtPct(r.max_drawdown / 100)}</span> : '—') },
-    { label: '胜率', render: r => `${r.win_rate.toFixed(1)}%` },
-    { label: '盈亏比', render: r => (r.profit_loss_ratio != null ? r.profit_loss_ratio.toFixed(2) : '—') },
-    { label: '回合数', render: r => String(r.rounds) },
-    { label: '平均持有', render: r => `${r.avg_holding_days}天` },
-    { label: '现金', render: r => fmtMoney(r.cash) },
-    { label: '持仓市值', render: r => fmtMoney(r.market_value) },
-    { label: '初始资金', render: r => fmtMoney(r.initial_cash, 0) },
-    {
-      label: '费用',
-      render: r => `${(r.fees.commission_pct * 10000).toFixed(1)}‱ · ${(r.fees.stamp_tax_pct * 1000).toFixed(1)}‰ · ${r.fees.slippage_bps}bps`,
-    },
-  ]
-  return (
-    <Modal onClose={onClose} labelledBy="compare-title" panelClassName="w-[94vw] max-w-4xl bg-surface border border-border rounded-card shadow-xl">
-      <div className="p-5">
-        <div className="flex items-center gap-2">
-          <GitCompare className="h-4 w-4 text-accent" />
-          <h3 id="compare-title" className="text-sm font-semibold text-foreground">账户横向对比</h3>
-          <button
-            onClick={() => cmpQ.refetch()}
-            className="ml-auto rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-          >
-            {cmpQ.isFetching ? '刷新中…' : '刷新'}
-          </button>
-        </div>
-        {cmpQ.isLoading ? (
-          <div className="py-12 text-center text-xs text-muted">加载中…</div>
-        ) : rows.length === 0 ? (
-          <div className="py-12 text-center text-xs text-muted">创建账户后即可在此横向对比</div>
-        ) : (
-          <div className="mt-3 space-y-3">
-            {chartRows.length > 0 && (
-              <div>
-                <div className="text-[11px] text-muted">归一化净值 (起点 = 1, 不同本金公平对比)</div>
-                <CompareChart rows={chartRows} />
-              </div>
-            )}
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border text-left text-[11px] text-muted">
-                    <th className="px-2 py-1.5 font-medium">指标</th>
-                    {rows.map(r => (
-                      <th key={r.account} className="px-2 py-1.5 font-medium">
-                        <span className={cn(r === bestAccount ? 'text-accent' : 'text-foreground')}>{r.name}</span>
-                        {r === bestAccount && <span className="ml-1 rounded bg-accent/15 px-1 py-px text-[9px] text-accent">领先</span>}
-                        {r.status === 'frozen' && <span className="ml-1 rounded-full bg-warning/15 px-1 py-px text-[9px] text-warning">冻结</span>}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {metrics.map(mrow => (
-                    <tr key={mrow.label} className="border-b border-border/50">
-                      <td className="px-2 py-1.5 text-muted">{mrow.label}</td>
-                      {rows.map(r => (
-                        <td key={r.account} className="px-2 py-1.5 font-mono tabular text-foreground">{mrow.render(r)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    </Modal>
-  )
-}
-
 function AutoRulesPanel({ acc }: { acc: string }) {
   const qc = useQueryClient()
   const rulesQ = useQuery({ queryKey: QK.paperAutoRules(acc), queryFn: () => api.paperAutoRules(acc) })
@@ -1057,7 +966,7 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
 }
 
 // ================================================================
-// 擂台 (V3): 模拟盘默认主视图 — 对比优先。
+// 多账户对比 (V3): 模拟盘默认主视图 — 对比优先, 收益降序。
 // ================================================================
 
 /** 净值迷你走势 (纯 SVG polyline, 最近 ~30 个定版点; 红涨绿跌与全局口径一致) */
@@ -1091,82 +1000,7 @@ function RankBadge({ rank }: { rank: number }) {
   )
 }
 
-/** 行展开: 该账户持仓 + 近期成交 (仅在展开时挂载查询, 避免整表 N+1) */
-function ArenaRowDetail({ acc, onEnter }: { acc: string; onEnter: () => void }) {
-  const ovQ = useQuery({ queryKey: QK.paperOverview(acc), queryFn: () => api.paperOverview(acc) })
-  const tradesQ = useQuery({ queryKey: QK.paperTrades(acc), queryFn: () => api.paperTrades(acc) })
-  const holdings = ovQ.data?.holdings ?? []
-  const fills = (tradesQ.data?.fills ?? []).filter(f => f.kind !== 'corp_action').slice(0, 5)
-  if (ovQ.isLoading) return <div className="py-4 text-center text-[11px] text-muted">加载中…</div>
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <div>
-        <div className="text-[11px] font-medium text-secondary">当前持仓{holdings.length > 0 ? ` (${holdings.length})` : ''}</div>
-        {holdings.length === 0 ? (
-          <div className="py-4 text-center text-[11px] text-muted">空仓 — 等待信号触发自动跟单</div>
-        ) : (
-          <table className="mt-1 w-full text-[11px]">
-            <thead>
-              <tr className="text-left text-[10px] text-muted">
-                <th className="py-0.5 font-normal">代码</th>
-                <th className="py-0.5 text-right font-normal">数量</th>
-                <th className="py-0.5 text-right font-normal">成本</th>
-                <th className="py-0.5 text-right font-normal">现价</th>
-                <th className="py-0.5 text-right font-normal">盈亏</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {holdings.map(h => (
-                <tr key={h.symbol} className="border-t border-border/40">
-                  <td className="py-1 font-sans">{h.symbol}</td>
-                  <td className="py-1 text-right">{h.qty}</td>
-                  <td className="py-1 text-right">{fmtMoney(h.avg_cost, 3)}</td>
-                  <td className="py-1 text-right">{fmtMoney(h.last_price, 3)}</td>
-                  <td className={cn('py-1 text-right', priceColorClass(h.pnl))}>
-                    {(h.pnl >= 0 ? '+' : '') + fmtMoney(h.pnl, 0)} ({fmtPct(h.pnl_pct / 100)})
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div>
-        <div className="text-[11px] font-medium text-secondary">近期成交</div>
-        {fills.length === 0 ? (
-          <div className="py-4 text-center text-[11px] text-muted">暂无成交</div>
-        ) : (
-          <div className="mt-1 space-y-1 font-mono text-[11px]">
-            {fills.map(f => (
-              <div key={`${f.seq}-${f.order_id ?? 'x'}`} className="flex items-center gap-2">
-                <span className="w-16 shrink-0 text-muted">{f.date}</span>
-                <span className={cn('w-7 shrink-0 font-sans font-medium', f.side === 'buy' ? 'text-bull' : 'text-bear')}>
-                  {f.side === 'buy' ? '买' : '卖'}
-                </span>
-                <span className="w-24 shrink-0">{f.symbol}</span>
-                <span className="w-14 shrink-0 text-right">{f.qty}</span>
-                <span className="flex-1 text-right text-muted">@ {fmtMoney(f.price, 3)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="lg:col-span-2">
-        <button
-          onClick={onEnter}
-          className="rounded-btn border border-border px-3 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
-        >
-          进入账户详情 (下单 · 跟单规则 · 费用 · 导出) →
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ArenaView({ onEnterAccount, onCreateSingle }: {
-  onEnterAccount: (id: string) => void
-  onCreateSingle: () => void
-}) {
+function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)
@@ -1183,17 +1017,17 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
-        title="模拟盘擂台"
-        subtitle="同本金 · 同费率 · 多账户并行对比 — 收益降序, 点行展开持仓与近期成交"
+        title="模拟盘"
+        subtitle="多账户并行对比 — 同本金 · 同费率 · 收益降序, 点行展开完整账户操作"
         right={
           <div className="flex items-center gap-2">
             <button
               onClick={() => setCreateOpen(true)}
               className="flex items-center gap-1 rounded-btn bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:bg-accent/90"
-              title="同本金同费率批量创建一批账户, 各绑一条策略/监控规则跟单, 让信号自动下场比拼"
+              title="同本金同费率批量创建一批账户, 各绑一条策略/监控规则跟单, 保证对比口径一致"
             >
-              <Swords className="h-3 w-3" />
-              批量创建擂台
+              <Plus className="h-3 w-3" />
+              批量创建账户
             </button>
             <button
               onClick={onCreateSingle}
@@ -1218,24 +1052,24 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
           <div className="py-16 text-center text-sm text-muted">加载中…</div>
         ) : cmpQ.isError ? (
           <div className="py-16 text-center text-sm text-danger">
-            擂台数据加载失败
+            对比数据加载失败
             <button onClick={() => cmpQ.refetch()} className="ml-2 rounded-btn border border-border px-2 py-0.5 text-xs text-secondary hover:text-foreground">重试</button>
           </div>
         ) : ranked.length === 0 ? (
           <div className="mx-auto mt-16 max-w-md rounded-card border border-dashed border-border bg-surface/50 px-6 py-14 text-center">
-            <Trophy className="mx-auto h-8 w-8 text-muted/50" />
-            <div className="mt-3 text-sm font-medium">擂台还没有参赛账户</div>
+            <GitCompare className="mx-auto h-8 w-8 text-muted/50" />
+            <div className="mt-3 text-sm font-medium">还没有对比账户</div>
             <div className="mt-1.5 text-xs leading-relaxed text-muted">
               同本金、同费率批量创建一批账户, 各绑一个策略或监控规则,
-              信号触发自动跟单下场比拼 — 对比才有意义。
+              信号自动跟单 — 同口径的并行对比才有参考意义。
             </div>
             <div className="mt-4 flex justify-center gap-2">
               <button
                 onClick={() => setCreateOpen(true)}
                 className="flex items-center gap-1 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:bg-accent/90"
               >
-                <Swords className="h-3.5 w-3.5" />
-                批量创建擂台
+                <Plus className="h-3.5 w-3.5" />
+                批量创建账户
               </button>
               <button
                 onClick={onCreateSingle}
@@ -1248,7 +1082,7 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard label="参赛账户" value={String(ranked.length)} icon={Wallet} iconCls="text-accent" />
+              <StatCard label="对比账户" value={String(ranked.length)} icon={Wallet} iconCls="text-accent" />
               <StatCard label="合计虚拟资产" value={fmtMoney(totalAssets, 0)} icon={Banknote} iconCls="text-muted" />
               <StatCard
                 label="平均累计收益"
@@ -1258,11 +1092,11 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
                 iconCls={priceColorClass((avgPct ?? 0) / 100)}
               />
               <StatCard
-                label="领先者"
+                label="收益最高"
                 value={ranked[0].name}
-                sub={ranked.length > 1 ? `+${(ranked[0].pnl_pct ?? 0).toFixed(2)}% 领先第2名 ${((ranked[0].pnl_pct ?? 0) - (ranked[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
+                sub={ranked.length > 1 ? `+${(ranked[0].pnl_pct ?? 0).toFixed(2)}% 高于第2名 ${((ranked[0].pnl_pct ?? 0) - (ranked[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
                 valueClass="text-accent"
-                icon={Trophy}
+                icon={TrendingUp}
                 iconCls="text-accent"
               />
             </div>
@@ -1276,9 +1110,9 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
 
             <div className="rounded-card border border-border bg-surface p-4">
               <div className="flex items-center gap-2">
-                <div className="text-sm font-medium">收益榜</div>
-                <span className="text-[10px] text-muted">按累计收益降序 · 点行展开持仓</span>
-                <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开行">数据截至最近结算日</span>
+                <div className="text-sm font-medium">收益对比</div>
+                <span className="text-[10px] text-muted">按累计收益降序 · 点行展开完整账户操作</span>
+                <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开区">数据截至最近结算日</span>
               </div>
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full min-w-[860px] text-xs">
@@ -1341,21 +1175,13 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
                             <td className="py-1.5"><NavSpark nav={r.nav} /></td>
                             <td className="py-2 text-right font-mono text-[11px] text-muted">{r.last_nav_date ?? '—'}</td>
                             <td className="py-2 text-right">
-                              <span className="inline-flex items-center gap-0.5">
-                                <button
-                                  onClick={e => { e.stopPropagation(); onEnterAccount(r.account) }}
-                                  className="rounded-btn border border-border px-2 py-0.5 text-[10px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
-                                >
-                                  进入
-                                </button>
-                                <ChevronDown className={cn('h-3.5 w-3.5 text-muted transition-transform duration-150', open && 'rotate-180')} />
-                              </span>
+                              <ChevronDown className={cn('inline h-3.5 w-3.5 text-muted transition-transform duration-150', open && 'rotate-180')} />
                             </td>
                           </tr>
                           {open && (
                             <tr className="border-t border-border/50 bg-base/40">
-                              <td colSpan={11} className="px-3 py-3">
-                                <ArenaRowDetail acc={r.account} onEnter={() => onEnterAccount(r.account)} />
+                              <td colSpan={11} className="px-4 py-4">
+                                <AccountPanel acc={r.account} name={r.name} />
                               </td>
                             </tr>
                           )}
@@ -1369,18 +1195,18 @@ function ArenaView({ onEnterAccount, onCreateSingle }: {
           </div>
         )}
       </div>
-      {createOpen && <ArenaCreateModal onClose={() => setCreateOpen(false)} onCreated={() => setCreateOpen(false)} />}
+      {createOpen && <BatchCreateModal onClose={() => setCreateOpen(false)} onCreated={() => setCreateOpen(false)} />}
     </div>
   )
 }
 
 // ================================================================
-// 擂台批量创建弹窗: 公平性由构造保证 (同本金/同费率/同跟单参数)。
+// 批量创建对比账户弹窗: 同口径由构造保证 (同本金/同费率/同跟单参数)。
 // 来源行只带 名称+匹配目标; 方向/仓位/订单类型/冷却为全表共享参数。
 // ================================================================
-type ArenaSourceRow = { name: string; kind: 'strategy' | 'rule'; matchId: string }
+type BatchSourceRow = { name: string; kind: 'strategy' | 'rule'; matchId: string }
 
-function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (count: number) => void }) {
+function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (count: number) => void }) {
   const qc = useQueryClient()
   const defaults = loadNewAccountDefaults()
   const [cash, setCash] = useState(defaults.cash)
@@ -1388,7 +1214,7 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [stampQian, setStampQian] = useState(defaults.stampQian)
   const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
   const [prefix, setPrefix] = useState('')
-  const [rows, setRows] = useState<ArenaSourceRow[]>([])
+  const [rows, setRows] = useState<BatchSourceRow[]>([])
   const [quickKind, setQuickKind] = useState<'strategy' | 'rule'>('strategy')
   const [quickId, setQuickId] = useState('')
   // 共享跟单参数 (应用到全部来源 → 同规格对比)
@@ -1433,7 +1259,7 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
     },
   })
 
-  const addRow = (row: ArenaSourceRow) => {
+  const addRow = (row: BatchSourceRow) => {
     setRows(prev => (prev.some(r => r.matchId === row.matchId) ? prev : [...prev, row]))
   }
   const addAllStrategies = () => {
@@ -1468,12 +1294,12 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
     <Modal onClose={onClose} labelledBy="arena-create-title" panelClassName="w-[94vw] max-w-3xl bg-surface border border-border rounded-card shadow-xl">
       <div className="max-h-[86vh] overflow-y-auto p-5">
         <div className="flex items-center gap-2">
-          <Swords className="h-4 w-4 text-accent" />
-          <h3 id="arena-create-title" className="text-sm font-semibold text-foreground">批量创建擂台账户</h3>
-          <span className="text-[10px] text-muted">同本金 · 同费率 · 同跟单参数 — 公平对比由构造保证</span>
+          <GitCompare className="h-4 w-4 text-accent" />
+          <h3 id="arena-create-title" className="text-sm font-semibold text-foreground">批量创建对比账户</h3>
+          <span className="text-[10px] text-muted">同本金 · 同费率 · 同跟单参数 — 口径一致由构造保证</span>
         </div>
 
-        {/* 参赛来源 */}
+        {/* 对比来源 */}
         <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex gap-1">
@@ -1495,7 +1321,7 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
                   setQuickId('')
                 }}
                 loading={quickKind === 'strategy' ? strategiesQ.isPending : rulesQ.isPending}
-                placeholder={quickKind === 'strategy' ? '搜索策略加入擂台 (中文名 / ID)' : '搜索监控规则加入擂台'}
+                placeholder={quickKind === 'strategy' ? '搜索策略加入对比 (中文名 / ID)' : '搜索监控规则加入对比'}
                 className="w-full rounded-btn border border-border bg-base px-3 py-1.5 text-sm outline-none focus:border-accent/50"
               />
             </div>
@@ -1519,7 +1345,7 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
           </div>
 
           {rows.length === 0 ? (
-            <div className="py-6 text-center text-[11px] text-muted">还没有参赛来源 — 上面搜索添加, 或「全部策略一键加入」</div>
+            <div className="py-6 text-center text-[11px] text-muted">还没有来源 — 上面搜索添加, 或「全部策略一键加入」</div>
           ) : (
             <div className="mt-2 max-h-52 space-y-1 overflow-y-auto">
               {rows.map((r, i) => (
@@ -1614,13 +1440,13 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
             disabled={!valid || m.isPending}
             className="flex-1 rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity hover:bg-accent/90 disabled:opacity-40"
           >
-            {m.isPending ? '创建中…' : `创建 ${rows.length || ''} 个擂台账户`.replace('  ', ' ')}
+            {m.isPending ? '创建中…' : `创建 ${rows.length || ''} 个账户`.replace('  ', ' ')}
           </button>
           <button onClick={onClose} className="rounded-btn border border-border px-4 py-2 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground">取消</button>
         </div>
         {m.isError && <div className="mt-2 rounded-btn bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{String((m.error as Error).message)}</div>}
         <div className="mt-2 text-[10px] leading-relaxed text-muted">
-          创建后各账户立即参与盘中自动跟单 (规则触发 → 下单 → T+1 约束), 每交易日盘后管道统一结算定版净值, 擂台榜单自动更新。
+          创建后各账户立即参与盘中自动跟单 (规则触发 → 下单 → T+1 约束), 每交易日盘后管道统一结算定版净值, 对比榜单自动更新。
         </div>
       </div>
     </Modal>
@@ -1628,133 +1454,98 @@ function ArenaCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 }
 
 export function Paper() {
-  const [view, setView] = useState<'arena' | 'account'>('arena')
-  const [accId, setAccIdState] = useState(() => localStorage.getItem(ACC_STORAGE_KEY) || 'default')
-  // 新建账户草稿 id: 非空 = 正在创建。点「+」只进入草稿态, 不动 accId / localStorage,
-  // 取消即丢弃; 旧实现直接把生成的 id 写进 accId, 刷新后卡在无主向导上无法退出。
+  const [view, setView] = useState<'compare' | 'setup'>('compare')
+  // 新建账户草稿 id: 非空 = 正在创建。点「单账户」只进入草稿态,
+  // 取消/返回即丢弃, 不写任何持久状态。
   const [draftId, setDraftId] = useState<string | null>(null)
-  const setAccId = (id: string) => {
-    localStorage.setItem(ACC_STORAGE_KEY, id)
-    setAccIdState(id)
-  }
 
-  if (view === 'arena') {
-    return (
-      <ArenaView
-        onEnterAccount={id => { setAccId(id); setView('account') }}
-        onCreateSingle={() => { setDraftId(genAccountId()); setView('account') }}
-      />
-    )
+  if (view === 'compare') {
+    return <CompareView onCreateSingle={() => { setDraftId(genAccountId()); setView('setup') }} />
   }
   return (
-    <AccountView
-      accId={accId}
-      setAccId={setAccId}
+    <SetupView
       draftId={draftId}
       setDraftId={setDraftId}
-      onBack={() => setView('arena')}
+      onBack={() => setView('compare')}
     />
   )
 }
 
-/** 单账户记账视图 (原主视图全量保留, 从擂台下钻进入) */
-function AccountView({ accId, setAccId, draftId, setDraftId, onBack }: {
-  accId: string
-  setAccId: (id: string) => void
+/** 新建单账户向导 (从对比页「单账户」进入; 返回/完成都回到对比页) */
+function SetupView({ draftId, setDraftId, onBack }: {
   draftId: string | null
   setDraftId: (id: string | null) => void
   onBack: () => void
 }) {
   const qc = useQueryClient()
+  const accountsQ = useQuery({ queryKey: QK.paperAccounts, queryFn: api.paperAccounts })
+  const accounts = accountsQ.data?.accounts ?? []
+  const back = () => {
+    setDraftId(null)
+    onBack()
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PageHeader
+        title="新建虚拟账户"
+        subtitle="单账户创建 · 批量对比请用对比页的「批量创建账户」"
+        right={
+          <button
+            onClick={back}
+            className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+            title="返回多账户对比"
+          >
+            <GitCompare className="h-3 w-3" />
+            返回对比
+          </button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+        <SetupCard
+          accId={draftId ?? 'default'}
+          onDone={() => {
+            setDraftId(null)
+            qc.invalidateQueries({ queryKey: QK.paperAll })
+            onBack()
+          }}
+          onCancel={accounts.length > 0 ? back : undefined}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** 账户操作面板 (原单账户视图主体): 在对比榜单行展开内渲染, 免跳转。
+ *  含总览卡/净值曲线/持仓/订单与成交/下单/跟单规则/费用设置/冻结。 */
+function AccountPanel({ acc, name }: { acc: string; name?: string }) {
+  const qc = useQueryClient()
   const [tab, setTab] = useState<'orders' | 'trades'>('orders')
   const [feeOpen, setFeeOpen] = useState(false)
-  const [compareOpen, setCompareOpen] = useState(false)
 
-  const accountsQ = useQuery({ queryKey: QK.paperAccounts, queryFn: api.paperAccounts })
-  const overviewQ = useQuery({ queryKey: QK.paperOverview(accId), queryFn: () => api.paperOverview(accId) })
-  const ordersQ = useQuery({ queryKey: QK.paperOrders(accId), queryFn: () => api.paperOrders(undefined, accId) })
-  const tradesQ = useQuery({ queryKey: QK.paperTrades(accId), queryFn: () => api.paperTrades(accId) })
-  const navQ = useQuery({ queryKey: QK.paperNav(accId), queryFn: () => api.paperNav(accId) })
-  const statsQ = useQuery({ queryKey: QK.paperStats(accId), queryFn: () => api.paperStats(accId) })
+  const overviewQ = useQuery({ queryKey: QK.paperOverview(acc), queryFn: () => api.paperOverview(acc) })
+  const ordersQ = useQuery({ queryKey: QK.paperOrders(acc), queryFn: () => api.paperOrders(undefined, acc) })
+  const tradesQ = useQuery({ queryKey: QK.paperTrades(acc), queryFn: () => api.paperTrades(acc) })
+  const navQ = useQuery({ queryKey: QK.paperNav(acc), queryFn: () => api.paperNav(acc) })
+  const statsQ = useQuery({ queryKey: QK.paperStats(acc), queryFn: () => api.paperStats(acc) })
 
   // 'paper' 前缀兜底失效: 覆盖全部账户的全部查询 (订单变动可能影响净值/统计)
   const invalidateAll = () => qc.invalidateQueries({ queryKey: QK.paperAll })
 
   const cancelM = useMutation({
-    mutationFn: (id: string) => api.paperOrderCancel(id, accId),
+    mutationFn: (id: string) => api.paperOrderCancel(id, acc),
     onSuccess: invalidateAll,
   })
   const queueM = useMutation({
-    mutationFn: (on: boolean) => api.paperSettings({ queue_limit_orders: on }, accId),
+    mutationFn: (on: boolean) => api.paperSettings({ queue_limit_orders: on }, acc),
     onSuccess: invalidateAll,
   })
 
   if (overviewQ.isLoading) {
-    return <div className="p-5 text-sm text-muted">加载中…</div>
+    return <div className="py-8 text-center text-xs text-muted">加载中…</div>
   }
   const ov = overviewQ.data
-  const accounts = accountsQ.data?.accounts ?? []
-  if (draftId !== null || !ov?.initialized) {
-    // 已有其他账户 → 顶部保留账户切换 (切走即放弃创建) + 可取消; 一个账户都没有 → 纯向导
-    const cancellable = accounts.length > 0
-    const selectedId = accounts.some(a => a.id === accId) ? accId : accounts[0]?.id ?? accId
-    const cancelCreate = () => {
-      setDraftId(null)
-      // 选中态是残留 id 时回到第一个既有账户 (正常新建流程 accId 本就有效, 此行不触发)
-      if (!accounts.some(a => a.id === accId)) setAccId(accounts[0].id)
-    }
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader
-          title="模拟盘"
-          subtitle="虚拟账户 · 用假钱验证你的策略"
-          right={
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={onBack}
-              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-              title="返回擂台总览 (多账户收益对比)"
-            >
-              <Trophy className="h-3 w-3" />
-              擂台
-            </button>
-            {cancellable && (
-              <>
-                <select
-                  value={selectedId}
-                  onChange={e => { setDraftId(null); setAccId(e.target.value) }}
-                  className="max-w-36 rounded-btn border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent/50"
-                  title="切换虚拟账户 (切换即放弃本次创建)"
-                >
-                  {accounts.map(a => (
-                    <option key={a.id} value={a.id}>{a.name || a.id}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={cancelCreate}
-                  className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-danger/40 hover:text-danger"
-                  title="放弃创建, 返回原账户"
-                >
-                  取消创建
-                </button>
-              </>
-            )}
-          </div>
-        }
-        />
-        <div className="flex-1 overflow-y-auto">
-          <SetupCard
-            accId={draftId ?? accId}
-            onDone={createdId => {
-              setDraftId(null)
-              setAccId(createdId)
-              invalidateAll()
-            }}
-            onCancel={cancellable ? cancelCreate : undefined}
-          />
-        </div>
-      </div>
-    )
+  if (!ov?.initialized) {
+    return <div className="py-8 text-center text-xs text-muted">账户未初始化</div>
   }
 
   const holdings = ov.holdings ?? []
@@ -1785,81 +1576,39 @@ function AccountView({ accId, setAccId, draftId, setDraftId, onBack }: {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `模拟盘成交台账_${accId}_${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `模拟盘成交台账_${acc}_${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader
-        title="模拟盘"
-        subtitle="虚拟账户 · 用假钱验证你的策略"
-        titleExtra={
-          <>
-            {ov.status === 'frozen' && <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">已冻结</span>}
-            {ov.queue_limit_orders && (
-              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] text-accent" title="触及涨跌停不直接拒单, 转次日开盘重试 (最多顺延 3 日)">
-                涨跌停排队
-              </span>
-            )}
-          </>
-        }
-        right={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onBack}
-              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-              title="返回擂台总览 (多账户收益对比)"
-            >
-              <Trophy className="h-3 w-3" />
-              擂台
-            </button>
-            <div className="flex items-center gap-1.5">
-              <select
-                value={accId}
-                onChange={e => setAccId(e.target.value)}
-                className="max-w-36 rounded-btn border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent/50"
-                title="切换虚拟账户 (数据相互隔离)"
-              >
-                {(accounts.some(a => a.id === accId) ? accounts : [...accounts, { id: accId, name: accId }]).map(a => (
-                  <option key={a.id} value={a.id}>{a.name || a.id}</option>
-                ))}
-              </select>
-              <button
-                onClick={() => setDraftId(genAccountId())}
-                className="flex items-center gap-0.5 rounded-btn border border-border px-1.5 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-                title="新建虚拟账户"
-              >
-                <Plus className="h-3 w-3" />
-              </button>
-            </div>
-            <button
-              onClick={() => setFeeOpen(true)}
-              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-              title={`佣金 ${((ov.fees?.commission_pct ?? 0) * 10000).toFixed(1)}‱ (最低5元) · 印花税 ${((ov.fees?.stamp_tax_pct ?? 0) * 1000).toFixed(1)}‰ 仅卖出 · 滑点 ${ov.fees?.slippage_bps ?? 0}bps — 点击调整`}
-            >
-              <Settings className="h-3 w-3" />
-              佣金 {((ov.fees?.commission_pct ?? 0) * 10000).toFixed(1)}‱ · 印花税 {((ov.fees?.stamp_tax_pct ?? 0) * 1000).toFixed(1)}‰ · 滑点 {ov.fees?.slippage_bps ?? 0}bps
-            </button>
-            <button
-              onClick={() => setCompareOpen(true)}
-              className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-              title="多账户指标横向对比 + 归一化净值叠加"
-            >
-              <GitCompare className="h-3 w-3" />
-              账户对比
-            </button>
-            <button
-              onClick={() => api.paperFreeze(ov.status !== 'frozen', accId).then(invalidateAll)}
-              className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-warning/40 hover:text-warning"
-            >
-              {ov.status === 'frozen' ? '解冻账户' : '冻结账户'}
-            </button>
-          </div>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+    <div>
+      {/* 面板头: 账户标识 + 状态徽章 + 费用 + 冻结 */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">{name || acc}</span>
+        <span className="font-mono text-[10px] text-muted">{acc}</span>
+        {ov.status === 'frozen' && <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">已冻结</span>}
+        {ov.queue_limit_orders && (
+          <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] text-accent" title="触及涨跌停不直接拒单, 转次日开盘重试 (最多顺延 3 日)">
+            涨跌停排队
+          </span>
+        )}
+        <button
+          onClick={() => setFeeOpen(true)}
+          className="ml-auto flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+          title={`佣金 ${((ov.fees?.commission_pct ?? 0) * 10000).toFixed(1)}‱ (最低5元) · 印花税 ${((ov.fees?.stamp_tax_pct ?? 0) * 1000).toFixed(1)}‰ 仅卖出 · 滑点 ${ov.fees?.slippage_bps ?? 0}bps — 点击调整`}
+        >
+          <Settings className="h-3 w-3" />
+          佣金 {((ov.fees?.commission_pct ?? 0) * 10000).toFixed(1)}‱ · 印花税 {((ov.fees?.stamp_tax_pct ?? 0) * 1000).toFixed(1)}‰ · 滑点 {ov.fees?.slippage_bps ?? 0}bps
+        </button>
+        <button
+          onClick={() => api.paperFreeze(ov.status !== 'frozen', acc).then(invalidateAll)}
+          className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-warning/40 hover:text-warning"
+        >
+          {ov.status === 'frozen' ? '解冻账户' : '冻结账户'}
+        </button>
+      </div>
+      <div>
         {/* 总览卡片 */}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="总资产 (虚拟)" value={fmtMoney(ov.total)} icon={Wallet} iconCls="text-accent" />
@@ -2014,8 +1763,8 @@ function AccountView({ accId, setAccId, draftId, setDraftId, onBack }: {
 
           {/* 右列: 下单 + 自动跟单 + 策略对比 */}
           <div className="space-y-4">
-            <OrderForm acc={accId} onDone={invalidateAll} />
-            <AutoRulesPanel acc={accId} />
+            <OrderForm acc={acc} onDone={invalidateAll} />
+            <AutoRulesPanel acc={acc} />
             <CandidateCompareCard paper={{
               total_return_pct: nav.length >= 2 && nav[0].nav > 0 ? (nav[nav.length - 1].nav / nav[0].nav - 1) * 100 : null,
               annual_pct: nav.length >= 2 && nav[0].nav > 0
@@ -2057,14 +1806,13 @@ function AccountView({ accId, setAccId, draftId, setDraftId, onBack }: {
       </div>
       {feeOpen && ov.fees && (
         <FeeSettingsModal
-          accId={accId}
+          accId={acc}
           fees={ov.fees}
           queue={!!ov.queue_limit_orders}
           onSaved={() => setFeeOpen(false)}
           onClose={() => setFeeOpen(false)}
         />
       )}
-      {compareOpen && <AccountCompareModal onClose={() => setCompareOpen(false)} />}
     </div>
   )
 }

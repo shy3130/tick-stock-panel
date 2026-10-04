@@ -1062,7 +1062,7 @@ export interface PaperAccountSummary {
 }
 
 /** 多账户横向对比行 (GET /api/paper/compare): 概览 + 回合统计 + 定版净值
- *  holdings_count 起的擂台字段为后端加法扩展, 旧响应可能缺失 → 可选 */
+ *  holdings_count 起的对比字段为后端加法扩展, 旧响应可能缺失 → 可选 */
 export interface PaperCompareRow {
   account: string
   name: string
@@ -1081,7 +1081,7 @@ export interface PaperCompareRow {
   realized_pnl: number
   max_drawdown: number | null
   nav: Array<{ date: string; nav: number }>
-  /** 擂台展示字段 (后端增量, 旧响应可缺) */
+  /** 对比展示字段 (后端增量, 旧响应可缺) */
   holdings_count?: number
   created_at?: string | null
   last_nav_date?: string | null
@@ -1091,7 +1091,7 @@ export interface PaperCompareRow {
   auto_enabled?: number
 }
 
-/** 擂台批量创建的单个参赛来源 (POST /api/paper/arena/batch_create) */
+/** 对比批量创建的单个来源 (POST /api/paper/arena/batch_create) */
 export interface PaperArenaSource {
   name?: string
   match_kind: 'strategy' | 'rule'
@@ -3878,7 +3878,7 @@ export const api = {
   paperAutoRuleDelete: (id: string, account?: string) =>
     request<{ ok: boolean }>(accUrl(`/api/paper/auto_rules/${encodeURIComponent(id)}`, account), { method: 'DELETE' }),
 
-  /** 擂台批量创建: 同本金/同费率一次开 N 个账户, 各绑一条自动跟单规则 */
+  /** 对比批量创建: 同本金/同费率一次开 N 个账户, 各绑一条自动跟单规则 */
   paperArenaCreate: (body: { initial_cash: number; sources: PaperArenaSource[]; name_prefix?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number }) =>
     request<{ created: Array<{ account: string; name: string; rule_id: string }> }>('/api/paper/arena/batch_create', {
       method: 'POST',

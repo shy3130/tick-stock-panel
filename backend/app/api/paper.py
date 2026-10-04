@@ -216,7 +216,7 @@ def compare_accounts(request: Request):
     """横向对比全部账户: 概览 + 回合统计 + 定版净值 (供对比表与净值叠加图)。
 
     净值给全量定版序列, 前端做归一化 (起点=1) 后多账户叠加。
-    擂台增量字段 (holdings_count/created_at/last_nav_date/day_change_pct/auto_rules)
+    对比增量字段 (holdings_count/created_at/last_nav_date/day_change_pct/auto_rules)
     为加法扩展, 旧前端忽略不影响。
     """
     from app.strategy import paper_auto
@@ -255,7 +255,7 @@ def compare_accounts(request: Request):
             "realized_pnl": st.get("realized_pnl"),
             "max_drawdown": st.get("max_drawdown"),
             "nav": [{"date": n["date"], "nav": n["nav"]} for n in nav_rows],
-            # 擂台展示用增量字段
+            # 对比展示用增量字段
             "holdings_count": len(ov.get("holdings") or []),
             "created_at": acc.get("created_at"),
             "last_nav_date": nav_rows[-1]["date"] if nav_rows else None,
@@ -351,13 +351,13 @@ def delete_auto_rule(request: Request, rule_id: str, account: str = Query(paper.
     return {"ok": True}
 
 
-# ===== 擂台批量创建 (V3): 同规格多账户并行对比的构造入口 =====
+# ===== 对比批量创建 (V3): 同规格多账户并行对比的构造入口 =====
 class ArenaSourceModel(BaseModel):
     name: str | None = None              # 账户名 (缺省用 match_id)
     match_kind: str                      # strategy / rule (与 auto_rules 同口径)
     match_id: str
     side: str = "buy"
-    size_mode: str = "pct_equity"        # 擂台默认按权益百分比, 不同本金也可公平比
+    size_mode: str = "pct_equity"        # 对比默认按权益百分比, 不同本金也可公平比
     size_value: float = 10.0
     order_type: str = "next_open"
     cooldown_days: int = 5
@@ -375,7 +375,7 @@ class ArenaBatchModel(BaseModel):
 
 @router.post("/arena/batch_create")
 def arena_batch_create(request: Request, body: ArenaBatchModel):
-    """擂台批量创建: 同本金/同费率一次性开 N 个账户, 各绑一条自动跟单规则。
+    """对比批量创建: 同本金/同费率一次性开 N 个账户, 各绑一条自动跟单规则。
 
     公平对比由构造保证 (同初始资金 + 同费用口径 + 同成交约束, 复用 paper 域
     的锁与校验)。先整体校验全部规则再落盘 — 任一来源非法即 400, 不留半创建
@@ -384,16 +384,16 @@ def arena_batch_create(request: Request, body: ArenaBatchModel):
     from app.strategy import paper_auto
 
     if not body.sources:
-        raise HTTPException(status_code=400, detail="至少需要一个参赛来源")
+        raise HTTPException(status_code=400, detail="至少需要一个来源")
     if len(body.sources) > 20:
-        raise HTTPException(status_code=400, detail="单次最多创建 20 个擂台账户")
+        raise HTTPException(status_code=400, detail="单次最多创建 20 个对比账户")
 
     data_dir = _data_dir(request)
     try:
         prepared = []
         for src in body.sources:
             rule = {
-                "name": f"擂台·{(src.name or '').strip() or src.match_id}",
+                "name": f"对比·{(src.name or '').strip() or src.match_id}",
                 "match_kind": src.match_kind,
                 "match_id": (src.match_id or "").strip(),
                 "side": src.side,
