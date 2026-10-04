@@ -959,6 +959,16 @@ class BacktestEngine:
             price = override if override is not None else exit_prices[time_id, asset_id]
             if not _valid_price(price):
                 return False, "sell_invalid_price"
+            if (
+                override is None
+                and config.exit_fill == "close_t"
+                and bool(matrix.limit_down_locked[time_id, asset_id])
+            ):
+                # close_t 按当日收盘价卖出: 收盘封死跌停(含一字)的卖队排队现实中
+                # 排不出去, 拦截并经 pending_exit 递延到下一可卖日 — 旧实现只拦
+                # 一字跌停, 尾盘封板股按跌停价"卖出"导致亏损被低估(涨停拒买的
+                # 镜像问题)。日内风控线(override)是盘中成交, 不受收盘封板影响。
+                return False, "sell_limit_down"
             if _one_price_limit(time_id, asset_id, "down"):
                 return False, "sell_limit_down"
             return True, ""
@@ -1003,13 +1013,14 @@ class BacktestEngine:
             reason: str,
             signal_date: str,
             override: float | None = None,
+            force: bool = False,
         ) -> bool:
             signal_id = (
                 _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
                 if reason == "signal" else None
             )
             minute_trigger = config.exit_fill == "signal_next_minute" and reason == "signal"
-            if minute_trigger and override is None:
+            if not force and minute_trigger and override is None:
                 if pos.get("pending_exit_next_open"):
                     open_price = float(matrix.open[time_id, asset_id])
                     override = open_price if _valid_price(open_price) else None
@@ -1025,7 +1036,11 @@ class BacktestEngine:
                         pos["blocked_exit_days"] += 1
                         _count("sell_minute_trigger_fallback")
                         return False
-            ok, blocked = _can_sell(time_id, asset_id, override)
+            if force:
+                # 期末强制记录: 已无未来数据可等, 跳过可卖性闸门按末日价格落账
+                ok, blocked = True, ""
+            else:
+                ok, blocked = _can_sell(time_id, asset_id, override)
             if not ok:
                 if not pos.get("pending_exit_reason"):
                     pos["pending_exit_reason"] = reason
@@ -1150,10 +1165,15 @@ class BacktestEngine:
                 high_price = float(matrix.high[future, asset_id])
                 if _valid_price(high_price):
                     pos["max_high"] = max(float(pos["max_high"]), high_price)
-            if not closed and not pos.get("pending_exit_reason"):
+            if not closed and future_times:
                 last_time = future_times[-1]
+                # 尾部仍被递延(封板/停牌)的持仓不再静默丢弃: 期末已无未来数据
+                # 可等, 按末日价格强制记录平仓, blocked_exit_days>0 保留"曾受阻"。
                 _try_close(
-                    pos, last_time, asset_id, "end", matrix.timestamp_labels[last_time][:10]
+                    pos, last_time, asset_id,
+                    str(pos.get("pending_exit_reason") or "end"),
+                    matrix.timestamp_labels[last_time][:10],
+                    force=True,
                 )
 
         result = self._calc_independent_candidate_result(
@@ -1382,6 +1402,16 @@ class BacktestEngine:
             exit_price = exit_price_override if exit_price_override is not None else exit_prices[idx]
             if not _valid_price(exit_price):
                 return False, "sell_invalid_price"
+            if (
+                exit_price_override is None
+                and config.exit_fill == "close_t"
+                and bool(limit_down_flags[idx])
+            ):
+                # close_t 按当日收盘价卖出: 收盘封死跌停(含一字)的卖队排队现实中
+                # 排不出去, 拦截并经 pending_exit 递延到下一可卖日 — 旧实现只拦
+                # 一字跌停, 尾盘封板股按跌停价"卖出"导致亏损被低估(涨停拒买的
+                # 镜像问题)。日内风控线(override)是盘中成交, 不受收盘封板影响。
+                return False, "sell_limit_down"
             if _is_one_price_limit(idx, "down"):
                 return False, "sell_limit_down"
             return True, ""
@@ -1432,8 +1462,12 @@ class BacktestEngine:
                         return "take_profit", tp_line
             return None, None
 
-        def _try_close(pos: dict, idx: int, reason: str, signal_date: str, exit_price_override: float | None = None) -> bool:
-            ok, block_reason = _can_sell(idx, exit_price_override)
+        def _try_close(pos: dict, idx: int, reason: str, signal_date: str, exit_price_override: float | None = None, force: bool = False) -> bool:
+            if force:
+                # 期末强制记录: 已无未来数据可等, 跳过可卖性闸门按末日价格落账
+                ok, block_reason = True, ""
+            else:
+                ok, block_reason = _can_sell(idx, exit_price_override)
             if not ok:
                 if not pos.get("pending_exit_reason"):
                     pos["pending_exit_reason"] = reason
@@ -1569,8 +1603,15 @@ class BacktestEngine:
             if not closed:
                 if last_idx == entry_idx:
                     _count("sell_no_future")
-                elif not pos.get("pending_exit_reason"):
-                    _try_close(pos, last_idx, "end", self._date_str(panel_dates[last_idx]))
+                else:
+                    # 尾部仍被递延(封板/停牌)的持仓不再静默丢弃: 期末已无未来数据
+                    # 可等, 按末日价格强制记录平仓, blocked_exit_days>0 保留"曾受阻"。
+                    _try_close(
+                        pos, last_idx,
+                        str(pos.get("pending_exit_reason") or "end"),
+                        self._date_str(panel_dates[last_idx]),
+                        force=True,
+                    )
 
         return self._calc_independent_candidate_result(trades, n_candidates, execution_stats)
 
@@ -2454,6 +2495,16 @@ class BacktestEngine:
             exit_price = exit_price_override if exit_price_override is not None else exit_prices[idx]
             if not _valid_price(exit_price):
                 return False, "sell_invalid_price"
+            if (
+                exit_price_override is None
+                and config.exit_fill == "close_t"
+                and bool(limit_down_flags[idx])
+            ):
+                # close_t 按当日收盘价卖出: 收盘封死跌停(含一字)的卖队排队现实中
+                # 排不出去, 拦截并经 pending_exit 递延到下一可卖日 — 旧实现只拦
+                # 一字跌停, 尾盘封板股按跌停价"卖出"导致亏损被低估(涨停拒买的
+                # 镜像问题)。日内风控线(override)是盘中成交, 不受收盘封板影响。
+                return False, "sell_limit_down"
             if _is_one_price_limit(idx, "down"):
                 return False, "sell_limit_down"
             return True, ""
