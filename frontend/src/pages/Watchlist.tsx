@@ -785,6 +785,7 @@ export function Watchlist() {
   const list = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
+    staleTime: 30_000,  // 清单慢变 (增删后 mutation 会失效), 减少切页重拉
   })
 
   const groupList = useQuery({

@@ -28,6 +28,8 @@ export function useCapabilityMatrix() {
   return useQuery({
     queryKey: QK.capabilityMatrix,
     queryFn: api.capabilityMatrix,
+    // 矩阵仅在路由偏好/插件装卸时变化 (设置页会失效): 5 分钟新鲜度减少切页重拉
+    staleTime: 5 * 60_000,
   })
 }
 
@@ -36,6 +38,7 @@ export function useSettings() {
   return useQuery({
     queryKey: QK.settings,
     queryFn: api.settings,
+    staleTime: 30_000,
   })
 }
 
@@ -44,6 +47,7 @@ export function usePreferences() {
   return useQuery({
     queryKey: QK.preferences,
     queryFn: api.preferences,
+    staleTime: 30_000,
   })
 }
 

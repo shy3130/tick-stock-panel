@@ -512,13 +512,27 @@ def regime_path(data_dir: Path) -> Path:
     return data_dir / REGIME_DIR / "part.parquet"
 
 
+# (path, mtime_ns, size) 签名缓存 — regime 三个端点每请求各读一次全量 parquet,
+# 重算/导入改变文件后 mtime 变化自动失效; Polars 帧由调用方只读 (操作均为函数式)
+_REGIME_HISTORY_CACHE: pl.DataFrame | None = None
+_REGIME_HISTORY_SIG: tuple[str, int, int] | None = None
+
+
 def load_regime_history(data_dir: Path) -> pl.DataFrame:
-    """读取全部 regime 时序; 不存在返回空 DataFrame。"""
+    """读取全部 regime 时序; 不存在返回空 DataFrame (带 mtime 签名缓存)。"""
+    global _REGIME_HISTORY_CACHE, _REGIME_HISTORY_SIG
     p = regime_path(data_dir)
-    if not p.exists():
-        return pl.DataFrame()
     try:
-        return pl.read_parquet(p)
+        sig = (str(p), p.stat().st_mtime_ns, p.stat().st_size)
+    except OSError:
+        return pl.DataFrame()
+    if _REGIME_HISTORY_CACHE is not None and sig == _REGIME_HISTORY_SIG:
+        return _REGIME_HISTORY_CACHE
+    try:
+        df = pl.read_parquet(p)
+        _REGIME_HISTORY_CACHE = df
+        _REGIME_HISTORY_SIG = sig
+        return df
     except Exception as e:  # noqa: BLE001
         logger.warning("load_regime_history failed: %s", e)
         return pl.DataFrame()

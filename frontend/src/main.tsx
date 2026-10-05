@@ -1,8 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
-import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
+import { QueryClient, QueryCache } from '@tanstack/react-query'
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
+import { createAppPersister, shouldPersistQuery, PERSIST_BUSTER } from './lib/queryPersist'
 // 字体自托管 (@fontsource): 替代 rsms.me / Google Fonts 渲染阻塞外链,
 // 内网/离线部署不再白屏等字体。权重覆盖 tailwind 全部用量 (300-900)。
 import '@fontsource/inter/300.css'
@@ -59,9 +61,18 @@ async function bootstrap() {
   const { router } = await import('./router')
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{
+          persister: createAppPersister(),
+          buster: PERSIST_BUSTER,
+          // 恢复超过 1 天的缓存直接丢弃 (慢变族一天内必然后台刷新过)
+          maxAge: 24 * 60 * 60 * 1000,
+          dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
+        }}
+      >
         <RouterProvider router={router} />
-      </QueryClientProvider>
+      </PersistQueryClientProvider>
     </React.StrictMode>,
   )
 }

@@ -644,6 +644,7 @@ function DeviationView({ onPreview }: {
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
     enabled: watchlistOnly,
+    staleTime: 30_000,
   })
 
   const toggleEnabled = (v: boolean) => {

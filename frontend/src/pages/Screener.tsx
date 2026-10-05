@@ -156,6 +156,7 @@ export function Screener() {
   const strategies = useQuery({
     queryKey: [...QK.screenerStrategies('all'), 'all'],
     queryFn: () => api.screenerStrategies(undefined, 'all'),
+    staleTime: 60_000,  // 策略池清单慢变 (与 Paper 同款), 减少切页重拉
   })
 
   // 激活策略自身的执行周期 (决定走缓存还是分钟实时跑)。
@@ -646,6 +647,7 @@ export function Screener() {
   const watchlist = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
+    staleTime: 30_000,
   })
   const watchlistSet = useMemo(() => {
     const symbols = watchlist.data?.symbols ?? []
