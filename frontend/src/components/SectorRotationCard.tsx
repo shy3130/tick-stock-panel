@@ -248,7 +248,9 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
       excludeSectors: rowsMode === 'custom' || excludeNames === null ? undefined : excludeNames,
       sortBy: rowsMode === 'custom' ? undefined : rowsMode,
     }),
-    refetchInterval: 30_000,
+    // 非连续竞价时段 (回放日期/盘前/盘后) 轮动矩阵不变, 降为 5 分钟兜底;
+    // 开盘后间隔函数随下次调度自动回到 30s (phase 计算与 isMarketSessionNow 同源)
+    refetchInterval: () => (isMarketSessionNow() ? 30_000 : 300_000),
     staleTime: 25_000,
   })
   const data = rotationQuery.data

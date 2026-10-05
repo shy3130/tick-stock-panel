@@ -5,10 +5,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { AlertTriangle, RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { ErrorState } from '@/components/ErrorState'
 import { Skeleton } from '@/components/data/Skeleton'
 import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type MonitorExtFieldItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { fmtPrice, fmtPct } from '@/lib/format'
+import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
@@ -159,8 +160,14 @@ export function Monitor() {
   const alertsQuery = useQuery({
     queryKey: [...QK.alerts(filter === 'all' ? undefined : filter), extColumnsParam ?? ''],
     queryFn: () => api.alertsList({ days: 7, limit: 500, source: filter === 'all' ? undefined : filter, extColumns: extColumnsParam }),
-    // 10s 轮询仅作 SSE strategy_alert 事件的兜底; 后台标签页不再拉 500 条全量
-    refetchInterval: 10000,
+    // 10s 轮询仅作 SSE strategy_alert 事件的兜底; 后台标签页不再拉 500 条全量。
+    // 非交易时段无新告警可拉, 降为 120s 探活; is_trading_hours 字段缺失时保持原频率
+    refetchInterval: () => (quoteStatus?.is_trading_hours === false ? 120_000 : 10_000),
+    // 切筛选 tab 沿用上一份同 source 记录, 整表不闪没 (跨 source 不透传)
+    placeholderData: (prev: any, prevQuery: any) => {
+      const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
+      return prevKey?.[1] === (filter === 'all' ? undefined : filter) ? prev : undefined
+    },
   })
   const total = alertsQuery.data?.total ?? 0
 
@@ -396,6 +403,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
             <Skeleton key={i} h="h-14" rounded="rounded-card" />
           ))}
         </div>
+      ) : alertsQuery.isError ? (
+        <ErrorState
+          title="触发记录加载失败"
+          hint="告警接口暂时不可用，请重试；持续失败请检查数据源配置与网络。"
+          retrying={alertsQuery.isFetching}
+          onRetry={() => alertsQuery.refetch()}
+        />
       ) : events.length === 0 ? (
         <EmptyState
           icon={Bell}
@@ -454,14 +468,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             )
                           })()}
                           {ev.price != null && (
-                            <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', _pct >= 0 ? 'text-danger' : 'text-bear')}>
+                            <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', priceColorClass(_pct))}>
                               {_pct >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                               {fmtPrice(ev.price)}
                             </span>
                           )}
                           {ev.change_pct != null && (
-                            <span className={cn('text-[11px] font-mono font-medium',
-                              _pct >= 0 ? 'text-danger' : 'text-bear')}>
+                            <span className={cn('text-[11px] font-mono font-medium', priceColorClass(_pct))}>
                               {fmtPct(_pct)}
                             </span>
                           )}
@@ -533,14 +546,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                           )
                         })()}
                         {ev.price != null && (
-                          <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', (ev.change_pct ?? 0) >= 0 ? 'text-danger' : 'text-bear')}>
+                          <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', priceColorClass(ev.change_pct ?? 0))}>
                             {(ev.change_pct ?? 0) >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                             {fmtPrice(ev.price)}
                           </span>
                         )}
                         {ev.change_pct != null && (
-                          <span className={cn('text-[11px] font-mono font-medium',
-                            ev.change_pct >= 0 ? 'text-danger' : 'text-bear')}>
+                          <span className={cn('text-[11px] font-mono font-medium', priceColorClass(ev.change_pct))}>
                             {fmtPct(ev.change_pct)}
                           </span>
                         )}
@@ -783,6 +795,13 @@ function RulesList({ rulesQuery, onEdit }: {
             <Skeleton key={i} h="h-16" rounded="rounded-card" />
           ))}
         </div>
+      ) : rulesQuery.isError ? (
+        <ErrorState
+          title="监控规则加载失败"
+          hint="规则接口暂时不可用，请重试；规则配置本身不受影响。"
+          retrying={rulesQuery.isFetching}
+          onRetry={() => rulesQuery.refetch()}
+        />
       ) : rules.length === 0 ? (
         <EmptyState
           icon={RadioTower}

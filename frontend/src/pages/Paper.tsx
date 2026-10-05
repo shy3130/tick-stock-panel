@@ -15,6 +15,7 @@ import * as echarts from 'echarts'
 import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, TrendingUp, Wallet, X } from 'lucide-react'
 import { api, type PaperCompareRow, type PaperFill, type PaperOrder } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useQuoteStatus } from '@/lib/useSharedQueries'
 import { cn } from '@/lib/cn'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/components/stock-table/primitives'
@@ -1063,8 +1064,15 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const [sort, setSort] = useState<{ key: CmpSortKey; desc: boolean }>({ key: 'pnl_pct', desc: true })
   const onSortCmp = (k: CmpSortKey) =>
     setSort(s => (s.key === k ? { key: k, desc: !s.desc } : { key: k, desc: k !== 'name' }))
-  // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)
-  const cmpQ = useQuery({ queryKey: QK.paperCompare, queryFn: api.paperCompare, refetchInterval: 60_000 })
+  // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)。
+  // 非交易时段榜单不变, 降为 5 分钟兜底 (字段缺失保持 60s)
+  const { data: quoteStatus } = useQuoteStatus()
+  const cmpQ = useQuery({
+    queryKey: QK.paperCompare,
+    queryFn: api.paperCompare,
+    refetchInterval: () => (quoteStatus?.is_trading_hours === false ? 300_000 : 60_000),
+    placeholderData: (prev: any) => prev,
+  })
 
   const rows = cmpQ.data?.accounts ?? []
   // 收益口径固定排序: 统计卡「收益最高」与净值叠加「收益前 8 名」不受表头排序影响
@@ -1623,6 +1631,22 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
 
   if (overviewQ.isLoading) {
     return <div className="py-8 text-center text-xs text-muted">加载中…</div>
+  }
+  // 请求失败与「未开户」分开呈现: 失败给错误态 + 重试, 不伪装成未初始化
+  if (overviewQ.isError || !overviewQ.data) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-8">
+        <span className="text-xs text-secondary">账户数据加载失败，请重试</span>
+        <button
+          type="button"
+          onClick={() => overviewQ.refetch()}
+          disabled={overviewQ.isFetching}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-accent transition-colors hover:bg-elevated disabled:opacity-50"
+        >
+          重试
+        </button>
+      </div>
+    )
   }
   const ov = overviewQ.data
   if (!ov?.initialized) {

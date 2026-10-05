@@ -28,7 +28,7 @@ import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { useReviewState } from '@/lib/useReviewStore'
 import {
-  startReviewGeneration, resetReview, isReviewGenerating,
+  startReviewGeneration, resetReview, isReviewGenerating, cancelReviewGeneration,
   type ReviewPhase,
 } from '@/lib/reviewStore'
 
@@ -41,10 +41,6 @@ function fmtPctAlready(v: number | null | undefined, digits = 2, withSign = fals
   if (v == null || Number.isNaN(v)) return '—'
   const sign = withSign && v > 0 ? '+' : ''
   return `${sign}${v.toFixed(digits)}%`
-}
-function pctClass(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v) || v === 0) return 'text-muted'
-  return v > 0 ? 'text-bull' : 'text-bear'
 }
 // A 股惯例: 强势=红, 弱式=绿(对齐 Dashboard scoreColor)
 function scoreColor(v: number | null | undefined): string {
@@ -679,7 +675,7 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
         {indices.map(idx => (
           <div key={idx.symbol} className="flex items-center gap-1">
             <span className="text-[11px] text-secondary">{indexShort(idx.name, idx.symbol)}</span>
-            <span className={cn('font-mono text-[11px] font-semibold tabular-nums', pctClass(idx.change_pct))}>
+            <span className={cn('font-mono text-[11px] font-semibold tabular-nums', priceColorClass(idx.change_pct))}>
               {fmtPctAlready(idx.change_pct, 2, true)}
             </span>
           </div>
@@ -829,6 +825,14 @@ function ReportPanel({
             </div>
             <div className="text-sm text-foreground">AI 正在复盘今日盘面…</div>
             <div className="text-xs text-secondary">分析指数结构 · 连板梯队 · 板块轮动 · 资金情绪</div>
+            <button
+              type="button"
+              onClick={cancelReviewGeneration}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+              取消生成
+            </button>
           </div>
         ) : (
           <div className="prose prose-invert max-w-none">
@@ -927,7 +931,7 @@ function HistoryPanel({
                             return pcts.map((p) => (
                               <span key={p.name} className="inline-flex items-center gap-0.5 text-[10px]">
                                 <span className="text-secondary">{p.name}</span>
-                                <span className={cn('font-mono font-medium tabular-nums', pctClass(p.pctNum))}>{p.pctStr}</span>
+                                <span className={cn('font-mono font-medium tabular-nums', priceColorClass(p.pctNum))}>{p.pctStr}</span>
                               </span>
                             ))
                           })()

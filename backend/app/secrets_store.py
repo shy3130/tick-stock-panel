@@ -7,6 +7,7 @@ UI 改 Key 时只动这个文件,不动 .env。
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -15,6 +16,11 @@ from pathlib import Path
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
+
+# (mtime_ns, size) 签名缓存 — 与 preferences.load 同模式。
+# 实时行情每轮的 webhook/邮件判定会多次读 secrets, 避免每次全文件读+JSON 解析。
+_cache: dict | None = None
+_cache_sig: tuple[int, int] | None = None
 
 
 def _path() -> Path:
@@ -25,13 +31,25 @@ def _path() -> Path:
 
 
 def load() -> dict:
+    """读取 secrets.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
+    global _cache, _cache_sig
     p = _path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("secrets.json malformed: %s", e)
-    return {}
+    try:
+        sig = (p.stat().st_mtime_ns, p.stat().st_size)
+    except OSError:
+        return {}
+    if _cache is not None and sig == _cache_sig:
+        return copy.deepcopy(_cache)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("secrets.json malformed: %s", e)
+        return {}
+    _cache = data
+    _cache_sig = sig
+    return copy.deepcopy(_cache)
 
 
 def save(updates: dict) -> dict:

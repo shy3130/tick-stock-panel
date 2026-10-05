@@ -85,13 +85,16 @@ export async function startReviewGeneration(
   notify()
 
   abortCtrl = new AbortController()
+  // 捕获 signal 局部引用: 外部中止 (查看历史/取消) 会把 abortCtrl 置空,
+  // 循环与 catch 若仍解引用模块变量会空指针
+  const signal = abortCtrl.signal
   let buf = ''
   let failed = false
   let doneMeta: ReviewMeta | null = null
 
   try {
     for await (const evt of api.reviewStream(asOf, focus)) {
-      if (abortCtrl.signal.aborted) break
+      if (signal.aborted) break
       if (evt.type === 'meta') {
         doneMeta = evt
         state = { ...state, meta: evt }
@@ -110,8 +113,9 @@ export async function startReviewGeneration(
         notify()
       }
     }
-    // 流正常结束但无 done 事件,按 done 处理
-    if (buf && !failed) {
+    // 流正常结束但无 done 事件,按 done 处理; 被中止的流半途内容不归档,
+    // 状态由中止发起方 (查看历史/取消按钮) 自行设定, 这里不动
+    if (buf && !failed && !signal.aborted) {
       state = { ...state, phase: 'done' }
       notify()
       // 自动归档(仅手动流: 定时流由后端归档, SSE done 不走这里)
@@ -120,7 +124,7 @@ export async function startReviewGeneration(
       }
     }
   } catch (e: any) {
-    if (!abortCtrl.signal.aborted) {
+    if (!signal.aborted) {
       state = { ...state, error: friendlyStreamError(e?.message) || '复盘失败', phase: 'error' }
       notify()
     }
@@ -133,7 +137,14 @@ export async function startReviewGeneration(
 /** 中断当前生成(供"查看历史"等场景主动中断流)。 */
 export function abortReviewGeneration(): void {
   abortCtrl?.abort()
+}
+
+/** 取消当前生成并回到 idle (取消按钮): 中止流 + 清空面板, 半途内容不归档。 */
+export function cancelReviewGeneration(): void {
+  abortCtrl?.abort()
   abortCtrl = null
+  state = { ...INITIAL }
+  notify()
 }
 
 /** 设置当前查看的历史报告(把 store 状态切到 done + 该报告内容)。 */

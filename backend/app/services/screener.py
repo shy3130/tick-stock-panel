@@ -353,10 +353,15 @@ class ScreenerService:
                     target_date, lookback_days, elapsed, len(df_full))
 
         _history_cache[cache_key] = (now, df_full)
+        # TTL 先清一轮; 仍超上限时按最旧无条件淘汰 — 否则两分钟内出现 >10 个
+        # 不同 (asset_type, date, lookback) 键时全部新鲜、零逐出, 数 GB 宽帧驻留
         if len(_history_cache) > 10:
             expired = [k for k, (ts, _) in _history_cache.items() if now - ts > _HISTORY_CACHE_TTL]
             for k in expired:
                 del _history_cache[k]
+            while len(_history_cache) > 10:
+                oldest = min(_history_cache, key=lambda k: _history_cache[k][0])
+                del _history_cache[oldest]
 
         return df_full
 

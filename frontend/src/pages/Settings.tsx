@@ -3,22 +3,21 @@
  *
  * 通过 URL query param ?tab=xxx 同步 Tab 状态。
  */
-import { useState } from 'react'
+import { Suspense, lazy, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BarChart3, Database, KeyRound, Radio, SlidersHorizontal, Sparkles, Settings2, PanelLeftClose, PanelLeftOpen, Clock3 } from 'lucide-react'
-import { SettingsAIPanel } from './settings/AI'
-import { SettingsApiTokensPanel } from './settings/ApiTokens'
-import { SettingsMonitoringPanel } from './settings/Monitoring'
-import { SettingsExtPagesPanel } from './settings/ExtPages'
-import { SettingsMenuSettingsPanel } from './settings/MenuSettings'
-import { SettingsTimeoutPanel } from './settings/Timeout'
-import { SettingsSystemPanel } from './settings/System'
-import { SettingsDataSourcesPanel } from './settings/DataSources'
+// 面板按 tab 按需加载: 8 个面板源码 270KB+, 同步打包会让设置页 chunk 膨胀
+const SettingsAIPanel = lazy(() => import('./settings/AI').then(m => ({ default: m.SettingsAIPanel })))
+const SettingsApiTokensPanel = lazy(() => import('./settings/ApiTokens').then(m => ({ default: m.SettingsApiTokensPanel })))
+const SettingsMonitoringPanel = lazy(() => import('./settings/Monitoring').then(m => ({ default: m.SettingsMonitoringPanel })))
+const SettingsExtPagesPanel = lazy(() => import('./settings/ExtPages').then(m => ({ default: m.SettingsExtPagesPanel })))
+const SettingsMenuSettingsPanel = lazy(() => import('./settings/MenuSettings').then(m => ({ default: m.SettingsMenuSettingsPanel })))
+const SettingsTimeoutPanel = lazy(() => import('./settings/Timeout').then(m => ({ default: m.SettingsTimeoutPanel })))
+const SettingsSystemPanel = lazy(() => import('./settings/System').then(m => ({ default: m.SettingsSystemPanel })))
+const SettingsDataSourcesPanel = lazy(() => import('./settings/DataSources').then(m => ({ default: m.SettingsDataSourcesPanel })))
 import { PageHeader } from '@/components/PageHeader'
 import { cn } from '@/lib/cn'
-
-import type { ComponentType } from 'react'
 
 // ===== Tab 定义 =====
 
@@ -123,9 +122,11 @@ export function Settings() {
             transition={{ duration: 0.15 }}
             className="min-w-0 flex-1"
           >
-            {activeTab.key === 'monitoring'
-            ? <SettingsMonitoringPanel highlight={highlight} />
-            : <activeTab.panel highlight={highlight} />}
+            <Suspense fallback={<div className="py-12 text-center text-xs text-muted">加载中…</div>}>
+              {activeTab.key === 'monitoring'
+                ? <SettingsMonitoringPanel highlight={highlight} />
+                : <activeTab.panel highlight={highlight} />}
+            </Suspense>
           </motion.div>
         </div>
       </div>

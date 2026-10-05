@@ -299,18 +299,6 @@ export interface QuoteMap {
   [key: string]: unknown
 }
 
-/** 构建 symbol → quote 的快速查找 */
-export function buildQuoteMap(quotes: QuoteMap[]): Map<string, QuoteMap> {
-  const map = new Map<string, QuoteMap>()
-  for (const q of quotes) {
-    if (q.symbol) map.set(q.symbol, q)
-    // 也用纯数字代码做索引
-    const code = q.symbol?.replace(/\.\w+$/, '')
-    if (code) map.set(code, q)
-  }
-  return map
-}
-
 /** 为分组计算行情聚合指标 */
 export function computeQuoteMetrics(
   stocks: StockRow[],

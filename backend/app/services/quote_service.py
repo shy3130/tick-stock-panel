@@ -78,6 +78,14 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="feishu-webhook")
 
 
+def shutdown_webhook_executor() -> None:
+    """应用关闭时放弃仍在排队的投递并关闭线程池 (lifespan shutdown 调用)。
+
+    不调用则 daemon 工作线程随进程退出, 排队中的 webhook 静默丢失。
+    """
+    _WEBHOOK_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+
+
 class QuoteSubscriber:
     """一个 SSE 连接对应一个订阅者: 独立事件 + 独立队列。
 
@@ -215,6 +223,10 @@ class QuoteService:
         # 串行化行情拉取: 手动 POST /refresh 与后台轮询线程可能并发调用
         # _fetch_quotes, 两者同时写同一批 parquet/缓存会互相覆盖
         self._fetch_lock = threading.Lock()
+        # 监控评估专用锁: 评估已移出 _fetch_lock (评估链含告警落盘/模拟盘逐账户
+        # IO/webhook 判定, 留在取数锁内会阻塞下一轮拉取与手动刷新), 此锁保证
+        # 两轮评估不并发 (原先由取数锁隐式串行)。
+        self._evaluate_lock = threading.Lock()
         self._running = False
         self._enabled = False      # 全局开关 (持久化到 preferences)
         # 暂停态: 盘后管道/数据修正运行期间临时暂停取数, 防止与管道写同一批 parquet 竞态。
@@ -644,21 +656,46 @@ class QuoteService:
                 time.sleep(0.5)
                 waited += 0.5
 
+    def _cleanup_day_scoped_state(self) -> None:
+        """按日清理 final 同步状态 (键为 (date, phase), 严格无界累积)。
+
+        旧日期键不再被 _final_sync_key 命中, 新交易日首次拉取时清掉;
+        放在 _fetch_quotes 入口而非 _update_volume_delta, 避免依赖最小实例
+        (测试用 __new__ 构造) 不具备的属性。
+        """
+        today = cn_today()
+        if self._final_sync_done and any(k[0] != today for k in self._final_sync_done):
+            self._final_sync_done = {k for k in self._final_sync_done if k[0] == today}
+        if self._final_sync_failed and any(k[0] != today for k in self._final_sync_failed):
+            self._final_sync_failed = {k: v for k, v in self._final_sync_failed.items() if k[0] == today}
+
     def _fetch_quotes(self, *, final: bool = False, final_boundary_ms: int | None = None) -> bool:
         """拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。
 
         final_boundary_ms: final 定版的边界时间戳 (ms)。传入时快照时间戳未达边界
         的本轮不落盘 (见 _process_full_market_records)。
         """
+        self._cleanup_day_scoped_state()
         with self._fetch_lock:
             before = self._fetched_at
             if final:
                 logger.info("最终行情同步开始")
-            self._fetch_full_market_quotes(final_boundary_ms=final_boundary_ms)
-            return self._fetched_at > before
+            snapshot = self._fetch_full_market_quotes(final_boundary_ms=final_boundary_ms)
+            updated = self._fetched_at > before
+        # 监控评估移出取数锁执行: 评估输入是本轮快照 (daily_df/quote_extra),
+        # 离锁执行结果不变; 时序不变式 (enriched 替换后才评估) 仍由调用顺序保证。
+        if snapshot is not None:
+            with self._evaluate_lock:
+                self._evaluate_monitors(*snapshot)
+        return updated
 
-    def _fetch_full_market_quotes(self, final_boundary_ms: int | None = None) -> None:
-        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
+    def _fetch_full_market_quotes(
+        self, final_boundary_ms: int | None = None
+    ) -> tuple[pl.DataFrame, pl.DataFrame | None] | None:
+        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
+
+        返回 (daily_df, quote_extra) 快照供调用方在锁外评估监控; 空/失败轮返回 None。
+        """
         from app.services import preferences
 
         provider_name = preferences.get_realtime_data_provider()
@@ -697,14 +734,13 @@ class QuoteService:
                 except Exception as e:  # noqa: BLE001
                     logger.warning("自定义实时行情拉取失败: %s", e)
                     return
-                self._process_full_market_records(
+                return self._process_full_market_records(
                     records,
                     t0=t0,
                     now_ts=now_ts,
                     replace_index_cache=replace_index_cache,
                     final_boundary_ms=final_boundary_ms,
                 )
-                return
             # 自定义源未配置 realtime → 回退 TickFlow
 
         from app.tickflow.client import get_paid_realtime_client
@@ -791,7 +827,7 @@ class QuoteService:
                 "session": q.get("session"),
             })
 
-        self._process_full_market_records(
+        return self._process_full_market_records(
             records, t0=t0, now_ts=now_ts, final_boundary_ms=final_boundary_ms
         )
 
@@ -803,7 +839,7 @@ class QuoteService:
         now_ts: float,
         replace_index_cache: bool = True,
         final_boundary_ms: int | None = None,
-    ) -> None:
+    ) -> tuple[pl.DataFrame, pl.DataFrame | None] | None:
         """把全市场 records 写盘并增量计算 enriched。
 
         final_boundary_ms (final 定版边界) 传入时, 快照最大时间戳未达边界的本轮
@@ -914,7 +950,9 @@ class QuoteService:
         self._broadcast_quote_updated()
 
         # ---- 策略监控 + 告警评估 ----
-        self._evaluate_monitors(daily_df, quote_extra)
+        # 由调用方 (_fetch_quotes) 持 _evaluate_lock 在取数锁外执行;
+        # 返回本轮快照 (daily_df, quote_extra) 作为评估输入
+        return daily_df, quote_extra
 
     # ================================================================
     # 工具

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import {
@@ -17,6 +17,7 @@ import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/components/stock-table/primitives'
 import { PageHeader } from '@/components/PageHeader'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { useQuoteStatus } from '@/lib/useSharedQueries'
 
 /**
  * 异动监控 — 全时段异动中心, 按交易时间线分三个 tab:
@@ -385,10 +386,13 @@ function IntradayView({ onPreview }: {
   const [query, setQuery] = useState('')
   const [excludeSt, setExcludeSt] = useState(true)
 
+  // 交易时段感知 (共享 Layout 的同 key 缓存, 无额外请求): 非交易时段停轮询
+  const { data: quoteStatus } = useQuoteStatus()
   const q = useQuery({
     queryKey: QK.abnormalIntraday(500),
     queryFn: () => api.abnormalIntraday(500),
-    refetchInterval: REFRESH_MS,
+    // 非交易时段盘中信号不变, 60s → 5min 兜底 (开盘后自动恢复); 字段缺失保持原频率
+    refetchInterval: () => (quoteStatus?.is_trading_hours === false ? 300_000 : REFRESH_MS),
   })
   const data = q.data
   const counts = data?.counts ?? {}
@@ -411,6 +415,10 @@ function IntradayView({ onPreview }: {
 
   // 切股导航列表: 当前筛选后的行序
   const navItems = useMemo(() => toNavItems(rows), [rows])
+  // 行点击回调恒稳定 (ref 读导航列表): 行内闭包不随筛选/轮询重建, memo 行组件生效
+  const navItemsRef = useRef(navItems)
+  navItemsRef.current = navItems
+  const handlePreviewRow = useCallback((row: AbnormalIntradayRow) => onPreview(row, navItemsRef.current), [onPreview])
 
   const total = (data?.rows ?? []).length
 
@@ -485,11 +493,28 @@ function IntradayView({ onPreview }: {
           <tbody>
             {q.isLoading ? (
               <tr><td colSpan={8} className="px-3 py-10 text-center text-muted">正在加载盘中信号…</td></tr>
+            ) : q.isError ? (
+              <tr>
+                <td colSpan={8} className="px-3 py-10 text-center">
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-xs text-secondary">盘中信号加载失败，请检查数据源与网络</span>
+                    <button
+                      type="button"
+                      onClick={() => q.refetch()}
+                      disabled={q.isFetching}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-accent transition-colors hover:bg-elevated disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      重试
+                    </button>
+                  </div>
+                </td>
+              </tr>
             ) : rows.length === 0 ? (
               <tr><td colSpan={8} className="px-3 py-10 text-center text-muted">{data ? '当前筛选下没有命中标的' : '暂无数据'}</td></tr>
             ) : (
               rows.map((r, i) => (
-                <IntradayRowView key={r.symbol} row={r} rank={i + 1} onPreview={() => onPreview(r, navItems)} />
+                <IntradayRowView key={r.symbol} row={r} rank={i + 1} onPreview={handlePreviewRow} />
               ))
             )}
           </tbody>
@@ -523,10 +548,10 @@ function SigChip({ active, onClick, label, count, cls }: {
   )
 }
 
-function IntradayRowView({ row, rank, onPreview }: {
+const IntradayRowView = memo(function IntradayRowView({ row, rank, onPreview }: {
   row: AbnormalIntradayRow
   rank: number
-  onPreview: () => void
+  onPreview: (row: AbnormalIntradayRow) => void
 }) {
   const board = boardTag(row.symbol)
   const clu = row.consecutive_limit_ups ?? 0
@@ -536,7 +561,7 @@ function IntradayRowView({ row, rank, onPreview }: {
       <td className="px-2 py-1.5">
         <button
           type="button"
-          onClick={onPreview}
+          onClick={() => onPreview(row)}
           title="查看个股详情"
           className="flex min-w-0 items-center gap-1.5 text-left"
         >
@@ -578,7 +603,7 @@ function IntradayRowView({ row, rank, onPreview }: {
       </td>
     </tr>
   )
-}
+})
 
 // ================================================================
 // 偏移异动 tab (原有异动边缘监控, 逻辑保持不变)
@@ -604,11 +629,15 @@ function DeviationView({ onPreview }: {
   // 默认过滤 ST/*ST 风险警示股票 (口径与后端 is_st_name 一致: 名称含 ST)
   const [excludeSt, setExcludeSt] = useState(true)
 
+  const { data: quoteStatus } = useQuoteStatus()
   const overview = useQuery({
     queryKey: QK.abnormalOverview(minCloseness, 300),
     queryFn: () => api.abnormalOverview(minCloseness, 300),
     enabled, // 关闭时零计算
-    refetchInterval: enabled ? REFRESH_MS : false,
+    // 非交易时段偏离快照不变, 60s → 5min 兜底 (开盘后自动恢复); 字段缺失保持原频率
+    refetchInterval: () => (enabled && quoteStatus?.is_trading_hours !== false ? REFRESH_MS : 300_000),
+    // 拖动 closeness 滑杆换 key 时沿用上一份结果, 不整表闪空
+    placeholderData: (prev: any) => prev,
   })
   // 自选过滤在关闭 (查看上次结果) 时也可用: 自选列表是轻量接口, 不涉及全市场计算
   const watchlist = useQuery({
@@ -668,6 +697,10 @@ function DeviationView({ onPreview }: {
 
   // 切股导航列表: 当前筛选后的行序
   const navItems = useMemo(() => toNavItems(rows), [rows])
+  // 行点击回调恒稳定 (ref 读导航列表): 搜索/筛选敲键时 memo 行组件不再全表重渲染
+  const navItemsRef = useRef(navItems)
+  navItemsRef.current = navItems
+  const handlePreviewRow = useCallback((row: AbnormalRow) => onPreview(row, navItemsRef.current), [onPreview])
 
   const counts = view?.counts
   const updating = overview.isFetching
@@ -896,6 +929,23 @@ function DeviationView({ onPreview }: {
                       正在计算全市场偏离值…
                     </td>
                   </tr>
+                ) : enabled && overview.isError ? (
+                  <tr>
+                    <td colSpan={9} className="px-3 py-10 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <span className="text-xs text-secondary">偏离计算请求失败，请重试</span>
+                        <button
+                          type="button"
+                          onClick={() => overview.refetch()}
+                          disabled={overview.isFetching}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-accent transition-colors hover:bg-elevated disabled:opacity-50"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          重试
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
                 ) : rows.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-3 py-10 text-center text-muted">
@@ -908,7 +958,7 @@ function DeviationView({ onPreview }: {
                       key={r.symbol}
                       row={r}
                       rank={i + 1}
-                      onPreview={() => onPreview(r, navItems)}
+                      onPreview={handlePreviewRow}
                     />
                   ))
                 )}
@@ -963,10 +1013,10 @@ function dominantWindow(r: AbnormalRow): { key: WindowKey; value: number; thresh
   return best
 }
 
-function AbnormalRowView({ row, rank, onPreview }: {
+const AbnormalRowView = memo(function AbnormalRowView({ row, rank, onPreview }: {
   row: AbnormalRow
   rank: number
-  onPreview: () => void
+  onPreview: (row: AbnormalRow) => void
 }) {
   const board = boardTag(row.symbol)
   const dominant = dominantWindow(row)
@@ -978,7 +1028,7 @@ function AbnormalRowView({ row, rank, onPreview }: {
         {/* 仅代码/名称可点击打开详情 (与自选列表一致), 其余单元格不可点 */}
         <button
           type="button"
-          onClick={onPreview}
+          onClick={() => onPreview(row)}
           title="查看个股详情"
           className="flex min-w-0 items-center gap-1.5 text-left"
         >
@@ -1043,7 +1093,7 @@ function AbnormalRowView({ row, rank, onPreview }: {
       </td>
     </tr>
   )
-}
+})
 
 function StatusChip({ label, count, tone }: { label: string; count?: number; tone: 'danger' | 'warning' | 'muted' }) {
   const toneCls =

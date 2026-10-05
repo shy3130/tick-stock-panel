@@ -1528,6 +1528,35 @@ class KlineRepository:
             if start >= cache_date:
                 return self._filter_cached_batch(cached, symbols, columns)
 
+        # 复用 300 天预计算 enriched 历史缓存 (与单股 get_daily 同源同判据):
+        # 自选迷你蜡烛窗口 (days≤60) 完全落在缓存内, 免整树 glob 扫描;
+        # 覆盖不足 (窗口早于缓存起点 / symbol 不在缓存) 时回退扫描路径。
+        df = pl.DataFrame()
+        hist = self._enriched_history_cache
+        if hist is not None and not hist.is_empty() and "date" in hist.columns:
+            hist_min = self._enriched_history_start
+            hist_max = hist["date"].max()
+            if hist_min is not None and hist_min <= start and hist_max >= start:
+                df = hist.filter(
+                    pl.col("symbol").is_in(symbols)
+                    & (pl.col("date") >= start)
+                    & (pl.col("date") <= end)
+                )
+
+        if not df.is_empty():
+            # 用实时缓存覆盖最新日 (与单股 get_daily 的覆盖逻辑同口径)
+            if cached is not None and not cached.is_empty() and cache_date and start <= cache_date <= end:
+                cached_part = self._filter_cached_batch(cached, symbols, None)
+                if not cached_part.is_empty():
+                    df = df.filter(pl.col("date") != cache_date)
+                    common_cols = [c for c in df.columns if c in cached_part.columns]
+                    df = pl.concat([df.select(common_cols), cached_part.select(common_cols)])
+            if columns and not df.is_empty():
+                existing = [c for c in columns if c in df.columns]
+                df = df.select(existing)
+            if not df.is_empty():
+                return df.sort(["symbol", "date"])
+
         # 回退 scan_parquet
         return self._scan_daily_batch(symbols, start, end, columns)
 
@@ -1623,16 +1652,28 @@ class KlineRepository:
             logger.warning("分钟复权投影失败, 按原始数据返回: %s", e)
             return df
 
+    def _minute_partition_path(self, asset_type: str, trade_date: date) -> str | None:
+        """单日分钟K分区文件路径; 不存在 (含存量未迁移的旧 symbol= 分区) 返回 None。"""
+        base = self._minute_glob_for(asset_type).rsplit("/", 2)[0]
+        p = f"{base}/date={trade_date.isoformat()}/part.parquet"
+        return p if Path(p).exists() else None
+
     def get_minute(
         self,
         symbol: str,
         trade_date: date,
         asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """分钟K查询 — Polars scan_parquet + predicate pushdown。"""
+        """分钟K查询 — 优先直读当日分区文件 (免全树 footer IO), 分区缺失回退全树扫描。
+
+        该查询在自选分时热路径上被每 tick、每客户端调用, 全树 glob 扫描成本随
+        本地分钟历史线性增长; 单日数据按约定完整落在 date= 分区内, 谓词不变。
+        """
         try:
+            part = self._minute_partition_path(asset_type, trade_date)
+            source = part if part is not None else self._minute_glob_for(asset_type)
             df = guarded_collect(
-                pl.scan_parquet(self._minute_glob_for(asset_type)).filter(
+                pl.scan_parquet(source).filter(
                     (pl.col("symbol") == symbol)
                     & (pl.col("datetime").dt.date() == trade_date)
                 ).sort("datetime")
@@ -1648,16 +1689,18 @@ class KlineRepository:
         trade_date: date,
         asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """批量分钟K查询 — 多 symbol 一次 scan_parquet。
+        """批量分钟K查询 — 多 symbol 一次 scan, 优先直读当日分区文件。
 
         用于自选列表分时图: 一次 predicate pushdown 读多只股票当日分钟K,
-        避免逐只查询的 N 次 I/O。
+        避免逐只查询的 N 次 I/O; 单日直读避免全树扫描 (同 get_minute)。
         """
         if not symbols:
             return pl.DataFrame()
         try:
+            part = self._minute_partition_path(asset_type, trade_date)
+            source = part if part is not None else self._minute_glob_for(asset_type)
             df = guarded_collect(
-                pl.scan_parquet(self._minute_glob_for(asset_type)).filter(
+                pl.scan_parquet(source).filter(
                     pl.col("symbol").is_in(symbols)
                     & (pl.col("datetime").dt.date() == trade_date)
                 ).sort(["symbol", "datetime"])

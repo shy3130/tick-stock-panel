@@ -11,7 +11,10 @@ quote_service,depth_service}` 的依赖改为显式参数。
 """
 from __future__ import annotations
 
+import copy
+import json
 import math
+import os
 import re
 from datetime import date
 from typing import Any
@@ -174,10 +177,30 @@ def _ext_files(data_dir, config: ExtConfig) -> list[str]:
     return [str(p) for p in sorted(base.glob("*.parquet")) if p.is_file()]
 
 
+# (文件集+mtime 签名, 维度字段) → 解析结果缓存 — 总览每次重建都重读 ext parquet,
+# 与 api/screener._load_ext_value_maps 同模式; 新导入/覆盖文件因 mtime 变化自动失效
+_EXT_ROWS_CACHE: dict[tuple, list[dict]] = {}
+_EXT_ROWS_CACHE_MAX = 64
+
+
 def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[dict]:
     files = _ext_files(data_dir, config)
     if not files:
         return []
+    try:
+        sig = (
+            tuple((f, os.stat(f).st_mtime_ns) for f in files),
+            config.mode,
+            json.dumps(config.symbol_map, sort_keys=True, default=str),
+            json.dumps(config.code_map, sort_keys=True, default=str),
+            dimension_field,
+        )
+    except OSError:
+        sig = None
+    if sig is not None:
+        cached = _EXT_ROWS_CACHE.get(sig)
+        if cached is not None:
+            return copy.deepcopy(cached)
     try:
         df = pl.read_parquet(files, hive_partitioning=True)
     except TypeError:
@@ -203,7 +226,12 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
     for col in [dimension_field, *symbol_cols]:
         if col in df.columns and col not in cols:
             cols.append(col)
-    return df.select(cols).to_dicts()
+    rows = df.select(cols).to_dicts()
+    if sig is not None:
+        if len(_EXT_ROWS_CACHE) >= _EXT_ROWS_CACHE_MAX:
+            _EXT_ROWS_CACHE.clear()
+        _EXT_ROWS_CACHE[sig] = rows
+    return copy.deepcopy(rows)
 
 
 def _dimension_values(raw: Any) -> list[str]:

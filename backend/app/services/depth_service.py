@@ -210,20 +210,26 @@ class DepthService:
         persist=True: 盘后定版, 写 depth5 parquet
         persist=False: 盘中轮询, 只更新内存缓存
 
-        全程持 _fetch_lock: 请求线程 (run_once)、轮询线程、finalize 不会交叉写 parquet。
+        网络拉取在 _fetch_lock 外执行 (SDK 批量最坏数秒, 全程持锁会让请求线程
+        run_once/轮询/finalize 互相阻塞); 锁内只做 sealed 计算与缓存替换/落盘,
+        parquet 写串行化语义不变。
         """
-        with self._fetch_lock:
-            self._fetch_and_seal_locked(persist)
-
-    def _fetch_and_seal_locked(self, persist: bool = False) -> None:
-        """_fetch_and_seal 的实际逻辑, 须在持有 _fetch_lock 时调用。"""
-        if not self._repo:
+        prepared = self._fetch_depth_snapshot()
+        if prepared is None:
             return
+        depth_data, syms_up, syms_down, enriched_date = prepared
+        with self._fetch_lock:
+            self._seal_locked(depth_data, syms_up, syms_down, enriched_date, persist)
+
+    def _fetch_depth_snapshot(self):
+        """锁外阶段: 读 enriched 涨跌停名单 + 批量拉取 depth (网络调用不进锁)。"""
+        if not self._repo:
+            return None
 
         # 只读 enriched 内存缓存(线程安全, 避免和 quote_service 写盘竞态)
         enriched, enriched_date = self._repo.get_enriched_latest()
         if enriched.is_empty():
-            return
+            return None
 
         # 筛涨跌停名单(用 fill_null 防止列缺失)
         syms_up: list[str] = []
@@ -240,14 +246,17 @@ class DepthService:
         all_syms = list(dict.fromkeys(syms_up + syms_down))  # 去重保序
         if not all_syms:
             logger.debug("depth sealed: 当日无涨跌停股, 跳过")
-            return
+            return None
 
         # 拉 depth(涨跌停一次拉, 按 capset batch 切片)
         depth_data = self._call_depth_batch(all_syms)
         if not depth_data:
             logger.warning("depth sealed: depth.batch 返回空")
-            return
+            return None
+        return depth_data, syms_up, syms_down, enriched_date
 
+    def _seal_locked(self, depth_data, syms_up, syms_down, enriched_date, persist) -> None:
+        """_fetch_and_seal 的计算/缓存/落盘阶段, 须在持有 _fetch_lock 时调用。"""
         up_set = set(syms_up)
         down_set = set(syms_down)
         now_perf = time.perf_counter()

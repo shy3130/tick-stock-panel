@@ -814,15 +814,21 @@ export function Watchlist() {
     enabled: (list.data?.symbols.length ?? 0) > 0,
   })
 
-  const symbols = enriched.data?.rows?.map((r: any) => r.symbol) ?? []
-  const symbolsKey = symbols.join(',')
-
+  // symbol 派生只依赖 enriched.data: 旧写法 symbols 每次渲染都是新引用 (击穿 memo)
+  // 且 filter×find 为 O(n²), 实时行情每 tick 重渲染时放大为每秒全量比较。
   // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
-  const minuteSymbols = useMemo(
-    () => symbols.filter((s: string) => (enriched.data?.rows ?? []).find((r: any) => r.symbol === s)?.asset_type !== 'index'),
-    [symbols, enriched.data],
-  )
-  const minuteSymbolsKey = minuteSymbols.join(',')
+  const enrichedRows = enriched.data?.rows
+  const { symbols, symbolsKey, minuteSymbols, minuteSymbolsKey } = useMemo(() => {
+    const rows = enrichedRows ?? []
+    const syms = rows.map((r: any) => r.symbol)
+    const nonIndex = rows.filter((r: any) => r.asset_type !== 'index').map((r: any) => r.symbol)
+    return {
+      symbols: syms,
+      symbolsKey: syms.join(','),
+      minuteSymbols: nonIndex,
+      minuteSymbolsKey: nonIndex.join(','),
+    }
+  }, [enrichedRows])
 
   // 实时行情状态 (提前到此处: 分时轮询判断需要 realtimeRunning)
   const quoteStatus = useQuoteStatus()
@@ -834,6 +840,9 @@ export function Watchlist() {
     queryFn: () => api.klineDailyBatch(symbols, candleDays),
     enabled: dailyKVisible && symbols.length > 0 && !groupCardsOpen,
     staleTime: 5 * 60_000,  // 5 分钟内不重请求
+    // 改蜡烛天数/增删自选时沿用上一份批量数据 (按 symbol 查表渲染, 旧键不会被读到),
+    // 避免整列蜡烛闪空 — 与 Screener 批量查询同款
+    placeholderData: (prev: any) => prev,
   })
 
   // 当日蜡烛实时修补: 历史 K 线按 staleTime 周期拉取 (见 queryKeys 注释), 最后一根
@@ -888,9 +897,13 @@ export function Watchlist() {
     // 跳动, 轮询降为 30s 兜底校准; tick 断流时回到用户设定间隔
     refetchInterval: () => {
       if (!(intradayRefreshEnabled && realtimeRunning)) return false
+      // 非连续竞价时段 (盘后/周末/节假日) 分钟K不可变, 降为 60s 兜底而非按用户间隔空转;
+      // 字段缺失 (旧后端) 时保持原行为
+      if (quoteStatus.data?.is_trading_hours === false) return 60_000
       const tickFresh = Date.now() - enriched.dataUpdatedAt < 10_000
       return tickFresh ? 30_000 : intradayRefreshInterval * 1000
     },
+    placeholderData: (prev: any) => prev,
   })
 
   // 分时图 SSE 续画: enriched 行情列每 tick 刷新 (SSE 触发), 前端本地续写分钟序列

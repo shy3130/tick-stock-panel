@@ -1,8 +1,6 @@
-import { lazy } from 'react'
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate, useSearchParams } from 'react-router-dom'
 import { Layout } from './components/Layout'
-import { Onboarding } from './pages/Onboarding'
-import { Auth } from './pages/Auth'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
 import { ExtensionBoundary } from './extensions/ExtensionBoundary'
@@ -38,6 +36,9 @@ const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.S
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
+// Onboarding 只在首次使用时进入, Auth 只在登录页用到 — 均改按需加载
+const Onboarding = lazy(() => import('./pages/Onboarding').then(m => ({ default: m.Onboarding })))
+const Auth = lazy(() => import('./pages/Auth').then(m => ({ default: m.Auth })))
 
 const CORE_ROUTE_PATHS = new Set([
   '/',
@@ -112,9 +113,32 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// 按需路由的加载占位 (与 OnboardingGuard 的加载态同风格)
+function RouteFallback() {
+  return (
+    <div className="min-h-screen bg-base grid place-items-center">
+      <Logo size={28} className="text-foreground" />
+    </div>
+  )
+}
+
 export const router = createBrowserRouter([
-  { path: '/onboarding', element: <Onboarding /> },
-  { path: '/login', element: <Auth /> },
+  {
+    path: '/onboarding',
+    element: (
+      <Suspense fallback={<RouteFallback />}>
+        <Onboarding />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/login',
+    element: (
+      <Suspense fallback={<RouteFallback />}>
+        <Auth />
+      </Suspense>
+    ),
+  },
   {
     path: '/',
     element: (

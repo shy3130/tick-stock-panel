@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
@@ -12,6 +12,7 @@ import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { ErrorState } from '@/components/ErrorState'
 import { useTheme } from '@/lib/theme'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
@@ -1537,13 +1538,18 @@ export function LimitUpLadder() {
 
   const extColumnsParam = useMemo(() => buildExtColumnsParam(extFields), [extFields])
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     // key 必须拍平 (spread 展开): key[0] 为字符串 'limit-ladder' 才能被 SSE 前缀失效
     // 命中实现实时刷新, depth_updated 事件 (invalidate ['limit-ladder']) 也才能匹配本查询。
     // 嵌套数组 key 会导致前者靠 String() 侥幸命中、后者永远失配。
     queryKey: [...QK.limitLadder(asOf || undefined), extColumnsParam, direction],
     queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
     staleTime: 5 * 60_000,
+    // 改扩展列重取期间沿用上一份「同日期同方向」数据不闪空; 涨跌切换不透传反向梯队
+    placeholderData: (prev: any, prevQuery: any) => {
+      const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
+      return prevKey?.[1] === (asOf || undefined) && prevKey?.[3] === direction ? prev : undefined
+    },
   })
   const handleOpenDimension = useCallback((kind: DimensionKind, value: string, sourceField?: string) => {
     if (!sourceField) return
@@ -1572,11 +1578,15 @@ export function LimitUpLadder() {
     [sortedTiers],
   )
 
+  // 用 ref 读取导航列表: 回调依赖若含 ladderNavItems, 每个 SSE tick 引用变化会
+  // 击穿全部 React.memo(StockCard); ref 读取让回调恒稳定, memo 真正生效
+  const ladderNavItemsRef = useRef(ladderNavItems)
+  ladderNavItemsRef.current = ladderNavItems
   const handleStockClick = useCallback((symbol: string, name?: string, navList?: NavItem[]) => {
     setPreviewSymbol(symbol)
     setPreviewName(name ?? '')
-    setPreviewNavList(navList ?? ladderNavItems)
-  }, [ladderNavItems])
+    setPreviewNavList(navList ?? ladderNavItemsRef.current)
+  }, [])
 
   // sealed 降级判定
   const sealedDegrade = useSealedDegrade(asOf, data?.as_of, data?.sealed_ready, data?.sealed_counts)
@@ -1590,6 +1600,21 @@ export function LimitUpLadder() {
   }
 
   const dateValue = displayDate || new Date().toISOString().slice(0, 10)
+
+  // 请求失败与空数据分开呈现: 失败显示错误态 + 重试, 而非误导性的「暂无连板数据」
+  if (isError) {
+    return (
+      <div className="flex flex-col h-full">
+        <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
+        <ErrorState
+          title={direction === 'down' ? '连跌数据加载失败' : '连板数据加载失败'}
+          hint="行情接口暂时不可用，请重试；多次失败可检查数据源配置与网络"
+          retrying={isFetching}
+          onRetry={() => refetch()}
+        />
+      </div>
+    )
+  }
 
   if (!data || rawTiers.length === 0) {
     return (

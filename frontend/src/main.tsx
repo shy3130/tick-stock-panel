@@ -3,6 +3,18 @@ import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
+// 字体自托管 (@fontsource): 替代 rsms.me / Google Fonts 渲染阻塞外链,
+// 内网/离线部署不再白屏等字体。权重覆盖 tailwind 全部用量 (300-900)。
+import '@fontsource/inter/300.css'
+import '@fontsource/inter/400.css'
+import '@fontsource/inter/500.css'
+import '@fontsource/inter/600.css'
+import '@fontsource/inter/700.css'
+import '@fontsource/inter/900.css'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/500.css'
+import '@fontsource/jetbrains-mono/600.css'
+import '@fontsource/jetbrains-mono/700.css'
 import './index.css'
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。

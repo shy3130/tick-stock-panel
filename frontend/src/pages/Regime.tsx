@@ -1007,8 +1007,16 @@ export function Regime() {
                 </tr>
               ))}
               {(mainline.data?.leaders ?? []).length === 0 && (
-                <tr><td colSpan={5} className="py-4 text-center text-[10px] text-muted">
-                  {mainline.isLoading ? '加载中…' : '暂无主线数据 — 点击「重算」回填, 或检查过滤设置'}
+                <tr><td colSpan={5} className="py-4 text-center text-[10px]">
+                  {mainline.isLoading ? <span className="text-muted">加载中…</span>
+                    : mainline.isError ? (
+                      <span className="text-secondary">主线数据加载失败 —{' '}
+                        <button type="button" onClick={() => mainline.refetch()} disabled={mainline.isFetching} className="text-accent underline underline-offset-2 transition-colors hover:text-accent/70 disabled:opacity-50">
+                          重试
+                        </button>
+                      </span>
+                    )
+                    : <span className="text-muted">暂无主线数据 — 点击「重算」回填, 或检查过滤设置</span>}
                 </td></tr>
               )}
             </tbody>
@@ -1101,8 +1109,16 @@ export function Regime() {
           </div>
         </div>
       ) : (
-        <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-          {history.isLoading ? '加载中…' : '暂无环境数据，请先运行盘后管道或点击「重算」'}
+        <div className="rounded-card border border-dashed border-border p-8 text-center text-sm">
+          {history.isLoading ? <span className="text-muted">加载中…</span>
+            : history.isError ? (
+              <span className="text-secondary">环境数据加载失败 —{' '}
+                <button type="button" onClick={() => history.refetch()} disabled={history.isFetching} className="text-accent underline underline-offset-2 transition-colors hover:text-accent/70 disabled:opacity-50">
+                  重试
+                </button>
+              </span>
+            )
+            : <span className="text-muted">暂无环境数据，请先运行盘后管道或点击「重算」</span>}
         </div>
       )}
 
@@ -1269,6 +1285,18 @@ function MainlineFilterPanel({ filter, onDone }: {
   const [excludeSt, setExcludeSt] = useState(filter?.exclude_st ?? true)
   const [input, setInput] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // 面板可能先于过滤配置查询挂载: 首次拿到真实 filter 时回填一次, 避免用户在
+  // 默认值上点「保存并重算」用 4/600 覆盖真实过滤配置; 只同步首轮, 不打断编辑
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (!filter || seededRef.current) return
+    seededRef.current = true
+    setMinMembers(String(filter.min_members))
+    setMaxMembers(String(filter.max_members))
+    setBlacklist(filter.blacklist)
+    setExcludeSt(filter.exclude_st ?? true)
+  }, [filter])
 
   const addTag = () => {
     const v = input.trim()

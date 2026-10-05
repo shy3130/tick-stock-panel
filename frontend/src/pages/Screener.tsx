@@ -897,7 +897,20 @@ export function Screener() {
         {cardSize !== 'hidden' && (
         <section>
           {strategies.isLoading && <div className="text-sm text-muted">加载中…</div>}
-          {!strategies.isLoading && displayPool.length === 0 && (
+          {!strategies.isLoading && strategies.isError && (
+            <div className="flex flex-col items-center gap-2 py-4 text-center border border-dashed border-danger/40 rounded-btn">
+              <span className="text-sm text-secondary">策略列表加载失败，请重试；策略池配置本身不受影响。</span>
+              <button
+                type="button"
+                onClick={() => strategies.refetch()}
+                disabled={strategies.isFetching}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-accent transition-colors hover:bg-elevated disabled:opacity-50"
+              >
+                重试
+              </button>
+            </div>
+          )}
+          {!strategies.isLoading && !strategies.isError && displayPool.length === 0 && (
             <div className="text-sm text-muted py-4 text-center border border-dashed border-border rounded-btn">
               {pool.length === 0
                 ? '策略池为空，点击右上角「策略池」按钮添加策略'
