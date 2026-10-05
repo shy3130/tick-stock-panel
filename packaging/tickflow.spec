@@ -62,6 +62,20 @@ for pkg in ("_polars_runtime_32", "_polars_runtime_compat"):
 # Polars 新 ABI 运行时由加载器选择，需显式收集子模块。
 hiddenimports += collect_submodules("polars")
 
+# ── 内置可选插件 (app/plugins/*) ─────────────────────────────────────
+# loader._load_builtin_plugins() 在文件系统扫 <_internal>/app/plugins/*/plugin.yaml,
+# entry 又是 importlib 字符串动态导入 — 两条链路静态分析都看不见, 必须双声明:
+# datas 把清单 yaml 落盘 (frozen 下 plugins_dir() 恰好解析到 _internal/app/plugins),
+# hiddenimports 把 provider/client 塞进 PYZ。
+# 注:  出于合规暂不进桌面包 (与 GHCR 镜像口径一致), 需要时仿照添加。
+datas += [
+    (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
+]
+hiddenimports += [
+    "app.plugins.fuyao.provider",
+    "app.plugins.fuyao.client",
+]
+
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
