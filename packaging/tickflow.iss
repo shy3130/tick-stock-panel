@@ -1,13 +1,13 @@
 ; ===========================================================================
 ; Tick Stock Panel — Inno Setup 安装包脚本
 ; ===========================================================================
-; 用途: 把 PyInstaller 产出的 dist/TickFlowStockPanel/ 文件夹封装成
+; 用途: 把 PyInstaller 产出的 dist/TSP/ 文件夹封装成
 ;       单个 Setup.exe 安装程序 (双击→安装向导→快捷方式→可卸载)。
 ;
 ; 构建 (本地):
 ;   1. 先跑 PyInstaller: cd backend && uv run pyinstaller ../packaging/tickflow.spec
 ;   2. 再跑 Inno Setup:   ISCC.exe packaging\tickflow.iss
-;   3. 产物: packaging\Output\TickFlowStockPanel-Setup-x.x.x.exe
+;   3. 产物: packaging\Output\TSP-Setup-x.x.x.exe
 ;
 ; 设计决策:
 ;   - 装到用户目录 {localappdata}\Programs\ (不弹 UAC, 不需管理员)
@@ -18,10 +18,10 @@
 ;   - 卸载入口 (控制面板可见)
 ; ===========================================================================
 
-#define MyAppName          "TickFlow 股票面板"
+#define MyAppName          "TSP 股票面板"
 #define MyAppNameEN       "Tick Stock Panel"
-#define MyAppExeName      "TickFlowStockPanel.exe"
-#define MyAppPublisher    "TickFlow"
+#define MyAppExeName      "TSP.exe"
+#define MyAppPublisher    "TSP"
 
 ; 版本号: 从 frontend/package.json 读取, 与 Release tag 保持一致
 ; 手动指定更可靠 (CI 传入 /DMyAppVersion)
@@ -31,17 +31,20 @@
 
 [Setup]
 ; 基本信息
+; AppId 固定 GUID: Inno 默认从 AppName 派生, 一旦改名旧安装会变成重复程序;
+; 固定后应用名再调整也保持同一卸载/升级身份
+AppId={{B7F4C9E2-3A51-4D8E-9C60-5E8A2F1D7B43}
 AppName={#MyAppName}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 ; 默认装到 D 盘 (非系统盘), 用户可在向导中改任意位置
 ; 若 D 盘不存在, [Code] 段 InitializeWizard 会自动回退到用户目录
-DefaultDirName=D:\TickFlowStockPanel
+DefaultDirName=D:\TSP
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=TickFlowStockPanel-Setup-{#MyAppVersion}
+OutputBaseFilename=TSP-Setup-{#MyAppVersion}
 
 ; 关键: 不需要管理员权限, 永不弹 UAC
 ; 装到 D 盘普通目录 (非 Program Files) 不需要管理员权限
@@ -58,7 +61,9 @@ LZMAUseSeparateProcess=yes
 WizardStyle=modern
 DisableWelcomePage=no
 DisableReadyPage=no
-SetupIconFile=icon.ico
+; 安装向导/卸载图标: 直接引用品牌资产唯一来源 (brand/README 接入指引),
+; 不再使用 packaging/icon.ico 的旧手绘版本, 避免两处漂移
+SetupIconFile=..\brand\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 ; 卸载相关
@@ -77,7 +82,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; 把 PyInstaller 产出的整个文件夹搬进安装目录
 ; Source 路径相对于 .iss 文件所在目录
-Source: "..\backend\dist\TickFlowStockPanel\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\backend\dist\TSP\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; 开始菜单
@@ -139,7 +144,7 @@ begin
   // D 盘存在 → 用 D 盘; 否则回退用户目录 (无需管理员权限)
   if not DirExists('D:\') then
   begin
-    DefaultDir := ExpandConstant('{localappdata}\Programs\TickFlowStockPanel');
+    DefaultDir := ExpandConstant('{localappdata}\Programs\TSP');
     WizardForm.DirEdit.Text := DefaultDir;
   end;
 end;

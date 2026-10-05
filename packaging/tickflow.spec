@@ -10,7 +10,7 @@
 
 构建 (在项目根目录):
   cd frontend && pnpm build                     # 先构建前端到 frontend/dist
-  pyinstaller packaging/tickflow.spec           # 产物在 dist/TickFlowStockPanel/
+  pyinstaller packaging/tickflow.spec           # 产物在 dist/TSP/
 """
 import sys
 from importlib.util import find_spec
@@ -32,10 +32,10 @@ ROOT = Path(SPECPATH).parent
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
-# 图标按平台选: Windows 用 .ico, macOS 用 .icns (PyInstaller 对 .ico 在
-# mac 上静默忽略, 不换格式 Dock/Finder 会显示通用图标)。两者都由
-# packaging/generate_icon.py 一并生成。
-APP_ICON = str(ROOT / "packaging" / ("icon.icns" if _IS_MACOS else "icon.ico"))
+# 图标按平台选: Windows 用 brand/icon.ico, macOS 用 brand/icon.icns —
+# 两者均由 brand/png/logo-tile-light-512.png 派生 (浅色圆角卡版, 品牌资产唯一来源,
+# 见 brand/README 接入指引), 无需 CI 现场生成。
+APP_ICON = str((ROOT / "brand" / "icon.icns") if _IS_MACOS else (ROOT / "brand" / "icon.ico"))
 
 # ── 收集带原生库的依赖 (.libs/ 目录必须完整, 否则启动崩) ─────────────
 # polars / pyarrow / duckdb / fastexcel 都自带共享库子目录
@@ -157,7 +157,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="TickFlowStockPanel",
+    name="TSP",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -179,7 +179,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="TickFlowStockPanel",
+    name="TSP",
 )
 
 # ── macOS: 封装成 .app 包 ────────────────────────────────────────────
@@ -200,13 +200,13 @@ if _IS_MACOS:
 
     app = BUNDLE(
         coll,
-        name="TickFlowStockPanel.app",
+        name="TSP.app",
         icon=APP_ICON,
         bundle_identifier="com.tickflow.stockpanel",
         version=APP_VERSION,   # → CFBundleShortVersionString / CFBundleVersion
         info_plist={
             "CFBundleName": "Tick Stock Panel",
-            "CFBundleDisplayName": "TickFlow 股票面板",
+            "CFBundleDisplayName": "TSP 股票面板",
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "10.13",

@@ -25,7 +25,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_APP_NAME = "TickFlow 股票面板"
+_APP_NAME = "TSP 股票面板"
 _BASE_PORT = 3018
 _PORT_PROBE_RANGE = 50  # 从 3018 起最多试 50 个端口
 
@@ -339,7 +339,7 @@ def main() -> int:
         # 写完整 traceback 到 data/desktop.log, 并弹原生 MessageBox 让用户截图反馈。
         # 必须排在 KeyboardInterrupt 之后 —— Exception 是基类, 在前会遮蔽它。
         logger.exception("桌面客户端启动失败")
-        _show_crash("TickFlow 启动失败", traceback.format_exc())
+        _show_crash("TSP 启动失败", traceback.format_exc())
         return 1
     finally:
         _release_single_instance()
