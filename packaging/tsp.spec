@@ -79,6 +79,11 @@ hiddenimports += [
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
+# pywebview 运行时依赖链 (webview/__init__ 顶层 import proxy_tools, Windows 端
+# 还要 bottle/clr_loader/pythonnet)。显式声明为金丝雀: 构建环境缺这些包时
+# PyInstaller 直接报错, 而不是静默产出启动即崩的包 (曾因 venv 缺 proxy_tools
+# 发布过启动崩溃版本)。
+hiddenimports += ["proxy_tools", "bottle", "clr_loader", "pythonnet"]
 
 # ── 系统通知后端 (winotify/plyer 按平台动态导入) ─────────────────────
 if sys.platform == "win32":
