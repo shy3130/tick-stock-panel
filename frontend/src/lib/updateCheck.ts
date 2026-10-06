@@ -5,6 +5,8 @@
  * 静默检查结果按天缓存 localStorage (GitHub 未认证 API 限额 60 次/时):
  * 同一版本 24h 内只发一次真实请求; 手动检查 (force) 绕过缓存立即刷新。
  * 检查失败不落缓存, 下次启动仍会重试, 但单次会话只静默检查一次。
+ * 使用期间每小时静默复检一次 (silent+force): 新版本发布后最长 1 小时亮 NEW;
+ * 复检失败不打掉已亮的 found 状态。
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { useVersion } from '@/lib/useSharedQueries'
@@ -128,7 +130,7 @@ let inFlight = false
 
 export async function checkForUpdate(
   current: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; silent?: boolean } = {},
 ): Promise<void> {
   const cur = current.trim()
   if (!cur || inFlight) return
@@ -144,7 +146,7 @@ export async function checkForUpdate(
     }
   }
   inFlight = true
-  setState({ status: 'checking' })
+  if (!opts.silent) setState({ status: 'checking' })
   const checkedAt = Date.now()
   try {
     const info = await fetchLatest()
@@ -152,18 +154,26 @@ export async function checkForUpdate(
     setState({ status: found ? 'found' : 'latest', info, checkedAt })
     writeCache({ current: cur, latest: info.latest, url: info.url, found, checkedAt })
   } catch {
-    // 不落缓存: 下次启动重试 (静默检查每次会话最多一次, 不会打爆限额)
-    setState({ status: 'error', checkedAt })
+    // 不落缓存: 下次启动重试 (静默检查每次会话最多一次, 不会打爆限额)。
+    // 每小时复检 (silent) 失败时若已亮 NEW, 保留 found 不降级为 error。
+    if (!(opts.silent && state.status === 'found')) {
+      setState({ status: 'error', checkedAt })
+    }
   } finally {
     inFlight = false
   }
 }
 
 let silentStarted = false
+let hourlyStarted = false
+
+/** 每小时静默复检间隔 (ms)。 */
+const HOURLY_MS = 60 * 60 * 1000
 
 /**
  * 侧栏与设置页共用的更新检查 hook。
  * 版本号就绪后自动做一次静默检查 (每次会话最多一次);
+ * 此后每小时静默复检 (silent+force 绕过 24h 缓存, 捕捉使用期间发布的新版本);
  * `check` 为手动入口, 绕过缓存立即刷新。
  */
 export function useUpdateCheck(): {
@@ -179,6 +189,15 @@ export function useUpdateCheck(): {
     if (!current || silentStarted) return
     silentStarted = true
     void checkForUpdate(current)
+  }, [current])
+  // 每小时复检: 模块级单例 (Layout 常驻持有; 多消费者不重复起定时器)
+  useEffect(() => {
+    if (!current || hourlyStarted) return
+    hourlyStarted = true
+    const id = setInterval(() => {
+      void checkForUpdate(current, { force: true, silent: true })
+    }, HOURLY_MS)
+    return () => clearInterval(id)
   }, [current])
   const check = useCallback(() => {
     void checkForUpdate(current, { force: true })

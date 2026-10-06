@@ -5,6 +5,7 @@
     <script>
       // 预渲染主题脚本: 首屏前设置 html.dark, 避免亮暗闪烁 (FOUC)。
       // 默认暗色; 用户切过亮色后 (localStorage tf-theme=light) 保持亮色。
+      // 同步应用页面缩放 (tf-page-zoom, 设置→系统→界面缩放), 避免加载后尺寸跳变。
       (function () {
         try {
           if (localStorage.getItem('tf-theme') !== 'light') {
@@ -13,6 +14,12 @@
         } catch (e) {
           document.documentElement.classList.add('dark')
         }
+        try {
+          var z = JSON.parse(localStorage.getItem('tf-page-zoom') || '')
+          if (typeof z === 'number' && z >= 0.8 && z <= 1.5) {
+            document.documentElement.style.zoom = String(z)
+          }
+        } catch (e) { /* ignore */ }
       })()
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

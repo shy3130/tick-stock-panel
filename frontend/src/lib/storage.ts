@@ -100,6 +100,9 @@ export const storage = {
   /** Screener 卡片尺寸 */
   screenerCardSize:     kv<string>('screener-card-size'),
 
+  /** 界面整体缩放 (0.8–1.5, 设置→系统→界面缩放; 桌面客户端无浏览器缩放快捷键) */
+  pageZoom:             kv<number>('tf-page-zoom'),
+
   /** 连板梯队板块筛选 */
   limitLadderBoard:     kv<string[]>('limit-ladder-board-filter'),
 

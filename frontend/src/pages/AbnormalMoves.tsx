@@ -107,9 +107,9 @@ export function AbnormalMoves() {
         />
       </div>
 
-      {/* tab 条: 交易时间线 竞价(盘前) → 盘中 → 偏移(多日) */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 px-5 pt-3">
-        <div className="inline-flex items-center gap-0.5 rounded-full border border-border/50 bg-base/70 p-0.5">
+      {/* tab 条: 交易时间线 竞价(盘前) → 盘中 → 偏移(多日) — 单行, 描述超宽截断 */}
+      <div className="flex shrink-0 flex-nowrap items-center gap-3 px-5 pt-3">
+        <div className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border/50 bg-base/70 p-0.5">
           {TAB_META.map(t => {
             const Icon = t.icon
             const active = tab === t.key
@@ -131,7 +131,7 @@ export function AbnormalMoves() {
             )
           })}
         </div>
-        <span className="text-[10px] text-muted">{TAB_META.find(t => t.key === tab)?.desc}</span>
+        <span className="min-w-0 truncate text-[10px] text-muted">{TAB_META.find(t => t.key === tab)?.desc}</span>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-5 pb-4 pt-3">
@@ -424,8 +424,8 @@ function IntradayView({ onPreview }: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* 信号筛选 chips (带各类型计数) + 工具行 */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+      {/* 信号筛选 chips (带各类型计数) + 工具行 — 单行横向滚动, 不折行 */}
+      <div className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [&>*]:shrink-0">
         <SigChip active={sigFilter === 'all'} onClick={() => setSigFilter('all')} label="全部" count={total} />
         {SIGNAL_KEYS.map(k => (
           <SigChip

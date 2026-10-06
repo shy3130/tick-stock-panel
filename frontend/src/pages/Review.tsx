@@ -653,7 +653,7 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
   const indices = (data.indices ?? []).slice(0, 4)
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-card border border-border bg-surface/80 px-4 py-2.5">
+    <div className="flex flex-nowrap items-center gap-x-5 overflow-x-auto rounded-card border border-border bg-surface/80 px-4 py-2.5 [&>*]:shrink-0">
       {/* 情绪分(带色徽章)—— 复盘的核心定调 */}
       <div className="flex items-center gap-2">
         <span
@@ -671,7 +671,7 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
       <div className="hidden h-7 w-px bg-border sm:block" />
 
       {/* 四大指数(简称:上深创科)*/}
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      <div className="flex flex-nowrap items-center gap-x-2.5 [&>*]:shrink-0">
         {indices.map(idx => (
           <div key={idx.symbol} className="flex items-center gap-1">
             <span className="text-[11px] text-secondary">{indexShort(idx.name, idx.symbol)}</span>

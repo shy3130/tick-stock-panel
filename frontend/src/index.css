@@ -68,6 +68,11 @@ html.dark {
 /* 默认 1px 细分隔线(暗色用边框区分层次,不用 shadow) */
 * { border-color: hsl(var(--border)); }
 
+/* 页面缩放 (设置→系统→界面缩放) 用 CSS zoom 作用于 <html>:
+ * vh 单位不随 zoom 缩放 (zoom<1 底部露底 / zoom>1 溢出), 百分比高度链才会 —
+ * 根链路统一 % 高度, 主布局与加载占位用 h-full/min-h-full 而非 h-screen。 */
+html, body, #root { height: 100%; }
+
 body {
   background: hsl(var(--base));
   color: hsl(var(--fg-primary));
@@ -83,4 +88,19 @@ body {
 @keyframes rh-marquee {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
+}
+
+/* 呼吸灯: 透明度 + 橘黄色光晕同步起伏 (侧栏"有新版本"下载图标) */
+@keyframes breath-glow {
+  0%, 100% {
+    opacity: 0.5;
+    filter: drop-shadow(0 0 1px rgba(251, 191, 36, 0.35));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 5px rgba(251, 191, 36, 0.9));
+  }
+}
+.animate-breath {
+  animation: breath-glow 2.8s ease-in-out infinite;
 }

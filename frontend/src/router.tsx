@@ -96,7 +96,7 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   // 防误重定向已由 Onboarding/AI 等处 invalidate 前的 setQueryData 同步缓存兜底。
   if (settings.isLoading) {
     return (
-      <div className="min-h-screen bg-base grid place-items-center">
+      <div className="min-h-full bg-base grid place-items-center">
         <div className="flex flex-col items-center gap-3 text-muted">
           <Logo size={28} className="text-foreground" />
           <div className="text-xs">加载中…</div>
@@ -116,7 +116,7 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
 // 按需路由的加载占位 (与 OnboardingGuard 的加载态同风格)
 function RouteFallback() {
   return (
-    <div className="min-h-screen bg-base grid place-items-center">
+    <div className="min-h-full bg-base grid place-items-center">
       <Logo size={28} className="text-foreground" />
     </div>
   )

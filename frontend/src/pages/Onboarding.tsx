@@ -74,7 +74,7 @@ export function Onboarding() {
   const finish = () => complete.mutate()
 
   return (
-    <div className="relative min-h-screen bg-base overflow-hidden flex flex-col">
+    <div className="relative min-h-full bg-base overflow-hidden flex flex-col">
       {/* 背景光晕 —— 品牌 + 主色渐变 */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div

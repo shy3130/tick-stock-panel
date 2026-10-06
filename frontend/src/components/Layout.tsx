@@ -39,6 +39,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
+  Download,
 } from 'lucide-react'
 import {
   IconDashboard,
@@ -642,7 +643,7 @@ export function Layout() {
 
   return (
     <div
-      className="h-screen grid bg-base text-foreground overflow-hidden transition-[grid-template-columns] duration-200 ease-smooth"
+      className="h-full grid bg-base text-foreground overflow-hidden transition-[grid-template-columns] duration-200 ease-smooth"
       style={{ gridTemplateColumns: isDesktop && !overlayPreview ? (navState === 'expanded' ? '14rem 1fr' : navState === 'rail' ? '3.5rem 1fr' : '0 1fr') : '1fr' }}
     >
       {/* 移动端抽屉遮罩 */}
@@ -1023,30 +1024,30 @@ export function Layout() {
                     )}
                   />
                   <Settings className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                  {!railMode && <span>设置</span>}
+                  {!railMode && <span className="whitespace-nowrap">设置</span>}
                   {!railMode && version && (
-                    <span className="ml-auto font-mono text-[10px] text-muted/50 select-none shrink-0">
+                    <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-muted/50 select-none shrink-0">
                       {version}
                       {hasUpdate && update.info && (
                         <span
                           role="button"
                           tabIndex={0}
-                          title={`发现新版本 ${update.info.latest}，点击前往检查更新`}
+                          title={`发现新版本 ${update.info.latest}，点击检查更新`}
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
-                            navigate('/settings?tab=system')
+                            navigate('/settings?tab=system&autoupdate=1')
                           }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault()
                               e.stopPropagation()
-                              navigate('/settings?tab=system')
+                              navigate('/settings?tab=system&autoupdate=1')
                             }
                           }}
-                          className="ml-1.5 inline-flex cursor-pointer items-center rounded-full bg-accent px-1.5 py-px text-[9px] font-semibold leading-none text-white transition-colors hover:bg-accent/90"
+                          className="inline-flex cursor-pointer text-amber-400 transition-transform hover:scale-110 animate-breath"
                         >
-                          NEW
+                          <Download className="h-3 w-3" />
                         </span>
                       )}
                     </span>

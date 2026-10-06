@@ -18,7 +18,7 @@ on:
       version:
         description: '版本号 (如 v0.1.33, 用作 Release tag 和标题)'
         required: true
-        default: 'v0.3.2'
+        default: 'v0.3.3'
       platforms:
         description: '要构建的平台 (逗号分隔: windows,macos,linux)'
         required: true
@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter.outputs.matrix }}
+      ver: ${{ steps.filter.outputs.ver }}
     steps:
       - id: filter
         run: |
@@ -52,11 +53,17 @@ jobs:
           import json, sys
           requested = '${{ github.event.inputs.platforms }}'.split(',')
           requested = [r.strip() for r in requested if r.strip()]
+          ver = '${{ github.event.inputs.version }}'.lstrip('v')  # v0.3.3 → 0.3.3
           all_platforms = json.loads('''$ALL''')
           selected = [p for p in all_platforms if p['platform'] in requested]
+          # 产物文件名带版本号 (TSP-Setup-x64-0.3.3.exe): 用户下载后一眼可辨版本
+          for p in selected:
+              stem, _, ext = p['artifact'].rpartition('.')
+              p['artifact'] = f'{stem}-{ver}.{ext}'
           print('matrix=' + json.dumps({'include': selected}))
           with open('$GITHUB_OUTPUT', 'a') as f:
               f.write('matrix=' + json.dumps({'include': selected}) + '\n')
+              f.write('ver=' + ver + '\n')
           "
 
   # 第二步: 各平台并行构建
@@ -207,9 +214,9 @@ jobs:
 
             | 平台 | 文件 | 下载 |
             | :--- | :--- | :--- |
-            | **Windows x64** | `TSP-Setup-x64.exe` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-Setup-x64.exe) |
-            | **macOS (Apple Silicon / M 系列芯片)** | `TSP-macos-arm64.dmg` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-macos-arm64.dmg) |
-            | **Linux** | `TSP-linux-x64.tar.gz` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-linux-x64.tar.gz) |
+            | **Windows x64** | `TSP-Setup-x64-${{ needs.prepare.outputs.ver }}.exe` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-Setup-x64-${{ needs.prepare.outputs.ver }}.exe) |
+            | **macOS (Apple Silicon / M 系列芯片)** | `TSP-macos-arm64-${{ needs.prepare.outputs.ver }}.dmg` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-macos-arm64-${{ needs.prepare.outputs.ver }}.dmg) |
+            | **Linux** | `TSP-linux-x64-${{ needs.prepare.outputs.ver }}.tar.gz` | [⬇️ 立即下载](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TSP-linux-x64-${{ needs.prepare.outputs.ver }}.tar.gz) |
 
             > 💡 点击「立即下载」直接获取, 无需滚动到底部附件区。
             > 🍎 **macOS 仅提供 Apple Silicon (M 系列芯片) 版本**: 点左上角  → "关于本机", 看"芯片"一项是否为 Apple; Intel 芯片 Mac 暂不支持 (上游 polars 已停止发布 Intel wheel)。
@@ -240,11 +247,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p assets && cd assets
-          # 只拉已知的三个安装包 (latest.json 自身等其他资产不进清单)
+          # 只拉已知的三个安装包 (latest.json 自身等其他资产不进清单);
+          # 产物文件名带版本号, 故用通配匹配当前版本
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern 'TSP-Setup-x64.exe' \
-            --pattern 'TSP-macos-arm64.dmg' \
-            --pattern 'TSP-linux-x64.tar.gz' \
+            --pattern 'TSP-Setup-x64-*.exe' \
+            --pattern 'TSP-macos-arm64-*.dmg' \
+            --pattern 'TSP-linux-x64-*.tar.gz' \
             --clobber || true
           cd ..
           RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
@@ -256,11 +264,15 @@ jobs:
           repo = os.environ["REPO"]
           rel = json.loads(os.environ["RELEASE_JSON"])
 
-          # 资产文件名 → 渠道名 (客户端按渠道取下载地址)
+          # version 去掉 v 前缀, 与 package.json 语义版本一致
+          # (产物文件名 TSP-Setup-x64-0.3.3.exe 用的就是不带 v 的版本)
+          version = tag[1:] if tag.startswith("v") else tag
+
+          # 资产文件名 → 渠道名 (客户端按渠道取下载地址); 文件名带版本号, 按当前 tag 拼
           channels_cfg = {
-              "TSP-Setup-x64.exe": "windows",
-              "TSP-macos-arm64.dmg": "macos-arm64",
-              "TSP-linux-x64.tar.gz": "linux-x64",
+              f"TSP-Setup-x64-{version}.exe": "windows",
+              f"TSP-macos-arm64-{version}.dmg": "macos-arm64",
+              f"TSP-linux-x64-{version}.tar.gz": "linux-x64",
           }
           by_name = {a["name"]: a for a in rel.get("assets", [])}
 
@@ -281,8 +293,6 @@ jobs:
               print("::warning::Release 上没有任何安装包资产, 跳过 latest.json 生成")
               sys.exit(0)
 
-          # version 去掉 v 前缀, 与 package.json 语义版本一致
-          version = tag[1:] if tag.startswith("v") else tag
           manifest = {
               "version": version,
               "tag": tag,

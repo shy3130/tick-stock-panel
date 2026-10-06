@@ -93,6 +93,11 @@ Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; 刷新 Windows 图标缓存: 覆盖安装时 exe 路径不变 (D:\TSP\TSP.exe), 资源管理器
+; 会一直显示缓存里的旧图标 (首个版本为透明底)。ie4uinit -show 强制重建缓存,
+; 装完快捷方式立即显示当前 exe 内嵌图标, 无需用户重启资源管理器。
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden
+
 ; 安装完成后启动应用
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 

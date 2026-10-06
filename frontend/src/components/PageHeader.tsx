@@ -17,10 +17,16 @@ export function PageHeader({ title, subtitle, titleExtra, right, className }: Pr
         className,
       )}
     >
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-        {titleExtra}
-        {subtitle && <span className="text-xs text-muted">{subtitle}</span>}
+      <div className="flex min-w-0 flex-col justify-center gap-0.5">
+        <div className="flex items-center gap-2">
+          <h1 className="shrink-0 whitespace-nowrap bg-gradient-to-b from-foreground via-foreground to-accent/80 bg-clip-text text-xl font-semibold tracking-normal text-transparent">
+            {title}
+          </h1>
+          {titleExtra}
+        </div>
+        {subtitle && (
+          <span className="truncate whitespace-nowrap text-[10px] leading-tight text-muted">{subtitle}</span>
+        )}
       </div>
       {right}
     </header>

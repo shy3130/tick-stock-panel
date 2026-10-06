@@ -222,8 +222,8 @@ export function Monitor() {
           <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-surface/40 shadow-lg shadow-black/5">
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={BellRing} title="触发记录" />
-              {/* 过滤标签 */}
-              <div className="flex flex-wrap items-center gap-0.5">
+              {/* 过滤标签 — 单行横向滚动, 不折行 (缩放/窄窗口下保持一行) */}
+              <div className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto [&>button]:shrink-0">
                 {(['all', 'strategy', 'signal', 'price', 'market', 'sector', 'abnormal', 'volume_delta', 'date'] as const).map(f => (
                   <button
                     key={f}
