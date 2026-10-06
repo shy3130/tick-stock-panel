@@ -841,7 +841,7 @@ def get_version(request: Request) -> dict:
     """
     from app import __version__
 
-    # 1. 优先用 app.__version__ (唯一权威版本, 打包期由 PyInstaller 注入)
+    # 1. 优先用 app.__version__ (唯一权威版本, 运行时从 frontend/package.json 加载)
     if __version__:
         v = __version__.strip()
         return {"version": v if v.startswith("v") else f"v{v}"}

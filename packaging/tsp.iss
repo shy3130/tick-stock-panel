@@ -5,8 +5,8 @@
 ;       单个 Setup.exe 安装程序 (双击→安装向导→快捷方式→可卸载)。
 ;
 ; 构建 (本地):
-;   1. 先跑 PyInstaller: cd backend && uv run pyinstaller ../packaging/tickflow.spec
-;   2. 再跑 Inno Setup:   ISCC.exe packaging\tickflow.iss
+;   1. 先跑 PyInstaller: cd backend && uv run pyinstaller ../packaging/tsp.spec
+;   2. 再跑 Inno Setup:   ISCC.exe packaging\tsp.iss
 ;   3. 产物: packaging\Output\TSP-Setup-x.x.x.exe
 ;
 ; 设计决策:
@@ -18,7 +18,7 @@
 ;   - 卸载入口 (控制面板可见)
 ; ===========================================================================
 
-#define MyAppName          "TSP 股票面板"
+#define MyAppName          "TSP"
 #define MyAppNameEN       "Tick Stock Panel"
 #define MyAppExeName      "TSP.exe"
 #define MyAppPublisher    "TSP"
@@ -96,7 +96,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; 刷新 Windows 图标缓存: 覆盖安装时 exe 路径不变 (D:\TSP\TSP.exe), 资源管理器
 ; 会一直显示缓存里的旧图标 (首个版本为透明底)。ie4uinit -show 强制重建缓存,
 ; 装完快捷方式立即显示当前 exe 内嵌图标, 无需用户重启资源管理器。
-Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden
+; ie4uinit.exe 是 IE 组件, 在已移除 IE 的系统 (如 Win11 24H2+) 上不存在 ——
+; 不 Check 存在性直接执行会弹「无法执行文件」错误, 并中断后续 [Run] 条目
+; (安装完成自动启动应用也会被跳过)。
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden; Check: FileExists(ExpandConstant('{sys}\ie4uinit.exe'))
 
 ; 安装完成后启动应用
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

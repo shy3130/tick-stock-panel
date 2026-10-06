@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 v0.1.33, 用作 Release tag 和标题)'
+        description: '版本号 (如 v0.1.33, 用作 Release tag 和标题; 必须与 frontend/package.json 的 version 一致, 否则流水线直接失败)'
         required: true
         default: 'v0.3.3'
       platforms:
@@ -39,8 +39,21 @@ jobs:
       matrix: ${{ steps.filter.outputs.matrix }}
       ver: ${{ steps.filter.outputs.ver }}
     steps:
+      - name: 检出代码
+        # 仅为校验版本一致性 (读 frontend/package.json), 浅检出足够
+        uses: actions/checkout@v4
+
       - id: filter
         run: |
+          # 版本号唯一权威 = frontend/package.json (安装包、页面显示、更新检查同源)。
+          # 发版输入与它不一致直接失败, 防止 tag/安装包/页面三处版本漂移。
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          REQ_VER='${{ github.event.inputs.version }}'
+          if [ "v$PKG_VER" != "$REQ_VER" ]; then
+            echo "::error::版本不一致: 发版输入 $REQ_VER, frontend/package.json 为 v$PKG_VER。请以 frontend/package.json 为准, 统一版本号后再发版。"
+            exit 1
+          fi
+
           REQUESTED="${{ github.event.inputs.platforms }}"
           # macOS 仅构建 ARM64 (Apple Silicon), 不构建 Intel:
           #   1) GitHub 最后一个原生 Intel runner (macos-13) 已于 2025-12-04 退役;
@@ -124,12 +137,12 @@ jobs:
 
       - name: 打包 (PyInstaller)
         # 在 backend 目录跑 (用该目录的 venv: pywebview/polars 等依赖)。
-        # 产物输出到 backend/dist/ (PyInstaller 默认路径), 与 packaging/tickflow.iss
-        # 第 78 行的 Source 路径 (..\backend\dist\TSP\*) 保持一致。
-        # SPECPATH 由 spec 文件位置决定 (packaging/tickflow.spec → 项目根),
+        # 产物输出到 backend/dist/ (PyInstaller 默认路径), 与 packaging/tsp.iss
+        # 的 Source 路径 (..\backend\dist\TSP\*) 保持一致。
+        # SPECPATH 由 spec 文件位置决定 (packaging/tsp.spec → 项目根),
         # 与 cwd 无关, 故 frontend/dist、tiers.yaml 等相对路径仍正确。
         working-directory: backend
-        run: uv run pyinstaller ../packaging/tickflow.spec --noconfirm
+        run: uv run pyinstaller ../packaging/tsp.spec --noconfirm
 
       - name: 检查 Polars 兼容内核 (仅 Windows)
         if: matrix.platform == 'windows'
@@ -158,7 +171,7 @@ jobs:
         run: |
           $ver = (Get-Content frontend/package.json | ConvertFrom-Json).version
           echo "版本号: $ver"
-          ISCC.exe "/DMyAppVersion=$ver" packaging/tickflow.iss
+          ISCC.exe "/DMyAppVersion=$ver" packaging/tsp.iss
           # 把生成的 Setup.exe 移到工作区根 (Release 上传用)
           Move-Item packaging/Output/TSP-Setup-$ver.exe ${{ matrix.artifact }} -Force
         shell: pwsh
