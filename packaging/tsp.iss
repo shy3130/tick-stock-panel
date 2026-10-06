@@ -93,13 +93,11 @@ Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-; 刷新 Windows 图标缓存: 覆盖安装时 exe 路径不变 (D:\TSP\TSP.exe), 资源管理器
-; 会一直显示缓存里的旧图标 (首个版本为透明底)。ie4uinit -show 强制重建缓存,
-; 装完快捷方式立即显示当前 exe 内嵌图标, 无需用户重启资源管理器。
-; ie4uinit.exe 是 IE 组件, 在已移除 IE 的系统 (如 Win11 24H2+) 上不存在 ——
-; 不 Check 存在性直接执行会弹「无法执行文件」错误, 并中断后续 [Run] 条目
-; (安装完成自动启动应用也会被跳过)。
-Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden; Check: FileExists(ExpandConstant('{sys}\ie4uinit.exe'))
+; 安装完成后启动应用
+; shellexec: 部分机器对 exe 路径存有「以管理员身份运行」兼容标志/策略要求提权,
+; CreateProcess 无法弹 UAC 会直接报错误码 740; ShellExecute 遇提权正常弹 UAC,
+; asInvoker 场景行为不变。
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent shellexec
 
 ; 安装完成后启动应用
 ; shellexec: 部分机器对 exe 路径存有「以管理员身份运行」兼容标志/策略要求提权,
@@ -158,6 +156,27 @@ begin
     DefaultDir := ExpandConstant('{localappdata}\Programs\TSP');
     WizardForm.DirEdit.Text := DefaultDir;
   end;
+end;
+
+// ── 安装完成后: 通知外壳刷新图标缓存 ─────────────────────────────
+// 覆盖安装时 exe 路径不变 (如 D:\TSP\TSP.exe), 资源管理器会一直显示缓存的旧图标
+// (首个版本为透明底)。用 SHCNE_ASSOCCHANGED 强制外壳重建图标缓存, 装完快捷方式
+// 立即显示当前 exe 内嵌图标, 无需用户重启资源管理器。
+// 此前用 ie4uinit -show 实现同一目的, 但 ie4uinit.exe 是 IE 组件, 在移除 IE 的
+// 系统 (Win11 24H2+ 等) 上不存在 —— 执行会报错, 只能加 Check 跳过, 结果那些
+// 机器永远刷不掉旧图标。SHChangeNotify 是 ie4uinit -show 底层调用的同一外壳 API,
+// 所有 Windows 都有, 无外部依赖。
+const
+  SHCNE_ASSOCCHANGED = $08000000;
+  SHCNF_IDLIST = $0000;
+
+procedure SHChangeNotify(wEventId, uFlags, dwItem1, dwItem2: Longint);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0);
 end;
 
 // ── 卸载时询问是否删除用户数据 ─────────────────────────────────
