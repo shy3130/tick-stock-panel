@@ -102,7 +102,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden; Check: FileExists(ExpandConstant('{sys}\ie4uinit.exe'))
 
 ; 安装完成后启动应用
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; shellexec: 部分机器对 exe 路径存有「以管理员身份运行」兼容标志/策略要求提权,
+; CreateProcess 无法弹 UAC 会直接报错误码 740; ShellExecute 遇提权正常弹 UAC,
+; asInvoker 场景行为不变。
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent shellexec
 
 [UninstallRun]
 ; 卸载前先关闭正在运行的应用 (否则 exe 被占用删不掉)
