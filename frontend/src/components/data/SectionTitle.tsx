@@ -40,6 +40,8 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
           const r = job.result as Record<string, any>
           const parts: string[] = []
           if (r.daily_days != null) parts.push(`日K ${r.daily_days}日`)
+          // 独立除权因子同步任务 (无日K字段): 摘要以除权因子开头便于区分
+          if (r.adj_factor_symbols != null && r.daily_days == null) parts.push(`除权因子 ${r.adj_factor_symbols}只`)
           if (r.enriched_days != null) parts.push(`enriched ${r.enriched_days}行`)
           if (r.minute_rows != null) parts.push(`分钟K ${r.minute_rows}行`)
           if (r.earliest_after && r.earliest_before) {

@@ -147,7 +147,9 @@ class MyProvider:
 
     def get_adj_factors(self, symbols, start_time, end_time, asset_type="stock",
                         on_chunk_done=None) -> pl.DataFrame:
-        """除权因子: [symbol, trade_date, ex_factor]"""
+        """除权因子: [symbol, trade_date, ex_factor]
+        (+可选明细列 dividend/bonus/allot/allot_price/prev_close, 均可空 —
+        提供时用于等差显示投影与全精度因子链重建)"""
 
     def get_minute(self, symbols, start_time, end_time, asset_type="stock",
                    on_chunk_done=None, freq="1m") -> pl.DataFrame:

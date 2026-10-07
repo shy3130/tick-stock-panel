@@ -118,6 +118,10 @@ datasets:
 | `trade_date` | 除权日期 |
 | `ex_factor` | 复权因子 |
 
+可选明细列 (提供即落库, 缺省为空): `dividend` 每股现金分红、`bonus` 每股送转比例、
+`allot`/`allot_price` 配股比例与配股价、`prev_close` 除权前收盘 — 供等差显示投影
+与全精度因子链重建。
+
 ### realtime 必填
 
 | 内部字段 | 含义 |

@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -496,6 +497,13 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     return daily_df.height
 
 
+# 除权事件明细列 (可选, 缺省为 null): 等差显示投影 (原始价 - Σ未来每股分红,
+# 分红按其后送转比例缩放) 与官方金额全精度因子链重建使用。
+# 存量 all.parquet 只有规范三列, 合并用 how="diagonal" 自动补 null;
+# 读取方 (_apply_adj_factor / minute_adjust) 只按规范三列消费, 不受影响。
+ADJ_DETAIL_COLS = ("dividend", "bonus", "allot", "allot_price", "prev_close")
+
+
 def _normalize_adj_factor(raw) -> pl.DataFrame:
     """Normalize SDK ex_factors response to symbol/trade_date/ex_factor."""
     if raw is None or len(raw) == 0:
@@ -534,10 +542,68 @@ def _normalize_adj_factor(raw) -> pl.DataFrame:
             df = df.with_columns(pl.col("trade_date").cast(pl.Date, strict=False))
     if "ex_factor" in df.columns:
         df = df.with_columns(pl.col("ex_factor").cast(pl.Float64, strict=False))
-    cols = [c for c in ["symbol", "trade_date", "ex_factor"] if c in df.columns]
-    if len(cols) < 3:
+    if not all(c in df.columns for c in ("symbol", "trade_date", "ex_factor")):
         return pl.DataFrame()
-    return df.select(cols).drop_nulls()
+    # 明细列存在则透传 (缺省不影响规范三列); drop_nulls 只作用于规范三列 ——
+    # 明细列合法可为 null (如纯送转事件的 dividend)。
+    df = df.with_columns([
+        pl.col(c).cast(pl.Float64, strict=False)
+        for c in ADJ_DETAIL_COLS if c in df.columns
+    ])
+    cols = ["symbol", "trade_date", "ex_factor"] + [
+        c for c in ADJ_DETAIL_COLS if c in df.columns
+    ]
+    return df.select(cols).drop_nulls(subset=["symbol", "trade_date", "ex_factor"])
+
+
+def _align_adj_factor_frame(df: pl.DataFrame) -> pl.DataFrame:
+    """除权因子帧对齐为统一 schema: 规范三列 + 明细列 (缺则补 null 列)。"""
+    df = df.with_columns(
+        pl.col("trade_date").cast(pl.Date, strict=False),
+        pl.col("ex_factor").cast(pl.Float64, strict=False),
+        *[pl.col(c).cast(pl.Float64, strict=False)
+          for c in ADJ_DETAIL_COLS if c in df.columns],
+    )
+    df = df.with_columns([
+        pl.lit(None, dtype=pl.Float64).alias(c)
+        for c in ADJ_DETAIL_COLS if c not in df.columns
+    ])
+    return df.select(["symbol", "trade_date", "ex_factor", *ADJ_DETAIL_COLS])
+
+
+def _merge_adj_factor_store(out: Path, new_data: pl.DataFrame) -> tuple[int, list[str]]:
+    """合并写入 adj_factor 的 all.parquet, 返回 (新增行数, 因子发生变化的 symbol 列表)。
+
+    how="diagonal" 兼容存量三列 schema (旧行明细自动为 null);
+    unique keep="last" → 重复 (symbol, trade_date) 以本次同步为准,
+    重跑一次同步即完成存量数据的明细回填。
+
+    变化判定只看 ex_factor (新键 + 因子值差异 > 1e-9): 仅明细列回填
+    (dividend/prev_close 等补 null) 不改变复权价格 → 不计入变化列表,
+    enriched 局部重算因此不会被明细回填触发全市场重算。
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    new_data = _align_adj_factor_frame(new_data)
+    if not out.exists():
+        _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
+        return new_data.height, sorted(new_data["symbol"].unique().to_list())
+    existing = pl.read_parquet(out)
+    before = existing.height
+    # ex_factor 变化判定 (明细回填不算): 与存量按 (symbol, trade_date) 对齐,
+    # 旧值缺失 (新事件) 或值差超容差即视为变化。
+    diffed = new_data.select(["symbol", "trade_date", "ex_factor"]).join(
+        existing.select(["symbol", "trade_date", "ex_factor"]),
+        on=["symbol", "trade_date"], how="left", suffix="_old",
+    ).filter(
+        pl.col("ex_factor_old").is_null()
+        | ((pl.col("ex_factor") - pl.col("ex_factor_old")).abs() > 1e-9)
+    )
+    changed_symbols = sorted(set(diffed["symbol"].to_list()))
+    merged = pl.concat([existing, new_data], how="diagonal").unique(
+        subset=["symbol", "trade_date"], keep="last",
+    ).sort(["symbol", "trade_date"])
+    _atomic_write_parquet(merged, out)
+    return merged.height - before, changed_symbols
 
 
 def sync_adj_factor(symbols: list[str], repo: KlineRepository,
@@ -550,6 +616,8 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
     返回 (写入行数, 受影响的 symbol 列表) — 供 enriched 局部重算使用。
+    受影响 = 因子新增或值变化 (ex_factor diff) 的标的; 仅事件明细列
+    (dividend 等) 回填不改变复权价, 不计入受影响列表。
     """
     if not symbols:
         return 0, []
@@ -577,20 +645,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 else:
                     return 0, []
             else:
-                affected = new_data["symbol"].unique().to_list()
                 factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-                out = repo.store.data_dir / factor_dir / "all.parquet"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                if out.exists():
-                    existing = pl.read_parquet(out)
-                    before = existing.height
-                    merged = pl.concat([existing, new_data]).unique(
-                        subset=["symbol", "trade_date"], keep="last",
-                    ).sort(["symbol", "trade_date"])
-                    _atomic_write_parquet(merged, out)
-                    return merged.height - before, affected
-                _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-                return new_data.height, affected
+                added, affected = _merge_adj_factor_store(
+                    repo.store.data_dir / factor_dir / "all.parquet", new_data
+                )
+                return added, affected
         # 自定义源未配置 adj_factor → 回退 TickFlow
 
     if not capset.has(Cap.ADJ_FACTOR):
@@ -646,28 +705,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     new_data = pl.concat(all_dfs, how="diagonal_relaxed") if len(all_dfs) > 1 else all_dfs[0]
 
-    # 提取受影响的 symbol 列表(合并前)
-    affected = new_data["symbol"].unique().to_list()
-
     factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-    out = repo.store.data_dir / factor_dir / "all.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    if out.exists():
-        existing = pl.read_parquet(out)
-        before = existing.height
-        merged = pl.concat([existing, new_data]).unique(
-            subset=["symbol", "trade_date"], keep="last",
-        ).sort(["symbol", "trade_date"])
-        _atomic_write_parquet(merged, out)
-        added = merged.height - before
-        logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
-                     merged.height, added, new_data.height, len(symbols))
-        return added, affected
-    else:
-        _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-        logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
-        return new_data.height, affected
+    added, affected = _merge_adj_factor_store(repo.store.data_dir / factor_dir / "all.parquet", new_data)
+    logger.info("adj_factor merged: +%d new rows, %d changed symbols, %d fetched / %d symbols",
+                added, len(affected), new_data.height, len(symbols))
+    return added, affected
 
 
 # ===== 分钟 K 同步 =====

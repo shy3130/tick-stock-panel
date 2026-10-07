@@ -800,6 +800,94 @@ def run_now(
     return result
 
 
+def run_adj_factor_sync(
+    repo: KlineRepository,
+    capset: CapabilitySet,
+    on_progress: ProgressCb | None = None,
+) -> dict:
+    """独立同步除权因子(数据页单独按钮)。
+
+    与盘后管道 Step 1.5 的差异: 管道只拉日K范围或 15 天兜底窗口;
+    这里 start_time=None 拉**全历史** —— 用于切换数据源后的因子修复、
+    以及事件明细列扩表后的存量回填 (明细回填不改变 ex_factor,
+    sync_adj_factor 的变化判定不会因此触发 enriched 重算)。
+
+    下游联动与管道同语义: adj_factor 视图刷新 → 受影响个股 enriched
+    局部重算(全部日期) → kline_enriched 视图刷新 → 两表缓存失效。
+    enriched 尚未构建时跳过重算 (全量计算是盘后管道的职责)。
+    """
+    from datetime import datetime
+
+    emit = on_progress or _noop
+    adj_provider = _prefs.get_adj_factor_provider()
+    if not (capset.has(Cap.ADJ_FACTOR) or adj_provider != "tickflow"):
+        return {
+            "adj_factor_symbols": 0,
+            "adj_written": 0,
+            "enriched_days": 0,
+            "skipped_stages": ["sync_adj"],
+            "reason": "无可用除权因子数据源",
+        }
+
+    emit("resolve_universe", 5, "解析标的池…")
+    universe = _resolve_universe(capset, repo)
+    emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
+
+    def _adj_chunk_progress(cur: int, tot: int) -> None:
+        emit("sync_adj", 10 + int(55 * cur / tot),
+             f"除权因子批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+    # 按需窗口: 钳到本地日K起点。前复权里早于任一根已存K线的事件在
+    # cum/total 两侧同时出现、恰好抵消, 对所有已存价格零影响 (见
+    # indicators.pipeline._apply_adj_factor) — 拉它们只会为远古事件
+    # 逐只回补历史K线, 全市场一次曾多花 ~15 分钟。
+    store_min = repo.earliest_daily_date()
+    start = datetime(store_min.year, store_min.month, store_min.day) if store_min else None
+    window_label = f"自 {store_min.isoformat()}" if store_min else "全历史"
+    logger.info(
+        "standalone adj sync: %d symbols, event window %s",
+        len(universe), window_label,
+    )
+    emit("sync_adj", 10, f"获取除权因子 [{window_label}, {len(universe)} 只]…")
+    written_adj, affected = kline_sync.sync_adj_factor(
+        universe, repo, capset,
+        start_time=start, end_time=datetime.now(),
+        on_chunk_done=_adj_chunk_progress,
+    )
+    affected = sorted(set(affected))
+    _refresh_single_view(repo, "adj_factor")
+    emit("sync_adj", 65,
+         f"除权因子完成,新增 {written_adj} 行,因子变更 {len(affected)} 只")
+    _invalidate("adj_factor")
+
+    # enriched 局部重算: 与管道「无新日期 + 有新除权因子」分支同语义 (只重算受影响个股)
+    enriched_dir = repo.store.data_dir / "kline_daily_enriched"
+    enriched_exists = enriched_dir.exists() and any(enriched_dir.glob("date=*"))
+    written_enriched = 0
+    if affected and enriched_exists:
+        def _enriched_batch_progress(cur: int, tot: int) -> None:
+            emit("compute_enriched", 65 + int(30 * cur / tot),
+                 f"计算指标 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+        emit("compute_enriched", 65, f"增量计算 enriched ({len(affected)} 只个股)…")
+        logger.info("compute_enriched: adj_factor incremental (standalone), %d symbols", len(affected))
+        written_enriched = run_pipeline(symbols=affected, on_batch_done=_enriched_batch_progress)
+        _refresh_single_view(repo, "kline_enriched")
+        emit("compute_enriched", 95, f"enriched 完成,{len(affected)} 只个股")
+        _invalidate("enriched")
+    elif affected:
+        logger.info("standalone adj sync: enriched 未构建, 跳过局部重算 (交由盘后管道全量计算)")
+
+    emit("done", 100, "完成")
+    return {
+        "universe_size": len(universe),
+        "adj_written": written_adj,
+        "adj_factor_symbols": len(affected),
+        "enriched_days": written_enriched,
+        "skipped_stages": [],
+    }
+
+
 def warn_if_enriched_too_thin(data_dir: Path) -> int:
     """enriched 总覆盖天数; 低于常见指标暖机窗口时 WARN 引导全量回填 (#303)。
 

@@ -166,6 +166,7 @@ def test_in_process_backtests_share_capacity(capacity, monkeypatch, kind):
 
 @pytest.mark.parametrize("endpoint,body,module_name,function_name,result", [
     ("/api/pipeline/run", {}, "app.jobs.daily_pipeline", "run_now", {}),
+    ("/api/pipeline/adj-factor/run", {}, "app.jobs.daily_pipeline", "run_adj_factor_sync", {}),
     ("/api/kline/extend_history", {"value": 1, "unit": "month"},
      "app.services.extend_history", "run_extend_history", {}),
     ("/api/kline/repair_daily", {"start_date": "2026-01-01"},

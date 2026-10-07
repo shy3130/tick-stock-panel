@@ -1079,6 +1079,12 @@ def test_tail_ok_weekend_tolerance():
 
 # ---- adj_factor: 推导 ----
 
+# get_adj_factors 输出契约: 规范三列 + 事件明细列 (等差显示/全精度链重建用)
+_ADJ_OUT_COLS = [
+    "symbol", "trade_date", "ex_factor",
+    "dividend", "bonus", "allot", "allot_price", "prev_close",
+]
+
 
 def test_adj_dividend_factor_derivation(monkeypatch):
     """纯分红: P=32.8, D=0.68 → ref=32.12 → factor=32.8/32.12 (与 tickflow 对拍值一致)。"""
@@ -1090,6 +1096,20 @@ def test_adj_dividend_factor_derivation(monkeypatch):
     row = df.row(0, named=True)
     assert row["trade_date"] == date(2026, 6, 12)
     assert row["ex_factor"] == pytest.approx(32.8 / 32.12)
+
+
+def test_adj_output_keeps_event_details(monkeypatch):
+    """扩表: 输出保留事件明细 (每股分红/送转/配股/前收盘), 供等差显示与全精度链重建。"""
+    events = [("600519.SH", date(2026, 6, 12), 0.68, 0.0, 0.0, 0.0)]
+    bars = {"600519.SH": [_bar(date(2026, 6, 11), 32.8), _bar(date(2026, 6, 12), 32.0)]}
+    provider = _adj_provider(monkeypatch, events, bars)
+    df = provider.get_adj_factors(["600519.SH"], datetime(2026, 1, 1), datetime(2026, 12, 31))
+    row = df.row(0, named=True)
+    assert row["dividend"] == pytest.approx(0.68)
+    assert row["bonus"] == 0.0
+    assert row["allot"] == 0.0
+    assert row["allot_price"] == 0.0
+    assert row["prev_close"] == pytest.approx(32.8)
 
 
 def test_adj_bonus_and_allotment_formula(monkeypatch):
@@ -1194,7 +1214,7 @@ def test_adj_output_schema_sorted_and_deduped(monkeypatch):
     }
     provider = _adj_provider(monkeypatch, events, bars)
     df = provider.get_adj_factors(["000001.SZ", "600519.SH"], None, None)
-    assert df.columns == ["symbol", "trade_date", "ex_factor"]
+    assert df.columns == _ADJ_OUT_COLS
     assert df.schema["trade_date"] == pl.Date and df.schema["ex_factor"] == pl.Float64
     assert df.height == 3
     assert df.sort(["symbol", "trade_date"]).equals(df)  # 已排序
@@ -1204,7 +1224,7 @@ def test_adj_output_schema_sorted_and_deduped(monkeypatch):
 def test_adj_etf_and_empty_symbols_return_empty(monkeypatch):
     provider = _adj_provider(monkeypatch, [], {})
     empty = provider.get_adj_factors([], None, None)
-    assert empty.is_empty() and empty.columns == ["symbol", "trade_date", "ex_factor"]
+    assert empty.is_empty() and empty.columns == _ADJ_OUT_COLS
     etf = provider.get_adj_factors(["510300.SH"], None, None, asset_type="etf")
     assert etf.is_empty()
 
@@ -1218,7 +1238,7 @@ def test_adj_dump_unavailable_returns_empty(monkeypatch):
 
     provider._ensure_dump = _boom  # type: ignore[assignment]
     df = provider.get_adj_factors(["600519.SH"], None, None)
-    assert df.is_empty() and df.columns == ["symbol", "trade_date", "ex_factor"]
+    assert df.is_empty() and df.columns == _ADJ_OUT_COLS
 
 
 def test_adj_progress_callback_per_symbol(monkeypatch):
@@ -1287,6 +1307,32 @@ def test_adj_missing_symbol_in_dump_falls_back_to_http(monkeypatch, tmp_path):
     )
     assert [c["thscode"] for c in provider._get_client().calls] == ["600519.SH"]
     assert set(df["symbol"].to_list()) == {"000001.SZ", "600519.SH"}
+
+
+def test_adj_ancient_event_does_not_drag_universe_to_http(monkeypatch, tmp_path):
+    """一只远古事件(早于 dump 覆盖起点)只拖累自己; dump 覆盖内的标的零请求。
+
+    回归: 配价曾是"全有或全无" — 全市场最早事件早于 dump 起点时整轮放弃
+    dump, 全部标的逐只回补历史K线 (全市场一次 ~15 分钟)。
+    """
+    events = [
+        ("000001.SZ", date(2026, 6, 12), 0.3, 0.0, 0.0, 0.0),
+        ("600519.SH", date(2005, 6, 30), 1.0, 0.0, 0.0, 0.0),  # 早于 dump 起点
+    ]
+    big_rows = [
+        _dump_bar("000001.SZ", date(2026, 5, 10), 10.2),
+        _dump_bar("000001.SZ", date(2026, 6, 11), 10.625),
+        _dump_bar("000001.SZ", date(2026, 6, 12), 9.6),
+    ]
+    provider = _bigdump_provider(monkeypatch, tmp_path, big_rows)
+    provider._dump_memo[fp._ADJ_DUMP_KIND] = _adj_dump(events)
+    provider._get_client().bars["600519.SH"] = [
+        _bar(date(2005, 6, 29), 50.0),
+        _bar(date(2005, 6, 30), 45.0),
+    ]
+    df = provider.get_adj_factors(["000001.SZ", "600519.SH"], None, None)
+    assert [c["thscode"] for c in provider._get_client().calls] == ["600519.SH"]
+    assert "000001.SZ" in set(df["symbol"].to_list())  # dump 路径产出未被连累
 
 
 def test_adj_ten_day_dump_overlays_fresh_ex_close(monkeypatch, tmp_path):

@@ -31,7 +31,7 @@ import {
   useDataStatus,
 } from '@/lib/useSharedQueries'
 import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
-import { MissingCapChip, routeCapUsable, routeProviderDisplay, type RouteCapId } from '@/lib/capability-labels'
+import { MissingCapChip, routeCap, routeCapUsable, routeProviderDisplay, type RouteCapId } from '@/lib/capability-labels'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
@@ -48,6 +48,7 @@ import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
+import { AdjFactorSyncConfig } from '@/components/data/AdjFactorSyncConfig'
 import { RegimeConfigCard } from '@/components/data/RegimeConfigCard'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
@@ -261,13 +262,14 @@ export function Data() {
   const hasMinuteCap = usableOr('minute', !!tfCaps?.['kline.minute.batch'])
   const indexAuto = prefs.data?.pipeline_pull_index ?? true
   const etfAuto = prefs.data?.pipeline_pull_etf ?? false
-  const pipelineSteps = [
-    '日K',
-    ...(hasAdjCap ? ['复权'] : []),
-    '指标',
-    ...(indexAuto ? ['指数'] : []),
-    ...(etfAuto ? ['ETF'] : []),
-    ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : []),
+  // 管道步骤 + 各步能力路由 (路由徽标数据源 = 能力矩阵, 单一权威; 指标为本地计算无路由)
+  const pipelineSteps: { label: string; cap?: RouteCapId }[] = [
+    { label: '日K', cap: 'daily' },
+    ...(hasAdjCap ? [{ label: '复权', cap: 'adj_factor' as const }] : []),
+    { label: '指标' },
+    ...(indexAuto ? [{ label: '指数', cap: 'daily' as const }] : []),
+    ...(etfAuto ? [{ label: 'ETF', cap: 'daily' as const }] : []),
+    ...((hasMinuteCap && minuteAuto) ? [{ label: '分钟K', cap: 'minute' as const }] : []),
   ]
 
   // 数据画像卡片显隐(由页面设置弹窗控制,存 localStorage)
@@ -456,6 +458,8 @@ export function Data() {
             customProvider={routeProviderDisplay(matrix.data, 'adj_factor')}
             auto
             onShowFields={() => setSchemaTable('adj_factor')}
+            onSettings={() => setOpenSettings(v => v === 'adj_factor' ? null : 'adj_factor')}
+            settingsOpen={openSettings === 'adj_factor'}
           />
         )
       case 'enriched':
@@ -741,15 +745,27 @@ export function Data() {
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[10px] text-muted pb-2 border-b border-border/50">
+                <div className="flex items-center gap-1.5 text-[10px] text-muted pb-2 border-b border-border/50 flex-wrap">
                   <span className="text-accent/60 font-medium">盘前</span>
                   <span>个股维表</span>
                   <span className="text-border">→</span>
                   <span className="text-accent/60 font-medium">盘后</span>
                   {pipelineSteps.map((step, i) => (
-                    <span key={step} className="contents">
+                    <span key={step.label} className="contents">
                       {i > 0 && <span className="text-border">→</span>}
-                      <span>{step}</span>
+                      <span
+                        className="inline-flex items-center gap-0.5"
+                        title={step.cap
+                          ? `路由: ${routeCap(matrix.data, step.cap)?.effective_display ?? '—'}`
+                          : '本地计算'}
+                      >
+                        {step.label}
+                        {step.cap && (
+                          <span className="text-muted/60">
+                            ·{routeCap(matrix.data, step.cap)?.effective_display ?? '…'}
+                          </span>
+                        )}
+                      </span>
                     </span>
                   ))}
                 </div>
@@ -1173,6 +1189,18 @@ export function Data() {
         {openSettings === 'minute' && (
           <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
             <MinuteSyncConfig hasCap={hasMinuteCap} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'adj_factor' && (
+          <SettingsModal title="除权因子 · 同步设置" onClose={() => setOpenSettings(null)}>
+            <AdjFactorSyncConfig
+              hasCap={hasAdjCap}
+              providerDisplay={routeProviderDisplay(matrix.data, 'adj_factor')}
+              onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
+            />
           </SettingsModal>
         )}
       </AnimatePresence>

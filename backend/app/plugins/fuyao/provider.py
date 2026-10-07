@@ -358,13 +358,26 @@ class FuyaoProvider:
         self._dump_memo[dump_kind] = df
         return df
 
-    def _ensure_daily_big_dump(self, start_d: date) -> Path | None:
-        """10 年全量日K dump(约 172MB)。只要求覆盖窗口起点; 末端缺口由 10d dump 补。
+    def _ensure_daily_big_dump(self, start_d: date | None) -> Path | None:
+        """10 年全量日K dump(约 172MB)。要求覆盖窗口起点时校验; 末端缺口由 10d dump 补。
+
+        start_d=None 表示不校验覆盖(配价场景): 只要拿到 dump 本身即可,
+        个别覆盖不到的标的由 get_adj_factors 逐只回退 — 避免"全市场最早的
+        一个远古事件早于 dump 起点"就把整轮配价打回逐标的接口。
 
         已有缓存覆盖起点就直接复用, 不追新 release(避免深窗口高频触发时日日重下
         172MB — 旧 release 的中段历史不会变, 尾部新鲜度交给 1MB 的 10d dump)。
         """
-        for f in sorted(_cache_dir().glob("daily_k__*.parquet"), reverse=True):
+        cached = sorted(_cache_dir().glob("daily_k__*.parquet"), reverse=True)
+        if start_d is None:
+            if cached:
+                return cached[0]
+            try:
+                return self._ensure_dump_path(_DAILY_DUMP_KIND, "daily_k")
+            except FuyaoError as e:
+                logger.warning("扶摇 10 年 dump 不可用, 回退单标的接口: %s", e)
+                return None
+        for f in cached:
             try:
                 dmin, _ = _dump_date_range(f)
             except Exception:  # 缓存损坏不致命, 换下一个/重拉
@@ -685,14 +698,25 @@ class FuyaoProvider:
         asset_type: str = "stock",
         on_chunk_done: Callable[[int, int], None] | None = None,
     ) -> pl.DataFrame:
-        """A 股除权因子 → 内部契约(symbol/trade_date/ex_factor, 单事件比值非累积)。
+        """A 股除权因子 → 内部契约(symbol/trade_date/ex_factor, 单事件比值非累积)
+        + 事件明细列(dividend/bonus/allot/allot_price/prev_close, 可空):
+        供等差显示投影(Σ未来每股分红)与官方金额全精度因子链重建使用,
+        明细取自事件 dump 原始成分, 不再在推导后丢弃。
 
         数据链: adjustment-factors 全量事件 dump → 清洗(时区 +8h / 滤全零 / 同日成分合并)
         → 前收盘价从本地日K dump 一次取齐(缺价标的回退单标的接口) → 交易所公式推导
         → 涨跌停自检剔除异常。
         未来已公告事件无前收盘, 留给滚动增量窗口(15 天)自然补上。
         """
-        schema = {"symbol": pl.String, "trade_date": pl.Date, "ex_factor": pl.Float64}
+        schema = {
+            "symbol": pl.String, "trade_date": pl.Date, "ex_factor": pl.Float64,
+            "dividend": pl.Float64, "bonus": pl.Float64, "allot": pl.Float64,
+            "allot_price": pl.Float64, "prev_close": pl.Float64,
+        }
+
+        def _f(x) -> float | None:
+            return None if x is None else float(x)
+
         if not symbols or asset_type != "stock":
             return pl.DataFrame(schema=schema)
         try:
@@ -760,7 +784,12 @@ class FuyaoProvider:
                             ret * 100,
                         )
                         continue
-                out_rows.append({"symbol": sym, "trade_date": exd, "ex_factor": factor})
+                out_rows.append({
+                    "symbol": sym, "trade_date": exd, "ex_factor": factor,
+                    "dividend": _f(ev["dividend"]), "bonus": _f(ev["bonus"]),
+                    "allot": _f(ev["allot"]), "allot_price": _f(ev["allot_price"]),
+                    "prev_close": _f(p),
+                })
             if on_chunk_done:
                 on_chunk_done(i + 1, len(syms))
         if closes_by_sym is not None:
@@ -1057,12 +1086,12 @@ class FuyaoProvider:
 
         每标的开窗 [first_ex-30d, last_ex](与单标的接口同窗): 10 年大 dump 为
         主体, 10d dump 叠加补末端新鲜度(除权日当天的自检需要 ex 日收盘)。
-        返回 symbol → {date: close}; 大 dump 不可用/窗口早于其覆盖/读盘失败
-        → None, 由调用方整轮回退单标的接口。
+        返回 symbol → {date: close}; 大 dump 不可用/读盘失败 → None 整轮回退。
+        覆盖不到首个事件的个别标的不在此 dict 中(或首价晚于 first_ex),
+        由 get_adj_factors 逐只回退单标的接口 — 按需, 不全有或全无。
         """
         try:
-            lo = bounds["first_ex"].min() - timedelta(days=_PREV_CLOSE_BACKDAYS)
-            path = self._ensure_daily_big_dump(lo)
+            path = self._ensure_daily_big_dump(None)
             if path is None:
                 return None
             sources = [self._closes_scan(pl.scan_parquet(path))]
