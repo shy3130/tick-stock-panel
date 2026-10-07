@@ -1617,6 +1617,16 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
   const navQ = useQuery({ queryKey: QK.paperNav(acc), queryFn: () => api.paperNav(acc) })
   const statsQ = useQuery({ queryKey: QK.paperStats(acc), queryFn: () => api.paperStats(acc) })
 
+  // 持仓代码→名称 (#454): 就地显示名称, 不用切页查询。股票/ETF/指数都覆盖。
+  const holdingSymbols = (overviewQ.data?.holdings ?? []).map(h => h.symbol)
+  const namesQ = useQuery({
+    queryKey: ['instrument-names', holdingSymbols.join(',')],
+    queryFn: () => api.instrumentNames(holdingSymbols),
+    enabled: holdingSymbols.length > 0,
+    staleTime: 300000,
+  })
+  const symbolNames = namesQ.data?.names ?? {}
+
   // 'paper' 前缀兜底失效: 覆盖全部账户的全部查询 (订单变动可能影响净值/统计)
   const invalidateAll = () => qc.invalidateQueries({ queryKey: QK.paperAll })
 
@@ -1756,7 +1766,12 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
                   <tbody className="font-mono">
                     {holdings.map(h => (
                       <tr key={h.symbol} className="border-t border-border/50 transition-colors hover:bg-elevated/40">
-                        <td className="py-1.5 font-sans">{h.symbol}</td>
+                        <td className="py-1.5 font-sans">
+                          {h.symbol}
+                          {symbolNames[h.symbol] && (
+                            <span className="ml-1.5 text-[10px] text-muted">{symbolNames[h.symbol]}</span>
+                          )}
+                        </td>
                         <td className="py-1.5 text-right">{h.qty}</td>
                         <td className="py-1.5 text-right text-muted">{h.available_qty}</td>
                         <td className="py-1.5 text-right">{fmtMoney(h.avg_cost, 3)}</td>
