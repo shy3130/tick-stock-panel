@@ -95,9 +95,11 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
     [allStrategies, draftPool]
   )
 
-  // research_only 草稿(AI 来源)单独列出, 供「发布」操作; 不进待选列表
+  // research_only 草稿(AI 来源)单独列出, 供「发布」操作; 不进待选列表。
+  // 发布闸(/{id}/publish)仅接受 source=ai, 非 AI 的 research 项(如内置研究模板
+  // factor_rank_research)混入会渲染出必然失败的「发布」按钮, 故此处排除。
   const drafts = useMemo(
-    () => allStrategies.filter(s => s.research_only),
+    () => allStrategies.filter(s => s.research_only && s.source === 'ai'),
     [allStrategies]
   )
 
