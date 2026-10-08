@@ -76,6 +76,17 @@ hiddenimports += [
     "app.plugins.fuyao.client",
 ]
 
+# ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
+# extensions/loader.py 运行时用 importlib.import_module + pkgutil.iter_modules
+# 发现 app/custom/* — 与插件同样对静态分析不可见, 必须双声明 (issue #459:
+# 未声明时冻结包里扩展静默消失, 助手路由未注册 → 请求落到 GET-only SPA 兜底
+# 返回 405):
+#   datas 落盘到 _internal/app/custom — frozen 下 app.__path__ 解析到
+#     _internal/app, 保 pkgutil 枚举与磁盘可见性;
+#   hiddenimports 进 PYZ — 保 importlib.import_module 可导入。
+datas += [(str(ROOT / "backend" / "app" / "custom"), "app/custom")]
+hiddenimports += collect_submodules("app.custom")
+
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
