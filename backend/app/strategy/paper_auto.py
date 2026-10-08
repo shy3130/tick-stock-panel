@@ -184,6 +184,13 @@ def on_rule_events(data_dir: Path, events: list[dict], account_id: str = paper.D
                 if _in_cooldown(data_dir, rule, symbol, int(rule.get("cooldown_days", 0)), account_id):
                     continue
                 qty = _sizing_qty(data_dir, rule, float(price), account_id)
+                if rule["side"] == "sell":
+                    # 金额换算的股数与实际持仓对不上: 以可卖余量封顶, 金额设足够大即清仓
+                    held = paper.sell_capacity(data_dir, symbol, account_id)
+                    if held is None:
+                        continue
+                    available, pending_sell = held
+                    qty = min(qty, paper.normalize_qty(available - pending_sell))
                 if qty <= 0:
                     logger.info("paper auto %s: %s 金额不足以一手 (价 %s)", rule["name"], symbol, price)
                     continue
