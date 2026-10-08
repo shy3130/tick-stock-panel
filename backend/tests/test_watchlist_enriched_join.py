@@ -576,4 +576,51 @@ def test_empty_watchlist_returns_no_rows(monkeypatch):
     )
 
     res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
-    assert res == {"rows": [], "as_of": None, "elapsed_ms": 0}
+    assert res == {"rows": [], "as_of": None, "elapsed_ms": 0,
+                   "dates": {"stock": None, "etf": None, "index": None}}
+
+
+# ===== 按资产类型行情日期 (dates) =====
+
+def test_dates_reports_per_asset_type_quote_dates(monkeypatch):
+    """dates 契约: 股票当日实时 / ETF 停在旧日 (未开实时拉退回旧日K缓存)。
+
+    前端分时缩略图续画只对 dates[asset_type] == 当日 的标的用行情 close 拼尾K;
+    ETF 旧日期 (如 09-24 收盘 1.105) 不得被拼进当日 1.03x 的分钟序列尾部。
+    """
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": "600519.SH"}, {"symbol": "510300.SH"}])
+    repo = _FakeRepo(
+        enriched_df=_enriched_df([("600519.SH", 1900.0, 1.2, 1e9)]),
+        enriched_date="2026-10-08",
+        etf_df=_enriched_df([("510300.SH", 4.0, 0.5, 1e8)]),
+        etf_date="2026-09-29",
+        etf_set={"510300.SH"},
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    assert res["dates"] == {"stock": "2026-10-08", "etf": "2026-09-29", "index": None}
+    # 全局 as_of 取 min, 与分类型 dates 各自独立 (as_of 分不清哪类过期)
+    assert res["as_of"] == "2026-09-29"
+
+
+def test_dates_etf_none_when_no_etf_in_watchlist(monkeypatch):
+    """自选无 ETF 时不触发 ETF 缓存懒加载 → dates.etf = None (前端按不新鲜处理)。
+
+    锁定端点「仅自选真的含 ETF 才去加载」的懒加载契约不被 dates 字段破坏。
+    """
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": "600519.SH"}])
+    repo = _FakeRepo(
+        enriched_df=_enriched_df([("600519.SH", 1900.0, 1.2, 1e9)]),
+        enriched_date="2026-10-08",
+        # etf_df 有数据但自选无 ETF: 端点不应调用 get_enriched_latest_asset("etf")
+        etf_df=_enriched_df([("510300.SH", 4.0, 0.5, 1e8)]),
+        etf_date="2026-09-29",
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    assert res["dates"]["stock"] == "2026-10-08"
+    assert res["dates"]["etf"] is None

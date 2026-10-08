@@ -475,7 +475,8 @@ def watchlist_enriched(
     entries = watchlist.list_symbols()
     symbols = [r["symbol"] for r in entries]
     if not symbols:
-        return {"rows": [], "as_of": None, "elapsed_ms": 0}
+        return {"rows": [], "as_of": None, "elapsed_ms": 0,
+                "dates": {"stock": None, "etf": None, "index": None}}
 
     # 按资产拆分自选 symbol; ETF enriched 是独立缓存, 仅自选真的含 ETF 才去加载
     # (避免无 ETF 用户在缓存冷启动时触发 ETF 全量懒加载)
@@ -526,8 +527,18 @@ def watchlist_enriched(
     # as_of 取三类缓存中较旧者
     dates = [d for d in (cache_date if stock_symbols else None, etf_date, index_date) if d is not None]
     as_of = min(dates) if dates else None
+    # 按资产类型的行情日期 (ISO): as_of 是三类取 min 的全局值, 分不清哪类过期。
+    # 前端分时缩略图续画据此判定「该类行情是否为当日」—— ETF 未开实时拉取时
+    # etf 缓存停在旧日, 过期 close 拼到当日分钟K尾部会画出错价 (issue 场景)。
+    # None = 未加载/无缓存, 前端一律按不新鲜处理 (fail-closed)。
+    quote_dates = {
+        "stock": str(cache_date) if cache_date else None,
+        "etf": str(etf_date) if etf_date else None,
+        "index": str(index_date) if index_date else None,
+    }
     if df.is_empty():
-        return {"rows": [], "as_of": str(as_of) if as_of else None, "elapsed_ms": 0}
+        return {"rows": [], "as_of": str(as_of) if as_of else None,
+                "elapsed_ms": 0, "dates": quote_dates}
 
     # JOIN float_shares (仅股票有) + 名称 (股票/ETF 统一走 get_name_map)
     df_i = repo.get_instruments()
@@ -682,7 +693,8 @@ def watchlist_enriched(
 
     rows = df.to_dicts()
     elapsed = (time.perf_counter() - t0) * 1000
-    return {"rows": rows, "as_of": str(as_of) if as_of else None, "elapsed_ms": elapsed}
+    return {"rows": rows, "as_of": str(as_of) if as_of else None,
+            "elapsed_ms": elapsed, "dates": quote_dates}
 
 
 def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
