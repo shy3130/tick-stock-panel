@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date
 from pathlib import Path
 
@@ -58,6 +59,12 @@ def _score(value: float, low: float, high: float) -> float:
     与看板 market_overview_builder._score 同款。low/high 用 A 股真实分位数校准。
     """
     if high <= low:
+        return 50.0
+    if not math.isfinite(value):
+        # 非有限输入(inf/-inf/nan)不在 [low, high] 映射域内。原先直接 round() 会抛
+        # OverflowError(inf) / ValueError(nan) ⇒ 单个坏值中断整段 regime 计算
+        # (2026-09-15: 停牌补零 ⇒ avg_pct=inf ⇒ regime_history 停更)。取中性 50 =
+        # "该维度不可计算", 既不伪造看多也不伪造看空。
         return 50.0
     return float(max(0, min(100, round((value - low) / (high - low) * 100))))
 

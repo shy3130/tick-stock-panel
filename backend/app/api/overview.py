@@ -217,6 +217,10 @@ def _board(symbol: str) -> str:
 def _score(value: float, low: float, high: float) -> int:
     if high <= low:
         return 50
+    if not math.isfinite(value):
+        # 非有限输入不可映射: 取中性 50, 不得让 round(inf)/round(nan) 抛异常打断 API 计算
+        # (与 app/services/regime_builder.py 的同名实现保持一致)
+        return 50
     return max(0, min(100, round((value - low) / (high - low) * 100)))
 
 
