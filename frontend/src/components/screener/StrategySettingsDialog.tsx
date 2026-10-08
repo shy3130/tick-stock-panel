@@ -1,12 +1,15 @@
 ﻿import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
-import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection } from '@/lib/api'
+import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
+import { ConditionEditor } from '@/components/signals/ConditionEditor'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
 
@@ -32,6 +35,12 @@ interface Props {
   onSaved?: (displayLimit: number | null) => void
   onAiModify?: () => void
   onDeleted?: () => void
+}
+
+// ===== 叠加条件支持判定: 与后端 _OVERLAY_UNSUPPORTED_BACKENDS 同集 =====
+// composite 已有自身叠加合并语义, 分钟策略帧不带 enriched 列 (ext_*/因子不可见)。
+function overlaySupported(d: StrategyDetail | null): boolean {
+  return !!d && !['composite', 'minute_filter'].includes(d.execution_backend)
 }
 
 // ===== 可折叠区域 =====
@@ -208,6 +217,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   const [exitSignals, setExitSignals] = useState<string[]>([])
   const [displayLimit, setDisplayLimit] = useState<number | null>(null)
   const [basicFilterEnabled, setBasicFilterEnabled] = useState(true)
+  // 叠加条件 (每策略 overlay 硬过滤; 仅日线 polars_expr / matrix_native 支持)
+  const [overlayFilter, setOverlayFilter] = useState<CustomSignalCondition[]>([])
   // 叠加策略: 子策略列表与权重(composite 专属, 编辑权重后随 override 保存)
   const [compositeChildren, setCompositeChildren] = useState<CompositeChildInfo[]>([])
   // 点击子策略名打开其配置编辑(composite 专属; 子策略必非 composite, 不会再嵌套)
@@ -223,6 +234,24 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   const setBF = useCallback((key: string, value: any) => {
     setBasicFilter(prev => ({ ...prev, [key]: value }))
   }, [])
+
+  // 叠加条件字段选项 (与自定义信号同一端点: 基础列 + 注册表因子 + 扩展数据)
+  const overlayOptions = useQuery({
+    queryKey: QK.customSignalsOptions,
+    queryFn: api.customSignalsOptions,
+    enabled: overlaySupported(detail),
+  })
+  // matrix 策略的矩阵 fields 是 float 数组, 字符串扩展字段进不了回测矩阵 → 不提供
+  const isMatrixBackend = detail?.execution_backend === 'matrix_native'
+  const overlayStringFields = isMatrixBackend ? [] : (overlayOptions.data?.stringFields ?? [])
+  const overlayFields = isMatrixBackend
+    ? (overlayOptions.data?.fields ?? []).filter(f => !(overlayOptions.data?.stringFields ?? []).includes(f.key))
+    : (overlayOptions.data?.fields ?? [])
+  const overlayGroups = isMatrixBackend
+    ? (overlayOptions.data?.groups ?? [])
+        .map(g => ({ ...g, fields: g.fields.filter(f => !(overlayOptions.data?.stringFields ?? []).includes(f.key)) }))
+        .filter(g => g.fields.length > 0)
+    : overlayOptions.data?.groups
 
   // 加载策略详情
   useEffect(() => {
@@ -245,6 +274,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
         setMaxHoldDays(d.max_hold_days)
         setEntrySignals(d.entry_signals ?? [])
         setExitSignals(d.exit_signals ?? [])
+        setOverlayFilter((d.overlay_filter ?? []).map(c => ({ leftDays: 0, rightDays: 0, ...c })))
         setDisplayLimit(d.display_limit ?? null)
         setBasicFilterEnabled(d.basic_filter?.enabled !== false)
         setCompositeChildren((() => {
@@ -295,6 +325,10 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
         entry_signals: entrySignals,
         exit_signals: exitSignals,
         display_limit: displayLimit,
+        // 叠加条件: 仅支持的策略类型随保存提交 (composite/minute 后端会拒绝)
+        ...(overlaySupported(detail) ? {
+          overlay_filter: overlayFilter.map(c => ({ left: c.left, op: c.op, right: c.right })),
+        } : {}),
         // 叠加策略: 子策略权重(composite 专属, 走 override.children 持久化)
         ...(detail?.source === 'composite'
           ? { children: (() => {
@@ -636,6 +670,28 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                     >
                       <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
                       <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
+                    </Section>
+
+                    {/* 叠加条件: 每策略 overlay 硬过滤, 不改策略代码 */}
+                    <Section icon={Filter} title="叠加条件" accent="text-sky-400" defaultOpen={false}>
+                      {overlaySupported(detail) ? (
+                        <div className="space-y-2">
+                          <ConditionEditor
+                            conditions={overlayFilter}
+                            onChange={setOverlayFilter}
+                            options={{ fields: overlayFields, groups: overlayGroups, stringFields: overlayStringFields, hideDays: true }}
+                            title="叠加过滤（多条件为「且」关系，硬过滤）"
+                          />
+                          <div className="text-[10px] leading-4 text-muted/70">
+                            叠加条件直接过滤策略候选，选股 / 回测 / 监控一致生效；只影响新入场，不触发已持仓卖出；字段数据缺失的日期不入选（如扩展数据未回补的交易日）。
+                            {isMatrixBackend && ' matrix 策略不支持字符串字段条件。'}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-muted py-1">
+                          当前策略类型不支持叠加条件（composite 请对子策略单独配置，分钟策略不支持）。
+                        </div>
+                      )}
                     </Section>
 
                     <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">

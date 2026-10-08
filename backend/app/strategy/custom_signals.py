@@ -282,6 +282,99 @@ def _col(name: str, days: int = 0) -> pl.Expr:
     return expr
 
 
+# ── 叠加条件 (策略 overlay_filter) ──────────────────────
+# 每策略「叠加条件」: {left, op, right} 条件列表, AND 组合的当日硬过滤,
+# 直接叠加在策略自身规则之上 (选股/回测/监控三处一致), 不落信号 JSON。
+# 条件结构/白名单/运算符与自定义信号完全同源, 禁用日期偏移。
+_OVERLAY_MAX_CONDITIONS = 8
+
+
+def validate_overlay_conditions(conditions: object) -> None:
+    """校验叠加条件列表 (策略 override 的 overlay_filter 键)。非法抛 ValueError。
+
+    空列表合法 (= 清空叠加条件)。字段白名单与运算符同自定义信号
+    (allowed_fields 含注册表因子与字符串扩展字段); days 偏移不支持。
+    """
+    if not isinstance(conditions, list):
+        raise ValueError("overlay_filter 必须是条件数组")
+    if not conditions:
+        return
+    if len(conditions) > _OVERLAY_MAX_CONDITIONS:
+        raise ValueError(f"叠加条件最多 {_OVERLAY_MAX_CONDITIONS} 条")
+    string_fields = _string_ext_fields()
+    for i, c in enumerate(conditions):
+        if not isinstance(c, dict):
+            raise ValueError(f"第 {i+1} 个叠加条件格式错误")
+        left = c.get("left", "")
+        if left not in allowed_fields():
+            raise ValueError(f"第 {i+1} 个叠加条件: 字段 {left!r} 不在白名单")
+        is_str = left in string_fields
+        if is_str:
+            if c.get("op") not in STRING_OPS:
+                raise ValueError(
+                    f"第 {i+1} 个叠加条件: 字符串字段 {left!r} 仅支持 "
+                    f"{'/'.join(sorted(STRING_OPS))} 运算符"
+                )
+        elif c.get("op") not in OPS:
+            raise ValueError(f"第 {i+1} 个叠加条件: 运算符 {c.get('op')!r} 非法")
+        _parse_right(c.get("right"), string_mode=is_str)
+        for key in ("leftDays", "rightDays"):
+            raw = c.get(key, 0)
+            try:
+                days = int(raw or 0)
+            except (TypeError, ValueError):
+                raise ValueError(f"第 {i+1} 个叠加条件: {key} 必须是整数") from None
+            if days != 0:
+                raise ValueError(f"第 {i+1} 个叠加条件: 叠加条件不支持日期偏移 ({key})")
+
+
+def build_overlay_expr(conditions: list[dict]) -> pl.Expr | None:
+    """把叠加条件编译成一条 AND 组合的布尔表达式 (无 csg_ 前缀, 不落盘)。
+
+    与 build_expressions 同一套编译件 (_OP_BUILDERS/_parse_right);
+    差异: 禁用日期偏移; 条件已被 validate_overlay_conditions 拦过一遍,
+    这里编译失败直接抛 ValueError (fail-closed, 不静默跳过 — 静默跳过
+    等于悄悄放宽过滤, 与硬过滤语义冲突)。
+    null 语义: 表达式不做 fill, 由调用方统一 fill_null(False)
+    (缺数据日不入选)。
+    """
+    if not conditions:
+        return None
+    string_fields = _string_ext_fields()
+    parts: list[pl.Expr] = []
+    for i, c in enumerate(conditions):
+        if int(c.get("leftDays", 0) or 0) or int(c.get("rightDays", 0) or 0):
+            raise ValueError(f"第 {i+1} 个叠加条件: 叠加条件不支持日期偏移")
+        left, op = c["left"], c["op"]
+        is_str = left in string_fields
+        kind, val = _parse_right(c["right"], string_mode=is_str)
+        right_expr = _col(val) if kind == "field" else val
+        parts.append(_OP_BUILDERS[op](_col(left), right_expr))
+    combined = parts[0]
+    for p in parts[1:]:
+        combined = combined & p
+    return combined
+
+
+def overlay_missing_columns(conditions: list[dict], columns) -> list[str]:
+    """叠加条件引用、且不在 columns 里的根字段 (供 fail-closed 检查)。"""
+    if not conditions:
+        return []
+    missing: list[str] = []
+    have = set(columns)
+    for c in conditions:
+        left = str(c.get("left", ""))
+        if left and left not in have and left not in missing:
+            missing.append(left)
+        right = c.get("right")
+        if isinstance(right, str) and right.startswith("field:"):
+            col = right[len("field:"):]
+            if col and col not in have and col not in missing:
+                missing.append(col)
+    return missing
+
+
+
 def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str, pl.Expr]:
     """把多个自定义信号编译成 {column_name: pl.Expr}。
 

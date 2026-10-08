@@ -900,6 +900,12 @@ class StrategyEngine:
         params = self.resolve_params(s, params, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
+        overlay_conditions = self._effective_overlay(overrides)
+        # 叠加条件运行期守卫 (保存期已拦, 手改 override 文件时的双保险)
+        if overlay_conditions and s.execution_backend in ("composite", "minute_filter"):
+            raise ValueError(
+                f"strategy {strategy_id}: 叠加条件不支持 {s.execution_backend} 策略"
+            )
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -1040,6 +1046,30 @@ class StrategyEngine:
             expr = s.filter_fn(df, params)
             df = df.filter(expr)
 
+        # Stage 2.5: 叠加条件 (每策略 overlay 硬过滤) — 策略过滤之后、评分之前:
+        # 评分 min-max 归一化与 limit 截断都在过滤后的候选上进行; exit_signal_hits
+        # 已在 :942 过滤前的帧上收集, 已持仓的卖出信号不受影响。
+        if overlay_conditions:
+            from app.strategy import custom_signals
+            try:
+                overlay_expr = custom_signals.build_overlay_expr(overlay_conditions)
+            except ValueError as e:
+                raise ValueError(f"叠加条件编译失败: {e}") from e
+            if overlay_expr is not None:
+                # engine.run 不保证任意注册表因子列在帧上 → 先按条件依赖物化
+                df = custom_signals.materialize_factor_columns(
+                    df, {"__overlay__": overlay_expr}
+                )
+                missing = custom_signals.overlay_missing_columns(
+                    overlay_conditions, df.columns
+                )
+                if missing:
+                    raise ValueError(
+                        "叠加条件引用的列不存在: " + ", ".join(missing)
+                        + " — 请检查扩展数据拉取/因子计算是否可用"
+                    )
+                df = df.filter(overlay_expr.fill_null(False))
+
         # Stage 3: 评分
         df = self._apply_scoring(df, scoring, scoring_directions)
         entry_signal_hits = self._collect_signal_hits(df, entry_signals)
@@ -1089,6 +1119,14 @@ class StrategyEngine:
         if isinstance(value, list):
             return [str(signal) for signal in value if signal]
         return list(default or [])
+
+    @staticmethod
+    def _effective_overlay(overrides: dict) -> list[dict] | None:
+        """叠加条件 override; 归一为非空条件列表或 None (None/[] = 未配置)。"""
+        value = (overrides or {}).get("overlay_filter")
+        if isinstance(value, list) and value:
+            return value
+        return None
 
     @staticmethod
     def _collect_signal_hits(df: pl.DataFrame, signals: list[str]) -> list[dict]:
@@ -1358,11 +1396,45 @@ class StrategyEngine:
         if not target_ids:
             return StrategyResult(as_of=as_of, strategy_id=strategy_id)
         target_time = target_ids[-1]
+        target_frame = self._matrix_target_frame(source_panel, as_of)
         entry_active = signals.entry[target_time]
         exit_active = signals.exit[target_time]
         if asset_mask is not None:
             entry_active = entry_active & asset_mask
             exit_active = exit_active & asset_mask
+        # 叠加条件 (每策略 overlay 硬过滤): 在带完整 enriched 列 (ext_*/因子) 的
+        # target_frame 上评估, 按符号掩码 entry (只挡入场, exit/持仓卖出不动)。
+        # 与 polars 路径 Stage 2.5 同一套条件编译与 fail-closed 语义。
+        overlay_conditions = self._effective_overlay(overrides)
+        if overlay_conditions:
+            from app.strategy import custom_signals
+            try:
+                overlay_expr = custom_signals.build_overlay_expr(overlay_conditions)
+            except ValueError as e:
+                raise ValueError(f"叠加条件编译失败: {e}") from e
+            if overlay_expr is not None:
+                target_frame = custom_signals.materialize_factor_columns(
+                    target_frame, {"__overlay__": overlay_expr}
+                )
+                missing = custom_signals.overlay_missing_columns(
+                    overlay_conditions, target_frame.columns
+                )
+                if missing:
+                    raise ValueError(
+                        "叠加条件引用的列不存在: " + ", ".join(missing)
+                        + " — 请检查扩展数据拉取/因子计算是否可用"
+                    )
+                keep = set(
+                    target_frame.filter(overlay_expr.fill_null(False))[
+                        "symbol"
+                    ].cast(pl.Utf8).to_list()
+                )
+                allowed = np.fromiter(
+                    (str(symbol) in keep for symbol in market.symbols),
+                    dtype=bool,
+                    count=len(market.symbols),
+                )
+                entry_active = np.where(allowed, entry_active, 0)
         entry_signal_hits = self._matrix_signal_hits(
             entry_active,
             signals.entry_signal_code[target_time],
@@ -1385,7 +1457,6 @@ class StrategyEngine:
                 exit_signal_hits=exit_signal_hits,
             )
 
-        target_frame = self._matrix_target_frame(source_panel, as_of)
         row_by_symbol = {
             str(row["symbol"]): row
             for row in target_frame.iter_rows(named=True)

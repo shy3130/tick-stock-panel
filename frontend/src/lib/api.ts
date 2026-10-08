@@ -792,6 +792,8 @@ export interface StrategyDetail {
   scoring_directions: Record<string, ScoringDirection>
   entry_signals: string[]
   exit_signals: string[]
+  // 叠加条件 (每策略 overlay 硬过滤); 无覆盖时空数组
+  overlay_filter?: CustomSignalCondition[]
   minute_exit_trigger_supported_signals: string[]
   stop_loss: number | null
   take_profit: number | null
