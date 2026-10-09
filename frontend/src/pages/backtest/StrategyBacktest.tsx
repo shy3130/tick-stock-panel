@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers, BookmarkPlus, Download } from 'lucide-react'
@@ -712,10 +712,11 @@ function ConfigSection({ title, hint, actions, children }: { title: string; hint
 }
 
 
-function StrategyParamInput({ param, value, onChange }: {
+// memo: 单参数修改只重渲本行 (父组件需传稳定回调, 否则 memo 失效)
+const StrategyParamInput = memo(function StrategyParamInput({ param, value, onChange }: {
   param: StrategyParamDef
   value: any
-  onChange: (value: any) => void
+  onChange: (pid: string, value: any) => void
 }) {
   if (param.type === 'bool') {
     const checked = value === true || value === 'true' || value === 'True' || value === true
@@ -724,7 +725,7 @@ function StrategyParamInput({ param, value, onChange }: {
         <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
         <button
           type="button"
-          onClick={() => onChange(!checked)}
+          onClick={() => onChange(param.id, !checked)}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 cursor-pointer ${
             checked ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]' : 'bg-elevated'
           }`}
@@ -741,7 +742,7 @@ function StrategyParamInput({ param, value, onChange }: {
     return (
       <label className="block">
         <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
-        <select value={value ?? param.default} onChange={e => onChange(e.target.value)} className={INPUT_CLS}>
+        <select value={value ?? param.default} onChange={e => onChange(param.id, e.target.value)} className={INPUT_CLS}>
           {(param.options ?? []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
         </select>
       </label>
@@ -768,12 +769,12 @@ function StrategyParamInput({ param, value, onChange }: {
         min={param.min}
         max={param.max}
         step={param.step ?? (param.type === 'int' ? 1 : 0.01)}
-        onChange={n => onChange(n == null ? '' : (param.type === 'int' ? Math.round(n) : n))}
+        onChange={n => onChange(param.id, n == null ? '' : (param.type === 'int' ? Math.round(n) : n))}
         className={INPUT_CLS}
       />
     </label>
   )
-}
+})
 
 function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: string; onChange: (value: string) => void; assetType?: 'stock' | 'etf' }) {
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
@@ -993,6 +994,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
   const [settingsTab, setSettingsTab] = useState<AdvancedSettingsTab>('params')
   const [strategyParams, setStrategyParams] = useState<Record<string, any>>(saved?.params ?? {})
+  // 稳定回调: 配合 memo(StrategyParamInput), 单参数修改只重渲对应行
+  const handleStrategyParamChange = useCallback((pid: string, v: any) => setStrategyParams(prev => ({ ...prev, [pid]: v })), [])
   const [overrides, setOverrides] = useState<Record<string, any>>(saved?.overrides ?? {})
   // result 不从 localStorage 恢复:它是运行产物(净值/交易),大且易过时,
   // 跨会话/拉新代码后自动渲染一个可能对应已失效策略的旧结果会造成困惑
@@ -2767,7 +2770,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             onClick={() => setSettingsOpen(false)}
-            className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]"
+            className="fixed inset-0 z-50 bg-black/45"
           />
           <motion.aside
             initial={{ x: 32, opacity: 0 }}
@@ -2855,7 +2858,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                           key={param.id}
                           param={param}
                           value={strategyParams[param.id]}
-                          onChange={value => setStrategyParams(prev => ({ ...prev, [param.id]: value }))}
+                          onChange={handleStrategyParamChange}
                         />
                       ))}
                     </div>
