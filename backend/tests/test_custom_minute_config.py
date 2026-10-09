@@ -380,3 +380,107 @@ def test_full_minute_dataset_survives_config_and_registration(tmp_path: Path, mo
         custom_loader._PROVIDERS.clear()
         custom_loader._PROVIDERS.update(saved_providers)
         custom_loader._LOAD_ERRORS[:] = saved_errors
+
+
+# ================================================================
+# amount 可空契约 + 保存先验后存 (用户反馈: 自定义源配全量分钟"保存不好使")
+# ================================================================
+
+def _minute_dataset(*, drop_targets: tuple[str, ...] = ()) -> dict:
+    """minute/full_minute 形态的数据集配置; drop_targets 指定不映射的内部字段。"""
+    field_map = {
+        "code": "symbol", "ts": "datetime",
+        "o": "open", "h": "high", "lo": "low", "c": "close", "v": "volume",
+    }
+    field_map = {k: v for k, v in field_map.items() if v not in drop_targets}
+    return {
+        "url": "https://example.test/minutes",
+        "method": "POST",
+        "response_path": "data",
+        "field_map": field_map,
+        "symbols_param": "codes",
+    }
+
+
+def test_full_minute_without_amount_is_valid():
+    """契约: 分钟 amount(成交额)可空 — 缺成交额的源合法, 均价线降级显示 —。
+
+    修复前: _REQUIRED 把 amount 列为必填 → validate 报 missing mapped fields,
+    整个源被 load_all 拒绝, 用户保存后源从列表消失("保存不好使")。
+    """
+    from app.data_providers.custom import loader
+
+    provider = loader.create_provider({
+        "name": "fm_no_amount", "display_name": "fm",
+        "datasets": {"full_minute": _minute_dataset(drop_targets=("amount",))},
+    })
+    try:
+        assert not provider.validate(), provider.validate()
+        assert "full_minute" in provider.config.datasets
+    finally:
+        provider.close()
+
+
+def test_minute_without_amount_is_valid():
+    """minute 数据集同契约: amount 不映射也合法。"""
+    from app.data_providers.custom import loader
+
+    provider = loader.create_provider({
+        "name": "m_no_amount", "display_name": "m",
+        "datasets": {"minute": _minute_dataset(drop_targets=("amount",))},
+    })
+    try:
+        assert not provider.validate(), provider.validate()
+    finally:
+        provider.close()
+
+
+def test_minute_missing_core_field_still_rejected():
+    """必填集仍生效: 缺 volume(核心量字段)依旧拒绝, 不能矫枉过正。"""
+    from app.data_providers.custom import loader
+
+    with pytest.raises(ValueError, match="volume"):
+        loader.create_provider({
+            "name": "m_no_volume", "display_name": "m",
+            "datasets": {"minute": _minute_dataset(drop_targets=("volume",))},
+        })
+
+
+def test_save_data_source_validates_before_write(monkeypatch, tmp_path):
+    """保存先验后存: 校验不过 400 + 不落盘; 合法配置才写 YAML 并注册。
+
+    修复前: save_config 先写 YAML, load_all 校验失败仅记 _LOAD_ERRORS,
+    源从列表静默消失, 前端还弹"已保存"成功提示。
+    """
+    from app.api.settings import save_data_source
+    from app.data_providers.custom import loader
+
+    monkeypatch.setattr(loader, "data_sources_dir", lambda: tmp_path)
+    saved_providers = dict(loader._PROVIDERS)
+    saved_status = dict(loader._PLUGIN_STATUS)
+    monkeypatch.setattr(loader, "_load_builtin_plugins", lambda: None)
+    try:
+        # 合法: full_minute 缺 amount 映射 → 保存成功且源注册
+        ok = CustomSourceIn(
+            name="fm_ok",
+            datasets={"full_minute": DatasetConfigIn(**_minute_dataset())},
+        )
+        save_data_source(ok)
+        assert (tmp_path / "fm_ok.yaml").exists()
+        assert loader.provider_has_dataset("fm_ok", "full_minute")
+
+        # 非法: 缺 volume → HTTP 400 带原因, 且不写 YAML
+        bad = CustomSourceIn(
+            name="fm_bad",
+            datasets={"full_minute": DatasetConfigIn(**_minute_dataset(drop_targets=("volume",)))},
+        )
+        with pytest.raises(HTTPException) as ei:
+            save_data_source(bad)
+        assert ei.value.status_code == 400
+        assert "volume" in str(ei.value.detail)
+        assert not (tmp_path / "fm_bad.yaml").exists()
+    finally:
+        loader._PROVIDERS.clear()
+        loader._PROVIDERS.update(saved_providers)
+        loader._PLUGIN_STATUS.clear()
+        loader._PLUGIN_STATUS.update(saved_status)

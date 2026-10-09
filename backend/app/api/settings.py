@@ -749,10 +749,24 @@ def get_data_source(name: str) -> dict:
 
 @router.post("/data-sources")
 def save_data_source(req: CustomSourceIn) -> dict:
-    """创建或更新一个自定义数据源 yaml, 保存后自动 reload。"""
+    """创建或更新一个自定义数据源 yaml, 保存后自动 reload。
+
+    先验后存 (对齐插件 Key 的先探后存语义): 用与加载同一套校验试建临时
+    provider, 不通过直接 400 且不落盘 — 否则 YAML 写入但 load_all 校验失败,
+    源从列表静默消失, 前端还弹"已保存"成功提示 (用户反馈: 全量分钟缺
+    amount 映射被拒, 以为存上了)。
+    """
     from app.data_providers import custom as custom_sources
     config = req.model_dump()
     config["name"] = (config.get("name") or "").lower()
+    probe = None
+    try:
+        probe = custom_sources.create_provider(config)  # 失败自抛 ValueError(含全部校验原因)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        if probe is not None:
+            probe.close()  # 临时探针(仅校验用), 不留连接资源
     try:
         custom_sources.save_config(config["name"], config)
         custom_sources.load_all()

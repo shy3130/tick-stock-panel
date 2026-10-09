@@ -11,7 +11,7 @@
 | 日K | `daily` | 批量返回一组股票在指定区间内的日K |
 | 除权因子 | `adj_factor` | 批量返回一组股票的复权因子 |
 | 实时行情 | `realtime` | 返回全市场快照,用于盘中 enriched 增量计算 |
-| 分钟K | `minute` | 返回 1m 分钟K(需映射出 symbol / datetime / OHLC / 量额) |
+| 分钟K | `minute` | 返回 1m 分钟K(需映射出 symbol / datetime / OHLC / 量; amount 成交额可缺省, 缺省时均价线降级显示 —) |
 | 全量分钟 | `full_minute` | 与 `minute` 同形;声明后可被路由为「全量分钟」生效源,内置服务盘中按当日窗口全市场批量落盘(仅修复轮语义,节奏下限 60s) |
 | 财务数据 | `financial` | 一个配置覆盖全部财务表,请求时把表名作为参数传给上游;字段由数据源决定,仅需映射出 symbol |
 
@@ -295,7 +295,7 @@ cp docs/examples/custom-data-source/mock_source.yaml data/data_sources/mock_sour
   prev_close = 昨收价
   open / high / low = 当日 OHLC
   volume = 成交量
-  amount = 成交额
+  amount = 成交额 (可缺省)
   change_pct = 涨跌幅 (小数, 0.0366 = 3.66%)
   change_amount = 涨跌额
   amplitude = 振幅 (小数, 0.024 = 2.4%)
@@ -310,7 +310,7 @@ cp docs/examples/custom-data-source/mock_source.yaml data/data_sources/mock_sour
   datetime = 北京时间墙钟 (YYYY-MM-DD HH:MM:SS)
   open / high / low / close = OHLC
   volume = 成交量
-  amount = 成交额
+  amount = 成交额 (可缺省: 无法提供可靠成交额时不要映射, 前端均价线降级显示 —)
 
 === 我的 API 文档 ===
 [把你的接口文档贴这里: URL / 请求方式 / 参数 / 返回字段说明]
