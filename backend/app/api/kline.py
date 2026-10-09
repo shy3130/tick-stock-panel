@@ -1516,7 +1516,7 @@ async def repair_daily(request: Request):
         except ValueError:
             raise HTTPException(status_code=400, detail="start_date 格式错误 (应为 YYYY-MM-DD)")
 
-        if start_date > _date.today():
+        if start_date > cn_today():
             raise HTTPException(status_code=400, detail="起始日期不能晚于今天")
 
         repo = request.app.state.repo
