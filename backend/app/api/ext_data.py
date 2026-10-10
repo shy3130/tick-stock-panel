@@ -30,8 +30,8 @@ from app.services.ext_data import (
     get_ext_api_key,
     infer_fields_from_df,
     parse_upload_file,
-    write_ext_parquet,
     rows_to_parquet,
+    write_ext_parquet,
 )
 from app.services.ext_pull import _request_json, fetch_and_ingest, pull_scheduler
 
@@ -1272,8 +1272,9 @@ def _find_row_arrays(data, prefix: str = "", limit: int = 8) -> list[str]:
 @router.post("/detect-url")
 async def detect_url(body: DetectUrlReq):
     """请求外部 URL，自动检测 JSON 行数据的字段和标的代码列。"""
-    from app.services.ext_pull import _extract_rows, _apply_field_map
     import httpx
+
+    from app.services.ext_pull import _apply_field_map, _extract_rows
 
     method = body.method.upper()
     if method not in ("GET", "POST"):

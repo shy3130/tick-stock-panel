@@ -17,6 +17,34 @@ from app.price_limits import (
     polars_price_limit_pct,
     price_limit_pct,
 )
+from app.strategy import custom_signals
+
+
+@pytest.fixture(autouse=True)
+def _limit_signal_definitions(monkeypatch):
+    """注入涨跌停信号定义 (与 data/user_data/custom_signals 种子同语义),
+    使 signal_limit_* 列断言不依赖运行目录的用户数据。"""
+    def _cond(left, op, right):
+        return {"left": left, "op": op, "right": right, "leftDays": 0, "rightDays": 0}
+
+    sigs = [
+        {"id": "limit_up", "column": "signal_limit_up",
+         "conditions": [_cond("raw_close", ">", "0"),
+                        _cond("raw_close", ">=", "field:limit_up_price")]},
+        {"id": "limit_down", "column": "signal_limit_down",
+         "conditions": [_cond("raw_close", ">", "0"),
+                        _cond("raw_close", "<=", "field:limit_down_price")]},
+        {"id": "limit_down_recovery", "column": "signal_limit_down_recovery",
+         "conditions": [_cond("raw_low", ">", "0"),
+                        _cond("raw_close", ">", "field:limit_down_price"),
+                        _cond("raw_low", "<=", "field:limit_down_price"),
+                        _cond("close", ">", "field:open")]},
+    ]
+    monkeypatch.setattr(
+        pipeline, "_custom_signal_exprs", custom_signals.build_expressions(
+            [{**s, "name": s["id"], "kind": "both", "enabled": True} for s in sigs]
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -286,8 +314,11 @@ def test_daily_limit_prices_ignore_zero_placeholder_and_match_realtime():
         }),
         instruments,
     )
-    assert realtime["signal_limit_up"][0] is False
-    assert mild["signal_limit_up"][-1] is realtime["signal_limit_up"][0]
+    # 实时路径不注入信号列 (定义注入在 compute_enriched_today 末尾), 按引擎判定价对拍
+    assert realtime["limit_up_price"][0] == pytest.approx(10.995)
+    assert realtime["consecutive_limit_ups"][0] == 0
+    assert mild["limit_up_price"][-1] == realtime["limit_up_price"][0]
+    assert mild["consecutive_limit_ups"][-1] == realtime["consecutive_limit_ups"][0]
 
 
 def test_realtime_limit_prices_ignore_stale_instrument_date():
@@ -315,7 +346,9 @@ def test_realtime_limit_prices_ignore_stale_instrument_date():
 
     result = pipeline._compute_limit_signals_today(rows, instruments)
 
-    assert result["signal_limit_down"][0] is False
+    # 过期维表 → 回退理论跌停价 9.005 (而非权威 9.105), 9.10 未触及 → 不判跌停
+    assert result["limit_down_price"][0] == pytest.approx(9.005)
+    assert result["consecutive_limit_downs"][0] == 0
     assert "_instrument_as_of" not in result.columns
 
 

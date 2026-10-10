@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.services import auth
+from app.services.api_gateway import is_local_network as _is_local_network
 
 logger = logging.getLogger(__name__)
 
@@ -37,30 +38,6 @@ _fail_counter: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
 _fail_lock = Lock()
 _MAX_FAILS = 5
 _LOCK_SECONDS = 300
-
-
-def _is_local_network(host: str | None) -> bool:
-    """是否本机或内网请求。
-
-    反向代理(Nginx)场景下 request.client.host 是代理本身(127.0.0.1),
-    需信任 X-Forwarded-For 的最左(原始客户端)。本项目部署若经反代,
-    请在反代配置正确的 X-Forwarded-For(标准做法)。
-    """
-    if not host:
-        return False
-    if host in ("127.0.0.1", "::1", "localhost"):
-        return True
-    # 内网网段: 10.x / 172.16-31.x / 192.168.x
-    if host.startswith("10.") or host.startswith("192.168."):
-        return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
 
 
 def _client_ip(request: Request) -> str:

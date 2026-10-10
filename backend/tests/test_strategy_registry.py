@@ -85,11 +85,11 @@ def test_run_all_respects_explicit_empty_strategy_ids(tmp_path):
     assert engine.run_all(context, strategy_ids=[]) == {}
 
 
-def test_builtin_custom_and_ai_files_share_one_registry_and_run_path(tmp_path):
+def test_all_sources_share_one_registry_and_run_path(tmp_path):
     strategy_ids = {
-        "builtin": "builtin_plugin",
         "custom": "custom_plugin",
         "ai": "ai_plugin",
+        "composite": "composite_plugin",
     }
     dirs = []
     for source, strategy_id in strategy_ids.items():

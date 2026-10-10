@@ -21,7 +21,7 @@ from app.tickflow.repository import KlineRepository
 logger = logging.getLogger(__name__)
 
 # 常用指标 (MA5/10/20、BOLL(20)、量比等) 的近似最小暖机窗口。
-# 用于没有精确回看需求的场景 (自定义 SQL 选股、盘后管道) 的数据充足性提示 (#303);
+# 用于没有精确回看需求的场景 (自定义 SQL 筛选、盘后管道) 的数据充足性提示 (#303);
 # 策略运行用 engine.required_history_bars 的精确值。
 MIN_INDICATOR_WARMUP_DAYS = 30
 
@@ -373,7 +373,7 @@ class ScreenerService:
         limit: int = 30,
         pool: list[str] | None = None,
     ) -> ScreenerResult:
-        """自定义 SQL 条件选股。
+        """自定义 SQL 条件筛选。
 
         先通过 Polars 即时计算完整指标, 再用 DuckDB 做 SQL WHERE 过滤。
         kline_enriched DuckDB 视图只有 14 列, 不能直接用于指标过滤。
@@ -537,9 +537,9 @@ class ScreenerService:
     def coverage_warnings(self, as_of: date, *, required_bars: int | None = None) -> list[str]:
         """数据充足性提示 (#303): enriched 覆盖不足时返回用户可读警告, 充足返回 []。
 
-        空库首跑只拉到 1 个交易日时, 均线/动量/量比等指标暖机不足, 选股会静默
+        空库首跑只拉到 1 个交易日时, 均线/动量/量比等指标暖机不足, 策略会静默
         全 0 — 这里把"数据不够"显式说出来。required_bars 缺省用通用暖机窗口
-        (自定义 SQL 选股); 策略运行传 engine.required_history_bars 的精确值。
+        (自定义 SQL 筛选); 策略运行传 engine.required_history_bars 的精确值。
         available 为 0 时 enriched 为空, 上层 latest_date 已 400, 不重复提示。
         """
         available = enriched_history_days(self.repo.store.data_dir, self.asset_type, as_of)
@@ -550,6 +550,6 @@ class ScreenerService:
             return []
         return [
             f"本地数据仅覆盖 {available} 个交易日, 低于本次计算所需约 {need} 天暖机窗口 — "
-            "指标可能失真或全部落空 (选股 0 命中)。建议先全量回填日K并重算指标 "
+            "指标可能失真或全部落空 (策略命中 0)。建议先全量回填日K并重算指标 "
             "(数据页「日K批量同步」, 符号需带交易所后缀)"
         ]

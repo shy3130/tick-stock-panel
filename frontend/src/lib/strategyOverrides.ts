@@ -14,6 +14,9 @@ export function buildDefaultOverrides(detail: StrategyDetail): Record<string, an
     scoring: { ...detail.scoring },
     scoring_directions: { ...(detail.scoring_directions ?? {}) },
     scoring_replace: true,
+    // 叠加条件随策略配置带入: 回测 runner 只读请求 overrides, 不回退落盘配置,
+    // 缺了这一项策略页配置的叠加条件会在回测侧静默失效。
+    overlay_filter: detail.overlay_filter ?? [],
     stop_loss: detail.stop_loss,
     take_profit: detail.take_profit,
     trailing_stop: detail.trailing_stop,

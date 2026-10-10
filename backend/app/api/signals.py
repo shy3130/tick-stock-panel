@@ -53,6 +53,9 @@ class SignalModel(BaseModel):
     enabled: bool = True
     timeframe: str = "daily"   # daily | intraday(分钟K特征, 输出当日条件上升沿)
     min_bars: int = 0          # 仅 intraday: 当日最少已完成 bar 数, 不足不触发
+    # 显式输出列名 (None → csg_{id}); 迁移自内置的定义沿用 signal_* 原列名,
+    # 编辑保存时必须原样回传, 否则列名漂移会静默断开下游引用。
+    column: str | None = None
 
 
 class IntradayReplayRequest(BaseModel):
@@ -176,6 +179,18 @@ def save_signal(req: SignalModel, request: Request):
         custom_signals.validate(sig)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # 显式列名冲突闸: 两个定义输出同一列 (如改名另存仍带 signal_* column)
+    # 会让后者静默覆盖前者的注入, 必须显式拒绝。
+    if sig.get("column"):
+        for existing in custom_signals.load_all(_data_dir(request)):
+            if existing["id"] != sig["id"] and (
+                existing.get("column") == sig["column"]
+                or (not existing.get("column") and f"csg_{existing['id']}" == sig["column"])
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"列名 {sig['column']} 已被信号 {existing['id']} 占用",
+                )
     custom_signals.save_one(_data_dir(request), sig)
     _invalidate(request)
     return {"ok": True, "signal": sig}

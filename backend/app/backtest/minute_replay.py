@@ -1,6 +1,6 @@
 """分钟策略回测回放器 — 逐交易日回放 filter_minute_history 产生入场信号。
 
-与实盘选股 (ScreenerService 1m context) 走同一条 StrategyEngine.run 执行路径,
+与实盘策略 (ScreenerService 1m context) 走同一条 StrategyEngine.run 执行路径,
 消除回测/实盘偏差。语义铁律:
 
 - 分钟侧: 传入当日全量分钟分区, 策略函数自身因果 (第 m 根只用 <=m 的K线);
@@ -115,7 +115,7 @@ class MinuteReplayResult:
 
 
 class MinuteSignalReplayer:
-    """逐交易日回放分钟策略, 产出与实盘选股同源的入场命中。"""
+    """逐交易日回放分钟策略, 产出与实盘策略同源的入场命中。"""
 
     def __init__(self, engine, strategy_engine: StrategyEngine) -> None:
         # engine: BacktestEngine — 只用其 repo (分钟分区读取)。

@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
+from app.services.ndjson_heartbeat import with_heartbeat
 from app.strategy import config as strategy_config
 from app.strategy.ai_generator import AIStrategyGenerator, find_meta_assignment
 from app.strategy.engine import StrategyDef, StrategyEngine
@@ -29,7 +30,6 @@ from app.strategy.scoring import (
     effective_scoring,
     effective_scoring_directions,
 )
-from app.services.ndjson_heartbeat import with_heartbeat
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 logger = logging.getLogger(__name__)
@@ -205,12 +205,16 @@ def _strategy_detail(
         },
         "entry_signals": overrides.get("entry_signals", s.entry_signals) if overrides else s.entry_signals,
         "exit_signals": overrides.get("exit_signals", s.exit_signals) if overrides else s.exit_signals,
+        # 叠加条件 (每策略 overlay 硬过滤); 无覆盖时空列表
+        "overlay_filter": (overrides.get("overlay_filter") if overrides else None) or [],
         "minute_exit_trigger_supported_signals": sorted(MINUTE_EXIT_TRIGGER_SIGNALS),
         "stop_loss": overrides.get("stop_loss", s.stop_loss) if overrides else s.stop_loss,
-        "take_profit": getattr(s, "take_profit", None),
-        "trailing_stop": getattr(s, "trailing_stop", None),
-        "trailing_take_profit_activate": getattr(s, "trailing_take_profit_activate", None),
-        "trailing_take_profit_drawdown": getattr(s, "trailing_take_profit_drawdown", None),
+        # 风控字段与 stop_loss 同口径: 用户保存的 override 优先, 否则回退策略定义值。
+        # 否则策略设置里保存的止盈/移动止损不会回显, 回测页也无法继承。
+        "take_profit": overrides.get("take_profit", getattr(s, "take_profit", None)) if overrides else getattr(s, "take_profit", None),
+        "trailing_stop": overrides.get("trailing_stop", getattr(s, "trailing_stop", None)) if overrides else getattr(s, "trailing_stop", None),
+        "trailing_take_profit_activate": overrides.get("trailing_take_profit_activate", getattr(s, "trailing_take_profit_activate", None)) if overrides else getattr(s, "trailing_take_profit_activate", None),
+        "trailing_take_profit_drawdown": overrides.get("trailing_take_profit_drawdown", getattr(s, "trailing_take_profit_drawdown", None)) if overrides else getattr(s, "trailing_take_profit_drawdown", None),
         "max_hold_days": overrides.get("max_hold_days", s.max_hold_days) if overrides else s.max_hold_days,
         "order_by": s.meta.get("order_by", "score"),
         "descending": s.meta.get("descending", True),
@@ -350,7 +354,7 @@ def get_strategy(strategy_id: str, request: Request):
     return _strategy_detail(s, overrides or None, engine)
 
 
-# ── 执行选股 ─────────────────────────────────────────────────────────
+# ── 执行策略 ─────────────────────────────────────────────────────────
 
 
 @router.post("/run")
@@ -454,37 +458,85 @@ def run_all(req: RunAllRequest, request: Request):
 @router.post("/config")
 def save_config(req: SaveConfigRequest, request: Request):
     engine = _get_engine(request)
-    _get_public_strategy(engine, req.strategy_id)
+    strategy = _get_public_strategy(engine, req.strategy_id)
+    data_dir = _data_dir(request)
 
     _validate_scoring_config(req.overrides)
+    _validate_overlay_filter(strategy, req.overrides)
     # 剥离与策略默认值相同的字段，只保存用户真正修改过的值
     overrides = _strip_defaults(req.strategy_id, req.overrides, engine)
 
-    strategy_config.save_override(_data_dir(request), req.strategy_id, overrides)
+    old = strategy_config.load_override(data_dir, req.strategy_id) or {}
+    strategy_config.save_override(data_dir, req.strategy_id, overrides)
+    # 叠加条件改变策略结果, 而策略结果缓存键不含 overrides → 变化时必须清,
+    # 否则策略页读到旧缓存。仅在实际变化时清, 不波及普通保存。
+    if _overlay_changed(old.get("overlay_filter"), overrides.get("overlay_filter")):
+        _invalidate_strategy_runtime(request)
     return {"ok": True}
 
 
 @router.patch("/config")
 def patch_config(req: SaveConfigRequest, request: Request):
     engine = _get_engine(request)
-    _get_public_strategy(engine, req.strategy_id)
+    strategy = _get_public_strategy(engine, req.strategy_id)
     data_dir = _data_dir(request)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
+    old_overlay = overrides.get("overlay_filter")
     overrides.update(req.overrides)
     _validate_scoring_config(overrides)
+    _validate_overlay_filter(strategy, overrides)
     strategy_config.save_override(
         data_dir,
         req.strategy_id,
         _strip_defaults(req.strategy_id, overrides, engine),
     )
+    if _overlay_changed(old_overlay, overrides.get("overlay_filter")):
+        _invalidate_strategy_runtime(request)
     return {"ok": True}
+
+
+def _overlay_changed(old, new) -> bool:
+    """叠加条件是否实际变化 (None 与空列表等价为「未配置」)。"""
+    def _norm(value) -> list:
+        return value if isinstance(value, list) and value else []
+
+    return _norm(old) != _norm(new)
+
+
+# 叠加条件第一版只支持日线 polars_expr / matrix_native; composite 已有自身
+# 的叠加合并语义, minute 帧不带 enriched 列 (ext_*/因子列不可见)。
+_OVERLAY_UNSUPPORTED_BACKENDS = frozenset({"composite", "minute_filter"})
+
+
+def _validate_overlay_filter(strategy, overrides: dict) -> None:
+    """叠加条件 (overlay_filter) 保存校验: 条件合法性 + 策略类型支持。
+
+    键缺失或值为 None/空列表时跳过条件校验 (None/[] = 清空叠加条件)。
+    """
+    conditions = overrides.get("overlay_filter")
+    if conditions is None:
+        return
+    if strategy.execution_backend in _OVERLAY_UNSUPPORTED_BACKENDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{strategy.execution_backend} 策略暂不支持叠加条件; "
+                "composite 请对子策略单独配置, 分钟策略不支持"
+            ),
+        )
+    from app.strategy import custom_signals
+
+    try:
+        custom_signals.validate_overlay_conditions(conditions)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def _validate_scoring_config(overrides: dict) -> None:
     scoring = overrides.get("scoring")
     if scoring is not None:
         if not isinstance(scoring, dict):
-            raise HTTPException(status_code=400, detail="评分权重必须是对象")
+            raise HTTPException(status_code=400, detail="策略权重必须是对象")
         for name, weight in scoring.items():
             if not isinstance(name, str) or not name:
                 raise HTTPException(status_code=400, detail="评分因子名称无效")
@@ -761,8 +813,6 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
     elif req.mode == "update":
         if existing is None:
             raise ValueError(f"策略 {sid} 不存在")
-        if existing.source == "builtin":
-            raise ValueError("内置策略不可覆盖，请另存为自定义策略")
         path = existing.file_path
         expected_source = existing.source
     else:
@@ -1080,8 +1130,6 @@ def _save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request
     else:  # update
         if existing is None:
             raise ValueError(f"策略 {sid} 不存在")
-        if existing.source == "builtin":
-            raise ValueError("内置策略不可覆盖")
         # 只允许覆盖 composite 策略(防止把普通策略覆盖成 composite)
         if existing.execution_backend != "composite":
             raise ValueError("目标策略不是叠加策略，无法以叠加模式覆盖")
@@ -1200,7 +1248,7 @@ def publish_ai_strategy(strategy_id: str, request: Request):
 
 @router.delete("/{strategy_id}")
 def delete_strategy(strategy_id: str, request: Request):
-    """删除自定义策略 — 清除源文件、运行时注册和关联状态。内置策略不可删除。"""
+    """删除自定义策略 — 清除源文件、运行时注册和关联状态。"""
 
     engine = _get_engine(request)
     try:
@@ -1208,8 +1256,9 @@ def delete_strategy(strategy_id: str, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在") from e
 
-    if s.source == "builtin":
-        raise HTTPException(status_code=403, detail="内置策略不可删除")
+    # 研究模板是挖掘功能的内部依赖, 不允许从策略接口删除。
+    if s.meta.get("research_only"):
+        raise HTTPException(status_code=403, detail="研究模板不可删除")
 
     # 删除被引用的子策略会令叠加策略加载失败; 删除前 fail-closed 阻止。
     dependents = engine.find_dependents(strategy_id)

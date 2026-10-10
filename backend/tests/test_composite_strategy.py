@@ -1,11 +1,11 @@
-"""叠加策略 (composite) 加载、引用校验与选股合并测试。
+"""叠加策略 (composite) 加载、引用校验与策略合并测试。
 
 覆盖 CONTRIBUTING §9 矩阵中的「策略」与「回测」相关最低要求:
 - 加载解析正确, source 推断为 composite
 - 引用缺失 → 移除孤儿 composite, 不波及无辜策略(插件隔离)
 - 禁止嵌套 composite、asset_types 不一致、超过上限均 fail-closed
 - find_dependents 用于删除防护
-- 选股 union / intersect 合并, 标准化排名加权融合 score
+- 策略 union / intersect 合并, 标准化排名加权融合 score
 
 子策略用 polars_expr 后端(返回 True)以便用轻量 DataFrame 验证合并逻辑,
 不依赖 matrix_native 的矩阵加载。回测矩阵路径在 M2 单独测试。
@@ -250,7 +250,7 @@ def test_find_dependents_locates_referencing_composites(tmp_path):
     assert engine.find_dependents("nonexistent") == []
 
 
-# ───────────────────────── 选股合并 ─────────────────────────
+# ───────────────────────── 策略合并 ─────────────────────────
 
 
 def _stock_panel(symbols: list[str], scores: list[float]) -> pl.DataFrame:
@@ -400,10 +400,10 @@ def test_composite_no_scores_uses_neutral(tmp_path):
 
 
 def test_composite_single_candidate_child_matches_backtest_merge():
-    """子策略当天只选出一只票时, 选股合并与回测合并必须给出同一套评分。
+    """子策略当天只选出一只票时, 策略合并与回测合并必须给出同一套评分。
 
     单候选无法排名, 只能用中性分 0.5; 若当成"最优=1"会凭空抬高该票的融合分,
-    与 merge_signal_matrices (n <= 1 → 中性分) 分叉 —— 同一天同一标的在选股页
+    与 merge_signal_matrices (n <= 1 → 中性分) 分叉 —— 同一天同一标的在策略页
     和回测里评分与排序都不一样, 正是本模块要防的口径分裂。
     """
     from app.backtest.matrix import make_signal_matrix

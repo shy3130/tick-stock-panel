@@ -24,7 +24,7 @@ _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的�
 文件与范围铁律（不可违反）:
 1. 只创建这一个策略文件：只生成一个 .py 文件，绝不创建多文件、不拆分模块、不跨文件引用
 2. 绝不触碰项目源码：不要写任何会修改 backend/、docs/、frontend/ 等现有文件的代码；不要 import os/sys/pathlib 等文件系统模块
-3. 不得放入内置策略目录：AI 生成的策略只属于 data/strategies/ai/，文件名/ID 用 ai_ 前缀；内置目录 backend/app/strategy/builtin/ 由项目维护，AI 不得染指
+3. 策略只落在自己的目录：AI 生成的策略只属于 data/strategies/ai/，文件名/ID 用 ai_ 前缀；不要引用 app/strategy/ 下的任何项目文件
 4. polars 策略只 import polars 和 datetime；matrix_native 策略只允许 import numpy 以及 from app.backtest.matrix import 所需矩阵协议和算子
 
 要求:
@@ -345,7 +345,7 @@ META = {{...}}，{entrypoint_requirement}。只输出完整 Python 代码。
         "polars",
         "numpy",
         "app.backtest.matrix",
-        "app.strategy.builtin.factor_rank_research",
+        "app.strategy.research.factor_rank_research",
         "app.strategy.market_data",   # 新增: 策略可读取指数/ETF 日K
         "datetime",
         "__future__",

@@ -1,0 +1,17 @@
+{
+  "id": "n_day_low",
+  "name": "60日新低",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": "<=",
+      "right": "field:low_60d",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_n_day_low"
+}

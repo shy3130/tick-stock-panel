@@ -1,6 +1,6 @@
 """get_enriched_history 对历史日期也必须按「目标日及之前」的交易日计数取窗口。
 
-选股页可以选历史日期 (DatePicker), run_all / 单策略运行都会以 as_of 调
+策略页可以选历史日期 (DatePicker), run_all / 单策略运行都会以 as_of 调
 _load_enriched_history(as_of, required_history_bars)。缓存命中路径
 (repo.get_enriched_history) 从整份缓存的交易日序列取最后 N+1 个交易日作起点,
 缓存里晚于 as_of 的交易日也被算进去: as_of 越早窗口越短, 早于 N 个交易日时

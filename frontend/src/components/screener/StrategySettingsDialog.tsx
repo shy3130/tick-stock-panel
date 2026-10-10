@@ -1,12 +1,15 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
-import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection } from '@/lib/api'
+import { useQuery } from '@tanstack/react-query'
+import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2, SlidersHorizontal } from 'lucide-react'
+import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
+import { ConditionEditor } from '@/components/signals/ConditionEditor'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
 
@@ -34,48 +37,65 @@ interface Props {
   onDeleted?: () => void
 }
 
-// ===== 可折叠区域 =====
-function Section({ icon: Icon, title, accent, defaultOpen = true, children, extra }: {
-  icon?: React.ComponentType<{ className?: string }>
-  title: string
-  accent?: string
-  defaultOpen?: boolean
-  children: React.ReactNode
-  extra?: React.ReactNode
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div className="rounded-xl border border-border/15 bg-surface/20 overflow-hidden">
-      <div className="flex items-center gap-2 px-3.5 py-2 hover:bg-surface/30 transition-colors">
-        <button
-          onClick={() => setOpen(v => !v)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left cursor-pointer"
-        >
-          <ChevronDown className={`h-3 w-3 text-muted/40 transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
-          {Icon && <Icon className={`h-3.5 w-3.5 ${accent ?? 'text-muted'}`} />}
-          <span className="text-[11px] font-medium text-foreground/70">{title}</span>
-        </button>
-        {extra && <div className="ml-auto flex items-center gap-1">{extra}</div>}
-      </div>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="overflow-hidden"
-          >
-            <div className="px-3.5 pb-3 pt-0.5 space-y-2">
-              {children}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  )
+// ===== 叠加条件支持判定: 与后端 _OVERLAY_UNSUPPORTED_BACKENDS 同集 =====
+// composite 已有自身叠加合并语义, 分钟策略帧不带 enriched 列 (ext_*/因子不可见)。
+function overlaySupported(d: StrategyDetail | null): boolean {
+  return !!d && !['composite', 'minute_filter'].includes(d.execution_backend)
 }
 
+// ===== 设置分区 (左侧导航) =====
+type SettingsPage = 'screen' | 'scoring' | 'trading' | 'children'
+
+// ===== 基线快照: 用于「未保存改动」提示 (分区独立比较) =====
+interface SnapshotInput {
+  name: string
+  desc: string
+  limit: number | null
+  bf: Record<string, any>
+  enabled: boolean
+  params: Record<string, any>
+  overlay: CustomSignalCondition[]
+  scoring: Record<string, number>
+  dirs: Record<string, ScoringDirection>
+  sl: number | null
+  mh: number | null
+  tp: number | null
+  ts: number | null
+  ta: number | null
+  td: number | null
+  en: string[]
+  ex: string[]
+  children: { id: string; w: number }[]
+}
+
+// 各字段的归一化口径必须与加载/保存路径一致, 否则会误报"有改动":
+// overlay 按 left/op/right/偏移天数 归一; 子策略权重按整数百分比比较;
+// 风控小数按 abs 归一 (百分比输入往返 -0.08 → 0.08, 引擎按 abs 消费, 不算改动)。
+function buildSnapshot(v: SnapshotInput) {
+  const absRisk = (x: number | null) => (x == null ? null : Math.abs(x))
+  return {
+    info: JSON.stringify({ name: v.name, desc: v.desc, limit: v.limit ?? null }),
+    screen: JSON.stringify({
+      bf: { ...v.bf, enabled: v.enabled },
+      params: v.params,
+      overlay: v.overlay.map(c => ({ left: c.left, op: c.op, right: c.right, leftDays: c.leftDays ?? 0, rightDays: c.rightDays ?? 0 })),
+    }),
+    scoring: JSON.stringify({ s: v.scoring, d: v.dirs }),
+    trading: JSON.stringify({ sl: absRisk(v.sl), mh: v.mh, tp: absRisk(v.tp), ts: absRisk(v.ts), ta: absRisk(v.ta), td: absRisk(v.td), en: v.en, ex: v.ex }),
+    children: JSON.stringify(v.children),
+  }
+}
+type Snapshot = ReturnType<typeof buildSnapshot>
+
+// 页面切换时的入场动画 (tailwindcss-animate); 常驻挂载避免 ScoringEditor 草稿丢失
+const PAGE_ANIM = 'animate-in fade-in-0 slide-in-from-bottom-1 duration-150'
+
+// ===== 策略参数/基础参数通用字段行 =====
+const FIELD_LABEL_CLS = 'w-[88px] shrink-0 text-right text-[11px] leading-4 text-secondary'
+// 参数标签通常更长 (如「近60日最少涨停次数」), 单独放宽避免括号内折行
+// 参数标签通常更长 (如「近60日最少涨停次数」), 单独放宽; keep-all 让断行只发生在空格处, 避免拆断括号
+const PARAM_LABEL_CLS = 'w-[116px] shrink-0 text-right text-[11px] leading-4 text-secondary break-keep [overflow-wrap:anywhere]'
+const FIELD_INPUT_CLS = 'h-7 rounded-[6px] border border-border bg-base text-xs font-mono text-foreground focus:outline-none focus:border-accent/50'
 
 // ===== 区间字段（最小 ~ 最大） =====
 export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, step }: {
@@ -89,14 +109,14 @@ export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, un
 }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{label}</span>
+      <span className={FIELD_LABEL_CLS}>{label}</span>
       <input
         type="number"
         value={minVal ?? ''}
         onChange={e => onMinChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最小"
         step={step}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className={`${FIELD_INPUT_CLS} w-[84px] px-2 text-center`}
       />
       <span className="text-[10px] text-muted">~</span>
       <input
@@ -105,15 +125,45 @@ export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, un
         onChange={e => onMaxChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最大"
         step={step}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className={`${FIELD_INPUT_CLS} w-[84px] px-2 text-center`}
       />
-      {unit && <span className="text-[10px] text-muted shrink-0">{unit}</span>}
+      {unit && <span className="w-4 shrink-0 text-[10px] text-muted">{unit}</span>}
     </div>
   )
 }
 
 // 板块标签
 export const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
+
+// 风控百分比字段: 输入/显示百分比 (5 = 5%), 存储正小数 (0.05)。
+// 引擎与回测抽屉显示均按 abs 消费, 与历史负值 (-0.05) 兼容。
+function RiskPctField({ label, value, onChange, min, max, step = 0.5, unit = '%' }: {
+  label: string
+  value: number | null
+  onChange: (v: number | null) => void
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+}) {
+  const display = value == null ? '' : String(Math.round(Math.abs(value) * 10000) / 100)
+  return (
+    <div className="flex items-center gap-2">
+      <span className={FIELD_LABEL_CLS}>{label}</span>
+      <input
+        type="number"
+        value={display}
+        step={step}
+        min={min}
+        max={max}
+        placeholder="未设置"
+        onChange={e => onChange(e.target.value === '' ? null : Math.abs(Number(e.target.value)) / 100)}
+        className={`${FIELD_INPUT_CLS} w-[76px] px-2 text-center`}
+      />
+      <span className="text-[10px] text-muted">{unit}</span>
+    </div>
+  )
+}
 
 // 策略参数字段
 function ParamField({ def, value, onChange }: {
@@ -125,7 +175,7 @@ function ParamField({ def, value, onChange }: {
     const checked = value === true || value === 'true' || value === 'True'
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className={PARAM_LABEL_CLS} title={def.label}>{def.label}</span>
         <button
           type="button"
           onClick={() => onChange(!checked)}
@@ -138,17 +188,18 @@ function ParamField({ def, value, onChange }: {
             checked ? 'translate-x-[14px]' : 'translate-x-0.5'
           }`} />
         </button>
+        <span className="text-[10px] text-muted/60">{checked ? '开' : '关'}</span>
       </div>
     )
   }
   if (def.type === 'select' && def.options) {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className={PARAM_LABEL_CLS} title={def.label}>{def.label}</span>
         <select
           value={value ?? def.default}
           onChange={e => onChange(e.target.value)}
-          className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+          className={`${FIELD_INPUT_CLS} w-full max-w-[240px] px-1.5`}
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
@@ -158,21 +209,20 @@ function ParamField({ def, value, onChange }: {
   if (def.type === 'string') {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className={PARAM_LABEL_CLS} title={def.label}>{def.label}</span>
         <input
           type="text"
           value={value ?? def.default ?? ''}
           onChange={e => onChange(e.target.value)}
-          className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+          className={`${FIELD_INPUT_CLS} min-w-0 flex-1 px-2`}
         />
       </div>
     )
   }
 
-
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+      <span className={PARAM_LABEL_CLS} title={def.label}>{def.label}</span>
       <input
         type="number"
         value={value ?? def.default}
@@ -180,14 +230,48 @@ function ParamField({ def, value, onChange }: {
         step={def.step ?? 0.1}
         min={def.min}
         max={def.max}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className={`${FIELD_INPUT_CLS} w-24 px-2 text-center`}
       />
       {def.min != null && def.max != null && (
-        <span className="text-[10px] text-muted">{def.min}~{def.max}</span>
+        <span className="whitespace-nowrap text-[10px] text-muted/60">{def.min}~{def.max}</span>
       )}
     </div>
   )
 }
+
+// ===== 内容卡片 (分区页内的静态卡片, 取代原三列里的可折叠 Section) =====
+function Card({ icon: Icon, title, accent, extra, children, dim = false }: {
+  icon?: React.ComponentType<{ className?: string }>
+  title: string
+  accent?: string
+  extra?: React.ReactNode
+  children: React.ReactNode
+  /** 只淡化卡片主体, 头部操作 (如启用开关) 保持可点 */
+  dim?: boolean
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border/20 bg-surface/20">
+      <div className="flex items-center gap-2 border-b border-border/15 bg-elevated/20 px-4 py-2.5">
+        {Icon && <Icon className={`h-3.5 w-3.5 shrink-0 ${accent ?? 'text-muted'}`} />}
+        <span className="text-xs font-medium text-foreground/80">{title}</span>
+        {extra && <div className="ml-auto flex items-center gap-2">{extra}</div>}
+      </div>
+      <div className={`px-4 py-3 transition-opacity duration-200 ${dim ? 'opacity-25 pointer-events-none' : ''}`}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// 后端/周期显示名 (左侧导航底部信息栏)
+const BACKEND_LABEL: Record<string, string> = {
+  polars_expr: 'Polars 表达式',
+  matrix_native: '矩阵原生',
+  python_history_legacy: '历史兼容',
+  composite: '叠加融合',
+  minute_filter: '分钟过滤',
+}
+const TF_LABEL: Record<string, string> = { '1d': '日线', '1m': '分钟' }
 
 export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModify, onDeleted }: Props) {
   const [detail, setDetail] = useState<StrategyDetail | null>(null)
@@ -204,10 +288,17 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   const [scoringDirections, setScoringDirections] = useState<Record<string, ScoringDirection>>({})
   const [stopLoss, setStopLoss] = useState<number | null>(null)
   const [maxHoldDays, setMaxHoldDays] = useState<number | null>(null)
+  // 风控字段 (止盈/移动止损/回撤止盈): 与回测抽屉同口径, 输入百分比、存储小数
+  const [takeProfit, setTakeProfit] = useState<number | null>(null)
+  const [trailingStop, setTrailingStop] = useState<number | null>(null)
+  const [ttpActivate, setTtpActivate] = useState<number | null>(null)
+  const [ttpDrawdown, setTtpDrawdown] = useState<number | null>(null)
   const [entrySignals, setEntrySignals] = useState<string[]>([])
   const [exitSignals, setExitSignals] = useState<string[]>([])
   const [displayLimit, setDisplayLimit] = useState<number | null>(null)
   const [basicFilterEnabled, setBasicFilterEnabled] = useState(true)
+  // 叠加条件 (每策略 overlay 硬过滤; 仅日线 polars_expr / matrix_native 支持)
+  const [overlayFilter, setOverlayFilter] = useState<CustomSignalCondition[]>([])
   // 叠加策略: 子策略列表与权重(composite 专属, 编辑权重后随 override 保存)
   const [compositeChildren, setCompositeChildren] = useState<CompositeChildInfo[]>([])
   // 点击子策略名打开其配置编辑(composite 专属; 子策略必非 composite, 不会再嵌套)
@@ -218,10 +309,76 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   const [deleting, setDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  // 当前分区页 + 未保存改动基线
+  const [page, setPage] = useState<SettingsPage>('screen')
+  const [baseline, setBaseline] = useState<Snapshot | null>(null)
 
   // 辅助：更新 basicFilter 某个 key
   const setBF = useCallback((key: string, value: any) => {
     setBasicFilter(prev => ({ ...prev, [key]: value }))
+  }, [])
+
+  // 叠加条件字段选项 (与自定义信号同一端点: 基础列 + 注册表因子 + 扩展数据)
+  const overlayOptions = useQuery({
+    queryKey: QK.customSignalsOptions,
+    queryFn: api.customSignalsOptions,
+    enabled: overlaySupported(detail),
+  })
+  // matrix 策略的矩阵 fields 是 float 数组, 字符串扩展字段进不了回测矩阵 → 不提供
+  const isMatrixBackend = detail?.execution_backend === 'matrix_native'
+  const overlayStringFields = isMatrixBackend ? [] : (overlayOptions.data?.stringFields ?? [])
+  const overlayFields = isMatrixBackend
+    ? (overlayOptions.data?.fields ?? []).filter(f => !(overlayOptions.data?.stringFields ?? []).includes(f.key))
+    : (overlayOptions.data?.fields ?? [])
+  const overlayGroups = isMatrixBackend
+    ? (overlayOptions.data?.groups ?? [])
+        .map(g => ({ ...g, fields: g.fields.filter(f => !(overlayOptions.data?.stringFields ?? []).includes(f.key)) }))
+        .filter(g => g.fields.length > 0)
+    : overlayOptions.data?.groups
+
+  // 加载策略详情 → 编辑状态 (初始加载与「重置默认」后共用, 保证两边归一化口径一致)
+  const loadIntoState = useCallback((d: StrategyDetail) => {
+    setDetail(d)
+    setStrategyName(d.name ?? '')
+    setStrategyDesc(d.description ?? '')
+    // 确保 boards 有默认值
+    const bf = { ...d.basic_filter }
+    if (!bf.boards) bf.boards = ALL_BOARDS
+    const enabled = d.basic_filter?.enabled !== false
+    setBasicFilter(bf)
+    setBasicFilterEnabled(enabled)
+    setParams(d.params_defaults)
+    setScoring(d.scoring)
+    setScoringDirections(d.scoring_directions ?? {})
+    setStopLoss(d.stop_loss)
+    setMaxHoldDays(d.max_hold_days)
+    setTakeProfit(d.take_profit)
+    setTrailingStop(d.trailing_stop)
+    setTtpActivate(d.trailing_take_profit_activate)
+    setTtpDrawdown(d.trailing_take_profit_drawdown)
+    setEntrySignals(d.entry_signals ?? [])
+    setExitSignals(d.exit_signals ?? [])
+    const overlay = (d.overlay_filter ?? []).map(c => ({ leftDays: 0, rightDays: 0, ...c }))
+    setOverlayFilter(overlay)
+    setDisplayLimit(d.display_limit ?? null)
+    // 存储的小数权重 → 滑块百分比口径
+    const children = (() => {
+      const list = d.composite_children ?? []
+      const pcts = toPercentages(list.map(c => c.weight))
+      return list.map((c, i) => ({ ...c, weight: pcts[i] }))
+    })()
+    setCompositeChildren(children)
+    setPage(d.source === 'composite' ? 'children' : 'screen')
+    setBaseline(buildSnapshot({
+      name: d.name ?? '', desc: d.description ?? '', limit: d.display_limit ?? null,
+      bf, enabled, params: d.params_defaults, overlay,
+      scoring: d.scoring, dirs: d.scoring_directions ?? {},
+      sl: d.stop_loss, mh: d.max_hold_days,
+      tp: d.take_profit, ts: d.trailing_stop,
+      ta: d.trailing_take_profit_activate, td: d.trailing_take_profit_drawdown,
+      en: d.entry_signals ?? [], ex: d.exit_signals ?? [],
+      children: children.map(c => ({ id: c.id, w: Math.round(c.weight) })),
+    }))
   }, [])
 
   // 加载策略详情
@@ -231,28 +388,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     setLoading(true)
     api.strategyGet(strategyId)
       .then(d => {
-        setDetail(d)
-        setStrategyName(d.name ?? '')
-        setStrategyDesc(d.description ?? '')
-        // 确保 boards 有默认值
-        const bf = { ...d.basic_filter }
-        if (!bf.boards) bf.boards = ALL_BOARDS
-        setBasicFilter(bf)
-        setParams(d.params_defaults)
-        setScoring(d.scoring)
-        setScoringDirections(d.scoring_directions ?? {})
-        setStopLoss(d.stop_loss)
-        setMaxHoldDays(d.max_hold_days)
-        setEntrySignals(d.entry_signals ?? [])
-        setExitSignals(d.exit_signals ?? [])
-        setDisplayLimit(d.display_limit ?? null)
-        setBasicFilterEnabled(d.basic_filter?.enabled !== false)
-        setCompositeChildren((() => {
-          // 存储的小数权重 → 滑块百分比口径
-          const list = d.composite_children ?? []
-          const pcts = toPercentages(list.map(c => c.weight))
-          return list.map((c, i) => ({ ...c, weight: pcts[i] }))
-        })())
+        loadIntoState(d)
         // composite 策略: 加载全部可选子策略(排除自身和其他 composite)供添加
         if (d.source === 'composite') {
           api.screenerStrategies().then(data => {
@@ -262,7 +398,30 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       })
       .catch(() => setDetail(null))
       .finally(() => setLoading(false))
-  }, [strategyId])
+  }, [strategyId, loadIntoState])
+
+  // ===== 未保存改动检测 (分区维度) =====
+  const currentSnapshot = useMemo(() => buildSnapshot({
+    name: strategyName, desc: strategyDesc, limit: displayLimit,
+    bf: basicFilter, enabled: basicFilterEnabled, params,
+    overlay: overlayFilter, scoring, dirs: scoringDirections,
+    sl: stopLoss, mh: maxHoldDays,
+    tp: takeProfit, ts: trailingStop, ta: ttpActivate, td: ttpDrawdown,
+    en: entrySignals, ex: exitSignals,
+    children: compositeChildren.map(c => ({ id: c.id, w: Math.round(c.weight) })),
+  }), [strategyName, strategyDesc, displayLimit, basicFilter, basicFilterEnabled, params, overlayFilter, scoring, scoringDirections, stopLoss, maxHoldDays, takeProfit, trailingStop, ttpActivate, ttpDrawdown, entrySignals, exitSignals, compositeChildren])
+
+  const dirty = useMemo(() => {
+    if (!baseline) return { info: false, screen: false, scoring: false, trading: false, children: false }
+    return {
+      info: currentSnapshot.info !== baseline.info,
+      screen: currentSnapshot.screen !== baseline.screen,
+      scoring: currentSnapshot.scoring !== baseline.scoring,
+      trading: currentSnapshot.trading !== baseline.trading,
+      children: currentSnapshot.children !== baseline.children,
+    }
+  }, [currentSnapshot, baseline])
+  const dirtyAny = dirty.info || dirty.screen || dirty.scoring || dirty.trading || dirty.children
 
   // 叠加策略: 滑块百分比口径, 允许总和 ≠100, 保存时自动按比例归一
   const compositeTotal = compositeChildren.reduce((s, c) => s + (c.weight || 0), 0)
@@ -291,10 +450,19 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
           scoring_replace: true,
         } : {}),
         stop_loss: stopLoss,
+        take_profit: takeProfit,
+        trailing_stop: trailingStop,
+        trailing_take_profit_activate: ttpActivate,
+        trailing_take_profit_drawdown: ttpDrawdown,
         max_hold_days: maxHoldDays,
         entry_signals: entrySignals,
         exit_signals: exitSignals,
         display_limit: displayLimit,
+        // 叠加条件: 仅支持的策略类型随保存提交 (composite/minute 后端会拒绝);
+        // 含「前N日」偏移 (leftDays/rightDays), 与信号库同一套条件结构
+        ...(overlaySupported(detail) ? {
+          overlay_filter: overlayFilter.map(c => ({ left: c.left, op: c.op, right: c.right, leftDays: c.leftDays ?? 0, rightDays: c.rightDays ?? 0 })),
+        } : {}),
         // 叠加策略: 子策略权重(composite 专属, 走 override.children 持久化)
         ...(detail?.source === 'composite'
           ? { children: (() => {
@@ -317,24 +485,9 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     setResetting(true)
     try {
       await api.strategyResetConfig(strategyId)
-      // 重新加载默认值
+      // 重新加载默认值 (走同一归一化路径, 基线一并刷新)
       const d = await api.strategyGet(strategyId)
-      setDetail(d)
-      setStrategyName(d.name ?? '')
-      setStrategyDesc(d.description ?? '')
-      const bf = { ...d.basic_filter }
-      if (!bf.boards) bf.boards = ALL_BOARDS
-      setBasicFilter(bf)
-      setParams(d.params_defaults)
-      setScoring(d.scoring)
-      setScoringDirections(d.scoring_directions ?? {})
-      setStopLoss(d.stop_loss)
-      setMaxHoldDays(d.max_hold_days)
-      setEntrySignals(d.entry_signals ?? [])
-      setExitSignals(d.exit_signals ?? [])
-      setDisplayLimit(d.display_limit ?? null)
-      setBasicFilterEnabled(d.basic_filter?.enabled !== false)
-      setCompositeChildren(d.composite_children ?? [])
+      loadIntoState(d)
     } finally {
       setResetting(false)
     }
@@ -369,6 +522,29 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     URL.revokeObjectURL(url)
   }
 
+  // ===== 左侧导航分区 =====
+  const isComposite = detail?.source === 'composite'
+  const pages = useMemo(() => {
+    if (!detail) return []
+    return isComposite
+      ? [{ id: 'children' as const, label: '子策略与权重', icon: Layers, accent: 'text-teal-400' }]
+      : [
+          { id: 'screen' as const, label: '策略条件', icon: Filter, accent: 'text-sky-400' },
+          { id: 'scoring' as const, label: '策略权重', icon: Star, accent: 'text-amber-400' },
+          { id: 'trading' as const, label: '纪律与触发', icon: TrendingUp, accent: 'text-emerald-400' },
+        ]
+  }, [detail, isComposite])
+
+  // 导航徽标: 各分区核心数量一览
+  const navBadges: Record<SettingsPage, string | number | null> = {
+    screen: overlaySupported(detail) && overlayFilter.length > 0 ? overlayFilter.length : null,
+    scoring: !isComposite && Object.keys(scoring).length > 0 ? Object.keys(scoring).length : null,
+    trading: (entrySignals.length || exitSignals.length) ? `${entrySignals.length}/${exitSignals.length}` : null,
+    children: compositeChildren.length > 0 ? compositeChildren.length : null,
+  }
+
+  const scoreCount = Object.keys(scoring).length
+
   if (!strategyId) return null
 
   return (
@@ -388,7 +564,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
             <div className="flex items-center gap-2.5">
               <Settings2 className="h-4 w-4 text-accent" />
               <span id="strategy-settings-title" className="text-sm font-semibold text-foreground">{detail?.name ?? strategyId}</span>
-              {detail && <span className="text-[10px] px-1.5 py-0.5 rounded bg-elevated text-muted">{{ builtin: '内置', custom: '自定义', ai: 'AI', composite: '叠加' }[detail.source] ?? detail.source}</span>}
+              {detail && <span className="text-[10px] px-1.5 py-0.5 rounded bg-elevated text-muted">{{ custom: '自定义', ai: 'AI', composite: '叠加' }[detail.source] ?? detail.source}</span>}
               <span className="text-[10px] text-muted/40 font-mono">{strategyId}</span>
             </div>
             <div className="flex items-center gap-2">
@@ -407,252 +583,364 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
             </div>
           </div>
 
-          {/* 内容 */}
-          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-            {loading ? (
-              <div className="flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
-            ) : detail ? (
-              <>
-                {/* 名称 + 描述 + 显示上限 */}
-                <div className="flex items-end gap-4">
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">名称</span>
-                      <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)}
-                        className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">描述</span>
-                      <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
-                        className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
-                    <span className="text-[10px] text-muted/50">显示上限</span>
-                    <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
-                      className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                    <span className="text-[10px] text-muted/50">只</span>
-                  </div>
+          {loading ? (
+            <div className="flex flex-1 items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
+          ) : detail ? (
+            <>
+              {/* 名称 + 描述 + 显示上限 */}
+              <div className="flex items-center gap-4 border-b border-border/40 px-5 py-2.5">
+                <div className="flex min-w-0 flex-[3] items-center gap-2">
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted/50">名称</span>
+                  <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)}
+                    className="h-8 min-w-0 flex-1 rounded-lg bg-base border-0 ring-1 ring-border/30 px-3 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
                 </div>
+                <div className="flex min-w-0 flex-[4] items-center gap-2">
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted/50">描述</span>
+                  <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
+                    className="h-8 min-w-0 flex-1 rounded-lg bg-base border-0 ring-1 ring-border/30 px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <span className="text-[10px] text-muted/50">显示上限</span>
+                  <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
+                    className="h-8 w-16 rounded-lg bg-base border border-border/40 px-1.5 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                  <span className="text-[10px] text-muted/50">只</span>
+                </div>
+              </div>
 
-                {/* 叠加策略: 子策略列表 + 权重(替换三列参数, composite 专属) */}
-                {detail.source === 'composite' ? (() => {
-                  const SRC_LABEL: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
-                  const SRC_CLS: Record<string, string> = {
-                    builtin: 'border-accent/25 bg-accent/10 text-accent',
-                    custom: 'border-amber-400/25 bg-amber-400/10 text-amber-400',
-                    ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
-                  }
-                  const selectedIds = new Set(compositeChildren.map(c => c.id))
-                  const candidates = allStrategies.filter(s => !selectedIds.has(s.id))
-                  return (
-                  <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-4 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-teal-400" />
-                      <span className="text-sm font-medium text-foreground">子策略与权重</span>
-                      <span className="text-[10px] text-muted flex items-center gap-1.5">
-                        共 {compositeChildren.length} 个 · 权重
-                        <span className={`font-mono ${compositeChildren.length > 0 && compositeTotal !== 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                          {compositeTotal}%
-                        </span>
-                        {compositeChildren.length > 0 && compositeTotal !== 100 && (
-                          <span className="text-amber-400/60">(保存时自动按比例归一)</span>
-                        )}
-                      </span>
-                      <button onClick={() => setShowAddChild(v => !v)} className="ml-auto inline-flex items-center gap-1 h-6 px-2 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[11px] text-teal-400 hover:bg-teal-500/20">
-                        <Plus className="h-3 w-3" />添加
+              {/* 主区: 左侧分区导航 + 右侧内容页 */}
+              <div className="flex min-h-0 flex-1">
+                <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border/40 px-2.5 py-3">
+                  {pages.map(p => {
+                    const Icon = p.icon
+                    const activePage = page === p.id
+                    const badge = navBadges[p.id]
+                    const pageDirty = dirty[p.id]
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        aria-current={activePage ? 'page' : undefined}
+                        onClick={() => setPage(p.id)}
+                        className={`flex h-9 items-center gap-2 rounded-lg border px-2.5 text-left transition-colors cursor-pointer ${
+                          activePage
+                            ? 'border-accent/25 bg-accent/10 text-accent'
+                            : 'border-transparent text-secondary hover:bg-elevated/60 hover:text-foreground'
+                        }`}
+                      >
+                        <Icon className={`h-3.5 w-3.5 shrink-0 ${activePage ? 'text-accent' : p.accent}`} />
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium">{p.label}</span>
+                        {badge != null && <span className="shrink-0 font-mono text-[10px] text-muted/70">{badge}</span>}
+                        {pageDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" title="有未保存的改动" />}
                       </button>
+                    )
+                  })}
+                  {/* 底部: 策略元信息 */}
+                  <div className="mt-auto space-y-1 border-t border-border/20 px-1 pt-3" hidden={pages.length === 0}>
+                    <div className="flex items-center justify-between text-[10px] text-muted/50">
+                      <span>执行后端</span>
+                      <span className="font-mono text-muted/70">{BACKEND_LABEL[detail.execution_backend] ?? detail.execution_backend}</span>
                     </div>
-                    {/* 添加子策略面板 */}
-                    {showAddChild && (
-                      <div className="rounded-lg border border-border bg-base/60 p-2 space-y-1 max-h-48 overflow-y-auto">
-                        {candidates.length === 0 ? (
-                          <div className="text-[11px] text-muted py-2 text-center">无可添加的策略</div>
-                        ) : candidates.map(s => (
-                          <button key={s.id} onClick={() => addCompositeChild(s)} className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-teal-500/10">
-                            <Plus className="h-3 w-3 shrink-0 text-teal-400" />
-                            <span className="flex-1 truncate text-xs text-foreground">{s.name}</span>
-                            {s.source && (
-                              <span className={`rounded border px-1 text-[8px] ${SRC_CLS[s.source] ?? ''}`}>{SRC_LABEL[s.source] ?? s.source}</span>
-                            )}
-                          </button>
-                        ))}
+                    {detail.timeframes.length > 0 && (
+                      <div className="flex items-center justify-between text-[10px] text-muted/50">
+                        <span>周期</span>
+                        <span className="text-muted/70">{detail.timeframes.map(t => TF_LABEL[t] ?? t).join(' / ')}</span>
                       </div>
                     )}
-                    {compositeChildren.length === 0 ? (
-                      <div className="text-xs text-muted py-4 text-center">暂无子策略, 点击"添加"选择</div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {compositeChildren.map((c, i) => (
-                          <div key={c.id} className="flex items-center gap-2 rounded-lg bg-base/60 px-3 py-2">
-                            <span className="text-[10px] text-muted/50 font-mono w-5">{i + 1}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingChildId(c.id)}
-                                  title="点击编辑该子策略的配置"
-                                  className="truncate text-left text-xs font-medium text-foreground transition-colors hover:text-accent cursor-pointer"
-                                >
-                                  {c.name || c.id}
-                                </button>
-                                {c.source && (
-                                  <span className={`rounded border px-1 text-[8px] shrink-0 ${SRC_CLS[c.source] ?? ''}`}>{SRC_LABEL[c.source] ?? c.source}</span>
-                                )}
+                  </div>
+                </nav>
+
+                <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
+                  {/* 策略条件: 基础参数 / 策略参数 / 叠加条件 */}
+                  <div className={page === 'screen' ? PAGE_ANIM : 'hidden'}>
+                    <div className="space-y-3">
+                      <p className="text-[11px] leading-5 text-muted/70">决定哪些股票进入候选：基础过滤 → 策略参数 → 叠加条件，逐层收紧。</p>
+                      <div className="grid grid-cols-2 items-start gap-3">
+                        <Card
+                          icon={SlidersHorizontal}
+                          title="基础参数"
+                          accent="text-sky-400"
+                          dim={!basicFilterEnabled}
+                          extra={<>
+                            <span className="text-[10px] text-muted/60">{basicFilterEnabled ? '已启用' : '已关闭'}</span>
+                            <button
+                              type="button"
+                              onClick={() => setBasicFilterEnabled(v => !v)}
+                              aria-pressed={basicFilterEnabled}
+                              aria-label="启用基础参数过滤"
+                              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${basicFilterEnabled ? 'bg-sky-500' : 'bg-elevated'}`}
+                            >
+                              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${basicFilterEnabled ? 'translate-x-[14px]' : 'translate-x-0.5'}`} />
+                            </button>
+                          </>}
+                        >
+                          <div className="space-y-2">
+                            <RangeField label="价格" minVal={basicFilter.price_min} maxVal={basicFilter.price_max} onMinChange={v => setBF('price_min', v)} onMaxChange={v => setBF('price_max', v)} unit="元" step="1" />
+                            <RangeField label="流通市值" minVal={basicFilter.float_cap_min != null ? basicFilter.float_cap_min / 1e8 : null} maxVal={basicFilter.float_cap_max != null ? basicFilter.float_cap_max / 1e8 : null} onMinChange={v => setBF('float_cap_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('float_cap_max', v != null ? v * 1e8 : null)} unit="亿" step="5" />
+                            <RangeField label="成交额" minVal={basicFilter.amount_min != null ? basicFilter.amount_min / 1e8 : null} maxVal={basicFilter.amount_max != null ? basicFilter.amount_max / 1e8 : null} onMinChange={v => setBF('amount_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('amount_max', v != null ? v * 1e8 : null)} unit="亿" step="0.5" />
+                            <RangeField label="换手率" minVal={basicFilter.turnover_min} maxVal={basicFilter.turnover_max} onMinChange={v => setBF('turnover_min', v)} onMaxChange={v => setBF('turnover_max', v)} unit="%" step="0.5" />
+                            <div className="flex items-start gap-2 pt-0.5">
+                              <span className={`${FIELD_LABEL_CLS} pt-0.5`}>板块</span>
+                              <div className="flex flex-wrap gap-1">
+                                {ALL_BOARDS.map(b => {
+                                  const boards: string[] = basicFilter.boards ?? ALL_BOARDS
+                                  const active = boards.includes(b)
+                                  return (
+                                    <button key={b} onClick={() => { const cur: string[] = basicFilter.boards ?? ALL_BOARDS; const next = active ? cur.filter(x => x !== b) : [...cur, b]; setBF('boards', next.length === 0 ? ALL_BOARDS : next) }}
+                                      className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-colors cursor-pointer ${active ? `${color.select.border} ${color.select.bgLight} ${color.select.text}` : `border-border bg-base text-muted ${color.select.borderHover}`}`}>{b}</button>
+                                  )
+                                })}
                               </div>
-                              <div className="text-[10px] text-muted/50 font-mono">{c.id}</div>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={c.weight}
-                                onChange={e => setCompositeChildren(prev => prev.map((p, j) => j === i ? { ...p, weight: parseInt(e.target.value) || 0 } : p))}
-                                className="h-1 w-24 cursor-pointer accent-teal-400"
-                                aria-label={`${c.name || c.id}权重`}
-                              />
-                              <span className="w-9 text-right font-mono text-[10px] text-muted">{Math.round(c.weight)}%</span>
-                              <button onClick={() => removeCompositeChild(c.id)} className="text-danger/50 hover:text-danger p-1">
-                                <Trash2 className="h-3 w-3" />
+                            <div className="flex items-center gap-2">
+                              <span className={FIELD_LABEL_CLS}>ST</span>
+                              <button onClick={() => setBF('exclude_st', !basicFilter.exclude_st)}
+                                className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-colors cursor-pointer ${basicFilter.exclude_st ? 'border-danger/40 bg-danger/10 text-danger' : 'border-border bg-base text-muted hover:border-danger/30'}`}>{basicFilter.exclude_st ? '排除' : '包含'}</button>
+                            </div>
+                          </div>
+                        </Card>
+
+                        <Card
+                          icon={Settings2}
+                          title="策略参数"
+                          accent="text-muted"
+                          extra={detail.params.length > 0 ? <span className="text-[10px] text-muted/60">{detail.params.length} 项</span> : undefined}
+                        >
+                          {detail.params.length > 0 ? (
+                            <div className="space-y-2">
+                              {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
+                            </div>
+                          ) : (
+                            <div className="py-4 text-center text-xs text-muted/60">该策略无可调参数</div>
+                          )}
+                        </Card>
+                      </div>
+
+                      {/* 叠加条件: 每策略 overlay 硬过滤, 不改策略代码 */}
+                      <Card
+                        icon={Filter}
+                        title="叠加条件"
+                        accent="text-sky-400"
+                        extra={overlaySupported(detail) && overlayFilter.length > 0
+                          ? <span className="text-[10px] text-muted/60">{overlayFilter.length} 条</span>
+                          : undefined}
+                      >
+                        {overlaySupported(detail) ? (
+                          <div className="space-y-3">
+                            <ConditionEditor
+                              conditions={overlayFilter}
+                              onChange={setOverlayFilter}
+                              options={{ fields: overlayFields, groups: overlayGroups, stringFields: overlayStringFields }}
+                              title="叠加过滤（多条件为「且」关系，硬过滤）"
+                              allowEmpty
+                            />
+                            <div className="text-[11px] leading-5 text-muted/70">
+                              叠加条件直接过滤策略候选，策略 / 回测 / 监控一致生效；只影响新入场，不触发已持仓卖出；字段可点「最新」切换为「前N日」（按交易日回看，上限 60 日，与信号库同口径）；字段数据缺失的日期不入选（如扩展数据未回补的交易日）。
+                              {isMatrixBackend && ' matrix 策略不支持字符串字段条件。'}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-2 text-xs text-muted">
+                            当前策略类型不支持叠加条件（composite 请对子策略单独配置，分钟策略不支持）。
+                          </div>
+                        )}
+                      </Card>
+                    </div>
+                  </div>
+
+                  {/* 策略权重 */}
+                  <div className={page === 'scoring' ? PAGE_ANIM : 'hidden'}>
+                    <div className="space-y-3">
+                      <p className="text-[11px] leading-5 text-muted/70">对通过筛选的候选按因子加权打分排序；评分不改变是否入选，只决定排序先后。权重保存时自动归一。</p>
+                      <Card
+                        icon={Star}
+                        title="策略权重"
+                        accent="text-amber-400"
+                        extra={scoreCount > 0 ? <span className="text-[10px] text-muted/60">{scoreCount} 个因子</span> : undefined}
+                      >
+                        <ScoringEditor
+                          key={detail.id}
+                          value={scoring}
+                          directions={scoringDirections}
+                          fallbackLabels={FIELD_LABEL}
+                          onChange={(nextScoring, nextDirections) => {
+                            setScoring(nextScoring)
+                            setScoringDirections(nextDirections)
+                          }}
+                        />
+                      </Card>
+                    </div>
+                  </div>
+
+                  {/* 纪律与触发 */}
+                  <div className={page === 'trading' ? PAGE_ANIM : 'hidden'}>
+                    <div className="space-y-3">
+                      <p className="text-[11px] leading-5 text-muted/70">控制买卖时点：出入场触发器对回测与监控生效（任一命中即触发）；策略扫描不消费触发器，仍按策略自身规则。风控与持仓纪律作为策略默认值保存，回测 / 优化 / 走查打开时自动继承。</p>
+                      <Card icon={TrendingUp} title="风控与持仓纪律" accent="text-emerald-400">
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                            <RiskPctField label="止损" value={stopLoss} onChange={setStopLoss} min={0} max={99} />
+                            <RiskPctField label="止盈" value={takeProfit} onChange={setTakeProfit} min={1} max={500} />
+                            <RiskPctField label="移动止损" value={trailingStop} onChange={setTrailingStop} min={0.5} max={50} />
+                            <RiskPctField
+                              label="回撤止盈启动"
+                              value={ttpActivate}
+                              min={1} max={200}
+                              onChange={n => {
+                                setTtpActivate(n)
+                                // 联动: 回撤不能超过启动值 (与回测抽屉同规则)
+                                if (n != null && ttpDrawdown != null && ttpDrawdown > n) setTtpDrawdown(n)
+                              }}
+                            />
+                            <RiskPctField label="回撤止盈回撤" value={ttpDrawdown} onChange={setTtpDrawdown} min={0.5} max={50} unit="点" />
+                            <div className="flex items-center gap-2">
+                              <span className={FIELD_LABEL_CLS}>最长持仓</span>
+                              <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
+                                className={`${FIELD_INPUT_CLS} w-[76px] px-2 text-center`} />
+                              <span className="text-[10px] text-muted">天{maxHoldDays == null && '（不限）'}</span>
+                            </div>
+                          </div>
+                          <div className="text-[10px] leading-4 text-muted/70">回撤止盈：涨幅达到「启动」后启用，从高点回撤「回撤」个百分点即卖出；留空 = 不启用对应纪律。</div>
+                        </div>
+                      </Card>
+
+                      <div className="grid grid-cols-2 items-start gap-3">
+                        <Card
+                          icon={TrendingUp}
+                          title="入场触发器"
+                          accent="text-accent"
+                          extra={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
+                        >
+                          <div className="space-y-2">
+                            <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
+                            <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
+                          </div>
+                        </Card>
+
+                        <Card
+                          icon={TrendingUp}
+                          title="出场触发器"
+                          accent="text-warning"
+                          extra={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
+                        >
+                          <div className="space-y-2">
+                            <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
+                            <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
+                          </div>
+                        </Card>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 叠加策略: 子策略列表 + 权重 (composite 专属) */}
+                  <div className={page === 'children' ? PAGE_ANIM : 'hidden'}>
+                    {isComposite && (() => {
+                      const SRC_LABEL: Record<string, string> = { custom: '自定义', ai: 'AI' }
+                      const SRC_CLS: Record<string, string> = {
+                        custom: 'border-amber-400/25 bg-amber-400/10 text-amber-400',
+                        ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
+                      }
+                      const selectedIds = new Set(compositeChildren.map(c => c.id))
+                      const candidates = allStrategies.filter(s => !selectedIds.has(s.id))
+                      return (
+                      <div className="space-y-3">
+                        <p className="text-[11px] leading-5 text-muted/70">叠加策略按权重融合子策略的结果；点击子策略名可单独编辑其配置。</p>
+                        <div className="rounded-xl border border-teal-500/20 bg-teal-500/[0.03] overflow-hidden">
+                          <div className="flex items-center gap-2 border-b border-teal-500/15 bg-teal-500/[0.06] px-4 py-2.5">
+                            <Layers className="h-3.5 w-3.5 text-teal-400" />
+                            <span className="text-xs font-medium text-foreground/80">子策略与权重</span>
+                            <div className="ml-auto flex items-center gap-2">
+                              <span className="text-[10px] text-muted flex items-center gap-1.5">
+                                共 {compositeChildren.length} 个 · 权重
+                                <span className={`font-mono ${compositeChildren.length > 0 && compositeTotal !== 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {compositeTotal}%
+                                </span>
+                                {compositeChildren.length > 0 && compositeTotal !== 100 && (
+                                  <span className="text-amber-400/60">(保存时自动按比例归一)</span>
+                                )}
+                              </span>
+                              <button onClick={() => setShowAddChild(v => !v)} className="inline-flex items-center gap-1 h-6 px-2 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[11px] text-teal-400 hover:bg-teal-500/20 cursor-pointer">
+                                <Plus className="h-3 w-3" />添加
                               </button>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="text-[10px] text-muted/60 pt-1 border-t border-border/30">
-                      提示: 权重按相对比例生效, 保存时自动归一; 修改后点底部"保存设置"生效。
-                    </div>
-                  </div>
-                  )
-                })()
-                : (
-                <div className="grid grid-cols-3 gap-5 items-start">
-                  {/* 列1：选股条件 */}
-                    <Section icon={Filter} title="基础参数" accent="text-sky-400">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] text-muted">启用基础参数过滤</span>
-                        <button onClick={() => setBasicFilterEnabled(v => !v)}
-                          className={`relative w-8 h-[18px] rounded-full transition-colors ${basicFilterEnabled ? 'bg-sky-500' : 'bg-border'}`}>
-                          <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${basicFilterEnabled ? 'left-[16px]' : 'left-0.5'}`} />
-                        </button>
-                      </div>
-                      <div className={`space-y-2 transition-opacity duration-200 ${basicFilterEnabled ? '' : 'opacity-25 pointer-events-none'}`}>
-                      <RangeField label="价格" minVal={basicFilter.price_min} maxVal={basicFilter.price_max} onMinChange={v => setBF('price_min', v)} onMaxChange={v => setBF('price_max', v)} unit="元" step="1" />
-                      <RangeField label="流通市值" minVal={basicFilter.float_cap_min != null ? basicFilter.float_cap_min / 1e8 : null} maxVal={basicFilter.float_cap_max != null ? basicFilter.float_cap_max / 1e8 : null} onMinChange={v => setBF('float_cap_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('float_cap_max', v != null ? v * 1e8 : null)} unit="亿" step="5" />
-                      <RangeField label="成交额" minVal={basicFilter.amount_min != null ? basicFilter.amount_min / 1e8 : null} maxVal={basicFilter.amount_max != null ? basicFilter.amount_max / 1e8 : null} onMinChange={v => setBF('amount_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('amount_max', v != null ? v * 1e8 : null)} unit="亿" step="0.5" />
-                      <RangeField label="换手率" minVal={basicFilter.turnover_min} maxVal={basicFilter.turnover_max} onMinChange={v => setBF('turnover_min', v)} onMaxChange={v => setBF('turnover_max', v)} unit="%" step="0.5" />
-                      <div className="space-y-1.5">
-                        <div className="flex items-start gap-1.5">
-                          <span className="text-[11px] text-secondary w-16 shrink-0 text-right pt-0.5">板块</span>
-                          <div className="flex flex-wrap gap-0.5">
-                            {ALL_BOARDS.map(b => {
-                              const boards: string[] = basicFilter.boards ?? ALL_BOARDS
-                              const active = boards.includes(b)
-                              return (
-                                <button key={b} onClick={() => { const cur: string[] = basicFilter.boards ?? ALL_BOARDS; const next = active ? cur.filter(x => x !== b) : [...cur, b]; setBF('boards', next.length === 0 ? ALL_BOARDS : next) }}
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${active ? `${color.select.border} ${color.select.bgLight} ${color.select.text}` : `border-border bg-base text-muted ${color.select.borderHover}`}`}>{b}</button>
-                              )
-                            })}
+                          <div className="space-y-3 px-4 py-3">
+                            {/* 添加子策略面板 */}
+                            {showAddChild && (
+                              <div className="rounded-lg border border-border bg-base/60 p-2 space-y-1 max-h-56 overflow-y-auto">
+                                {candidates.length === 0 ? (
+                                  <div className="text-[11px] text-muted py-2 text-center">无可添加的策略</div>
+                                ) : candidates.map(s => (
+                                  <button key={s.id} onClick={() => addCompositeChild(s)} className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-teal-500/10 cursor-pointer">
+                                    <Plus className="h-3 w-3 shrink-0 text-teal-400" />
+                                    <span className="flex-1 truncate text-xs text-foreground">{s.name}</span>
+                                    {s.source && (
+                                      <span className={`rounded border px-1 text-[8px] ${SRC_CLS[s.source] ?? ''}`}>{SRC_LABEL[s.source] ?? s.source}</span>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {compositeChildren.length === 0 ? (
+                              <div className="text-xs text-muted py-6 text-center">暂无子策略，点击右上角「添加」选择</div>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {compositeChildren.map((c, i) => (
+                                  <div key={c.id} className="flex items-center gap-3 rounded-lg bg-base/60 px-3 py-2">
+                                    <span className="w-5 shrink-0 font-mono text-[10px] text-muted/50">{i + 1}</span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingChildId(c.id)}
+                                          title="点击编辑该子策略的配置"
+                                          className="truncate text-left text-xs font-medium text-foreground transition-colors hover:text-accent cursor-pointer"
+                                        >
+                                          {c.name || c.id}
+                                        </button>
+                                        {c.source && (
+                                          <span className={`shrink-0 rounded border px-1 text-[8px] ${SRC_CLS[c.source] ?? ''}`}>{SRC_LABEL[c.source] ?? c.source}</span>
+                                        )}
+                                      </div>
+                                      <div className="font-mono text-[10px] text-muted/50">{c.id}</div>
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-2">
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={c.weight}
+                                        onChange={e => setCompositeChildren(prev => prev.map((p, j) => j === i ? { ...p, weight: parseInt(e.target.value) || 0 } : p))}
+                                        className="h-1 w-36 cursor-pointer accent-teal-400"
+                                        aria-label={`${c.name || c.id}权重`}
+                                      />
+                                      <span className="w-9 text-right font-mono text-[10px] text-muted">{Math.round(c.weight)}%</span>
+                                      <button onClick={() => removeCompositeChild(c.id)} className="p-1 text-danger/50 hover:text-danger cursor-pointer" aria-label={`移除${c.name || c.id}`}>
+                                        <Trash2 className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <div className="border-t border-border/30 pt-2 text-[10px] text-muted/60">
+                              提示: 权重按相对比例生效, 保存时自动归一; 修改后点底部「保存设置」生效。
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-16 shrink-0 text-right">ST</span>
-                          <button onClick={() => setBF('exclude_st', !basicFilter.exclude_st)}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${basicFilter.exclude_st ? 'border-danger/40 bg-danger/10 text-danger' : 'border-border bg-base text-muted hover:border-danger/30'}`}>{basicFilter.exclude_st ? '排除' : '包含'}</button>
-                        </div>
                       </div>
-                    </div>
-                  </Section>
-
-                  {/* 列2：策略参数 */}
-                  <div className="space-y-3">
-                    {detail.params.length > 0 ? (
-                      <Section icon={Settings2} title="策略参数" accent="text-muted">
-                        <div className="space-y-1.5">
-                          {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
-                        </div>
-                      </Section>
-                    ) : (
-                      <div className="rounded-xl border border-border/15 bg-surface/20 px-3.5 py-4 text-[11px] text-muted/50 text-center">无策略参数</div>
-                    )}
-                  </div>
-
-                  {/* 列3：评分 + 交易 */}
-                  <div className="space-y-3">
-                    <Section icon={Star} title="评分权重" accent="text-amber-400">
-                      <ScoringEditor
-                        key={detail.id}
-                        value={scoring}
-                        directions={scoringDirections}
-                        fallbackLabels={FIELD_LABEL}
-                        onChange={(nextScoring, nextDirections) => {
-                          setScoring(nextScoring)
-                          setScoringDirections(nextDirections)
-                        }}
-                      />
-                    </Section>
-
-                    <Section icon={TrendingUp} title="交易参数" accent="text-emerald-400">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
-                          <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                          <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
-                          <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                          <span className="text-[10px] text-muted">天</span>
-                        </div>
-                        <div className="text-[11px] text-muted pt-1 border-t border-border/10">
-                          <span className="text-secondary">入场 </span><span className="text-foreground/70">{entrySignals.length > 0 ? `${entrySignals.length} 个触发器` : '无'}</span>
-                          <span className="text-secondary ml-3">出场 </span><span className="text-foreground/70">{exitSignals.length > 0 ? `${exitSignals.length} 个触发器` : '无'}</span>
-                        </div>
-                      </div>
-                    </Section>
-
-                    <Section
-                      icon={TrendingUp}
-                      title="入场触发器"
-                      accent="text-accent"
-                      defaultOpen={false}
-                      extra={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
-                    >
-                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
-                      <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
-                    </Section>
-
-                    <Section
-                      icon={TrendingUp}
-                      title="出场触发器"
-                      accent="text-warning"
-                      defaultOpen={false}
-                      extra={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
-                    >
-                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
-                      <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
-                    </Section>
-
-                    <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">
-                      出入场触发器保存后对<b className="text-secondary">回测和监控</b>生效;选股扫描仍按策略本身的筛选规则,不受此影响。
-                    </div>
-
+                      )
+                    })()}
                   </div>
                 </div>
-                )}
-              </>
-            ) : (
-              <div className="flex items-center justify-center py-16 text-sm text-muted">加载失败</div>
-            )}
-          </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center py-16 text-sm text-muted">加载失败</div>
+          )}
 
           {/* 底部按钮 */}
-          <div className="flex items-center justify-between px-5 py-3 border-t border-border/50 bg-surface/50">
+          <div className="flex items-center justify-between border-t border-border/50 bg-surface/50 px-5 py-3">
             <div className="flex items-center gap-2">
               <button onClick={handleReset} disabled={resetting}
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-surface text-xs text-secondary hover:text-danger hover:border-danger/30 transition-colors cursor-pointer disabled:opacity-50">
@@ -664,6 +952,11 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
               )}
             </div>
             <div className="flex items-center gap-2">
+              {dirtyAny && (
+                <span className="mr-1 inline-flex items-center gap-1.5 text-[11px] text-amber-400/90" title="改动需点击「保存设置」后生效">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />有未保存的改动
+                </span>
+              )}
               {onAiModify && (detail?.source === 'ai' || detail?.source === 'custom') && (
                 <button onClick={onAiModify}
                   className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-amber-400/30 bg-amber-400/8 text-amber-400 text-xs font-medium hover:bg-amber-400/15 transition-colors cursor-pointer">

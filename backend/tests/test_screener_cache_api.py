@@ -82,7 +82,7 @@ def test_cached_result_returns_only_requested_rows_with_ext_and_strategy_members
     monkeypatch.setattr(
         screener_api,
         "_load_ext_value_maps",
-        lambda *_args: {"concept.concept": {"000001.SZ": "银行", "000002.SZ": "科技"}},
+        lambda *_args, **_kwargs: {"concept.concept": {"000001.SZ": "银行", "000002.SZ": "科技"}},
     )
 
     payload = screener_api.get_cached_result(

@@ -72,7 +72,7 @@ QUICK_SUGGESTS: list[dict[str, str]] = [
         "id": "watchlist-check",
         "group": "我的与个股",
         "label": "我的自选表现如何",
-        "prompt": "查一下我的自选股列表, 按今日涨跌幅排序, 标出表现最好和最差的, 并简要点评。",
+        "prompt": "查一下我的自选列表, 按今日涨跌幅排序, 标出表现最好和最差的, 并简要点评。",
     },
     {
         "id": "stock-analyze",
@@ -114,8 +114,8 @@ QUICK_SUGGESTS: list[dict[str, str]] = [
     {
         "id": "run-strategy-today",
         "group": "策略与信号",
-        "label": "跑一个选股策略",
-        "prompt": "执行我的第一个选股策略, 看看按最新数据选出哪些标的, 并简要点评排在前面的几只。",
+        "label": "跑一个策略",
+        "prompt": "执行我的第一个策略, 看看按最新数据选出哪些标的, 并简要点评排在前面的几只。",
     },
     {
         "id": "backtest-pick",
@@ -1252,7 +1252,7 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
         ),
         _schema(
             "get_watchlist",
-            "查询用户的自选股列表(含备注), 并合并最新价与今日涨跌幅, 用于回答「我的自选表现如何」。",
+            "查询用户的自选列表(含备注), 并合并最新价与今日涨跌幅, 用于回答「我的自选表现如何」。",
             {},
             [],
         ),
@@ -1306,7 +1306,7 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
         ),
         _schema(
             "run_strategy",
-            "以最新交易日报酬面执行一个选股策略并返回命中标的列表(≤30 行)。strategy_id 可先用 list_strategies 查询。",
+            "以最新交易日报酬面执行一个策略并返回命中标的列表(≤30 行)。strategy_id 可先用 list_strategies 查询。",
             {"strategy_id": {"type": "string", "description": "策略 id"}},
             ["strategy_id"],
         ),

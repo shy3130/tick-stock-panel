@@ -1,0 +1,24 @@
+{
+  "id": "ma20_breakout",
+  "name": "突破MA20",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": ">",
+      "right": "field:ma20",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "close",
+      "op": "<=",
+      "right": "field:ma20",
+      "leftDays": 1,
+      "rightDays": 1
+    }
+  ],
+  "column": "signal_ma20_breakout"
+}

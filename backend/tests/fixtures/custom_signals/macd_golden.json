@@ -1,0 +1,25 @@
+{
+  "id": "macd_golden",
+  "name": "MACD金叉",
+  "kind": "both",
+  "conditions": [
+    {
+      "left": "macd_dif",
+      "op": ">",
+      "right": "field:macd_dea",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "macd_dif",
+      "op": "<=",
+      "right": "field:macd_dea",
+      "leftDays": 1,
+      "rightDays": 1
+    }
+  ],
+  "enabled": true,
+  "timeframe": "daily",
+  "min_bars": 0,
+  "column": "signal_macd_golden"
+}

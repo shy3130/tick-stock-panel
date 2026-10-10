@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import type { CapabilityMatrix, CapabilityRoute } from './api'
 
 export const CAP_LABELS: Record<string, { name: string; hint: string }> = {
-  'quote.by_symbol':         { name: '自选股实时监控', hint: 'Free 可按标的查询实时行情,用于少量自选股监控' },
+  'quote.by_symbol':         { name: '自选实时监控', hint: 'Free 可按标的查询实时行情,用于少量自选监控' },
   'quote.batch':             { name: '实时行情(批量)',   hint: '一次拿多只股票的价' },
   'quote.pool':              { name: '标的池查询',        hint: '按沪深300等池子拿行情' },
   'kline.daily.by_symbol':   { name: '日 K(按标的)',    hint: '单只股票历史日 K' },
-  'kline.daily.batch':       { name: '日 K(批量)',      hint: '一次拿多只股票的日 K — 选股 / 信号扫描 必需' },
+  'kline.daily.batch':       { name: '日 K(批量)',      hint: '一次拿多只股票的日 K — 策略 / 信号扫描 必需' },
   'kline.minute.by_symbol':  { name: '分钟 K(按标的)',  hint: '单股 1m/5m/15m/30m/60m K 线' },
   'kline.minute.batch':      { name: '分钟 K(批量)',    hint: '多股分钟 K' },
   'intraday.universe':       { name: '全量分钟',        hint: '标的池单请求拉全市场当日分钟K (盘中增量落盘, Expert 专有)' },

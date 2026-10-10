@@ -1,0 +1,17 @@
+{
+  "id": "boll_breakout_upper",
+  "name": "突破布林上轨",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": ">",
+      "right": "field:boll_upper",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_boll_breakout_upper"
+}

@@ -85,7 +85,7 @@ def _rss_bytes() -> int:
 def _strategy_dirs(data_dir: Path) -> list[Path]:
     app_dir = Path(__file__).resolve().parents[1]
     return [
-        app_dir / "strategy" / "builtin",
+        app_dir / "strategy" / "research",
         data_dir / "strategies" / "custom",
         data_dir / "strategies" / "ai",
         data_dir / "strategies" / "composite",

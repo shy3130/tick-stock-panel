@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 from datetime import date, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import polars as pl
@@ -296,6 +297,12 @@ def test_spawn_mining_benchmarks_strategy_on_every_outer_fold(tmp_path):
     start = date(2023, 1, 2)
     data_dir = tmp_path / "data"
     _write_mining_market_data(data_dir, start)
+    # 策略是用户数据: worker 只加载 data 目录下的策略, 把夹具拷进临时 custom 目录
+    import shutil
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures" / "strategies"
+    custom = data_dir / "strategies" / "custom"
+    custom.mkdir(parents=True, exist_ok=True)
+    shutil.copy(fixtures / "low_volatility_leader.py", custom / "low_volatility_leader.py")
     store = MiningRunStore(data_dir)
     manifest = store.create(
         {

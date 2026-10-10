@@ -3,14 +3,41 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import (
     ENRICHED_COLUMNS_BY_CATEGORY,
-    SIGNAL_DEPENDENCIES,
     compute_enriched_today,
     compute_indicators,
 )
+from app.strategy import custom_signals
 from app.tickflow.repository import DataStore, KlineRepository
+
+
+@pytest.fixture(autouse=True)
+def _isolated_limit_signal(monkeypatch):
+    """信号列已定义驱动: 注入最小 limit_up 定义, 不依赖运行目录的用户数据。
+
+    无涨跌幅限制日 limit_up_price 为 null → 信号为 null (非 False),
+    消费端按假值处理; 断言用 ``is not True`` 口径。
+    """
+    from app.indicators import pipeline
+
+    sigs = [{
+        "id": "limit_up", "name": "涨停", "kind": "both", "enabled": True,
+        "column": "signal_limit_up",
+        "conditions": [
+            {"left": "raw_close", "op": ">", "right": "0", "leftDays": 0, "rightDays": 0},
+            {"left": "raw_close", "op": ">=", "right": "field:limit_up_price",
+             "leftDays": 0, "rightDays": 0},
+        ],
+    }]
+    prev_fields = custom_signals.prev_day_fields(sigs)
+    monkeypatch.setattr(
+        pipeline, "_custom_signal_exprs_today",
+        custom_signals.build_expressions_prev(sigs, prev_fields),
+    )
+    monkeypatch.setattr(pipeline, "_custom_prev_fields_cache", prev_fields)
 
 
 def _historical_cache(latest: date) -> pl.DataFrame:
@@ -202,9 +229,9 @@ def test_realtime_enriched_keeps_rows_without_history_and_limits_technical_field
             "extremes", "momentum", "volatility", "rsi",
         )
         for column in ENRICHED_COLUMNS_BY_CATEGORY[category]
-    } | set(SIGNAL_DEPENDENCIES)
+    }
     assert all(resumed[column] is None for column in technical_columns)
-    assert ipo["signal_limit_up"] is False
+    assert ipo["signal_limit_up"] is not True  # 无涨跌幅日判定价为 null
     assert halted["signal_limit_up"] is not True
     assert "_has_history_state" not in result.columns
 

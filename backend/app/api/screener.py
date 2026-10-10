@@ -60,7 +60,7 @@ def _coverage_warnings(
 ) -> list[str]:
     """数据充足性提示 (#303): enriched 覆盖低于暖机需求时给出人话警告。
 
-    advisory 元数据: 任何计算失败都静默返回 [], 绝不影响选股主流程。
+    advisory 元数据: 任何计算失败都静默返回 [], 绝不影响策略主流程。
     引擎/服务无该方法时 (测试 Fake) 同样跳过, 与 build_shared_matrix 的
     可选能力探测同风格。
     """
@@ -109,7 +109,8 @@ def _safe_ext_value(value: Any) -> Any:
 # 用底层 parquet 文件的 (路径, mtime) 签名做 memoize: 文件未变则复用上次的 map,
 # parquet 被重写 (mtime 变化) 时自动失效重算。仅缓存基于 config 的快照/时序路径,
 # 无 config 的 DuckDB view 回退路径不缓存 (少见)。
-_ext_value_map_cache: dict[tuple[str, str], tuple[Any, dict[str, Any]]] = {}
+# 键含目标日期: 同一扩展列的「结果日分区」与「最新分区」是两个独立映射, 不可混用。
+_ext_value_map_cache: dict[tuple[str, str, str], tuple[Any, dict[str, Any]]] = {}
 
 
 def _ext_parquet_signature(cfg, data_dir) -> Optional[tuple]:
@@ -125,11 +126,18 @@ def _ext_parquet_signature(cfg, data_dir) -> Optional[tuple]:
         return None
 
 
-def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str, Any]]:
+def _load_ext_value_maps(
+    repo, ext_columns: Optional[str], as_of: Optional[str] = None
+) -> dict[str, dict[str, Any]]:
     """按请求加载扩展列，返回 {输出列名: {symbol: value}}。
 
     策略结果缓存是共享文件，不能被不同 ext_columns 组合污染；因此扩展列只在
     返回前通过该投影映射追加到结果副本中。
+
+    as_of 给定时, timeseries 扩展表按该日期的分区取值 —— 与策略结果同日,
+    保证「结果里展示的扩展值(如人气)」与「策略过滤时实际使用的值」同一口径;
+    该日期无分区 (扩展表上线前的历史日期等) 时回退最新分区。
+    as_of=None 维持"当前值"语义 (自选/个股详情/告警等实时场景), 取最新分区。
 
     基于 config 的路径按 parquet 文件 mtime 签名 memoize, 文件未变时跳过磁盘重读。
     """
@@ -147,11 +155,12 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
     ext_store = ExtConfigStore(data_dir)
     configs = {c.id: c for c in ext_store.load_all()}
     value_maps: dict[str, dict[str, Any]] = {}
+    want_date = str(as_of) if as_of else None
 
     for config_id, field_name in ext_specs:
         out_col = f"{config_id}__{field_name}"
         cfg = configs.get(config_id)
-        cache_key = (config_id, field_name)
+        cache_key = (config_id, field_name, want_date or "")
         sig = _ext_parquet_signature(cfg, data_dir) if cfg else None
         try:
             if cfg:
@@ -160,8 +169,15 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
                 if cached is not None and sig is not None and cached[0] == sig:
                     value_maps[out_col] = cached[1]
                     continue
-                # 时序扩展表只取最新分区，避免历史分区把同一 symbol JOIN 放大。
-                ext_df, _ = _read_ext_dataframe(cfg, data_dir)
+                if want_date and cfg.mode == "timeseries":
+                    # 与结果同日的历史分区: 展示口径 == 过滤口径
+                    ext_df, _ = _read_ext_dataframe(cfg, data_dir, snapshot_date=want_date)
+                    if ext_df.is_empty():
+                        # 该日期无分区 → 回退最新, 避免整列空白
+                        ext_df, _ = _read_ext_dataframe(cfg, data_dir)
+                else:
+                    # 时序扩展表默认只取最新分区，避免历史分区把同一 symbol JOIN 放大。
+                    ext_df, _ = _read_ext_dataframe(cfg, data_dir)
             else:
                 view_name = f"ext_{config_id}"
                 ext_df = pl.from_arrow(db.query(
@@ -184,6 +200,26 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
             logger.debug("screener ext column join skipped for %s.%s: %s", config_id, field_name, e)
 
     return value_maps
+
+
+def _ext_maps_for_dates(
+    repo, ext_columns: Optional[str], dates
+) -> dict[Optional[str], dict[str, dict[str, Any]]]:
+    """按日期集合构建多份 ext 投影映射 (缓存 payload 的结果/今日曾命中可能跨日)。
+
+    无 ext_columns 时返回 {} (调用方视为"无投影")。None 键 = 无日期结果, 取最新分区。
+    """
+    if not ext_columns:
+        return {}
+    keys = {str(d) if d else None for d in dates}
+    return {k: _load_ext_value_maps(repo, ext_columns, as_of=k) for k in keys}
+
+
+def _maps_for_date(
+    maps_by_date: dict[Optional[str], dict[str, dict[str, Any]]], date
+) -> dict[str, dict[str, Any]]:
+    key = str(date) if date else None
+    return maps_by_date.get(key) or maps_by_date.get(None) or {}
 
 
 def _row_with_ext(row: dict, ext_values: dict[str, dict[str, Any]], symbol: Optional[str] = None) -> dict:
@@ -212,12 +248,20 @@ def _results_with_ext(results: dict[str, dict], ext_values: dict[str, dict[str, 
     return {sid: _result_with_ext(r, ext_values) for sid, r in results.items()}
 
 
-def _cache_payload_with_ext(cached: dict, ext_values: dict[str, dict[str, Any]]) -> dict:
-    if not ext_values:
+def _cache_payload_with_ext(
+    cached: dict, maps_by_date: dict[Optional[str], dict[str, dict[str, Any]]]
+) -> dict:
+    """把 ext 投影按各自日期合并进缓存 payload (结果行与今日曾命中行各用其 date)。"""
+    if not maps_by_date:
         return cached
 
     payload = dict(cached)
-    payload["results"] = _results_with_ext(cached.get("results", {}), ext_values)
+    results = cached.get("results") or {}
+    payload["results"] = {
+        sid: _result_with_ext(r, _maps_for_date(maps_by_date, r.get("as_of")))
+        if isinstance(r, dict) else r
+        for sid, r in results.items()
+    }
 
     ever_rows = cached.get("today_ever_rows")
     if isinstance(ever_rows, dict):
@@ -226,7 +270,7 @@ def _cache_payload_with_ext(cached: dict, ext_values: dict[str, dict[str, Any]])
             if not isinstance(sym_map, dict):
                 continue
             enriched_ever[sid] = {
-                sym: _row_with_ext(row, ext_values, symbol=sym)
+                sym: _row_with_ext(row, _maps_for_date(maps_by_date, row.get("date")), symbol=sym)
                 for sym, row in sym_map.items()
                 if isinstance(row, dict)
             }
@@ -302,7 +346,8 @@ def run_custom(req: CustomRequest, request: Request):
     warnings = _coverage_warnings(svc, as_of)
     if warnings:
         safe_data["warnings"] = warnings
-    ext_values = _load_ext_value_maps(repo, req.ext_columns)
+    # 投影取结果日分区 (与过滤同口径), 而非最新分区
+    ext_values = _load_ext_value_maps(repo, req.ext_columns, as_of=str(as_of))
     return _result_with_ext(safe_data, ext_values)
 
 
@@ -316,7 +361,8 @@ def run_preset(req: PresetRequest, request: Request):
 
     # 加载用户保存的策略配置
     data_dir = request.app.state.repo.store.data_dir
-    ext_values = _load_ext_value_maps(repo, req.ext_columns)
+    # ext 投影取结果日分区: 结果表里展示的扩展值(如人气) 必须与叠加条件过滤时用的同一天
+    ext_values = _load_ext_value_maps(repo, req.ext_columns, as_of=str(as_of))
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
     engine = getattr(request.app.state, "strategy_engine", None)
     if not engine:
@@ -405,8 +451,22 @@ def get_cached(
     if not cached.get("results") and cached.get("as_of") is None:
         return {"as_of": None, "results": {}, "updated_at": None}
 
-    ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
-    return _cache_payload_with_ext(cached, ext_values)
+    # 结果与「今日曾命中」可能跨日期 (盘后缓存 + 监控实时叠加) → 按各自日期取
+    # ext 投影, 保证展示的扩展值与结果计算/过滤所用同日。
+    result_dates = {
+        r.get("as_of") for r in (cached.get("results") or {}).values()
+        if isinstance(r, dict)
+    }
+    ever_rows = cached.get("today_ever_rows")
+    if isinstance(ever_rows, dict):
+        for sym_map in ever_rows.values():
+            if isinstance(sym_map, dict):
+                result_dates.update(
+                    row.get("date") for row in sym_map.values() if isinstance(row, dict)
+                )
+    result_dates.add(None)  # 无日期的结果 → 最新分区兜底
+    maps_by_date = _ext_maps_for_dates(request.app.state.repo, ext_columns, result_dates)
+    return _cache_payload_with_ext(cached, maps_by_date)
 
 
 @router.get("/cached-summary")
@@ -463,7 +523,10 @@ def get_cached_result(
             "updated_at": cached.get("updated_at"),
         }
 
-    ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
+    # 结果行按该策略结果的 as_of 日取值 (与过滤同口径); 今日曾命中行按行日期取值
+    repo = request.app.state.repo
+    result_date = raw_result.get("as_of")
+    ext_values = _load_ext_value_maps(repo, ext_columns, as_of=str(result_date) if result_date else None)
     result = {
         "as_of": raw_result.get("as_of"),
         "strategy": strategy_id,
@@ -476,8 +539,13 @@ def get_cached_result(
     if cached.get("as_of") == result["as_of"]:
         strategy_ever_rows = (cached.get("today_ever_rows") or {}).get(strategy_id)
         if isinstance(strategy_ever_rows, dict):
+            ever_maps = _ext_maps_for_dates(
+                repo, ext_columns,
+                {row.get("date") for row in strategy_ever_rows.values() if isinstance(row, dict)}
+                | {result_date},
+            )
             ever_rows = {
-                symbol: _row_with_ext(row, ext_values, symbol=symbol)
+                symbol: _row_with_ext(row, _maps_for_date(ever_maps, row.get("date")), symbol=symbol)
                 for symbol, row in strategy_ever_rows.items()
                 if isinstance(row, dict)
             }
@@ -800,7 +868,8 @@ def run_all(request: Request, body: Optional[dict] = None):
             },
         }
 
-    ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
+    # ext 投影取本次结果日分区 (与过滤同口径)
+    ext_values = _load_ext_value_maps(repo, body.get("ext_columns"), as_of=str(as_of))
     return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
 
 
@@ -1006,7 +1075,7 @@ def limit_ladder(
             ext_col_name = f"{config_id}__{field_name}"
             try:
                 # 扩展时序数据必须只取最新分区; 否则一个 symbol 会按历史分区数被 JOIN 放大
-                # (ext_{id} 视图覆盖 timeseries/**), 与自选股列表同口径。
+                # (ext_{id} 视图覆盖 timeseries/**), 与自选列表同口径。
                 cfg = configs.get(config_id)
                 if cfg:
                     ext_df, _ = _read_ext_dataframe(cfg, data_dir)

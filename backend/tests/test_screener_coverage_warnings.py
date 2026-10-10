@@ -1,6 +1,6 @@
-"""#303: 空库/薄库数据不足时的选股可见化。
+"""#303: 空库/薄库数据不足时的策略可见化。
 
-增量管道只拉到 1 个交易日时, 指标暖机不足, 选股静默全 0。修复后:
+增量管道只拉到 1 个交易日时, 指标暖机不足, 策略静默全 0。修复后:
 - enriched_history_days 按 date=* 分区目录计数 (不读 parquet 内容);
 - ScreenerService.coverage_warnings 生成人话警告, run/run_preset/run_all
   响应附带 warnings 字段;

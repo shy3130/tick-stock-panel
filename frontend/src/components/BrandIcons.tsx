@@ -50,7 +50,7 @@ export const IconWatchlist = make(
   </>,
 )
 
-/** 策略 — 直角漏斗 (筛选/选股策略) */
+/** 策略 — 直角漏斗 (筛选/策略) */
 export const IconStrategy = make(
   <path d="M4 5H20L14 12.2V19.2L10 17.2V12.2Z" />,
 )

@@ -38,8 +38,8 @@ ACTION_META: dict[str, dict[str, str]] = {
         "risk": "将启动回测子进程, 占用共享计算资源, 可能需要数秒到数十秒",
     },
     "add_to_watchlist": {
-        "label": "加入自选股",
-        "risk": "将修改你的自选股列表",
+        "label": "加入自选",
+        "risk": "将修改你的自选列表",
     },
     "sync_data": {
         "label": "数据补全/同步",

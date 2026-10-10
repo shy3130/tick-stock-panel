@@ -142,7 +142,7 @@ def test_additional_rolling_operators_match_pandas_and_hit_cache():
 def test_builtin_matrix_strategy_formula_is_unchanged_with_cache():
     market = _market()
     strategy_path = (
-        REPO_ROOT / "backend" / "app" / "strategy" / "builtin" / "macd_golden.py"
+        REPO_ROOT / "backend" / "tests" / "fixtures" / "strategies" / "macd_golden.py"
     )
     strategy_def = StrategyEngine._load_file(strategy_path)
     strategy = strategy_def.matrix_strategy

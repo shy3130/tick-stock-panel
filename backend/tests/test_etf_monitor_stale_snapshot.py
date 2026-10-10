@@ -2,7 +2,7 @@
 
 _evaluate_monitors 的节假日与陈旧数据兜底靠「快照日期 = 当日」新鲜度判据
 (股票轮 stock_ready、指数轮 index_date == cn_today()), ETF 轮只看缓存是否为空。
-但 ETF 缓存并不只由 ETF 实时落盘焐热: 自选页/ETF 选股/ETF K 线等以 refresh=True
+但 ETF 缓存并不只由 ETF 实时落盘焐热: 自选页/ETF 策略/ETF K 线等以 refresh=True
 调 get_enriched_latest_asset("etf") 会把磁盘上最新一日 (上一交易日) 读进缓存。
 ETF 实时拉取默认关闭 (realtime_pull_etf=False), 工作日休市时实时快照也不落盘,
 这两种情况下 ETF 规则每轮都拿上一交易日的数据当作今天评估并推送告警。

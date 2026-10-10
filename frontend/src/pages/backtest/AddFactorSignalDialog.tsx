@@ -175,7 +175,7 @@ export function AddFactorSignalDialog({
           </select>
         </label>
         <p className="text-[10px] leading-relaxed text-muted">
-          保存后成为 csg_ 信号列：选股、回测、盘后监控可用；因子列由历史路径自动补算（与检验同一条计算管线），盘中实时快照无滚动窗口、该信号盘中不触发。
+          保存后成为 csg_ 信号列：策略、回测、盘后监控可用；因子列由历史路径自动补算（与检验同一条计算管线），盘中实时快照无滚动窗口、该信号盘中不触发。
         </p>
       </div>
 

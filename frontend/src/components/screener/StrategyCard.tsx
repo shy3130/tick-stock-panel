@@ -63,9 +63,8 @@ export function cardWrapCls(size: CardSize): string {
 
 // ===== 来源标签 =====
 
-const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI', composite: '叠加' }
+const SRC_MAP: Record<string, string> = { custom: '自定义', ai: 'AI', composite: '叠加' }
 const BADGE_CLS_MAP: Record<string, string> = {
-  builtin: 'bg-secondary/10 text-muted border-border',
   ai: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
   custom: 'bg-amber-400/10 text-amber-400 border-amber-400/30',
   composite: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
@@ -112,8 +111,8 @@ export function StrategyCard({
   const countCls = count === 0
     ? 'text-muted'
     : 'bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent'
-  const srcLabel = cardSize === 'mini' ? (SRC_MAP[source ?? ''] ?? '内') : (SRC_MAP[source ?? ''] ?? '内置')
-  const badgeCls = BADGE_CLS_MAP[source ?? 'builtin'] ?? BADGE_CLS_MAP.builtin
+  const srcLabel = cardSize === 'mini' ? (SRC_MAP[source ?? ''] ?? '自') : (SRC_MAP[source ?? ''] ?? '自定义')
+  const badgeCls = BADGE_CLS_MAP[source ?? 'custom'] ?? BADGE_CLS_MAP.custom
 
   // 失效数 > 0 时显示
   const hasExpired = expiredCount != null && expiredCount > 0

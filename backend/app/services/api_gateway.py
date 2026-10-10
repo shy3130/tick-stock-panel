@@ -1,7 +1,10 @@
-"""API 开放网关 — Token 请求的 scope 校验与限流 (docs/open-platform-plan.md §4-5)。
+"""API 开放网关 — Token 请求的网络门禁、scope 校验与限流 (docs/open-platform-plan.md §4-5)。
 
-evaluate() 是唯一入口: 认证中间件把 Bearer 明文交给它, 得到
-放行 / 401 / 403 / 429 的裁决与响应头。UI 会话完全不经过本模块。
+Token 通道有两道闸, 认证中间件按序调用:
+  1. token_network_verdict(client_ip) — 网络门禁: 默认仅本机/内网可调,
+     公网来源直接 403 (不消耗限流额度, 也不向公网探测者泄露 Token 有效性)。
+  2. evaluate(data_dir, method, path, plaintext) — 验 Token → scope → 限流,
+     得到放行 / 401 / 403 / 429 的裁决与响应头。UI 会话完全不经过本模块。
 
 规则表按顺序匹配 (方法 + 路径前缀); 未命中 = 不对外开放 (403)。
 刻意不放进规则表的: SSE 流端点 (EventSource 无法带 Authorization 头,
@@ -80,6 +83,59 @@ def rate_limit_per_min() -> int:
         return v if 1 <= v <= 10000 else 120
     except ValueError:
         return 120
+
+
+# ── 网络门禁: Token 通道默认仅本机/内网 (auth.setup 端点的同源判据) ──
+
+def is_local_network(host: str | None) -> bool:
+    """是否本机或内网地址: 127.0.0.1 / ::1 / localhost、10.x、172.16-31.x、192.168.x。
+
+    反向代理(Nginx)场景下 request.client.host 是代理本身(127.0.0.1),
+    真实客户端由 _client_ip 经 X-Forwarded-For 还原(仅当直连 peer 可信时采信)。
+    """
+    if not host:
+        return False
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+    if host.startswith("10.") or host.startswith("192.168."):
+        return True
+    if host.startswith("172."):
+        try:
+            second = int(host.split(".")[1])
+            if 16 <= second <= 31:
+                return True
+        except (IndexError, ValueError):
+            pass
+    return False
+
+
+def token_channel_local_only() -> bool:
+    """Token 通道是否仅限本机/内网调用 (env API_TOKEN_LOCAL_ONLY, 默认开)。
+
+    设 0/false/off/no 显式放开 — 供公网 VPS 部署的远程脚本/门户等场景自主选择,
+    开放后的数据再分发合规责任由部署者承担(见 docs/configuration.md)。
+    """
+    return (os.environ.get("API_TOKEN_LOCAL_ONLY", "1").strip().lower()
+            not in ("0", "false", "off", "no"))
+
+
+def token_network_verdict(client_ip: str | None) -> dict | None:
+    """Token 通道网络门禁裁决: 公网来源且默认策略未放开 → 403 verdict; 放行 → None。
+
+    返回 None 时调用方继续走 evaluate(); 在 evaluate 之前拦截故不消耗限流额度,
+    且公网探测者拿不到 401/403(scope) 差异, 无法探测 Token 有效性。
+    """
+    if not token_channel_local_only() or is_local_network(client_ip):
+        return None
+    return {
+        "status": 403,
+        "detail": (
+            "API Token 通道默认仅接受本机/内网请求; 远程调用请经 SSH 隧道"
+            "或使用浏览器密码会话。确需公网开放: 设置环境变量"
+            " API_TOKEN_LOCAL_ONLY=0 (数据再分发合规责任由部署者承担)"
+        ),
+        "headers": {},
+    }
 
 
 def required_scope(method: str, path: str) -> str | None:

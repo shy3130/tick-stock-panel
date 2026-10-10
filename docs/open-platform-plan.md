@@ -121,7 +121,7 @@
 | 端点 | 说明 |
 |---|---|
 | `GET /api/strategies` / `GET /api/strategies/{id}` | 策略清单与详情（参数定义、数据依赖） |
-| `POST /api/screener/run` | 运行策略选股（异步任务） |
+| `POST /api/screener/run` | 运行策略（异步任务） |
 | `GET /api/screener/result...` | 运行结果（含扩展列） |
 | `POST /api/backtest` | 提交回测（含 regime_filter） → 任务 id |
 | `GET /api/backtest/{job}/status` / `GET .../report` | 任务状态 / 回测报告（指标、回合、净值序列） |

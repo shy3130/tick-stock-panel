@@ -17,13 +17,13 @@ export const color = {
     bgLight: 'bg-sky-400/10',
     borderHover: 'hover:border-sky-400/30',
   },
-  /** 选股条件区 section 标题色 */
+  /** 策略条件区 section 标题色 */
   filterSection: 'text-sky-400',
 
-  /** 评分权重正常指示 — emerald 色系 */
+  /** 策略权重正常指示 — emerald 色系 */
   ok: 'text-emerald-400',
 
-  /** 评分权重异常警告 — amber 色系 */
+  /** 策略权重异常警告 — amber 色系 */
   scoreWarn: 'text-amber-400',
 
   /** 交易参数区 section 标题色 */

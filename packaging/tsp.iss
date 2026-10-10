@@ -180,7 +180,7 @@ begin
 end;
 
 // ── 卸载时询问是否删除用户数据 ─────────────────────────────────
-// 用户数据在 {app}\data\ (策略/选股/回测/监控/行情), 与程序同处 {app} 总目录。
+// 用户数据在 {app}\data\ (策略/回测/监控/行情), 与程序同处 {app} 总目录。
 // Inno Setup 卸载默认只删它装过的程序文件, data\ 会被保留 (覆盖安装/常规卸载都不丢)。
 // 这里仅在用户明确「彻底卸载」时, 才询问是否清理 data\ + {app} 空壳。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -196,7 +196,7 @@ begin
       if SuppressibleMsgBox(
           '是否同时删除用户数据?' + #13#10 + #13#10 +
           '位置: ' + DataDir + #13#10 +
-          '内容: 行情数据、策略、选股结果、回测记录、监控规则等' + #13#10 + #13#10 +
+          '内容: 行情数据、策略、策略结果、回测记录、监控规则等' + #13#10 + #13#10 +
           '选「是」彻底卸载, 选「否」保留数据(重装后可恢复)。',
           mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES then
       begin

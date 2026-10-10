@@ -977,7 +977,7 @@ def set_webhook_default_channels(channels: list[str]) -> list[str]:
 
 
 def get_screener_auto_run() -> bool:
-    """选股页进入时是否自动运行所有策略 (获取命中数)。默认开。"""
+    """策略页进入时是否自动运行所有策略 (获取命中数)。默认开。"""
     return load().get("screener_auto_run", True)
 
 

@@ -5,7 +5,7 @@
   (新股 / 冷门股 / 新用户未同步). 缺失标的的指标字段为 null, 前端渲染为 "—".
 
 旧 bug: `df_e.filter(is_in(stock_symbols))` 以 enriched 为主表, 会把不在缓存
-universe 里的自选股静默丢弃.
+universe 里的自选静默丢弃.
 """
 from __future__ import annotations
 
@@ -141,7 +141,7 @@ def test_all_watchlist_missing_from_enriched(monkeypatch):
 
 
 def test_partial_coverage_preserves_count(monkeypatch):
-    """多只自选, 部分覆盖: 返回行数必须 == 自选股票数."""
+    """多只自选, 部分覆盖: 返回行数必须 == 自选只数."""
     syms = ["600519", "000001", "999888", "888999"]
     monkeypatch.setattr(wl_api.watchlist, "list_symbols",
                         lambda: [{"symbol": s} for s in syms])

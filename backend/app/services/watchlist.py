@@ -1,4 +1,4 @@
-"""自选股与分组服务。
+"""自选与分组服务。
 
 自选存储于 ``data/user_data/watchlist.parquet``，分组定义存储于同目录的
 ``watchlist_groups.json``。

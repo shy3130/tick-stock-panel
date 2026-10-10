@@ -318,6 +318,11 @@ uv run --extra dev python -m ruff check app/plugins/<your_plugin>/ tests/test_<y
   - `client.py` — httpx 客户端(X-api-key 认证 + 统一信封解包 + 分页 + 页间隔限频 + 单标的日K + dump 预签名下载, S3 下载不带 Key 头)
   - `provider.py` — Provider 实现(实测/文档双字段名映射、百分数→小数制、volume 股→手、上海零点戳 +8h 时区、dump 按 release 版本缓存、软失败、Key 探测)
   - `tests/test_fuyao_provider.py` — 73 个契约测试, 是新插件的测试范本
+- **`backend//`** — 自部署行情服务(runtime: none, 纯 HTTP 零依赖)
+  - 提供 `daily`(A 股日K, 分钟仓库按日聚合的原始价; 历史深度随仓库积累变厚, 新装服务仅近端)、`full_minute`(批量分钟: `get_intraday_batch` 全天修复轮按当日窗口+分块拉取, `get_intraday_latest` 稳态增量轮按 SH/SZ/BJ 股票分段单请求)、`realtime`(全市场列式快照, 含 ETF — 单请求一轮; 无指数, 未实现 `get_realtime_indices` → 指数由本地日K兜底); 未声明 `minute`/`adj_factor` 等 → 对应能力回退 TickFlow; volume(手)/amount(元)与项目口径一致零换算(快照涨跌幅由 provider 推导, 天然小数制); 服务地址默认 `http://127.0.0.1:8310`, 可用 `` 覆盖; Key 在服务端 `/keys` 页创建后于设置页卡片直接配置(先探后存), 或 `.env` 配 ``
+  - `client.py` — httpx 客户端(Bearer 认证 + HTTP 状态码/detail 信封解包 + 服务端护栏常量: 单请求 codes ≤2000、分钟 bar ≤200k、日K cell ≤400k)
+  - `provider.py` — Provider 实现(日K 矩阵→长表、停牌 cell 跳过、批大小按窗口跨度动态计算、修复轮 provider 侧过滤当日 bar 防 `_write_minute_partition` 跨分区写放大、分钟显式 schema 防 #458 稀疏列推断问题、快照 last≤0 行跳过防 -100% 伪涨跌、批间软失败隔离、Key 探活回报标的数)
+  - `tests/_provider.py` — 35 个契约测试(矩阵映射/单位零换算/分块进度/历史 bar 过滤/分段失败隔离/快照列式映射/软失败/loader 注册)
 - **`backend/app/plugins//`** — Node 型插件, 通过 subprocess 桥接调用 
   - `bridge.py` — Python↔Node 桥接 + availability 检测
   - `bridge.mjs` — Node 端(并发池、重试、SDK 解析)
