@@ -265,12 +265,23 @@ export function Screener() {
     prune(allStrategyIds)
   }, [allStrategyIds, prune, strategies.isError, strategies.isSuccess])
 
-  // 策略文件加载失败时提示用户(避免"策略静默消失"被误判为正常)
+  // 策略文件加载失败时提示用户(避免"策略静默消失"被误判为正常)。
+  // 多个失败聚合为一条, 避免旧数据目录升级后 (内置模块移除/叠加断链) 刷屏。
   const loadErrors = strategies.data?.load_errors ?? []
   useEffect(() => {
-    for (const e of loadErrors) {
-      toast(`策略「${e.file}」加载失败：${e.error}`, 'error')
+    if (loadErrors.length === 0) return
+    if (loadErrors.length === 1) {
+      toast(`策略「${loadErrors[0].file}」加载失败：${loadErrors[0].error}`, 'error')
+      return
     }
+    const files = loadErrors.slice(0, 3)
+      .map(e => String(e.file).split('/').pop())
+      .join('、')
+    toast(
+      `${loadErrors.length} 个策略文件加载失败（${files}${loadErrors.length > 3 ? ' 等' : ''}）。` +
+      '常见原因：文件引用了已移除的内置模块、或叠加策略的子策略不存在 —— 请在 data/strategies/ 下更新或删除这些文件',
+      'error',
+    )
   }, [loadErrors])
 
   // 进入页面自动跑策略池中的策略，获取命中数 (日线走盘后缓存/渐进式 runAll;
@@ -296,6 +307,12 @@ export function Screener() {
           : null,
       )
       if (data.error) toast(`策略计算失败：${data.error}`, 'error')
+      // 策略池残留的失效 ID (如内置策略移除后的旧数据目录): 后端已跳过,
+      // 这里从池中清掉并提示一次, 空库场景 prune(按有效列表) 清不掉的兜底。
+      if (data.skipped_unknown?.length) {
+        for (const id of data.skipped_unknown) removeFromPool(id)
+        toast(`已跳过 ${data.skipped_unknown.length} 个不存在的策略，并从策略池移除`, 'success')
+      }
       qc.invalidateQueries({ queryKey: ['screener-cached'] })
     },
   })
