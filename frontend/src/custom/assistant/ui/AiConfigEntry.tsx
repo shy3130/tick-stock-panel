@@ -108,7 +108,9 @@ export function AiConfigEntry() {
       aria-label="打开 AI 助手"
       style={{ left: spot.left, top: spot.top, width: BTN, height: BTN }}
       className={cn(
-        'fixed z-[55] flex cursor-pointer items-center justify-center rounded-md',
+        // z-30 = 常驻入口层: 高于页面内容, 低于 z-40 遮罩与 z-50 弹窗 —
+        // 弹窗打开时不再悬浮遮挡 (与 AssistantFloatingButton 同层)。
+        'fixed z-30 flex cursor-pointer items-center justify-center rounded-md',
         'transition-colors duration-150 ease-smooth',
         open
           ? 'bg-purple-400/15 text-purple-400'
