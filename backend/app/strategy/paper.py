@@ -40,6 +40,7 @@ from pathlib import Path
 import polars as pl
 
 from app.market_time import CN_TZ, cn_now, cn_today
+from app.parquet import scan_daily_parquet
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -808,7 +809,7 @@ def read_daily_bar(data_dir: Path, symbol: str, asset_type: str, day: str) -> di
         return None
     try:
         df = (
-            pl.scan_parquet((base / "**" / "*.parquet").as_posix())
+            scan_daily_parquet((base / "**" / "*.parquet").as_posix())
             .filter((pl.col("symbol") == symbol) & (pl.col("date") == _date.fromisoformat(day)))
             .select(["open", "close"])
             .collect()
@@ -828,7 +829,7 @@ def _prev_close(data_dir: Path, symbol: str, asset_type: str, day: str) -> float
         return None
     try:
         df = (
-            pl.scan_parquet((base / "**" / "*.parquet").as_posix())
+            scan_daily_parquet((base / "**" / "*.parquet").as_posix())
             .filter((pl.col("symbol") == symbol) & (pl.col("date") < _date.fromisoformat(day)))
             .sort("date")
             .select(pl.col("close").last())
@@ -849,7 +850,7 @@ def _index_close(data_dir: Path, day: str) -> float | None:
         return None
     try:
         df = (
-            pl.scan_parquet((base / "**" / "*.parquet").as_posix())
+            scan_daily_parquet((base / "**" / "*.parquet").as_posix())
             .filter((pl.col("symbol") == "000300.SH") & (pl.col("date") == _date.fromisoformat(day)))
             .select("close")
             .collect()
