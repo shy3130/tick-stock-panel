@@ -1,7 +1,7 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
-import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
+import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
@@ -43,46 +43,36 @@ function overlaySupported(d: StrategyDetail | null): boolean {
   return !!d && !['composite', 'minute_filter'].includes(d.execution_backend)
 }
 
-// ===== 可折叠区域 =====
-function Section({ icon: Icon, title, accent, defaultOpen = true, children, extra }: {
+// ===== 分区: 非折叠, 结构由左侧锚点导航承担 (导航即目录, 折叠+滚动+导航三重导航是负担) =====
+function SettingsSection({ icon: Icon, title, accent, summary, sectionRef, children }: {
   icon?: React.ComponentType<{ className?: string }>
   title: string
   accent?: string
-  defaultOpen?: boolean
+  summary?: React.ReactNode
+  sectionRef?: (el: HTMLDivElement | null) => void
   children: React.ReactNode
-  extra?: React.ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="rounded-xl border border-border/15 bg-surface/20 overflow-hidden">
-      <div className="flex items-center gap-2 px-3.5 py-2 hover:bg-surface/30 transition-colors">
-        <button
-          onClick={() => setOpen(v => !v)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left cursor-pointer"
-        >
-          <ChevronDown className={`h-3 w-3 text-muted/40 transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
-          {Icon && <Icon className={`h-3.5 w-3.5 ${accent ?? 'text-muted'}`} />}
-          <span className="text-[11px] font-medium text-foreground/70">{title}</span>
-        </button>
-        {extra && <div className="ml-auto flex items-center gap-1">{extra}</div>}
-      </div>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="overflow-hidden"
-          >
-            <div className="px-3.5 pb-3 pt-0.5 space-y-2">
-              {children}
-            </div>
-          </motion.div>
+    <div ref={sectionRef} className="scroll-mt-4">
+      <div className="flex items-center gap-2 border-b border-border/40 pb-2">
+        {Icon && <Icon className={`h-3.5 w-3.5 shrink-0 ${accent ?? 'text-muted'}`} />}
+        <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+        {summary !== undefined && (
+          <span className="ml-auto text-[10px] text-muted font-normal">{summary}</span>
         )}
-      </AnimatePresence>
+      </div>
+      <div className="pt-3.5 space-y-3.5">{children}</div>
     </div>
   )
+}
+
+// ===== 锚点导航项定义 =====
+interface NavSection {
+  id: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  accent: string
+  summary: string
 }
 
 
@@ -134,7 +124,7 @@ function ParamField({ def, value, onChange }: {
     const checked = value === true || value === 'true' || value === 'True'
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className="text-[11px] text-secondary w-20 shrink-0 text-right leading-snug">{def.label}</span>
         <button
           type="button"
           onClick={() => onChange(!checked)}
@@ -153,7 +143,7 @@ function ParamField({ def, value, onChange }: {
   if (def.type === 'select' && def.options) {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className="text-[11px] text-secondary w-20 shrink-0 text-right leading-snug">{def.label}</span>
         <select
           value={value ?? def.default}
           onChange={e => onChange(e.target.value)}
@@ -167,7 +157,7 @@ function ParamField({ def, value, onChange }: {
   if (def.type === 'string') {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <span className="text-[11px] text-secondary w-20 shrink-0 text-right leading-snug">{def.label}</span>
         <input
           type="text"
           value={value ?? def.default ?? ''}
@@ -181,7 +171,7 @@ function ParamField({ def, value, onChange }: {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+      <span className="text-[11px] text-secondary w-20 shrink-0 text-right leading-snug">{def.label}</span>
       <input
         type="number"
         value={value ?? def.default}
@@ -252,6 +242,62 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
         .map(g => ({ ...g, fields: g.fields.filter(f => !(overlayOptions.data?.stringFields ?? []).includes(f.key)) }))
         .filter(g => g.fields.length > 0)
     : overlayOptions.data?.groups
+
+  // ===== 锚点导航: 分区目录 + 滚动高亮 =====
+  // 目录兼状态总览: 摘要实时反映各区配置量 (如 触发 入2·出1), 用户不用滚到该区就知道配置了多少。
+  const navSections: NavSection[] = useMemo(() => {
+    if (!detail) return []
+    if (detail.source === 'composite') {
+      return [
+        { id: 'basic', label: '基本', icon: Settings2, accent: 'text-accent', summary: basicFilterEnabled ? '过滤已启用' : '过滤已停用' },
+        { id: 'children', label: '子策略与权重', icon: Layers, accent: 'text-teal-400', summary: `${compositeChildren.length} 个` },
+      ]
+    }
+    const navs: NavSection[] = [
+      { id: 'basic', label: '基本', icon: Settings2, accent: 'text-accent', summary: basicFilterEnabled ? '过滤已启用' : '过滤已停用' },
+    ]
+    if (detail.params.length > 0) {
+      navs.push({ id: 'params', label: '策略参数', icon: Settings2, accent: 'text-sky-400', summary: `${detail.params.length} 项` })
+    }
+    navs.push(
+      { id: 'scoring', label: '评分权重', icon: Star, accent: 'text-amber-400', summary: `${Object.keys(scoring).length} 因子` },
+      { id: 'trading', label: '交易与触发', icon: TrendingUp, accent: 'text-emerald-400', summary: `入${entrySignals.length}·出${exitSignals.length}` },
+    )
+    if (overlaySupported(detail)) {
+      navs.push({ id: 'overlay', label: '叠加条件', icon: Filter, accent: 'text-sky-400', summary: overlayFilter.length > 0 ? `${overlayFilter.length} 条` : '未配置' })
+    }
+    return navs
+  }, [detail, compositeChildren.length, scoring, entrySignals.length, exitSignals.length, overlayFilter.length, basicFilterEnabled])
+
+  const [activeNav, setActiveNav] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const sectionEls = useRef<Record<string, HTMLDivElement | null>>({})
+  const navRaf = useRef(0)
+
+  useEffect(() => () => { if (navRaf.current) cancelAnimationFrame(navRaf.current) }, [])
+
+  // scrollspy: 取「分区顶边已滚过阈值」的最后一个分区 (rAF 节流, 避免滚动逐帧 setState)
+  const handleNavScroll = useCallback(() => {
+    const scroller = scrollRef.current
+    if (!scroller || navSections.length === 0 || navRaf.current) return
+    navRaf.current = requestAnimationFrame(() => {
+      navRaf.current = 0
+      const threshold = scroller.getBoundingClientRect().top + 88
+      let current = navSections[0].id
+      for (const s of navSections) {
+        const el = sectionEls.current[s.id]
+        if (el && el.getBoundingClientRect().top <= threshold) current = s.id
+      }
+      setActiveNav(prev => (prev === current ? prev : current))
+    })
+  }, [navSections])
+
+  const jumpTo = useCallback((id: string) => {
+    sectionEls.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+  const setSectionEl = useCallback((id: string) => (el: HTMLDivElement | null) => {
+    sectionEls.current[id] = el
+  }, [])
 
   // 加载策略详情
   useEffect(() => {
@@ -415,7 +461,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       }}
       labelledBy="strategy-settings-title"
       overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      panelClassName="w-[1200px] max-w-[95vw] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      panelClassName="w-[920px] max-w-[95vw] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
     >
           {/* 标题 */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
@@ -441,269 +487,311 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
             </div>
           </div>
 
-          {/* 内容 */}
-          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+          {/* 内容: 左锚点目录 + 右单栏分区 (全展开, 导航承担定位; 手风琴+滚动双导航是负担) */}
+          <div className="flex-1 min-h-0 flex">
             {loading ? (
-              <div className="flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
+              <div className="flex-1 flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
             ) : detail ? (
               <>
-                {/* 名称 + 描述 + 显示上限 */}
-                <div className="flex items-end gap-4">
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">名称</span>
-                      <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)}
-                        className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">描述</span>
-                      <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
-                        className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
-                    <span className="text-[10px] text-muted/50">显示上限</span>
-                    <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
-                      className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                    <span className="text-[10px] text-muted/50">只</span>
-                  </div>
-                </div>
-
-                {/* 叠加策略: 子策略列表 + 权重(替换三列参数, composite 专属) */}
-                {detail.source === 'composite' ? (() => {
-                  const SRC_LABEL: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
-                  const SRC_CLS: Record<string, string> = {
-                    builtin: 'border-accent/25 bg-accent/10 text-accent',
-                    custom: 'border-amber-400/25 bg-amber-400/10 text-amber-400',
-                    ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
-                  }
-                  const selectedIds = new Set(compositeChildren.map(c => c.id))
-                  const candidates = allStrategies.filter(s => !selectedIds.has(s.id))
-                  return (
-                  <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-4 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-teal-400" />
-                      <span className="text-sm font-medium text-foreground">子策略与权重</span>
-                      <span className="text-[10px] text-muted flex items-center gap-1.5">
-                        共 {compositeChildren.length} 个 · 权重
-                        <span className={`font-mono ${compositeChildren.length > 0 && compositeTotal !== 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                          {compositeTotal}%
-                        </span>
-                        {compositeChildren.length > 0 && compositeTotal !== 100 && (
-                          <span className="text-amber-400/60">(保存时自动按比例归一)</span>
-                        )}
-                      </span>
-                      <button onClick={() => setShowAddChild(v => !v)} className="ml-auto inline-flex items-center gap-1 h-6 px-2 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[11px] text-teal-400 hover:bg-teal-500/20">
-                        <Plus className="h-3 w-3" />添加
+                {/* 左侧目录 (lg+) */}
+                <nav className="hidden lg:flex w-[172px] shrink-0 flex-col gap-1 border-r border-border/40 p-3">
+                  {navSections.map(s => {
+                    const active = (activeNav || navSections[0]?.id) === s.id
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => jumpTo(s.id)}
+                        className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                          active ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-elevated/60 hover:text-secondary'
+                        }`}
+                      >
+                        <s.icon className={`h-3.5 w-3.5 shrink-0 ${active ? s.accent : 'text-muted/50'}`} />
+                        <span className="flex-1 min-w-0 truncate text-[11px] font-medium">{s.label}</span>
+                        {s.summary && <span className="shrink-0 text-[9px] font-normal opacity-60">{s.summary}</span>}
                       </button>
-                    </div>
-                    {/* 添加子策略面板 */}
-                    {showAddChild && (
-                      <div className="rounded-lg border border-border bg-base/60 p-2 space-y-1 max-h-48 overflow-y-auto">
-                        {candidates.length === 0 ? (
-                          <div className="text-[11px] text-muted py-2 text-center">无可添加的策略</div>
-                        ) : candidates.map(s => (
-                          <button key={s.id} onClick={() => addCompositeChild(s)} className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-teal-500/10">
-                            <Plus className="h-3 w-3 shrink-0 text-teal-400" />
-                            <span className="flex-1 truncate text-xs text-foreground">{s.name}</span>
-                            {s.source && (
-                              <span className={`rounded border px-1 text-[8px] ${SRC_CLS[s.source] ?? ''}`}>{SRC_LABEL[s.source] ?? s.source}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {compositeChildren.length === 0 ? (
-                      <div className="text-xs text-muted py-4 text-center">暂无子策略, 点击"添加"选择</div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {compositeChildren.map((c, i) => (
-                          <div key={c.id} className="flex items-center gap-2 rounded-lg bg-base/60 px-3 py-2">
-                            <span className="text-[10px] text-muted/50 font-mono w-5">{i + 1}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingChildId(c.id)}
-                                  title="点击编辑该子策略的配置"
-                                  className="truncate text-left text-xs font-medium text-foreground transition-colors hover:text-accent cursor-pointer"
-                                >
-                                  {c.name || c.id}
-                                </button>
-                                {c.source && (
-                                  <span className={`rounded border px-1 text-[8px] shrink-0 ${SRC_CLS[c.source] ?? ''}`}>{SRC_LABEL[c.source] ?? c.source}</span>
-                                )}
-                              </div>
-                              <div className="text-[10px] text-muted/50 font-mono">{c.id}</div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={c.weight}
-                                onChange={e => setCompositeChildren(prev => prev.map((p, j) => j === i ? { ...p, weight: parseInt(e.target.value) || 0 } : p))}
-                                className="h-1 w-24 cursor-pointer accent-teal-400"
-                                aria-label={`${c.name || c.id}权重`}
-                              />
-                              <span className="w-9 text-right font-mono text-[10px] text-muted">{Math.round(c.weight)}%</span>
-                              <button onClick={() => removeCompositeChild(c.id)} className="text-danger/50 hover:text-danger p-1">
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="text-[10px] text-muted/60 pt-1 border-t border-border/30">
-                      提示: 权重按相对比例生效, 保存时自动归一; 修改后点底部"保存设置"生效。
-                    </div>
-                  </div>
-                  )
-                })()
-                : (
-                <div className="grid grid-cols-3 gap-5 items-start">
-                  {/* 列1：选股条件 */}
-                    <Section icon={Filter} title="基础参数" accent="text-sky-400">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] text-muted">启用基础参数过滤</span>
-                        <button onClick={() => setBasicFilterEnabled(v => !v)}
-                          className={`relative w-8 h-[18px] rounded-full transition-colors ${basicFilterEnabled ? 'bg-sky-500' : 'bg-border'}`}>
-                          <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${basicFilterEnabled ? 'left-[16px]' : 'left-0.5'}`} />
+                    )
+                  })}
+                </nav>
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {/* 窄屏: 顶部横向目录 (sticky) */}
+                  <div className="lg:hidden sticky top-0 z-[5] flex gap-1 overflow-x-auto border-b border-border/40 bg-surface/95 px-3 py-1.5 backdrop-blur-sm">
+                    {navSections.map(s => {
+                      const active = (activeNav || navSections[0]?.id) === s.id
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => jumpTo(s.id)}
+                          className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                            active ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-elevated/60'
+                          }`}
+                        >
+                          {s.label}{s.summary && <span className="ml-1 text-[9px] font-normal opacity-60">{s.summary}</span>}
                         </button>
-                      </div>
-                      <div className={`space-y-2 transition-opacity duration-200 ${basicFilterEnabled ? '' : 'opacity-25 pointer-events-none'}`}>
-                      <RangeField label="价格" minVal={basicFilter.price_min} maxVal={basicFilter.price_max} onMinChange={v => setBF('price_min', v)} onMaxChange={v => setBF('price_max', v)} unit="元" step="1" />
-                      <RangeField label="流通市值" minVal={basicFilter.float_cap_min != null ? basicFilter.float_cap_min / 1e8 : null} maxVal={basicFilter.float_cap_max != null ? basicFilter.float_cap_max / 1e8 : null} onMinChange={v => setBF('float_cap_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('float_cap_max', v != null ? v * 1e8 : null)} unit="亿" step="5" />
-                      <RangeField label="成交额" minVal={basicFilter.amount_min != null ? basicFilter.amount_min / 1e8 : null} maxVal={basicFilter.amount_max != null ? basicFilter.amount_max / 1e8 : null} onMinChange={v => setBF('amount_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('amount_max', v != null ? v * 1e8 : null)} unit="亿" step="0.5" />
-                      <RangeField label="换手率" minVal={basicFilter.turnover_min} maxVal={basicFilter.turnover_max} onMinChange={v => setBF('turnover_min', v)} onMaxChange={v => setBF('turnover_max', v)} unit="%" step="0.5" />
-                      <div className="space-y-1.5">
-                        <div className="flex items-start gap-1.5">
-                          <span className="text-[11px] text-secondary w-16 shrink-0 text-right pt-0.5">板块</span>
-                          <div className="flex flex-wrap gap-0.5">
-                            {ALL_BOARDS.map(b => {
-                              const boards: string[] = basicFilter.boards ?? ALL_BOARDS
-                              const active = boards.includes(b)
-                              return (
-                                <button key={b} onClick={() => { const cur: string[] = basicFilter.boards ?? ALL_BOARDS; const next = active ? cur.filter(x => x !== b) : [...cur, b]; setBF('boards', next.length === 0 ? ALL_BOARDS : next) }}
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${active ? `${color.select.border} ${color.select.bgLight} ${color.select.text}` : `border-border bg-base text-muted ${color.select.borderHover}`}`}>{b}</button>
-                              )
-                            })}
+                      )
+                    })}
+                  </div>
+                  <div ref={scrollRef} onScroll={handleNavScroll} className="flex-1 overflow-y-auto px-5 py-4 lg:px-6">
+                    <div className="max-w-[700px] space-y-9">
+
+                      {/* ── 基本: 名称/描述/显示上限 + 基础参数过滤 ── */}
+                      <SettingsSection icon={Settings2} title="基本" accent="text-accent" sectionRef={setSectionEl('basic')}
+                        summary={basicFilterEnabled ? '基础过滤已启用' : '基础过滤已停用'}>
+                        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                          <div className="space-y-2">
+                            <label className="flex items-center gap-2.5">
+                              <span className="w-14 shrink-0 text-right text-[11px] text-muted">名称</span>
+                              <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)}
+                                className="flex-1 h-8 px-3 rounded-lg bg-base ring-1 ring-border/30 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
+                            </label>
+                            <label className="flex items-center gap-2.5">
+                              <span className="w-14 shrink-0 text-right text-[11px] text-muted">描述</span>
+                              <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
+                                className="flex-1 h-8 px-3 rounded-lg bg-base ring-1 ring-border/30 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
+                            </label>
+                          </div>
+                          <label className="flex items-center gap-1.5 self-start pt-0.5">
+                            <span className="text-[11px] text-muted">显示上限</span>
+                            <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
+                              className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                            <span className="text-[11px] text-muted">只</span>
+                          </label>
+                        </div>
+
+                        <div className="rounded-xl border border-border/15 bg-base/40 p-3.5 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-medium text-secondary">基础参数过滤</span>
+                            <button onClick={() => setBasicFilterEnabled(v => !v)}
+                              className={`relative w-8 h-[18px] rounded-full transition-colors cursor-pointer ${basicFilterEnabled ? 'bg-sky-500' : 'bg-border'}`}>
+                              <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${basicFilterEnabled ? 'left-[16px]' : 'left-0.5'}`} />
+                            </button>
+                          </div>
+                          <div className={`grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 transition-opacity duration-200 ${basicFilterEnabled ? '' : 'opacity-25 pointer-events-none'}`}>
+                            <RangeField label="价格" minVal={basicFilter.price_min} maxVal={basicFilter.price_max} onMinChange={v => setBF('price_min', v)} onMaxChange={v => setBF('price_max', v)} unit="元" step="1" />
+                            <RangeField label="流通市值" minVal={basicFilter.float_cap_min != null ? basicFilter.float_cap_min / 1e8 : null} maxVal={basicFilter.float_cap_max != null ? basicFilter.float_cap_max / 1e8 : null} onMinChange={v => setBF('float_cap_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('float_cap_max', v != null ? v * 1e8 : null)} unit="亿" step="5" />
+                            <RangeField label="成交额" minVal={basicFilter.amount_min != null ? basicFilter.amount_min / 1e8 : null} maxVal={basicFilter.amount_max != null ? basicFilter.amount_max / 1e8 : null} onMinChange={v => setBF('amount_min', v != null ? v * 1e8 : null)} onMaxChange={v => setBF('amount_max', v != null ? v * 1e8 : null)} unit="亿" step="0.5" />
+                            <RangeField label="换手率" minVal={basicFilter.turnover_min} maxVal={basicFilter.turnover_max} onMinChange={v => setBF('turnover_min', v)} onMaxChange={v => setBF('turnover_max', v)} unit="%" step="0.5" />
+                          </div>
+                          <div className={`space-y-2 transition-opacity duration-200 ${basicFilterEnabled ? '' : 'opacity-25 pointer-events-none'}`}>
+                            <div className="flex items-start gap-1.5">
+                              <span className="text-[11px] text-secondary w-16 shrink-0 text-right pt-0.5">板块</span>
+                              <div className="flex flex-wrap gap-0.5">
+                                {ALL_BOARDS.map(b => {
+                                  const boards: string[] = basicFilter.boards ?? ALL_BOARDS
+                                  const active = boards.includes(b)
+                                  return (
+                                    <button key={b} onClick={() => { const cur: string[] = basicFilter.boards ?? ALL_BOARDS; const next = active ? cur.filter(x => x !== b) : [...cur, b]; setBF('boards', next.length === 0 ? ALL_BOARDS : next) }}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${active ? `${color.select.border} ${color.select.bgLight} ${color.select.text}` : `border-border bg-base text-muted ${color.select.borderHover}`}`}>{b}</button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] text-secondary w-16 shrink-0 text-right">ST</span>
+                              <button onClick={() => setBF('exclude_st', !basicFilter.exclude_st)}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${basicFilter.exclude_st ? 'border-danger/40 bg-danger/10 text-danger' : 'border-border bg-base text-muted hover:border-danger/30'}`}>{basicFilter.exclude_st ? '排除' : '包含'}</button>
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-16 shrink-0 text-right">ST</span>
-                          <button onClick={() => setBF('exclude_st', !basicFilter.exclude_st)}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${basicFilter.exclude_st ? 'border-danger/40 bg-danger/10 text-danger' : 'border-border bg-base text-muted hover:border-danger/30'}`}>{basicFilter.exclude_st ? '排除' : '包含'}</button>
-                        </div>
-                      </div>
-                    </div>
-                  </Section>
+                      </SettingsSection>
 
-                  {/* 列2：策略参数 */}
-                  <div className="space-y-3">
-                    {detail.params.length > 0 ? (
-                      <Section icon={Settings2} title="策略参数" accent="text-muted">
-                        <div className="space-y-1.5">
-                          {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
-                        </div>
-                      </Section>
-                    ) : (
-                      <div className="rounded-xl border border-border/15 bg-surface/20 px-3.5 py-4 text-[11px] text-muted/50 text-center">无策略参数</div>
-                    )}
-                  </div>
-
-                  {/* 列3：评分 + 交易 */}
-                  <div className="space-y-3">
-                    <Section icon={Star} title="评分权重" accent="text-amber-400">
-                      <ScoringEditor
-                        key={detail.id}
-                        value={scoring}
-                        directions={scoringDirections}
-                        fallbackLabels={FIELD_LABEL}
-                        onChange={(nextScoring, nextDirections) => {
-                          setScoring(nextScoring)
-                          setScoringDirections(nextDirections)
-                        }}
-                      />
-                    </Section>
-
-                    <Section icon={TrendingUp} title="交易参数" accent="text-emerald-400">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
-                          <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                          <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
-                          <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
-                          <span className="text-[10px] text-muted">天</span>
-                        </div>
-                        <div className="text-[11px] text-muted pt-1 border-t border-border/10">
-                          <span className="text-secondary">入场 </span><span className="text-foreground/70">{entrySignals.length > 0 ? `${entrySignals.length} 个触发器` : '无'}</span>
-                          <span className="text-secondary ml-3">出场 </span><span className="text-foreground/70">{exitSignals.length > 0 ? `${exitSignals.length} 个触发器` : '无'}</span>
-                        </div>
-                      </div>
-                    </Section>
-
-                    <Section
-                      icon={TrendingUp}
-                      title="入场触发器"
-                      accent="text-accent"
-                      defaultOpen={false}
-                      extra={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
-                    >
-                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
-                      <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
-                    </Section>
-
-                    <Section
-                      icon={TrendingUp}
-                      title="出场触发器"
-                      accent="text-warning"
-                      defaultOpen={false}
-                      extra={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
-                    >
-                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
-                      <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
-                    </Section>
-
-                    {/* 叠加条件: 每策略 overlay 硬过滤, 不改策略代码 */}
-                    <Section icon={Filter} title="叠加条件" accent="text-sky-400" defaultOpen={false}>
-                      {overlaySupported(detail) ? (
+                      {detail.source === 'composite' ? (
+                      /* ── 子策略与权重 (composite 专属) ── */
+                      <SettingsSection icon={Layers} title="子策略与权重" accent="text-teal-400" sectionRef={setSectionEl('children')}
+                        summary={
+                          <>
+                            共 {compositeChildren.length} 个 · 权重{' '}
+                            <span className={`font-mono ${compositeChildren.length > 0 && compositeTotal !== 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                              {compositeTotal}%
+                            </span>
+                            {compositeChildren.length > 0 && compositeTotal !== 100 && (
+                              <span className="text-amber-400/60">(保存时自动按比例归一)</span>
+                            )}
+                          </>
+                        }>
                         <div className="space-y-2">
+                          <div className="flex items-center justify-end">
+                            <button onClick={() => setShowAddChild(v => !v)} className="inline-flex items-center gap-1 h-6 px-2 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[11px] text-teal-400 hover:bg-teal-500/20 cursor-pointer">
+                              <Plus className="h-3 w-3" />添加
+                            </button>
+                          </div>
+                          {showAddChild && (
+                            <div className="rounded-lg border border-border bg-base/60 p-2 space-y-1 max-h-48 overflow-y-auto">
+                              {(() => {
+                                const selectedIds = new Set(compositeChildren.map(c => c.id))
+                                const candidates = allStrategies.filter(s => !selectedIds.has(s.id))
+                                const SRC_LABEL: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+                                const SRC_CLS: Record<string, string> = {
+                                  builtin: 'border-accent/25 bg-accent/10 text-accent',
+                                  custom: 'border-amber-400/25 bg-amber-400/10 text-amber-400',
+                                  ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
+                                }
+                                return candidates.length === 0 ? (
+                                  <div className="text-[11px] text-muted py-2 text-center">无可添加的策略</div>
+                                ) : candidates.map(s => (
+                                  <button key={s.id} onClick={() => addCompositeChild(s)} className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-teal-500/10 cursor-pointer">
+                                    <Plus className="h-3 w-3 shrink-0 text-teal-400" />
+                                    <span className="flex-1 truncate text-xs text-foreground">{s.name}</span>
+                                    {s.source && (
+                                      <span className={`rounded border px-1 text-[8px] ${SRC_CLS[s.source] ?? ''}`}>{SRC_LABEL[s.source] ?? s.source}</span>
+                                    )}
+                                  </button>
+                                ))
+                              })()}
+                            </div>
+                          )}
+                          {compositeChildren.length === 0 ? (
+                            <div className="text-xs text-muted py-4 text-center">暂无子策略, 点击"添加"选择</div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {compositeChildren.map((c, i) => {
+                                const SRC_LABEL: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+                                const SRC_CLS: Record<string, string> = {
+                                  builtin: 'border-accent/25 bg-accent/10 text-accent',
+                                  custom: 'border-amber-400/25 bg-amber-400/10 text-amber-400',
+                                  ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
+                                }
+                                return (
+                                  <div key={c.id} className="flex items-center gap-2 rounded-lg bg-base/60 border border-border/30 px-3 py-2">
+                                    <span className="text-[10px] text-muted/50 font-mono w-5">{i + 1}</span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingChildId(c.id)}
+                                          title="点击编辑该子策略的配置"
+                                          className="truncate text-left text-xs font-medium text-foreground transition-colors hover:text-accent cursor-pointer"
+                                        >
+                                          {c.name || c.id}
+                                        </button>
+                                        {c.source && (
+                                          <span className={`rounded border px-1 text-[8px] shrink-0 ${SRC_CLS[c.source] ?? ''}`}>{SRC_LABEL[c.source] ?? c.source}</span>
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-muted/50 font-mono">{c.id}</div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={c.weight}
+                                        onChange={e => setCompositeChildren(prev => prev.map((p, j) => j === i ? { ...p, weight: parseInt(e.target.value) || 0 } : p))}
+                                        className="h-1 w-24 cursor-pointer accent-teal-400"
+                                        aria-label={`${c.name || c.id}权重`}
+                                      />
+                                      <span className="w-9 text-right font-mono text-[10px] text-muted">{Math.round(c.weight)}%</span>
+                                      <button onClick={() => removeCompositeChild(c.id)} className="text-danger/50 hover:text-danger p-1 cursor-pointer">
+                                        <Trash2 className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                          <div className="text-[10px] text-muted/60 pt-1 border-t border-border/30">
+                            提示: 权重按相对比例生效, 保存时自动归一; 修改后点底部"保存设置"生效。
+                          </div>
+                        </div>
+                      </SettingsSection>
+                      ) : (
+                      <>
+                      {/* ── 策略参数 ── */}
+                      {detail.params.length > 0 && (
+                        <SettingsSection icon={Settings2} title="策略参数" accent="text-sky-400" summary={`${detail.params.length} 项`} sectionRef={setSectionEl('params')}>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                            {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
+                          </div>
+                        </SettingsSection>
+                      )}
+
+                      {/* ── 评分权重 ── */}
+                      <SettingsSection icon={Star} title="评分权重" accent="text-amber-400" summary={`${Object.keys(scoring).length} 因子`} sectionRef={setSectionEl('scoring')}>
+                        <ScoringEditor
+                          key={detail.id}
+                          value={scoring}
+                          directions={scoringDirections}
+                          fallbackLabels={FIELD_LABEL}
+                          onChange={(nextScoring, nextDirections) => {
+                            setScoring(nextScoring)
+                            setScoringDirections(nextDirections)
+                          }}
+                        />
+                      </SettingsSection>
+
+                      {/* ── 交易与触发 ── */}
+                      <SettingsSection icon={TrendingUp} title="交易与触发" accent="text-emerald-400" summary={`入${entrySignals.length}·出${exitSignals.length}`} sectionRef={setSectionEl('trading')}>
+                        <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
+                            <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
+                              className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                            <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
+                            <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
+                              className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                            <span className="text-[10px] text-muted">天</span>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-accent/15 bg-base/40 p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-medium text-secondary">入场触发器</span>
+                            <span className="text-[10px] text-muted/60">{entrySignals.length > 0 ? `${entrySignals.length} 个` : '未覆盖'}</span>
+                            <div className="ml-auto">
+                              <SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />
+                            </div>
+                          </div>
+                          <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
+                          <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
+                        </div>
+
+                        <div className="rounded-xl border border-warning/15 bg-base/40 p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-medium text-secondary">出场触发器</span>
+                            <span className="text-[10px] text-muted/60">{exitSignals.length > 0 ? `${exitSignals.length} 个` : '未覆盖'}</span>
+                            <div className="ml-auto">
+                              <SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />
+                            </div>
+                          </div>
+                          <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
+                          <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
+                        </div>
+
+                        <div className="rounded-lg border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">
+                          出入场触发器保存后对<b className="text-secondary">回测和监控</b>生效;选股扫描仍按策略本身的筛选规则,不受此影响。
+                        </div>
+                      </SettingsSection>
+
+                      {/* ── 叠加条件 (仅支持的策略类型) ── */}
+                      {overlaySupported(detail) && (
+                        <SettingsSection icon={Filter} title="叠加条件" accent="text-sky-400"
+                          summary={overlayFilter.length > 0 ? `${overlayFilter.length} 条` : '未配置'}
+                          sectionRef={setSectionEl('overlay')}>
                           <ConditionEditor
                             conditions={overlayFilter}
                             onChange={setOverlayFilter}
                             options={{ fields: overlayFields, groups: overlayGroups, stringFields: overlayStringFields, hideDays: true }}
-                            title="叠加过滤（多条件为「且」关系，硬过滤）"
+                            title=""
                           />
                           <div className="text-[10px] leading-4 text-muted/70">
                             叠加条件直接过滤策略候选，选股 / 回测 / 监控一致生效；只影响新入场，不触发已持仓卖出；字段数据缺失的日期不入选（如扩展数据未回补的交易日）。
                             {isMatrixBackend && ' matrix 策略不支持字符串字段条件。'}
                           </div>
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-muted py-1">
-                          当前策略类型不支持叠加条件（composite 请对子策略单独配置，分钟策略不支持）。
-                        </div>
+                        </SettingsSection>
                       )}
-                    </Section>
+                      </>
+                      )}
 
-                    <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">
-                      出入场触发器保存后对<b className="text-secondary">回测和监控</b>生效;选股扫描仍按策略本身的筛选规则,不受此影响。
                     </div>
-
                   </div>
                 </div>
-                )}
               </>
             ) : (
-              <div className="flex items-center justify-center py-16 text-sm text-muted">加载失败</div>
+              <div className="flex-1 flex items-center justify-center py-16 text-sm text-muted">加载失败</div>
             )}
           </div>
 

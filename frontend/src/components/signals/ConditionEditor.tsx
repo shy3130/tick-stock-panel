@@ -29,8 +29,8 @@ interface Props {
   options: ConditionEditorOptions
   /** 行数上限 (后端约束 8) */
   max?: number
-  /** 条件区标题 (默认「条件（多条件为「且」关系）」); 传空串隐藏 */
-  title?: string
+  /** 条件区标题; null 隐藏整个标题行(含添加按钮); '' 只隐藏文字保留按钮 */
+  title?: string | null
   /** 标题行右侧追加内容 (如 AI 生成按钮), 与内置「添加条件」并排 */
   headerExtra?: React.ReactNode
 }
@@ -62,7 +62,7 @@ export function ConditionEditor({ conditions, onChange, options, max = 8, title,
 
   return (
     <div className="space-y-2">
-      {title !== '' && (
+      {title !== null && (
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-muted">{title ?? '条件（多条件为「且」关系）'}</span>
           <div className="flex items-center gap-2 shrink-0">
