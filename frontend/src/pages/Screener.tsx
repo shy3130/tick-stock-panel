@@ -265,6 +265,27 @@ export function Screener() {
     prune(allStrategyIds)
   }, [allStrategyIds, prune, strategies.isError, strategies.isSuccess])
 
+  // 去内置化一次性迁移提示: 后端启动时自动种入默认信号/归档失效策略,
+  // 摘要只在首次见到时提示一次 (localStorage 记录迁移指纹)。
+  const legacyMigration = strategies.data?.legacy_migration
+  useEffect(() => {
+    if (!legacyMigration) return
+    const fingerprint = JSON.stringify(legacyMigration)
+    const key = 'tsp-legacy-migration-v1'
+    try {
+      if (localStorage.getItem(key) === fingerprint) return
+      localStorage.setItem(key, fingerprint)
+    } catch { /* 隐私模式等存储不可用: 退化为每次提示 */ }
+    const parts: string[] = []
+    if (legacyMigration.seeded_signals) {
+      parts.push(`已将 ${legacyMigration.seeded_signals} 个原内置信号转为自定义信号(可在信号库编辑)`)
+    }
+    if (legacyMigration.archived_files?.length) {
+      parts.push(`已归档 ${legacyMigration.archived_files.length} 个无法加载的旧策略文件(位于 data/strategies/*/_archive_unloadable/)`)
+    }
+    if (parts.length) toast(`旧版数据自动迁移完成：${parts.join('；')}`, 'success')
+  }, [legacyMigration])
+
   // 策略文件加载失败时提示用户(避免"策略静默消失"被误判为正常)。
   // 多个失败聚合为一条, 避免旧数据目录升级后 (内置模块移除/叠加断链) 刷屏。
   const loadErrors = strategies.data?.load_errors ?? []

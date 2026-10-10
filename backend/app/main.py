@@ -263,6 +263,27 @@ async def _application_lifespan(app: FastAPI):
         strategy_dirs=strategy_dirs,
         override_loader=lambda sid: strategy_config.load_override(store.data_dir, sid),
     )
+    # 去内置化一次性迁移: ①信号目录为空时种入 20 个默认定义;
+    # ②内置残留类加载失败 (composite 断链 / import 已删模块) 的策略文件
+    #   自动归档出扫描目录并重载。摘要挂到 app.state 供前端提示一次。
+    legacy_migration: dict = {}
+    try:
+        from app.strategy import custom_signals as _cs
+        from app.strategy.legacy_migrate import archive_unloadable_strategies
+
+        seeded = _cs.seed_if_empty(store.data_dir)
+        if seeded:
+            legacy_migration["seeded_signals"] = seeded
+            logger.info("legacy migrate: seeded %d default signals", seeded)
+        archived = archive_unloadable_strategies(strategy_engine.load_errors())
+        if archived:
+            strategy_engine.reload()
+            legacy_migration["archived_files"] = archived
+            logger.info("legacy migrate: archived %d unloadable files", len(archived))
+        if legacy_migration:
+            app.state.legacy_migration = legacy_migration
+    except Exception as e:  # noqa: BLE001
+        logger.warning("legacy migrate failed (ignored): %s", e)
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
 

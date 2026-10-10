@@ -1,10 +1,11 @@
-"""旧数据目录升级的宽容降级 — 去内置化迁移配套。
+"""旧数据目录升级的宽容降级与一次性自动迁移 — 去内置化配套。
 
-内置策略移除后, 老环境的用户数据 (data/strategies/ 里的自定义文件、浏览器
-策略池) 仍引用旧世界: 文件 import ``app.strategy.builtin.factor_rank_research``
-断链逐条 toast; 策略池残留内置 ID 让 /run_all 整体 404。此处回归:
+内置策略移除后, 老环境的用户数据仍引用旧世界。此处回归:
   1. builtin.factor_rank_research 兼容垫片透明转发到 research 模块;
-  2. /run_all 混合未知 ID → 跳过并回 skipped_unknown; 全部未知才 404。
+  2. /run_all 混合未知 ID → 跳过并回 skipped_unknown; 全部未知才 404;
+  3. 信号种子 seed_if_empty: 空目录一次写入 20 个默认定义, 标记防重,
+     用户已有定义/再次启动不重复种入;
+  4. 失效策略文件归档: 仅「内置残留」类错误归档, 语法错误不动。
 """
 from __future__ import annotations
 
@@ -93,3 +94,53 @@ def test_run_all_all_unknown_still_404(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as exc:
         screener_api.run_all(request, {"strategy_ids": ["gone_only"], "as_of": "2026-07-15"})
     assert exc.value.status_code == 404
+
+
+# ── 信号种子一次性迁移 ─────────────────────────────────────
+def test_seed_if_empty_writes_once_and_marks(tmp_path):
+    from app.strategy import custom_signals
+
+    n = custom_signals.seed_if_empty(tmp_path)
+    assert n == 20
+    files = list((tmp_path / "user_data" / "custom_signals").glob("*.json"))
+    assert len(files) == 20
+    # 标记存在 → 二次调用不再种入 (即使清空目录也不复活)
+    for f in files:
+        f.unlink()
+    assert custom_signals.seed_if_empty(tmp_path) == 0
+    assert not list((tmp_path / "user_data" / "custom_signals").glob("*.json"))
+
+
+def test_seed_if_empty_skips_when_user_signals_present(tmp_path):
+    from app.strategy import custom_signals
+
+    d = tmp_path / "user_data" / "custom_signals"
+    d.mkdir(parents=True)
+    (d / "my_own.json").write_text("{}", encoding="utf-8")
+
+    assert custom_signals.seed_if_empty(tmp_path) == 0
+    assert [f.name for f in d.glob("*.json")] == ["my_own.json"]
+
+
+# ── 失效策略文件归档 ───────────────────────────────────────
+def test_archive_only_legacy_unloadable_files(tmp_path):
+    from app.strategy.legacy_migrate import archive_unloadable_strategies
+
+    custom = tmp_path / "data" / "strategies" / "custom"
+    custom.mkdir(parents=True)
+    broken_composite = custom / "combo_old.py"
+    broken_composite.write_text("# composite", encoding="utf-8")
+    syntax_err = custom / "editing_wip.py"
+    syntax_err.write_text("# wip", encoding="utf-8")
+
+    archived = archive_unloadable_strategies([
+        {"file": str(broken_composite), "error": "composite strategy combo_old 引用的子策略 'boll_breakout' 不存在"},
+        {"file": str(syntax_err), "error": "SyntaxError: unexpected EOF"},
+        {"file": str(custom / "missing.py"), "error": "composite strategy x 引用的子策略 'y' 不存在"},
+    ])
+
+    assert archived == ["combo_old.py"]
+    assert not broken_composite.exists()
+    assert syntax_err.exists()  # 普通失败不归档
+    archive_dir = custom / "_archive_unloadable"
+    assert (archive_dir / "combo_old.py").exists()

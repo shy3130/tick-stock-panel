@@ -343,7 +343,12 @@ def list_strategies(
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
         result.append(_strategy_detail(s, overrides, engine))
-    return {"strategies": result, "load_errors": engine.load_errors()}
+    payload: dict = {"strategies": result, "load_errors": engine.load_errors()}
+    # 去内置化一次性迁移摘要 (启动时执行过才有): 前端提示一次后本地记忆
+    migration = getattr(request.app.state, "legacy_migration", None)
+    if migration:
+        payload["legacy_migration"] = migration
+    return payload
 
 
 @router.get("/{strategy_id}")

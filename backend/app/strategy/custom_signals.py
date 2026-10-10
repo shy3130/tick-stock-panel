@@ -755,6 +755,29 @@ def invalidate_intraday_cache() -> None:
 _names_cache: dict[Path, tuple[object, dict[str, str]]] = {}
 
 
+def seed_if_empty(data_dir: Path) -> int:
+    """去内置化迁移: 信号目录为空且从未种子化时, 写入 20 个默认信号定义。
+
+    - 幂等: ``.seeded_v1`` 标记存在 (无论目录后来是否被用户清空) 不再种入,
+      用户删除全部信号后重启不会"复活"。
+    - 返回写入的定义数 (0 = 未执行)。
+    """
+    from app.strategy.signal_seeds import SEED_SIGNALS
+
+    d = _dir(data_dir)
+    marker = d / ".seeded_v1"
+    if marker.exists():
+        return 0
+    if any(d.glob("*.json")):
+        # 用户已有信号定义 (如从旧环境拷贝): 不掺入种子, 仅落标记防重
+        marker.write_text("skipped: user signals present\n", encoding="utf-8")
+        return 0
+    for sig in SEED_SIGNALS:
+        save_one(data_dir, sig)
+    marker.write_text("seeded: 20\n", encoding="utf-8")
+    return len(SEED_SIGNALS)
+
+
 def signal_names(data_dir: Path) -> dict[str, str]:
     """自定义信号列名 (csg_/csgi_) → 用户命名的映射, 带目录指纹缓存。
 

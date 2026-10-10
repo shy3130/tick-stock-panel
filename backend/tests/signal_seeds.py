@@ -14,10 +14,10 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "custom_signals"
 
 
 def load_seed_definitions() -> list[dict]:
-    return [
-        json.loads(p.read_text(encoding="utf-8"))
-        for p in sorted(FIXTURE_DIR.glob("*.json"))
-    ]
+    """单一事实源: app.strategy.signal_seeds (fixtures JSON 与其同内容)。"""
+    from app.strategy.signal_seeds import SEED_SIGNALS
+
+    return SEED_SIGNALS
 
 
 def install_pipeline_caches(monkeypatch) -> list[dict]:
