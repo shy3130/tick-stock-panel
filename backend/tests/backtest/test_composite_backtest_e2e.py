@@ -92,7 +92,7 @@ EXECUTION_BACKEND = "composite"
 
 @pytest.fixture
 def composite_setup(tmp_path):
-    builtin = Path(__file__).resolve().parents[2] / "app" / "strategy" / "builtin"
+    builtin = Path(__file__).resolve().parents[1] / "fixtures" / "strategies"
     comp_dir = tmp_path / "composite"
     comp_dir.mkdir(parents=True)
     _write_composite(comp_dir, "custom_e2e_blend", [("ma_golden_cross", 0.5), ("macd_golden", 0.5)])
@@ -164,7 +164,7 @@ def test_worker_strategy_dirs_includes_composite(tmp_path):
 
     dirs = _strategy_dirs(tmp_path)
     dir_names = [d.name for d in dirs]
-    assert "builtin" in dir_names
+    assert "research" in dir_names
     assert "composite" in dir_names, f"worker._strategy_dirs 缺 composite 目录: {dir_names}"
     assert "custom" in dir_names
     assert "ai" in dir_names

@@ -20,7 +20,7 @@ STRATEGY_PATH = (
     Path(__file__).resolve().parents[2]
     / "app"
     / "strategy"
-    / "builtin"
+    / "research"
     / "factor_rank_research.py"
 )
 

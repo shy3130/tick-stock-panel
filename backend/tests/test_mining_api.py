@@ -449,7 +449,7 @@ def test_publish_endpoint_uses_persisted_definition_and_invalidates_runtime(
 ) -> None:
     client, store = _client(tmp_path)
     _successful_run(store)
-    builtin_dir = Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"
+    builtin_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "strategies"
     custom_dir = tmp_path / "strategies" / "custom"
     engine = StrategyEngine(strategy_dirs=[builtin_dir, custom_dir])
     invalidations: list[str] = []

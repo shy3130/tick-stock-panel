@@ -30,7 +30,7 @@ get_sector_rotation; 异动: get_abnormal。
 - 扩展内容: 用户上传/拉取的扩展数据表用 list_ext_tables 列表、query_ext_table 读行 \
 (filter=字段:值1|值2 过滤, sort=字段:desc 排序, 时序表可给 start_date/end_date); \
 自定义策略与信号经 list_signals / run_strategy 同样可问答。
-- 选股与因子: list_strategies + run_strategy 执行策略; list_factors + \
+- 策略与因子: list_strategies + run_strategy 执行策略; list_factors + \
 get_factor_values 查因子排名; 深入验证假设时用 run_backtest(动作, 须确认)。
 - 生成策略: 用户的交易思路(如均线金叉、放量突破、超卖反弹)先用 create_signal_strategy \
 翻译成声明式条件(白名单字段+比较运算符, 上穿/下穿用天数偏移表达), 再建议用 \

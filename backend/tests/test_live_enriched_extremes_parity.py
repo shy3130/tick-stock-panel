@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import (
     compute_enriched_today,
@@ -82,6 +83,13 @@ def _incremental_and_full(tmp_path) -> tuple[pl.DataFrame, pl.DataFrame]:
     ).sort("symbol")
     full = compute_signals(compute_indicators(bars)).filter(pl.col("date") == TODAY).sort("symbol")
     return incremental, full
+
+
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    """注入迁移自内置的信号定义 (信号列定义驱动, 不依赖运行目录)。"""
+    from tests.signal_seeds import install_pipeline_caches
+    install_pipeline_caches(monkeypatch)
 
 
 def test_intraday_60d_extremes_match_full_close_basis(tmp_path):

@@ -12,7 +12,7 @@
 
 1. **因子定义单一事实源**：公式、元数据、计算、测试同处一地，可审计、可版本化。
 2. **研究结论可辩护**：宇宙可解释、风险调整显式、统计检验完备、指标口径唯一。
-3. **策略接入零摩擦**【用户核心诉求】：因子研究成果（含用户自定义因子、复合因子、挖掘产物）以统一形态被策略评分、选股、回测、监控四端消费，一处定义、处处生效。
+3. **策略接入零摩擦**【用户核心诉求】：因子研究成果（含用户自定义因子、复合因子、挖掘产物）以统一形态被策略评分、策略页、回测、监控四端消费，一处定义、处处生效。
 4. **不推倒重来**：挖掘框架（purge/embargo/嵌套样本外）、enriched 列体系、虚拟评分机制全部保留，只做补层和收口。
 
 ---
@@ -30,7 +30,7 @@
 | L-CMP 复合因子→策略 | `app/factors/composite.py`【设计】 | `strategy/scoring.py` 虚拟评分字段机制【现状·已可用】 | 扩展既有机制 | L2→L3 接线 |
 | 数据契约 | provider dataset 声明 | 无 ST 历史/退市股/点时行业 | 新增 dataset | L1（YAML）+provider 实现 |
 
-模块落点说明：新建 `app/factors/` 包而不是塞进 `backtest/`，因为因子目录、宇宙、中性化被选股（`strategy/`）、回测（`backtest/`）、挖掘（`backtest/mining.py`）三方消费，放任一方都会造成反向依赖（违反 CONTRIBUTING 2.3 模块边界）。
+模块落点说明：新建 `app/factors/` 包而不是塞进 `backtest/`，因为因子目录、宇宙、中性化被策略（`strategy/`）、回测（`backtest/`）、挖掘（`backtest/mining.py`）三方消费，放任一方都会造成反向依赖（违反 CONTRIBUTING 2.3 模块边界）。
 
 ---
 
@@ -467,7 +467,7 @@ class CompositeMember:
 
 **接入策略（零引擎改动）**：
 
-- 复合因子注册进注册表（kind="composite"），`scoring_value_expr` 机制天然支持：策略写 `"scoring": {"cf_hotmom": 0.6, "vol_ratio_5d": 0.2, "amount": 0.2}` 即生效；依赖/预热自动递归展开进矩阵构建，选股/回测/监控三端无需感知"这是复合因子"。
+- 复合因子注册进注册表（kind="composite"），`scoring_value_expr` 机制天然支持：策略写 `"scoring": {"cf_hotmom": 0.6, "vol_ratio_5d": 0.2, "amount": 0.2}` 即生效；依赖/预热自动递归展开进矩阵构建，策略/回测/监控三端无需感知"这是复合因子"。
 - 挖掘产物一键导出为 CompositeSpec：mining 的排名组合本来 = factors+weights，导出即 `cf_mined_<run>`，闭合"挖掘 → 复合因子 → 策略"回路。
 - 前置校验：成员因子任一 warmup 超研究窗口 → 启动期注册成功但使用时返回明确"预热不足"错误（不产出半截分数）。
 
@@ -484,7 +484,7 @@ class CompositeMember:
 
 ### 8.3 一致性契约【设计】
 
-同一 `cf_xxx` 在**因子研究（IC/分层）、选股、回测、监控**四端必须逐位同值——单测直接断言四路径对同一 (date,symbol) 的输出相等。这是 CONTRIBUTING 5.3"同一候选集和排序方向"的推广。
+同一 `cf_xxx` 在**因子研究（IC/分层）、策略、回测、监控**四端必须逐位同值——单测直接断言四路径对同一 (date,symbol) 的输出相等。这是 CONTRIBUTING 5.3"同一候选集和排序方向"的推广。
 
 ### 8.4 监控端数据流澄清【设计】
 
@@ -492,9 +492,9 @@ class CompositeMember:
 
 ### 8.5 自定义/复合因子的盘中行为【设计】
 
-- 选股（盘后批量）：`incremental_safe=True` 的成员因子照常参与当日计算。
-- `incremental_safe=False` 成员（若有）：当日选股对该因子返回"预热/路径不足"的明确不可计算状态（对齐 CONTRIBUTING 5.1"空值不得伪装成零分"），UI 标注原因；**不降级用部分成员算半截复合分**。
-- 盘中增量路径（`pipeline.py:1795` `compute_enriched_today`【现状】）：自定义与复合因子默认不进入（§12 缓存策略），分时选股若引用则同样返回不可计算状态，盘后恢复。
+- 策略（盘后批量）：`incremental_safe=True` 的成员因子照常参与当日计算。
+- `incremental_safe=False` 成员（若有）：当日策略对该因子返回"预热/路径不足"的明确不可计算状态（对齐 CONTRIBUTING 5.1"空值不得伪装成零分"），UI 标注原因；**不降级用部分成员算半截复合分**。
+- 盘中增量路径（`pipeline.py:1795` `compute_enriched_today`【现状】）：自定义与复合因子默认不进入（§12 缓存策略），分时策略若引用则同样返回不可计算状态，盘后恢复。
 
 ---
 
@@ -808,7 +808,7 @@ researchUniverses()
 | kline_sync.py:358-367 | (symbol, trade_date) 去重 keep=last 原子合并 | ✓ |
 | scoring.py:13-51 / 53-66 / 91-104 / 108+ | VIRTUAL 依赖 35 项 / 预热表 / 依赖展开与预热推导 / scoring_value_expr | ✓（全文读取，附录A 由其逐字推导） |
 | monitor.py:1314-1322 | score_min/max 消费 result.scores | ✓ |
-| strategy/builtin/*.py | "scoring": {字段: 权重} 配置形态 | ✓（8 个内置策略抽样） |
+| data/strategies/custom/*.py | "scoring": {字段: 权重} 配置形态 | ✓（8 个策略抽样, 原内置目录已迁移为自定义） |
 | candidates.py | factor/strategy 双形态候选配置字段 | ✓ |
 | services/heavy_job_limiter.py、backtest/numba_runtime.py、services/ext_presets.py、services/market_mainline.py:35 | 模块存在性 / 行业两级口径 | ✓ |
 

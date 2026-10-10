@@ -1,0 +1,24 @@
+{
+  "id": "ma_golden_5_20",
+  "name": "MA5上穿MA20",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "ma5",
+      "op": ">",
+      "right": "field:ma20",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "ma5",
+      "op": "<=",
+      "right": "field:ma20",
+      "leftDays": 1,
+      "rightDays": 1
+    }
+  ],
+  "column": "signal_ma_golden_5_20"
+}

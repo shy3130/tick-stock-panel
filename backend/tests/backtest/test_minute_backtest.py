@@ -2,7 +2,7 @@
 
 用合成的分钟K分区 + 合成日线面板 + 专用测试策略, 完整跑通
 StrategyBacktestService.run() 的 minute_filter 分支:
-逐日回放 (与实盘选股同一条 StrategyEngine.run 路径) → 信号分钟收盘入场
+逐日回放 (与实盘策略同一条 StrategyEngine.run 路径) → 信号分钟收盘入场
 → 涨停拒买 → 日K矩阵离场 → 交易记录携带分钟时间戳。
 
 核心断言:

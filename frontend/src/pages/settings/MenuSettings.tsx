@@ -61,7 +61,7 @@ type ArchKind = 'core' | 'ext'
 const ARCH_CLASS: Record<string, { kind: ArchKind; reason: string }> = {
   '/':               { kind: 'core', reason: '总览页 — 聚合核心数据的多维视图' },
   '/watchlist':      { kind: 'core', reason: '订阅锚点 — 监控/提醒/看板的数据范围基准' },
-  '/screener':       { kind: 'core', reason: '策略引擎 — 选股/评分/信号定义' },
+  '/screener':       { kind: 'core', reason: '策略引擎 — 策略/评分/信号定义' },
   '/factors':        { kind: 'core', reason: '因子平台 — 因子检验与回测联动' },
   '/backtest':       { kind: 'core', reason: '回测引擎 — 矩阵回测与优化' },
   '/regime':         { kind: 'core', reason: '环境数据生产 — 回测/挖掘/归因共用的市场状态口径' },

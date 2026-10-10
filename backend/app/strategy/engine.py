@@ -198,7 +198,7 @@ class StrategyDef:
     filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None
     filter_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None
     lookback_days: int
-    source: str  # "builtin" | "custom" | "ai" | "composite"
+    source: str  # "custom" | "ai" | "composite"
     required_features: frozenset[str] = field(default_factory=frozenset)
     file_path: Path | None = None
     execution_backend: str = "polars_expr"
@@ -440,17 +440,14 @@ class StrategyEngine:
         meta.setdefault("descending", True)
         meta.setdefault("limit", 100)
 
+        # research/ 目录: 挖掘功能的研究模板 (research_only), 对外按 custom 口径。
         source = "custom"
         normalized_path = str(path).replace("\\", "/")
-        if "/builtin/" in normalized_path:
-            source = "builtin"
-        elif "/ai/" in normalized_path:
+        if "/ai/" in normalized_path:
             source = "ai"
         elif "/composite/" in normalized_path:
             source = "composite"
 
-        if source == "builtin" and "asset_types" not in meta:
-            raise ValueError("builtin strategy META must declare asset_types")
         meta.setdefault("asset_types", ["stock"])
         meta.setdefault("timeframes", ["1d"])
         for field_name in ("asset_types", "timeframes"):
@@ -722,6 +719,13 @@ class StrategyEngine:
         for strategy_id in strategy_ids:
             strategy = self.get(strategy_id)
             overrides = overrides_map.get(strategy_id) or {}
+            # 叠加条件含「前 N 日」偏移时, 历史窗口需覆盖其回看深度 (as_of + N 个交易日)。
+            overlay = self._effective_overlay(overrides)
+            if overlay:
+                from app.strategy import custom_signals as _custom_signals
+                overlay_days = _custom_signals.overlay_max_days(overlay)
+                if overlay_days > 0:
+                    required = max(required, overlay_days + 1)
             scoring = effective_scoring(strategy.meta.get("scoring"), overrides)
             required = max(required, scoring_warmup_bars(scoring))
             if strategy.execution_backend == "matrix_native":
@@ -1056,19 +1060,46 @@ class StrategyEngine:
             except ValueError as e:
                 raise ValueError(f"叠加条件编译失败: {e}") from e
             if overlay_expr is not None:
+                overlay_days = custom_signals.overlay_max_days(overlay_conditions)
+                if overlay_days > 0:
+                    # 「前 N 日」偏移需要更早的行来 shift: 候选帧只是当日切片, 改在
+                    # 完整历史窗口上求值 as_of 行掩码, 再按 symbol 交集回候选行。
+                    if history is None or history.is_empty():
+                        raise ValueError(
+                            "叠加条件含「前 N 日」偏移, 需要历史数据窗口; "
+                            "当前调用未提供 history"
+                        )
+                    src = history
+                else:
+                    src = df
                 # engine.run 不保证任意注册表因子列在帧上 → 先按条件依赖物化
-                df = custom_signals.materialize_factor_columns(
-                    df, {"__overlay__": overlay_expr}
+                src = custom_signals.materialize_factor_columns(
+                    src, {"__overlay__": overlay_expr}
                 )
                 missing = custom_signals.overlay_missing_columns(
-                    overlay_conditions, df.columns
+                    overlay_conditions, src.columns
                 )
                 if missing:
                     raise ValueError(
                         "叠加条件引用的列不存在: " + ", ".join(missing)
                         + " — 请检查扩展数据拉取/因子计算是否可用"
                     )
-                df = df.filter(overlay_expr.fill_null(False))
+                if overlay_days > 0:
+                    # 掩码必须在完整帧上算 (先 filter 到 as_of 会截断 shift 所需的历史行),
+                    # 再取 as_of 行读掩码 — 与 matrix 路径同一顺序。
+                    masked = src.with_columns(
+                        overlay_expr.fill_null(False).alias("__overlay__")
+                    )
+                    allowed = (
+                        masked.filter(pl.col("date") == as_of)
+                        .filter(pl.col("__overlay__"))["symbol"]
+                        .cast(pl.Utf8)
+                        .unique()
+                        .to_list()
+                    )
+                    df = df.filter(pl.col("symbol").cast(pl.Utf8).is_in(allowed))
+                else:
+                    df = df.filter(overlay_expr.fill_null(False))
 
         # Stage 3: 评分
         df = self._apply_scoring(df, scoring, scoring_directions)
@@ -1413,22 +1444,41 @@ class StrategyEngine:
             except ValueError as e:
                 raise ValueError(f"叠加条件编译失败: {e}") from e
             if overlay_expr is not None:
-                target_frame = custom_signals.materialize_factor_columns(
-                    target_frame, {"__overlay__": overlay_expr}
+                overlay_days = custom_signals.overlay_max_days(overlay_conditions)
+                # 「前 N 日」偏移需要更早的行来 shift: 在完整 source_panel 上求值,
+                # 再取 as_of 行读掩码; 无偏移时维持现状 (只评估当日切片)。
+                eval_frame = target_frame
+                if overlay_days > 0:
+                    if source_panel is None or source_panel.is_empty():
+                        raise ValueError("叠加条件含「前 N 日」偏移, 需要历史数据窗口")
+                    eval_frame = source_panel
+                eval_frame = custom_signals.materialize_factor_columns(
+                    eval_frame, {"__overlay__": overlay_expr}
                 )
                 missing = custom_signals.overlay_missing_columns(
-                    overlay_conditions, target_frame.columns
+                    overlay_conditions, eval_frame.columns
                 )
                 if missing:
                     raise ValueError(
                         "叠加条件引用的列不存在: " + ", ".join(missing)
                         + " — 请检查扩展数据拉取/因子计算是否可用"
                     )
-                keep = set(
-                    target_frame.filter(overlay_expr.fill_null(False))[
-                        "symbol"
-                    ].cast(pl.Utf8).to_list()
-                )
+                if overlay_days > 0:
+                    masked = eval_frame.with_columns(
+                        overlay_expr.fill_null(False).alias("__overlay__")
+                    )
+                    keep_frame = self._matrix_target_frame(masked, as_of)
+                    keep = set(
+                        keep_frame.filter(pl.col("__overlay__"))[
+                            "symbol"
+                        ].cast(pl.Utf8).to_list()
+                    )
+                else:
+                    keep = set(
+                        eval_frame.filter(overlay_expr.fill_null(False))[
+                            "symbol"
+                        ].cast(pl.Utf8).to_list()
+                    )
                 allowed = np.fromiter(
                     (str(symbol) in keep for symbol in market.symbols),
                     dtype=bool,
@@ -1499,7 +1549,7 @@ class StrategyEngine:
         overrides: dict | None = None,
         started_at: float,
     ) -> StrategyResult:
-        """叠加策略选股: 调度各子策略(共享 context)→ 合并结果。
+        """叠加策略: 调度各子策略(共享 context)→ 合并结果。
 
         复用 run_all 共享 current/history/market, 避免各子策略重复加载数据。
         子策略必须已在加载期通过两阶段引用校验(存在/非嵌套/asset_types 一致)。

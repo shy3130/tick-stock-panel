@@ -2,7 +2,7 @@
 
 ext_{config_id} DuckDB 视图对 timeseries 模式覆盖 timeseries/**/*.parquet 全部
 分区 (见 app/api/ext_data._refresh_views), 一只票在 N 天快照里就有 N 行。
-自选股列表 (app/api/watchlist) 对同一场景先走 _read_ext_dataframe 取最新分区
+自选列表 (app/api/watchlist) 对同一场景先走 _read_ext_dataframe 取最新分区
 再按 symbol 去重, 梯队这边直接查视图, 于是同一只涨停股在梯队里出现 N 次、
 档位 count 被放大 N 倍。
 """

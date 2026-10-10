@@ -113,7 +113,7 @@ def test_default_end_is_beijing_today(fake_repo, monkeypatch, fn, symbol, kind):
     """未传 end 时日K窗口右端必须是北京今天, 不能用服务器本地 date.today()。
 
     CONTRIBUTING §3.3: A 股交易时段按北京时间, 服务器时区不能成为隐式输入。
-    自定义/AI 策略在选股页读指数/ETF/个股日K 时常省略 end, 缺省走本模块。
+    自定义/AI 策略在策略页读指数/ETF/个股日K 时常省略 end, 缺省走本模块。
 
     美西主机整个 A 股交易时段、UTC 主机北京 00:00-08:00, 本地日历日比北京
     早一天: 管道已写入的当日官方 K 被排除, 相对强弱/对照指数停在昨天。

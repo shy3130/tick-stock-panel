@@ -9,10 +9,10 @@ import time
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
-import app.data_providers
 import polars as pl
 import pytest
 
+import app.data_providers
 from app.market_time import CN_TZ, cn_today
 from app.services import data_integrity as di
 from app.services.data_integrity import (
@@ -60,9 +60,11 @@ def _write_daily_partition(root, table: str, day: date, quote_ts: int | None, sy
 
 def test_snapshot_predicate():
     noon = _ts_ms(FRIDAY, time(11, 58))
-    after_close = _ts_ms(FRIDAY, time(15, 0, 30))
+    close_final = _ts_ms(FRIDAY, time(15, 0, 30))   # 15:00-15:30 的实时定版也不可信
+    after_cutoff = _ts_ms(FRIDAY, time(15, 30, 30))  # 过盘后固定价终止线才算收盘后写入
     assert _is_snapshot(FRIDAY, noon) is True
-    assert _is_snapshot(FRIDAY, after_close) is False
+    assert _is_snapshot(FRIDAY, close_final) is True
+    assert _is_snapshot(FRIDAY, after_cutoff) is False
     assert _is_snapshot(FRIDAY, None) is False  # batch 历史 → 权威
 
 
@@ -106,9 +108,15 @@ def test_midday_snapshot_partition_is_flagged(tmp_path):
     ]
 
 
-def test_final_snapshot_after_close_is_clean(tmp_path):
+def test_close_final_snapshot_is_flagged(tmp_path):
+    """15:00 后的 close_final 定版也是实时写入 → 判坏 (完整以盘后管道 batch 覆盖为准)。"""
     _write_daily_partition(tmp_path, "kline_daily", FRIDAY, _ts_ms(FRIDAY, time(15, 1)))
     _write_daily_partition(tmp_path, "kline_daily", TODAY, _ts_ms(TODAY, time(10, 0)))
+    issues = scan_recent_integrity(tmp_path, today=TODAY)
+    assert issues and issues[0].kind == "snapshot"
+
+    # 过 15:30 定版线 (盘后固定价终止) 的极晚写入 → 完整
+    _write_daily_partition(tmp_path, "kline_daily", FRIDAY, _ts_ms(FRIDAY, time(15, 31)))  # 覆写同分区
     assert scan_recent_integrity(tmp_path, today=TODAY) == []
 
 
@@ -346,8 +354,8 @@ def test_branch4_start_without_stale_day_uses_latest():
 
 
 def test_timezone_conversion_is_cn():
-    # quote_ts 是毫秒 Unix 时间戳, 必须按 UTC+8 折算 — 15:00 边界用例
-    ts = int(datetime(2026, 8, 21, 7, 0, tzinfo=timezone.utc).timestamp() * 1000)  # 北京 15:00
+    # quote_ts 是毫秒 Unix 时间戳, 必须按 UTC+8 折算 — 15:30 边界用例
+    ts = int(datetime(2026, 8, 21, 7, 30, tzinfo=timezone.utc).timestamp() * 1000)  # 北京 15:30
     assert _is_snapshot(FRIDAY, ts) is False
     ts_morning = int(datetime(2026, 8, 21, 3, 58, tzinfo=timezone.utc).timestamp() * 1000)  # 北京 11:58
     assert _is_snapshot(FRIDAY, ts_morning) is True
@@ -719,7 +727,7 @@ def test_candidate_days_excludes_market_holiday(monkeypatch):
 
 
 def test_candidate_days_falls_back_to_weekday_without_calendar(monkeypatch):
-    """从未取到日历 (fuyao 未配置/失败) → 回退周几近似 (历史行为)。"""
+    """未配置 fuyao apikey → 直接降级周几近似 (近似会把节假日误报为缺失日)。"""
     fake = SimpleNamespace(is_custom_provider=lambda name: False)
     monkeypatch.setattr(app.data_providers, "custom", fake)
     got = _candidate_days(date(2026, 9, 28), 7)

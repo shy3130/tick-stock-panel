@@ -8,7 +8,7 @@ import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
 import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
 import { SignalPicker } from '@/components/screener/SignalPicker'
-import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
+import { MONITOR_INTRADAY_SIGNAL_OPTIONS } from '@/lib/signals'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 
 interface Props {
@@ -168,7 +168,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     return level === 1 || level === 3 ? level : 2
   })
   const [strategyQuery, setStrategyQuery] = useState('')
-  const [strategyCategory, setStrategyCategory] = useState<'all' | 'builtin' | 'custom' | 'ai' | 'composite'>('all')
+  const [strategyCategory, setStrategyCategory] = useState<'all' | 'custom' | 'ai' | 'composite'>('all')
   // 标的搜索资产类型: ETF 一并搜股票; 指数只搜指数; 否则只搜股票。
   const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : assetType === 'index' ? 'index' : 'stock'
   const symbolSearch = useQuery({
@@ -399,10 +399,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const selectedSignals = draft.conditions.filter(c => c.op === 'truth').map(c => c.field)
   const hasIntradaySignal = selectedSignals.some(signal => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(signal))
   const intradaySupport = options.data?.intraday_signal_support
-  const monitorBuiltinSignals = [
-    ...SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) })),
-    ...(options.data?.builtin_signals ?? []).filter(option => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(option.key)),
-  ]
+  // 日线信号已全部定义驱动 → custom_signals; builtin_signals 仅剩盘中信号
+  const monitorBuiltinSignals = (options.data?.builtin_signals ?? []).filter(
+    option => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(option.key),
+  )
   // 指数: 隐藏涨跌停/连板类 (指数无这些列) 与分时信号 (无本地分钟K, 会静默不触发)
   const INDEX_HIDDEN_SIGNALS = (key: string) =>
     key.includes('limit') || MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(key)
@@ -444,7 +444,6 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   })
   const strategyCategories = [
     { key: 'all' as const, label: '全部', count: strategyPresets.length },
-    { key: 'builtin' as const, label: '内置', count: strategyPresets.filter(strategy => strategy.source === 'builtin').length },
     { key: 'custom' as const, label: '自定义', count: strategyPresets.filter(strategy => strategy.source === 'custom').length },
     { key: 'ai' as const, label: 'AI', count: strategyPresets.filter(strategy => strategy.source === 'ai').length },
     { key: 'composite' as const, label: '叠加', count: strategyPresets.filter(strategy => strategy.source === 'composite').length },
@@ -987,7 +986,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           </div>
 
           <div className="space-y-2">
-            <span className="text-[11px] text-muted">基础过滤 (与策略选股口径对齐, 留空不过滤)</span>
+            <span className="text-[11px] text-muted">基础过滤 (与策略口径对齐, 留空不过滤)</span>
             <div className="grid gap-2 sm:grid-cols-3">
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">股价区间 (元)</span>
@@ -1409,7 +1408,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <div className="border-t border-border/60 pt-3">
             <div
               className="mb-2 text-[11px] text-muted"
-              title="评分范围仅过滤选股结果与买入信号，卖出信号不受限制"
+              title="评分范围仅过滤策略结果与买入信号，卖出信号不受限制"
             >
               评分范围
             </div>
@@ -1459,7 +1458,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               {(['signal', 'pool'] as const).map(group => (
                 <div key={group} className="rounded-btn border border-border bg-base p-2.5">
                   <div className="mb-2 text-[10px] font-medium text-secondary">
-                    {group === 'signal' ? '交易信号' : '选股结果'}
+                    {group === 'signal' ? '交易信号' : '策略结果'}
                   </div>
                   <div className="space-y-2">
                     {STRATEGY_NOTIFY_EVENT_OPTIONS.filter(option => option.group === group).map(option => (

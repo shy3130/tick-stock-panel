@@ -1,0 +1,17 @@
+{
+  "id": "boll_breakdown_lower",
+  "name": "跌破布林下轨",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": "<",
+      "right": "field:boll_lower",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_boll_breakdown_lower"
+}

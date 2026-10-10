@@ -302,13 +302,13 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* 自选实时模式提示: 大盘看板为盘后数据, 仅自选股实时。避免用户误读为全市场实时。 */}
+      {/* 自选实时模式提示: 大盘看板为盘后数据, 仅自选实时。避免用户误读为全市场实时。 */}
       {quoteMode === 'watchlist' && (
         <div className="mb-1.5 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] leading-relaxed">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div className="min-w-0 flex-1 text-secondary">
             当前为「自选实时」模式,看板展示的大盘数据为<strong className="text-foreground">盘后快照</strong>(最新有数据日),并非盘中实时;
-            仅自选股({data.quote_status?.watchlist_symbol_count ?? 0} 只)支持实时监控。
+            仅自选({data.quote_status?.watchlist_symbol_count ?? 0} 只)支持实时监控。
             <span className="ml-1 text-accent">全市场实时依赖数据源支持</span>
           </div>
         </div>
@@ -371,7 +371,7 @@ function FetchDataCard({
               : `将从当前数据源「${providerLabel}」拉取近 1 年全 A 股日K`}(约 5500 只),预计 1-3 分钟,期间可继续浏览其他页面。
           </p>
           <p className="mt-1 text-[11px] text-warning/80 leading-relaxed">
-            ⓘ 获取数据后即可进行策略定制、回测验证、选股扫描等本地分析功能。
+            ⓘ 获取数据后即可进行策略定制、回测验证、策略扫描等本地分析功能。
           </p>
           <p className="mt-1 text-[11px] text-muted leading-relaxed">
             💡 配置 fuyao(同花顺 REST) Key 可解锁财务四表 / 龙虎榜 / 盘前风向标 / 竞价异动:

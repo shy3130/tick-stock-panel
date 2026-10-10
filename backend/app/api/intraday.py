@@ -1,6 +1,6 @@
 """行情状态 / SSE 推送 API。
 
-盘中选股相关端点已迁移至策略页面，此处仅保留全局行情基础设施。
+盘中策略相关端点已迁移至策略页面，此处仅保留全局行情基础设施。
 SSE 推送四种事件 (使用标准 SSE event 字段):
   - quotes_updated: 行情数据刷新，前端 invalidate 对应 query
   - strategy_results_updated: 策略监控已写入最新结果，前端刷新策略个股列表

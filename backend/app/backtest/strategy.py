@@ -238,7 +238,13 @@ class StrategyDependencyResolver:
 
         indicator_columns = frozenset(required_features & set(INDICATOR_COLUMNS))
         base_columns = _resolve_base_columns(required_features | set(_EXECUTION_COLUMNS))
-        if required_signals & set(LIMIT_SIGNAL_OUTPUTS):
+        # 涨跌停族: 显式请求连板/判定价列, 或引用了判定价的自定义信号
+        # (signal_limit_* 等迁移定义) → 统一加载不复权三价。
+        if (required_signals & set(LIMIT_SIGNAL_OUTPUTS)) or any(
+            signal_dependencies.get(sig, frozenset())
+            & {"limit_up_price", "limit_down_price"}
+            for sig in required_signals
+        ):
             base_columns = frozenset(set(base_columns) | set(_LIMIT_BASE_COLUMNS))
 
         instrument_columns = frozenset(required_features & set(_INSTRUMENT_COLUMNS))
@@ -1194,7 +1200,7 @@ class StrategyBacktestService:
         )
 
         if s.execution_backend == "minute_filter":
-            # 分钟策略回测: 逐交易日回放 filter_minute_history (与实盘选股同源),
+            # 分钟策略回测: 逐交易日回放 filter_minute_history (与实盘策略同源),
             # 信号分钟收盘价入场, 之后复用日K矩阵模拟的离场与组合管理。
             return self._run_minute_backtest(
                 config, s, params, overrides,
@@ -2128,7 +2134,7 @@ class StrategyBacktestService:
             elapsed_ms=round(elapsed, 1),
         )
 
-    # ── 全量模拟 (选股能力统计, 不建组合不算净值) ──
+    # ── 全量模拟 (策略能力统计, 不建组合不算净值) ──
 
     def _run_full_simulation(
         self,
@@ -2138,7 +2144,7 @@ class StrategyBacktestService:
     ) -> SimResult:
         """对 entry_mask 命中的全部候选, 算持有 N 天后的前瞻收益统计。
 
-        不受 max_positions/资金约束, 反映策略选股能力本身。
+        不受 max_positions/资金约束, 反映策略能力本身。
         equity_curve 复用为"累计日均超额收益曲线"(基准归零)。
         """
         n = holding_days if holding_days and holding_days > 0 else 5
@@ -2335,7 +2341,7 @@ class StrategyBacktestService:
         true_mask = pl.Series("_candidate_filter", [True] * len(panel), dtype=pl.Boolean)
 
         history_failed = False
-        # 优先: filter_history_fn 策略 (涨停/反包等多日形态, 与选股路径共用同一逻辑)
+        # 优先: filter_history_fn 策略 (涨停/反包等多日形态, 与策略路径共用同一逻辑)
         if s.filter_history_fn:
             try:
                 hit_df = s.filter_history_fn(panel, params)
@@ -2405,6 +2411,20 @@ class StrategyBacktestService:
             detail = f"，缺失列: {', '.join(missing)}" if missing else f": {e}"
             return None, f"叠加条件评估失败{detail}"
 
+    @staticmethod
+    def _shift_time(arr: np.ndarray, days: int) -> np.ndarray:
+        """沿时间轴取 N 个交易日前的值 (前 days 行置 NaN, 与 polars shift 同语义)。
+
+        NaN 在比较结果里一律不命中 (调用方统一 AND ~isnan), 即越界/缺数据
+        fail-closed, 与 polars 路径 fill_null(False) 对齐。
+        """
+        if days <= 0:
+            return arr
+        out = np.full(arr.shape, np.nan, dtype=float)
+        if days < arr.shape[0]:
+            out[days:] = arr[:-days]
+        return out
+
     @classmethod
     def _overlay_matrix_mask(
         cls, market_data: MarketDataMatrix, conditions: list[dict]
@@ -2412,7 +2432,8 @@ class StrategyBacktestService:
         """叠加条件 → (T,A) 布尔掩码 (matrix 路径)。出错返回 (None, errmsg)。
 
         在 market_data.fields (float 数组) 上元素级评估; NaN (缺数据日) 一律
-        不命中, 与 polars 路径 fill_null(False) 同语义。字符串字段在保存期
+        不命中, 与 polars 路径 fill_null(False) 同语义。leftDays/rightDays
+        沿时间轴回看 N 个交易日 (越界前置 NaN → 不命中)。字符串字段在保存期
         已对 matrix_native 策略拒绝, 这里对 contains 再兜底拦截。
         """
         n_times = len(market_data.timestamp_labels)
@@ -2429,13 +2450,19 @@ class StrategyBacktestService:
                     f"叠加条件引用的列不在回测矩阵中: {left} "
                     "(请检查扩展数据拉取/因子计算是否可用)"
                 )
-            left_arr = np.asarray(market_data.fields[left], dtype=float)
+            left_days = int(c.get("leftDays", 0) or 0)
+            right_days = int(c.get("rightDays", 0) or 0)
+            left_arr = cls._shift_time(
+                np.asarray(market_data.fields[left], dtype=float), left_days
+            )
             right = c.get("right")
             if isinstance(right, str) and right.startswith("field:"):
                 col = right[len("field:"):]
                 if col not in market_data.fields:
                     return None, f"叠加条件引用的列不在回测矩阵中: {col}"
-                right_arr = np.asarray(market_data.fields[col], dtype=float)
+                right_arr = cls._shift_time(
+                    np.asarray(market_data.fields[col], dtype=float), right_days
+                )
                 cond = fn(left_arr, right_arr) & ~np.isnan(left_arr) & ~np.isnan(right_arr)
             else:
                 try:

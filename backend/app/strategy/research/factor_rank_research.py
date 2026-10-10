@@ -13,7 +13,7 @@ from app.backtest.matrix import (
 META = {
     "id": "factor_rank_research",
     "name": "因子排名研究",
-    "description": "受控多因子截面评分、阈值与排名选股策略",
+    "description": "受控多因子截面评分、阈值与排名策略",
     "tags": ["因子", "研究", "截面排名"],
     "asset_types": ["stock", "etf"],
     "timeframes": ["1d"],

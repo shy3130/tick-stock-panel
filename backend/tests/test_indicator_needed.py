@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import compute_indicators, compute_limit_signals, compute_signals
 
@@ -26,6 +27,13 @@ def _bars(n: int = 90) -> pl.DataFrame:
                 "raw_low": close - 0.10,
             })
     return pl.DataFrame(rows)
+
+
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    """注入迁移自内置的信号定义 (信号列定义驱动, 不依赖运行目录)。"""
+    from tests.signal_seeds import install_pipeline_caches
+    install_pipeline_caches(monkeypatch)
 
 
 def test_compute_indicators_assume_sorted_matches_default_values():

@@ -306,8 +306,8 @@ _KLINE_KEEP_COLS = [
     "consecutive_limit_ups",
     # 信号类(布尔)——只挑对消息面推断有用的几个
     "signal_limit_up", "signal_broken_limit_up", "signal_macd_golden",
-    "signal_macd_death", "signal_ma_golden_5_20", "signal_volume_surge",
-    "signal_boll_breakout_upper", "signal_boll_breakout_lower",
+    "signal_macd_dead", "signal_ma_golden_5_20", "signal_volume_surge",
+    "signal_boll_breakout_upper", "signal_boll_breakdown_lower",
 ]
 
 

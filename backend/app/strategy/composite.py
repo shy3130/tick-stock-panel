@@ -1,11 +1,11 @@
-"""叠加策略合并器 — 选股与回测共用的纯函数。
+"""叠加策略合并器 — 策略与回测共用的纯函数。
 
-为什么单独成模块: 选股(StrategyEngine._run_composite_strategy)和回测
+为什么单独成模块: 策略(StrategyEngine._run_composite_strategy)和回测
 (StrategyBacktestService)都要合并子策略结果, 必须共享同一套口径, 否则会出现
-"选股与回测使用不同逻辑"的金融错误(CONTRIBUTING §5.1)。
+"策略与回测使用不同逻辑"的金融错误(CONTRIBUTING §5.1)。
 
 两种合并入口:
-- merge_results: 选股合并。输入各子 StrategyResult, 输出合并后的 StrategyResult。
+- merge_results: 策略合并。输入各子 StrategyResult, 输出合并后的 StrategyResult。
 - merge_signal_matrices: 回测合并。输入各子 SignalMatrix, 输出合并后的 SignalMatrix。
 
 合并语义(首版):
@@ -53,7 +53,7 @@ def merge_results(
     strategy_id: str,
     elapsed_ms: float = 0.0,
 ) -> StrategyResult:
-    """选股合并: 按 symbol 聚合各子结果, 标准化排名加权融合 score。
+    """策略合并: 按 symbol 聚合各子结果, 标准化排名加权融合 score。
 
     Args:
         results: 各子策略的 StrategyResult(顺序与 children_weights 对齐)

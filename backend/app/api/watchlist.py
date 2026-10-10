@@ -1,4 +1,4 @@
-"""自选股 API。"""
+"""自选 API。"""
 from __future__ import annotations
 
 import logging
@@ -461,7 +461,7 @@ def watchlist_enriched(
     request: Request,
     ext_columns: str | None = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
 ):
-    """自选股 enriched 数据 — 直接从 enriched 最新日读取, 无重计算。
+    """自选 enriched 数据 — 直接从 enriched 最新日读取, 无重计算。
 
     仅两列为按行向量化现算 (不落盘): 涨跌停价, 以及「加入后涨跌幅」(pct_since_added,
     以加入日收盘价为基准)。本端点在行情 tick 热路径上被反复调用, 故不做历史 scan 兜底。
@@ -491,7 +491,7 @@ def watchlist_enriched(
     # 以自选列表为主表 LEFT JOIN enriched, 保证自选的每一只都返回一行;
     # 不在 enriched 缓存里的标的 (新股/冷门股/新用户未同步) 指标为 null, 前端渲染为 "—".
     # 旧实现是 df_e.filter(is_in(stock_symbols)), 方向反了 (以 enriched 为主),
-    # 会把不在缓存 universe 里的自选股静默丢弃.
+    # 会把不在缓存 universe 里的自选静默丢弃.
     if stock_symbols:
         watchlist_df = pl.DataFrame({"symbol": stock_symbols})
         if df_e.is_empty():
@@ -632,8 +632,8 @@ def watchlist_enriched(
     if ext_specs:
         db = repo.store.db
         data_dir = repo.store.data_dir
-        from app.services.ext_data import ExtConfigStore
         from app.api.ext_data import _read_ext_dataframe
+        from app.services.ext_data import ExtConfigStore
 
         ext_store = ExtConfigStore(data_dir)
         configs = {c.id: c for c in ext_store.load_all()}

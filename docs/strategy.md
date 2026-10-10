@@ -1,14 +1,14 @@
 # 策略指南
 
-策略是选股引擎、回测、监控的基础。本文介绍策略体系与三种扩展方式。
+策略是策略引擎、回测、监控的基础。本文介绍策略体系与三种扩展方式。
 
 完整策略开发规范(AI 生成与手写)见 [`backend/app/strategy/prompts/strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md)。
 
 ---
 
-## 内置策略
+## 示例策略
 
-**25 个内置策略**,每个策略一个独立 Python 文件,基于 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+**策略全部是用户自定义文件**,每个策略一个独立 Python 文件,基于 Polars 表达式向量化实现,存放在 `data/strategies/custom/`(可编辑、可删除);原 25 个示例策略已随数据目录一次性迁移为普通自定义策略。按类型概览:
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
@@ -16,9 +16,9 @@
 | 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量 · 接近涨停 · 涨停基因活跃股 |
 | 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20 · 回踩支撑 · 强势开盘 · MACD 零下回升 · 长下影反击 · RSI 中轴回踩 |
 
-内置目录 `backend/app/strategy/builtin/` 还包含一个仅供挖掘 worker 使用的受控因子排名研究模板。它不出现在普通选股列表，也不能通过普通策略 API 直接运行或保存 override；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
+`backend/app/strategy/research/` 保留一个仅供挖掘 worker 使用的受控因子排名研究模板(research_only)。它不出现在普通策略列表，也不能通过普通策略 API 直接运行或删除；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
 
-内置目录 `backend/app/strategy/builtin/` 由项目维护,**AI 生成的策略不会落入此目录**。
+策略引擎只加载用户数据目录(`data/strategies/custom|ai|composite`)与研究模板目录,**不再有内置策略目录**;新装环境策略库为空,需要手动导入或重建。AI 生成的策略只落入 `data/strategies/ai/`。
 
 ---
 
@@ -26,7 +26,7 @@
 
 ### 🎛️ 方式一:自定义信号(不写代码)
 
-在选股页 UI 上用 `字段 + 操作符 + 阈值` 组合,编译成 Polars 表达式热加载。适合:
+在策略页 UI 上用 `字段 + 操作符 + 阈值` 组合,编译成 Polars 表达式热加载。适合:
 
 - 快速验证一个简单的筛选思路(如 `RSI < 30 AND 量比 > 2`)
 - 不熟悉 Python 但想自定义筛选条件
@@ -44,7 +44,7 @@
    AI_API_KEY=sk-...
    AI_MODEL=deepseek-chat
    ```
-2. 在选股页打开「AI 策略生成器」,用自然语言描述你的策略思路
+2. 在策略页打开「AI 策略生成器」,用自然语言描述你的策略思路
 3. 前端流式接收生成代码,后端经 `ast` 安全校验(禁止 import os/sys/subprocess 等危险模块)后返回结果
 4. 保存后落入 `data/strategies/ai/`,文件名/ID 用 `ai_` 前缀
 
@@ -61,7 +61,7 @@
 
 ### 📝 方式三:自定义编写 / 代码迁移
 
-可以在选股页「自定义编写」中直接编辑策略代码并保存,新建自定义策略会落入 `data/strategies/custom/`,文件名/ID 用 `custom_` 前缀。也可以手动把已有策略改写为 Polars 文件后放入该目录,引擎会自动发现。
+可以在策略页「自定义编写」中直接编辑策略代码并保存,新建自定义策略会落入 `data/strategies/custom/`,文件名/ID 用 `custom_` 前缀。也可以手动把已有策略改写为 Polars 文件后放入该目录,引擎会自动发现;或用策略池对话框右上角的**「导入策略」**按钮直接上传 `.py` 文件(新装空库上手的最快路径)。
 
 手写策略需遵循 [`strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md) 的文件结构(META / basic_filter / scoring / ENTRY_SIGNALS / filter 等),完整规范见该文档。
 
@@ -76,13 +76,13 @@
 | `META` | 策略元信息(名称、参数、方向等),用户可在 UI 调整阈值 |
 | `basic_filter(df, params)` | 模式 A:单日过滤,返回 `pl.Expr` |
 | `filter_history(df, params)` | 模式 B:历史窗口过滤,返回 `pl.DataFrame`(配 `LOOKBACK_DAYS`) |
-| `scoring` | 评分权重,总和 = 1.0 |
+| `scoring` | 策略权重,总和 = 1.0 |
 | `ENTRY_SIGNALS` / `EXIT_SIGNALS` | 进出场信号列(回测用) |
 
 完整字段说明与示例见 [`strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md)。
 
 ---
 
-## 新增内置策略(贡献者)
+## 新增示例策略(贡献者)
 
-如果你想为项目贡献一个内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎会自动发现并加载。欢迎提交 PR。
+如果你想随项目分发一个示例策略:在 `backend/tests/fixtures/strategies/` 维护参考实现(仅测试用);面向用户的策略分发请直接提供 `.py` 文件由用户导入 `data/strategies/custom/`,引擎会自动发现并加载。

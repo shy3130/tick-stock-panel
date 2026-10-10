@@ -1010,7 +1010,10 @@ class FuyaoProvider:
                         if value is not None:
                             row[self._METRICS_FIELD_MAP.get(index_id, index_id)] = value
             rows_out.append(row)
-        return pl.DataFrame(rows_out) if rows_out else pl.DataFrame()
+        # 稀疏列(仅个别行业有值的指标)前 100 行可能不存在或全空, 默认采样会
+        # 静默丢列 / 推断成 Null 后 append 失败 → 全量扫描推断 (与 _financial_
+        # statements 同修, #458)
+        return pl.DataFrame(rows_out, infer_schema_length=None) if rows_out else pl.DataFrame()
 
     def trading_days(self) -> set:
         """近一年交易日集合 (供交易日探针)。失败抛 FuyaoError, 由探针兜为未知。"""

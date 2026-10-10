@@ -33,9 +33,11 @@ interface Props {
   title?: string
   /** 标题行右侧追加内容 (如 AI 生成按钮), 与内置「添加条件」并排 */
   headerExtra?: React.ReactNode
+  /** 允许删到 0 条 (叠加条件默认即空 = 不叠加; 自定义信号至少 1 条, 保持默认 false) */
+  allowEmpty?: boolean
 }
 
-export function ConditionEditor({ conditions, onChange, options, max = 8, title, headerExtra }: Props) {
+export function ConditionEditor({ conditions, onChange, options, max = 8, title, headerExtra, allowEmpty = false }: Props) {
   const {
     fields, groups, stringFields,
     operators = ['>', '>=', '<', '<=', '==', '!='],
@@ -108,8 +110,8 @@ export function ConditionEditor({ conditions, onChange, options, max = 8, title,
                   onChangeDays={v => updateCond(i, { rightDays: v })} />
               )}
 
-              {conditions.length > 1 && (
-                <button onClick={() => removeCond(i)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
+              {(conditions.length > 1 || allowEmpty) && (
+                <button onClick={() => removeCond(i)} aria-label="删除条件" className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                   <X className="h-3 w-3" />
                 </button>
               )}

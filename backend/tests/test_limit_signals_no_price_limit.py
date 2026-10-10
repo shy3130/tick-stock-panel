@@ -1,10 +1,10 @@
 """维表涨停价为「无涨跌停限制」哨兵值 (>= 10000) 时, 盘后全量与实时路径同口径不判涨跌停。
 
 注册制新股上市前 5 个交易日无涨跌幅限制, 数据源在维表 limit_up 填上万的占位值。
-实时路径 (_compute_limit_signals_today) 识别该哨兵后涨停/跌停/炸板/翘板一律为 False;
-盘后全量 (compute_limit_signals) 只把哨兵排除出「权威价」, 随后回退按 10%/20%/30%
-理论价判断, 于是新股当日涨超 10% 就被记为涨停、连板数 +1, 收盘后看板涨停家数、
-连板梯队与涨停类策略都会把它算进去, 与盘中结论相反。
+识别该哨兵后涨跌停判定价 (limit_up_price / limit_down_price) 为 null —— 引用判定价的
+signal_limit_* 自定义信号条件一律不成立, 连板数归零; 否则盘后全量 (compute_limit_signals)
+回退按 10%/20%/30% 理论价判断, 新股当日涨超 10% 就被记为涨停、连板数 +1, 收盘后看板
+涨停家数、连板梯队与涨停类策略都会把它算进去, 与盘中结论相反。
 
 listing_date 窗口判定 (price_limits.is_no_limit_day) 补齐哨兵覆盖不到的部分:
 维表 as_of 只命中一个行情日, 窗口内其余交易日与 as_of 漂移后的历史重算由
@@ -62,17 +62,14 @@ def _realtime(rows: pl.DataFrame, instruments: pl.DataFrame) -> dict:
     return pipeline._compute_limit_signals_today(today, instruments).row(0, named=True)
 
 
-# 昨收 20.00, 主板理论涨停 22.00 / 跌停 18.00
+# 昨收 20.00, 主板理论涨停 22.00 / 跌停 18.00; 判定价含 ∓0.005 容差
 CASES = {
     "up_close": dict(open_=21.0, high=23.5, low=20.5, close=23.4),        # 涨超 10% 收盘
     "up_touch_fade": dict(open_=21.0, high=22.5, low=20.5, close=21.5),   # 冲过理论涨停价后回落
     "down_close": dict(open_=19.0, high=19.5, low=17.5, close=17.6),      # 跌超 10% 收盘
     "down_touch_up": dict(open_=18.2, high=19.0, low=17.8, close=18.8),   # 跌破理论跌停价后收阳
 }
-SIGNALS = (
-    "signal_limit_up", "signal_broken_limit_up",
-    "signal_limit_down", "signal_limit_down_recovery",
-)
+LIMIT_PRICES = ("limit_up_price", "limit_down_price")
 
 
 @pytest.mark.parametrize("case", list(CASES))
@@ -83,9 +80,9 @@ def test_full_path_no_price_limit_sentinel_matches_realtime(case):
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
     realtime = _realtime(rows, instruments)
 
-    for signal in SIGNALS:
-        assert realtime[signal] is False, signal
-        assert full[signal] is False, signal
+    for price in LIMIT_PRICES:
+        assert realtime[price] is None, price
+        assert full[price] is None, price
     assert full["consecutive_limit_ups"] == 0
     assert full["consecutive_limit_downs"] == 0
 
@@ -95,10 +92,10 @@ def test_down_signals_alone_also_respect_sentinel():
     instruments = _instruments(limit_up=100000.0, limit_down=0.0)
 
     full = pipeline.compute_limit_signals(
-        rows, instruments, needed={"signal_limit_down", "consecutive_limit_downs"},
+        rows, instruments, needed={"limit_down_price", "consecutive_limit_downs"},
     ).row(-1, named=True)
 
-    assert full["signal_limit_down"] is False
+    assert full["limit_down_price"] is None
     assert full["consecutive_limit_downs"] == 0
 
 
@@ -109,7 +106,7 @@ def test_sentinel_only_applies_to_matching_instrument_date():
 
     full = pipeline.compute_limit_signals(rows, stale).row(-1, named=True)
 
-    assert full["signal_limit_up"] is True
+    assert full["limit_up_price"] == pytest.approx(21.995)
     assert full["consecutive_limit_ups"] == 1
 
 
@@ -119,7 +116,8 @@ def test_regular_stock_limit_up_unchanged():
 
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
 
-    assert full["signal_limit_up"] is True
+    assert full["limit_up_price"] == pytest.approx(21.995)
+    assert full["raw_close"] >= full["limit_up_price"]
     assert full["consecutive_limit_ups"] == 1
 
 
@@ -165,8 +163,8 @@ def test_full_path_listing_date_window_marks_no_limit_on_stale_as_of():
 
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
 
-    for signal in SIGNALS:
-        assert full[signal] is False, signal
+    for price in LIMIT_PRICES:
+        assert full[price] is None, price
     assert full["consecutive_limit_ups"] == 0
     assert full["consecutive_limit_downs"] == 0
 
@@ -190,7 +188,7 @@ def test_sixth_trading_day_after_window_resumes_limit_signals():
 
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
 
-    assert full["signal_limit_up"] is True
+    assert full["limit_up_price"] == pytest.approx(21.995)
     assert full["consecutive_limit_ups"] == 1
 
 
@@ -204,7 +202,7 @@ def test_pre_registration_listing_keeps_theoretical_limit():
 
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
 
-    assert full["signal_limit_up"] is True
+    assert full["limit_up_price"] == pytest.approx(21.995)
     assert full["consecutive_limit_ups"] == 1
 
 
@@ -219,7 +217,7 @@ def test_partial_local_history_old_stock_not_marked_no_limit():
 
     full = pipeline.compute_limit_signals(rows, instruments).row(-1, named=True)
 
-    assert full["signal_limit_up"] is True
+    assert full["limit_up_price"] == pytest.approx(21.995)
 
 
 def test_realtime_path_listing_date_window_without_sentinel():
@@ -231,5 +229,5 @@ def test_realtime_path_listing_date_window_without_sentinel():
 
     realtime = _realtime(rows, instruments)
 
-    for signal in SIGNALS:
-        assert realtime[signal] is False, signal
+    for price in LIMIT_PRICES:
+        assert realtime[price] is None, price

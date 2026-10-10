@@ -31,7 +31,7 @@ def _make_strategy(
         filter_fn=None,
         filter_history_fn=None,
         lookback_days=60,
-        source="builtin",
+        source="custom",
     )
 
 

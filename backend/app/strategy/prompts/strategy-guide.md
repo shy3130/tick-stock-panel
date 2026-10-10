@@ -40,7 +40,7 @@ META = {
     "params": [
     ],
 
-    # 评分权重 (用于排序, 根据策略核心逻辑定制, 权重总和 = 1.0)
+    # 策略权重 (用于排序, 根据策略核心逻辑定制, 权重总和 = 1.0)
     "scoring": {
     },
 
@@ -140,7 +140,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 - `LOOKBACK_DAYS` 决定引擎加载多少天的数据，设为策略逻辑需要的最大回看天数
 - 优先使用 Polars 的 `with_columns`、`over("symbol")`、`group_by`、`join`、`filter` 实现历史逻辑，避免把数据转成 Python list/dict 循环
 - 只有遇到表达式难以描述的复杂状态机时，才使用 `partition_by("symbol")` + `to_dicts()` 逐股票分析
-- **返回所有匹配行，不要过滤 `latest`**；选股引擎会自动取最新日，回测引擎需要全区间命中
+- **返回所有匹配行，不要过滤 `latest`**；策略引擎会自动取最新日，回测引擎需要全区间命中
 - 未声明 `filter_history()` 的策略走普通 `filter()` 路径，不受影响
 - **date 类型参数必须先转换再与 `date` 列比较**：params 里的 `"type": "date"` 参数从 JSON 传来是字符串（如 `"2024-01-01"`），而数据中 `date` 列是 Polars Date 类型，**不能直接比较**，否则报错。必须先转换：
 

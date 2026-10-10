@@ -108,7 +108,7 @@ async def test_action_tool_gated_and_executes_after_approval(monkeypatch: pytest
 
     confirms = [e for e in events if e["type"] == "action_confirm"]
     assert len(confirms) == 1
-    assert confirms[0]["label"] == "加入自选股"
+    assert confirms[0]["label"] == "加入自选"
     assert confirms[0]["risk"]
     assert confirms[0]["expires_in"] == 120
     # tool_call 与确认卡共用同一 call_id, 前端据此关联足迹记录

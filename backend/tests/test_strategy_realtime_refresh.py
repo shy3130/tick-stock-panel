@@ -136,7 +136,7 @@ def test_matrix_strategy_monitor_reuses_live_matrix_and_updates_last_row():
         return history
 
     strategy_engine = StrategyEngine(
-        strategy_dirs=[Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"],
+        strategy_dirs=[Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "strategies"],
     )
     overrides = {
         "params": {"require_macd_golden": False, "use_volume_filter": False},

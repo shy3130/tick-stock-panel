@@ -229,6 +229,81 @@ def test_metrics_indicator_failure_keeps_row(monkeypatch):
     assert "roe" not in df.columns
 
 
+class _PerSymbolMetricsClient(_FakeFinClient):
+    """按标的返回不同利润表行与指标, 模拟全市场同步的逐股稀疏出现。"""
+
+    def __init__(
+        self,
+        rows_by_symbol: dict[str, dict],
+        indicators_by_symbol: dict[str, list[dict]],
+    ):
+        super().__init__()
+        self.rows_by_symbol = rows_by_symbol
+        self.indicators_by_symbol = indicators_by_symbol
+
+    def financial_statements(self, stmt, thscode, limit=1):
+        self.stmt_calls.append((stmt, thscode, limit))
+        return [dict(self.rows_by_symbol[thscode], thscode=thscode)]
+
+    def financial_indicators(self, thscode, report):
+        self.ind_calls.append(f"{thscode}@{report}")
+        return self.indicators_by_symbol.get(thscode, [])
+
+
+def test_metrics_sparse_column_after_100_rows(monkeypatch):
+    """前 100 只只有公共指标、之后才出现行业特有指标时, 列不得丢失或崩溃。
+
+    真实场景 (#458): custom 数据源全市场同步一次传入数千只, 不分批;
+    行业特有指标 (如仅银行披露的 financial_expense) 前 100 行的 row 里完全
+    没有该键 (值非 None 才写列), 裸 pl.DataFrame 默认按前 100 行采样推断,
+    该列被静默丢弃 —— 指标值消失且无任何异常; 公共列 (eps_basic) 前 100 行
+    为 None、之后才有值时则直接 ComputeError 整表构建失败。本用例同时覆盖
+    两种形态。
+    """
+    common = {
+        "ability": "profitability",
+        "indicators": [{"index_id": "index_weighted_avg_roe", "value": "10.5"}],
+    }
+    # 前 100 只: 无 basic_eps (eps_basic=None), 仅公共指标 roe
+    rows_by_symbol = {
+        f"{600000 + i:06d}.SH": dict(_INCOME_ROW, basic_eps=None)
+        for i in range(100)
+    }
+    indicators_by_symbol = {
+        f"{600000 + i:06d}.SH": [common] for i in range(100)
+    }
+    # 第 101 只 (银行): basic_eps 有值 + 行业特有指标首次出现
+    rows_by_symbol["601998.SH"] = dict(_INCOME_ROW, basic_eps=2.31)
+    indicators_by_symbol["601998.SH"] = [
+        {
+            "ability": "profitability",
+            "indicators": [
+                {"index_id": "index_weighted_avg_roe", "value": "11.2"},
+                {"index_id": "financial_expense", "value": "61199000000.0"},
+            ],
+        },
+    ]
+    provider = _provider_with(
+        monkeypatch, _PerSymbolMetricsClient(rows_by_symbol, indicators_by_symbol)
+    )
+
+    df = provider.get_financials("metrics", list(rows_by_symbol), latest_only=True)
+
+    assert df.height == 101
+    # 稀疏列不再被静默丢弃 (修复前: 该列直接从结果中消失, 无异常)
+    assert "financial_expense" in df.columns
+    assert df.schema["financial_expense"] == pl.Float64
+    bank = df.filter(pl.col("symbol") == "601998.SH").row(0, named=True)
+    assert bank["financial_expense"] == pytest.approx(6.1199e10)
+    assert (
+        df.filter(pl.col("symbol") != "601998.SH")["financial_expense"].null_count()
+        == 100
+    )
+    # 公共列 None→值 不再触发 ComputeError (修复前: "could not append value")
+    assert df.schema["eps_basic"] == pl.Float64
+    assert bank["eps_basic"] == 2.31
+
+
 def test_metrics_skips_symbol_without_income(monkeypatch):
     fake = _FakeFinClient(statements={"income": []})
     provider = _provider_with(monkeypatch, fake)

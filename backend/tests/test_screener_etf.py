@@ -10,7 +10,7 @@ import pytest
 from app.services.screener import ScreenerService
 from app.strategy.engine import StrategyDataContext, StrategyEngine
 
-BUILTIN_DIR = Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"
+BUILTIN_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "strategies"
 
 
 class _FakeRepo:

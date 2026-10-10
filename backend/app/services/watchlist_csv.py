@@ -1,4 +1,4 @@
-"""自选股 CSV/TXT 与粘贴代码批量导入：解码 → 抽代码 → instruments 校验。
+"""自选 CSV/TXT 与粘贴代码批量导入：解码 → 抽代码 → instruments 校验。
 
 国内行情软件（同花顺/东财/通达信）导出的自选多为 CSV/TXT，且常为 GBK 系编码
 （参见 ext_data.ensure_utf8_csv 的说明）。本模块把上传字节 / 粘贴文本解析为与截图

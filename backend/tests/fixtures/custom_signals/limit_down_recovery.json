@@ -1,0 +1,38 @@
+{
+  "id": "limit_down_recovery",
+  "name": "跌停翘板",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "raw_low",
+      "op": ">",
+      "right": "0",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "raw_close",
+      "op": ">",
+      "right": "field:limit_down_price",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "raw_low",
+      "op": "<=",
+      "right": "field:limit_down_price",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "close",
+      "op": ">",
+      "right": "field:open",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_limit_down_recovery"
+}

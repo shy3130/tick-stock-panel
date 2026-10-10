@@ -1,0 +1,17 @@
+{
+  "id": "volume_surge",
+  "name": "放量",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "vol_ratio_5d",
+      "op": ">=",
+      "right": "2",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_volume_surge"
+}

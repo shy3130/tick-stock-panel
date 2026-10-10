@@ -293,7 +293,7 @@ export function Financials() {
             {/* 个股搜索区 */}
             <div>
               {selected ? (
-                // 已选股:紧凑搜索条 + 清除按钮(便于换股)
+                // 已选个股:紧凑搜索条 + 清除按钮(便于换股)
                 <div className="flex items-center gap-3">
                   <div className="flex-1 max-w-xl">
                     <StockFinancialSearch onSelect={pick} />
@@ -308,7 +308,7 @@ export function Financials() {
                   </button>
                 </div>
               ) : (
-                // 未选股:醒目居中引导
+                // 未选个股:醒目居中引导
                 <div className="flex flex-col items-center gap-3 py-8">
                   <div className="flex items-center gap-2 text-sm text-secondary">
                     <Search className="h-4 w-4 text-accent" />

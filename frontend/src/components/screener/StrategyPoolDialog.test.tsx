@@ -32,8 +32,8 @@ function mkStrategy(p: Partial<StrategyDetail> & Pick<StrategyDetail, 'id' | 'na
 }
 
 const aiDraft = mkStrategy({ id: 'ai_breakout_v1', name: 'AI突破', source: 'ai', research_only: true })
-const builtinResearch = mkStrategy({ id: 'factor_rank_research', name: '因子排名研究', source: 'builtin', research_only: true })
-const builtinPublic = mkStrategy({ id: 'trend_follow', name: '趋势跟随', source: 'builtin' })
+const builtinResearch = mkStrategy({ id: 'factor_rank_research', name: '因子排名研究', source: 'custom', research_only: true })
+const builtinPublic = mkStrategy({ id: 'trend_follow', name: '趋势跟随', source: 'custom' })
 
 let root: Root | null = null
 const container = document.createElement('div')

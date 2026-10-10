@@ -643,7 +643,7 @@ export function Screener() {
 
   const batchAdd = useWatchlistBatchAdd()
 
-  // 自选股列表 (用于判断是否在自选中)
+  // 自选列表 (用于判断是否在自选中)
   const watchlist = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
@@ -1140,7 +1140,7 @@ export function Screener() {
                 <ScanSearch className="h-7 w-7 text-accent/40" />
               </div>
               <div className="flex flex-col items-center gap-1.5">
-                <span className="text-sm text-secondary">点击策略卡片查看选股结果</span>
+                <span className="text-sm text-secondary">点击策略卡片查看策略结果</span>
                 <span className="text-[11px] text-muted">若提示 enriched 表无数据，请先运行盘后管道</span>
               </div>
             </div>

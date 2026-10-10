@@ -29,6 +29,7 @@ function render(props: {
   conditions: { left: string; op: string; right: string; leftDays?: number; rightDays?: number }[]
   onChange: (next: any[]) => void
   hideDays?: boolean
+  allowEmpty?: boolean
 }) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   if (root) { act(() => { root!.unmount() }); root = null }
@@ -40,6 +41,7 @@ function render(props: {
         conditions={props.conditions}
         onChange={props.onChange}
         options={{ ...baseOptions, hideDays: props.hideDays }}
+        allowEmpty={props.allowEmpty}
       />,
     )
   })
@@ -95,6 +97,21 @@ it('empty conditions shows the no-filter hint and still allows adding', () => {
   render({ conditions: [], onChange })
 
   expect(container.textContent).toContain('无条件 — 不叠加过滤')
+})
+
+it('default behavior keeps the last row undeletable (custom signals need ≥1)', () => {
+  render({ conditions: [{ left: 'close', op: '>', right: '10' }], onChange: () => {} })
+  expect(container.querySelector('button[class*="hover:text-danger"]')).toBeNull()
+})
+
+it('allowEmpty exposes delete on the last row and reports []', () => {
+  const onChange = vi.fn()
+  render({ conditions: [{ left: 'close', op: '>', right: '10' }], onChange, allowEmpty: true })
+
+  const remove = container.querySelector<HTMLButtonElement>('button[class*="hover:text-danger"]')
+  expect(remove).toBeTruthy()
+  act(() => { remove!.click() })
+  expect(onChange).toHaveBeenCalledWith([])
 })
 
 it('hideDays hides the 最新 offset toggle', () => {

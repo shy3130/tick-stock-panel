@@ -1085,7 +1085,7 @@ export function Watchlist() {
   }, [groupBySymbol, rows, selectedGroup])
   const watchlistContentLoading = list.isLoading || (allSymbols.length > 0 && enriched.isLoading)
 
-  // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
+  // 实时监控圆点: 仅 Free/低档 "按自选实时监控" 模式 (mode === 'watchlist') 下显示;
   // 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
   // 后端自选实时模式实际只监控自选页前 N 个 (N = watchlist_symbol_count), 顺序与 allSymbols 一致。
   const realtimeMode = quoteStatus.data?.mode
@@ -1332,7 +1332,7 @@ export function Watchlist() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title="自选股"
+        title="自选"
         titleExtra={
           <span className="inline-flex items-center gap-1.5">
             {/* 计数胶囊: 显示数/总数, mono 字体突出数字 */}
@@ -1614,7 +1614,7 @@ export function Watchlist() {
           ) : allSymbols.length === 0 ? (
             <EmptyState
               icon={Star}
-              title="自选股为空"
+              title="自选为空"
               hint="点击右上角搜索添加标的，或用导入按钮从券商自选 CSV / 截图批量导入、粘贴代码。"
             />
           ) : rowsInSelectedGroup.length === 0 ? (
@@ -1931,7 +1931,7 @@ export function Watchlist() {
             >
               <h3 className="text-sm font-medium text-foreground mb-2">确认清空自选</h3>
               <p className="text-xs text-secondary mb-5">
-                将移除全部 {allSymbols.length} 只自选股，此操作不可恢复。
+                将移除全部 {allSymbols.length} 只自选，此操作不可恢复。
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button

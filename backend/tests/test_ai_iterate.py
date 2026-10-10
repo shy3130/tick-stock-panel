@@ -16,10 +16,11 @@ import tempfile
 import types
 from pathlib import Path
 
-from app.strategy import ai_iterator as it
-from app.strategy.ai_generator import AIStrategyGenerator as RealGen, find_meta_assignment
-from app.strategy.ai_iterator import AIStrategyIterator, _rewrite_meta_id
 from app.services import tool_catalog
+from app.strategy import ai_iterator as it
+from app.strategy.ai_generator import AIStrategyGenerator as RealGen
+from app.strategy.ai_generator import find_meta_assignment
+from app.strategy.ai_iterator import AIStrategyIterator, _rewrite_meta_id
 
 V1_CODE = '''"""v1 策略"""
 import polars as pl
@@ -186,7 +187,7 @@ class _FakeEngine:
     def list_strategies(self, include_research=False):
         return [{"id": "builtin_1", "name": "内置", "description": "", "tags": [],
                  "asset_types": ["stock"], "timeframes": ["1d"], "execution_backend": "polars_expr",
-                 "source": "builtin", "params": []}]
+                 "source": "custom", "params": []}]
 
 
 def test_execute_list_strategies():

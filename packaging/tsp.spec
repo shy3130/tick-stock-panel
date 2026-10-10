@@ -31,7 +31,7 @@ block_cipher = None
 ROOT = Path(SPECPATH).parent
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
-BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
+RESEARCH_TEMPLATE = str(ROOT / "backend" / "app" / "strategy" / "research")
 # 图标按平台选: Windows 用 brand/icon.ico, macOS 用 brand/icon.icns —
 # 两者均由 brand/png/logo-tile-light-512.png 派生 (浅色圆角卡版, 品牌资产唯一来源,
 # 见 brand/README 接入指引), 无需 CI 现场生成。
@@ -70,10 +70,13 @@ hiddenimports += collect_submodules("polars")
 # 注:  出于合规暂不进桌面包 (与 GHCR 镜像口径一致), 需要时仿照添加。
 datas += [
     (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
+    (str(ROOT / "backend" / "app" / "" / "plugin.yaml"), ""),
 ]
 hiddenimports += [
     "app.plugins.fuyao.provider",
     "app.plugins.fuyao.client",
+    "app..provider",
+    "app..client",
 ]
 
 # ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
@@ -146,8 +149,8 @@ datas += [(TIERS_YAML, ".")]
 # frontend/package.json → 包根 (app/__init__.py frozen 模式读 _MEIPASS/package.json,
 # __version__ 与安装包 AppVersion / 页面显示同源, 版本号只改 package.json 一处)
 datas += [(str(ROOT / "frontend" / "package.json"), ".")]
-# 内置策略 → app/strategy/builtin/ (importlib 动态加载, 不能进 PYZ)
-datas += [(BUILTIN_STRATEGIES, "app/strategy/builtin")]
+# 研究模板 → app/strategy/research/ (importlib 动态加载, 不能进 PYZ; 挖掘功能依赖)
+datas += [(RESEARCH_TEMPLATE, "app/strategy/research")]
 
 # ── 排除不需要的重型依赖 (主包不含 vectorbt 回测链) ──────────────────
 excludes = [

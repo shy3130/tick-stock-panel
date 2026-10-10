@@ -43,7 +43,7 @@ export interface ListColumnCustomizerProps {
    * 是否禁用遮罩背景模糊 (backdrop-blur)。默认 false。
    * 信息条场景 (宿主含 Canvas K线/分时图) 传 true：blur 会对 Canvas 做逐帧 GPU 合成，
    * 是抽屉打开/滑动卡顿的主因；改纯半透明遮罩后合成层锐减。
-   * 选股/自选页背后是 DOM 表格，blur 开销可忽略，保持默认。
+   * 策略/自选页背后是 DOM 表格，blur 开销可忽略，保持默认。
    */
   disableBackdropBlur?: boolean
 }

@@ -6,10 +6,23 @@
 (纯比较条件) 时回退原条件摘要; 自定义信号解析为用户命名。
 """
 import json
+import tempfile
+from pathlib import Path
 
 import polars as pl
 
 from app.strategy.monitor import MonitorRuleEngine
+from tests.signal_seeds import materialize_data_root
+
+# 信号列已定义驱动: 标签 (signal_* → 中文名) 从种子定义目录解析,
+# 不依赖运行目录的用户数据。
+_SEED_ROOT = materialize_data_root(Path(tempfile.mkdtemp(prefix="tsp_sig_seeds_")))
+
+
+def _engine() -> MonitorRuleEngine:
+    eng = MonitorRuleEngine()
+    eng.set_data_dir(_SEED_ROOT)
+    return eng
 
 
 def _rule(rid="r1", conditions=None, **over):
@@ -37,7 +50,7 @@ def _fire(eng, rule, df):
 
 def test_message_leads_with_hit_signals():
     """OR 规则部分命中: message 只含实际命中的信号, 不再列全量条件。"""
-    eng = MonitorRuleEngine()
+    eng = _engine()
     rule = _rule(conditions=[
         {"field": "signal_ma_dead_5_20", "op": "truth"},
         {"field": "signal_macd_dead", "op": "truth"},
@@ -54,7 +67,7 @@ def test_message_leads_with_hit_signals():
 
 def test_message_falls_back_to_conditions_when_no_truth_hit():
     """纯比较条件规则 (hit_sigs 为空): 保持原条件摘要格式, 行为不变。"""
-    eng = MonitorRuleEngine()
+    eng = _engine()
     rule = _rule(type="price",
                  conditions=[{"field": "close", "op": ">=", "value": 2500}])
     msg = _fire(eng, rule, _df())
@@ -71,7 +84,7 @@ def test_message_resolves_custom_signal_cn_name(tmp_path):
         "conditions": [{"left": "ma5", "op": "<=", "right": "field:ma10"}],
     }, ensure_ascii=False), encoding="utf-8")
 
-    eng = MonitorRuleEngine()
+    eng = _engine()
     eng.set_data_dir(tmp_path)
     rule = _rule(conditions=[{"field": "csg_ma_dead_5_10", "op": "truth"}])
     msg = _fire(eng, rule, _df(csg_ma_dead_5_10=[True]))
@@ -81,7 +94,7 @@ def test_message_resolves_custom_signal_cn_name(tmp_path):
 
 def test_message_and_logic_includes_comparison_conditions():
     """AND 规则 truth+比较混合: 比较条件全部满足, 一并补进 message (信息完整)。"""
-    eng = MonitorRuleEngine()
+    eng = _engine()
     rule = _rule(logic="and", conditions=[
         {"field": "signal_macd_dead", "op": "truth"},
         {"field": "close", "op": ">=", "value": 2500},
@@ -93,7 +106,7 @@ def test_message_and_logic_includes_comparison_conditions():
 
 def test_message_or_logic_omits_comparison_conditions():
     """OR 规则 truth+比较混合: 无法判定比较条件是否为真, 不补进 message。"""
-    eng = MonitorRuleEngine()
+    eng = _engine()
     rule = _rule(logic="or", conditions=[
         {"field": "signal_macd_dead", "op": "truth"},
         {"field": "close", "op": ">=", "value": 2500},
@@ -105,7 +118,7 @@ def test_message_or_logic_omits_comparison_conditions():
 
 def test_message_custom_signal_fallback_without_data_dir():
     """未注入 data_dir 时 csg_ 名称解析优雅回退为原始列名 (不报错)。"""
-    eng = MonitorRuleEngine()
+    eng = _engine()
     rule = _rule(conditions=[{"field": "csg_unknown_sig", "op": "truth"}])
     msg = _fire(eng, rule, _df(csg_unknown_sig=[True]))
     assert "csg_unknown_sig" in msg

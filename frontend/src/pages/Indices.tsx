@@ -177,7 +177,7 @@ export function Indices() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">指数</h1>
           <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
+            指数使用独立 kline_index_* parquet，不进入股票策略链路。
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -4,6 +4,7 @@ import types
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.backtest.strategy import StrategyDependencyResolver
 from app.strategy.engine import StrategyDef
@@ -27,6 +28,13 @@ def _strategy(**overrides) -> StrategyDef:
     )
     values.update(overrides)
     return StrategyDef(**values)
+
+
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    """注入迁移自内置的信号定义 (信号列定义驱动, 不依赖运行目录)。"""
+    from tests.signal_seeds import install_pipeline_caches
+    install_pipeline_caches(monkeypatch)
 
 
 def test_resolver_merges_signals_scoring_filter_and_execution_columns():

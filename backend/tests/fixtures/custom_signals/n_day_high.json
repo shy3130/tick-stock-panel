@@ -1,0 +1,17 @@
+{
+  "id": "n_day_high",
+  "name": "60日新高",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": ">=",
+      "right": "field:high_60d",
+      "leftDays": 0,
+      "rightDays": 0
+    }
+  ],
+  "column": "signal_n_day_high"
+}

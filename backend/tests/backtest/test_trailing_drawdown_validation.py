@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 def _service() -> StrategyBacktestService:
     return StrategyBacktestService(
         BacktestEngine(repo=None),
-        StrategyEngine(strategy_dirs=[REPO_ROOT / "backend" / "app" / "strategy" / "builtin"]),
+        StrategyEngine(strategy_dirs=[REPO_ROOT / "backend" / "tests" / "fixtures" / "strategies"]),
     )
 
 

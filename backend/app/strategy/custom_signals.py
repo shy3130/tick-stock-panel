@@ -9,7 +9,7 @@
 
 设计:
   - 信号列名加前缀 ``csg_`` 避免与内置 ``signal_`` 列冲突。
-  - 回测/选股/监控都按列名找信号，因此注入列后零特殊处理即可三处生效。
+  - 回测/策略/监控都按列名找信号，因此注入列后零特殊处理即可三处生效。
   - 字段白名单 + 固定运算符集，杜绝任意表达式注入。
   - 第一版只支持 AND（多条件同时满足）。
 """
@@ -37,10 +37,16 @@ _MAX_STR_RIGHT = 64
 
 # 字段白名单：只允许这些列出现在条件里（防注入）。均为数值型。
 # 与 ENRICHED_COLUMNS 的数值列保持一致，排除 symbol/date/name 等非数值列。
+# raw_* 为存储列(未复权原始价); limit_*_price 为涨跌停判定价运行时列
+# (compute_limit_signals 产出, 已含 0.005 交易所容差)。
 ALLOWED_FIELDS: frozenset[str] = frozenset({
     # 行情
     "open", "high", "low", "close", "volume", "amount", "turnover_rate",
     "consecutive_limit_ups", "consecutive_limit_downs",
+    # 原始价 (涨跌停类信号判定用)
+    "raw_close", "raw_high", "raw_low",
+    # 涨跌停判定价 (运行时列: 生效价∓0.005 容差)
+    "limit_up_price", "limit_down_price",
     # 基础
     "prev_close", "change_pct", "change_amount", "amplitude",
     # 均线 / 指数均线
@@ -230,6 +236,11 @@ def validate(sig: dict) -> None:
     sid = sig.get("id", "")
     if not isinstance(sid, str) or not ID_RE.match(sid):
         raise ValueError(f"信号 id 非法（仅小写字母数字下划线，1-40字符）: {sid!r}")
+    explicit_column = sig.get("column")
+    if explicit_column is not None and (
+        not isinstance(explicit_column, str) or not COLUMN_RE.match(explicit_column)
+    ):
+        raise ValueError(f"信号 column 非法（仅小写字母数字下划线，1-48字符）: {explicit_column!r}")
     if not isinstance(sig.get("name"), str) or not sig["name"].strip():
         raise ValueError("信号 name 不能为空")
     if sig.get("kind") not in ("entry", "exit", "both"):
@@ -274,6 +285,24 @@ def column_name(signal_id: str) -> str:
     return f"{PREFIX}{signal_id}"
 
 
+COLUMN_RE = re.compile(r"^[a-z0-9_]{1,48}$")
+
+
+def resolve_column(sig: dict) -> str:
+    """信号定义 → 输出列名。
+
+    默认 ``csg_{id}``; 定义可携带显式 ``column`` 字段改写列名 (如迁移自
+    内置信号的定义沿用 ``signal_*`` 原名, 下游消费方零改动)。显式列名
+    仅允许小写字母数字下划线, 防止任意列名注入。
+    """
+    explicit = sig.get("column")
+    if explicit:
+        if not isinstance(explicit, str) or not COLUMN_RE.match(explicit):
+            raise ValueError(f"信号 column 非法（仅小写字母数字下划线，1-48字符）: {explicit!r}")
+        return explicit
+    return column_name(sig["id"])
+
+
 def _col(name: str, days: int = 0) -> pl.Expr:
     """构造列表达式; days>0 时取 N 个交易日前的值 (按 symbol 分组 shift)。"""
     expr = pl.col(name)
@@ -283,9 +312,10 @@ def _col(name: str, days: int = 0) -> pl.Expr:
 
 
 # ── 叠加条件 (策略 overlay_filter) ──────────────────────
-# 每策略「叠加条件」: {left, op, right} 条件列表, AND 组合的当日硬过滤,
-# 直接叠加在策略自身规则之上 (选股/回测/监控三处一致), 不落信号 JSON。
-# 条件结构/白名单/运算符与自定义信号完全同源, 禁用日期偏移。
+# 每策略「叠加条件」: {left, op, right, leftDays?, rightDays?} 条件列表,
+# AND 组合的硬过滤, 直接叠加在策略自身规则之上 (策略/回测/监控三处一致),
+# 不落信号 JSON。条件结构/白名单/运算符/日期偏移与自定义信号完全同源:
+# leftDays/rightDays 为按交易日回看的偏移 (0..MAX_DAYS, 按 symbol 分组 shift)。
 _OVERLAY_MAX_CONDITIONS = 8
 
 
@@ -293,7 +323,8 @@ def validate_overlay_conditions(conditions: object) -> None:
     """校验叠加条件列表 (策略 override 的 overlay_filter 键)。非法抛 ValueError。
 
     空列表合法 (= 清空叠加条件)。字段白名单与运算符同自定义信号
-    (allowed_fields 含注册表因子与字符串扩展字段); days 偏移不支持。
+    (allowed_fields 含注册表因子与字符串扩展字段); 日期偏移同源支持
+    (leftDays/rightDays, 0..MAX_DAYS)。
     """
     if not isinstance(conditions, list):
         raise ValueError("overlay_filter 必须是条件数组")
@@ -318,23 +349,36 @@ def validate_overlay_conditions(conditions: object) -> None:
         elif c.get("op") not in OPS:
             raise ValueError(f"第 {i+1} 个叠加条件: 运算符 {c.get('op')!r} 非法")
         _parse_right(c.get("right"), string_mode=is_str)
+        _parse_days(c, "leftDays", i)   # 左字段偏移
+        _parse_days(c, "rightDays", i)  # 右字段偏移
+
+
+def overlay_max_days(conditions: object) -> int:
+    """叠加条件里最大的日期偏移 (0 = 无偏移)。调用方据此评估所需历史窗口。"""
+    if not isinstance(conditions, list):
+        return 0
+    max_days = 0
+    for c in conditions:
+        if not isinstance(c, dict):
+            continue
         for key in ("leftDays", "rightDays"):
-            raw = c.get(key, 0)
             try:
-                days = int(raw or 0)
+                days = int(c.get(key, 0) or 0)
             except (TypeError, ValueError):
-                raise ValueError(f"第 {i+1} 个叠加条件: {key} 必须是整数") from None
-            if days != 0:
-                raise ValueError(f"第 {i+1} 个叠加条件: 叠加条件不支持日期偏移 ({key})")
+                continue
+            if days > max_days:
+                max_days = days
+    return max_days
 
 
 def build_overlay_expr(conditions: list[dict]) -> pl.Expr | None:
     """把叠加条件编译成一条 AND 组合的布尔表达式 (无 csg_ 前缀, 不落盘)。
 
-    与 build_expressions 同一套编译件 (_OP_BUILDERS/_parse_right);
-    差异: 禁用日期偏移; 条件已被 validate_overlay_conditions 拦过一遍,
-    这里编译失败直接抛 ValueError (fail-closed, 不静默跳过 — 静默跳过
-    等于悄悄放宽过滤, 与硬过滤语义冲突)。
+    与 build_expressions 同一套编译件 (_OP_BUILDERS/_parse_right/_col);
+    日期偏移 (leftDays/rightDays) 与自定义信号同口径, 按 symbol 分组 shift。
+    条件已被 validate_overlay_conditions 拦过一遍, 这里编译失败直接抛
+    ValueError (fail-closed, 不静默跳过 — 静默跳过等于悄悄放宽过滤,
+    与硬过滤语义冲突)。
     null 语义: 表达式不做 fill, 由调用方统一 fill_null(False)
     (缺数据日不入选)。
     """
@@ -342,14 +386,14 @@ def build_overlay_expr(conditions: list[dict]) -> pl.Expr | None:
         return None
     string_fields = _string_ext_fields()
     parts: list[pl.Expr] = []
-    for i, c in enumerate(conditions):
-        if int(c.get("leftDays", 0) or 0) or int(c.get("rightDays", 0) or 0):
-            raise ValueError(f"第 {i+1} 个叠加条件: 叠加条件不支持日期偏移")
+    for c in conditions:
         left, op = c["left"], c["op"]
         is_str = left in string_fields
         kind, val = _parse_right(c["right"], string_mode=is_str)
-        right_expr = _col(val) if kind == "field" else val
-        parts.append(_OP_BUILDERS[op](_col(left), right_expr))
+        left_days = int(c.get("leftDays", 0) or 0)
+        right_days = int(c.get("rightDays", 0) or 0)
+        right_expr = _col(val, right_days) if kind == "field" else val
+        parts.append(_OP_BUILDERS[op](_col(left, left_days), right_expr))
     combined = parts[0]
     for p in parts[1:]:
         combined = combined & p
@@ -391,7 +435,7 @@ def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str
             continue
         try:
             conds = sig["conditions"]
-            col_name = column_name(sig["id"])
+            col_name = resolve_column(sig)
             parts: list[pl.Expr] = []
             for c in conds:
                 left_days = int(c.get("leftDays", 0) or 0)
@@ -415,6 +459,81 @@ def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str
             out[col_name] = combined
         except Exception as e:
             logger.warning("custom signal compile failed %s: %s", sig.get("id"), e)
+    return out
+
+
+def prev_day_fields(signals: list[dict]) -> set[str]:
+    """全部定义里以 leftDays/rightDays=1 引用的根字段集合。
+
+    供当日(实时)路径预 join 昨日值: compute_enriched_today 据此 select
+    ``_prev_{field}`` 列, build_expressions_prev 再把它们映射进表达式。
+    偏移 >1 的字段当日路径无解 (需多日历史), 不在此列。
+    """
+    fields: set[str] = set()
+    for sig in signals:
+        for c in sig.get("conditions") or []:
+            if not isinstance(c, dict):
+                continue
+            if int(c.get("leftDays", 0) or 0) == 1 and isinstance(c.get("left"), str):
+                fields.add(c["left"])
+            right = c.get("right")
+            if (
+                int(c.get("rightDays", 0) or 0) == 1
+                and isinstance(right, str)
+                and right.startswith("field:")
+            ):
+                fields.add(right[len("field:"):])
+    return fields
+
+
+def build_expressions_prev(
+    signals: list[dict],
+    prev_available: set[str],
+) -> dict[str, pl.Expr]:
+    """当日(实时)路径的表达式构建: 偏移=1 的字段改读 ``_prev_{field}`` join 列。
+
+    - 昨日值列缺失 (prev_available 不含该字段) 或偏移 >1 的信号被跳过并告警
+      (单日快照无法回看多日; 与旧内置行为的差异在于昨日值由 join 提供)。
+    - 其余编译逻辑与 build_expressions 完全同源。
+    """
+    def _col_prev(name: str, days: int) -> pl.Expr:
+        if days == 0:
+            return pl.col(name)
+        if days == 1:
+            return pl.col(f"_prev_{name}")
+        raise ValueError(f"当日路径不支持 {days} 日偏移: {name}")
+
+    out: dict[str, pl.Expr] = {}
+    string_fields = _string_ext_fields()
+    for sig in signals:
+        if sig.get("enabled") is False:
+            continue
+        try:
+            col_name = resolve_column(sig)
+            parts: list[pl.Expr] = []
+            for c in sig["conditions"]:
+                left_days = int(c.get("leftDays", 0) or 0)
+                right_days = int(c.get("rightDays", 0) or 0)
+                if left_days > 1 or right_days > 1:
+                    raise ValueError("当日实时路径不支持 >1 日偏移, 已跳过")
+                left = c["left"]
+                op = c["op"]
+                is_str = left in string_fields
+                kind, val = _parse_right(c["right"], string_mode=is_str)
+                # 偏移字段须已由调用方 join 出 _prev_ 列
+                for name, days in ((left, left_days), (val if kind == "field" else None, right_days)):
+                    if name is None:
+                        continue
+                    if days == 1 and name not in prev_available:
+                        raise ValueError(f"当日路径缺少昨日值列: _prev_{name}")
+                right_expr = _col_prev(val, right_days) if kind == "field" else val
+                parts.append(_OP_BUILDERS[op](_col_prev(left, left_days), right_expr))
+            combined = parts[0]
+            for p in parts[1:]:
+                combined = combined & p
+            out[col_name] = combined
+        except Exception as e:
+            logger.warning("custom signal (today) compile failed %s: %s", sig.get("id"), e)
     return out
 
 
@@ -650,7 +769,8 @@ def signal_names(data_dir: Path) -> dict[str, str]:
     for s in load_all(data_dir):
         sid, name = s.get("id"), s.get("name")
         if sid and name:
-            names[column_name(sid)] = name
+            # 显式 column (迁移自内置的 signal_*) 优先于默认 csg_ 前缀
+            names[resolve_column(s)] = name
             names[intraday_column_name(sid)] = name
     _names_cache[data_dir] = (fp, names)
     return names

@@ -1,6 +1,6 @@
 """全局实时行情服务。
 
-集中管理全市场行情拉取 + enriched 缓存，供盘中选股、自选股等所有模块复用。
+集中管理全市场行情拉取 + enriched 缓存，供盘中策略、自选等所有模块复用。
 
 架构:
   - 后台线程轮询 TickFlow get_by_universes(["CN_Equity_A", "CN_ETF"]) + 核心指数按码拉取
@@ -29,7 +29,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime
+from datetime import time as dt_time
 
 import polars as pl
 
@@ -312,7 +313,7 @@ class QuoteService:
         """开启自动行情 (不立即启动线程，等下一个交易时段)。
 
         none 档无实时行情权限,拒绝开启并返回 False;
-        free 档开启自选股实时,starter+ 开启全市场实时。返回值表示是否真正开启。
+        free 档开启自选实时,starter+ 开启全市场实时。返回值表示是否真正开启。
         """
         if not self.is_realtime_allowed():
             logger.warning("实时行情开启被拒:当前档位(none)无实时行情权限")
@@ -530,7 +531,7 @@ class QuoteService:
         return self._repo.get_enriched_latest()
 
     def get_quotes_compat(self) -> pl.DataFrame:
-        """兼容接口: 返回行情 DataFrame (用于盘中选股等需要 last_price/prev_close 的场景)。
+        """兼容接口: 返回行情 DataFrame (用于盘中策略等需要 last_price/prev_close 的场景)。
 
         从 _enriched_cache 取 today 的数据, 只选行情基础列, 补上 last_price 别名。
         不返回指标列, 避免 JOIN live_agg 时列名冲突。
@@ -539,7 +540,7 @@ class QuoteService:
         if df.is_empty():
             return df
 
-        # 只取盘中选股需要的行情基础列
+        # 只取盘中策略需要的行情基础列
         keep = [c for c in [
             "symbol", "close", "open", "high", "low", "volume", "amount",
             "prev_close", "change_pct", "change_amount", "amplitude", "turnover_rate",
@@ -1272,7 +1273,7 @@ class QuoteService:
                     # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
                     # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
                     # flush 焐热; 未焐热说明无 ETF 实时数据, 跳过本轮 ETF 评估)。
-                    # 日期守卫同指数轮: 自选/选股等页面会把磁盘上一交易日的 ETF 快照读进缓存,
+                    # 日期守卫同指数轮: 自选/策略等页面会把磁盘上一交易日的 ETF 快照读进缓存,
                     # ETF 实时拉取关闭 (默认) 或休市时它不会被当日数据替换, 不得当作当日评估。
                     if engine.has_asset_rules("etf") and self._repo is not None:
                         try:
@@ -1783,8 +1784,7 @@ class QuoteService:
         - 批量策略事件 (symbol="") 聚合为一条通知, 避免刷屏
         """
         try:
-            from app.services import preferences
-            from app.services import notify_adapter
+            from app.services import notify_adapter, preferences
 
             if not preferences.get_system_notify_enabled():
                 return
@@ -1847,7 +1847,7 @@ class QuoteService:
 
             if use_incremental:
                 from app.indicators.pipeline import compute_enriched_today
-                from app.market_time import trading_minutes_elapsed_from_ts, trading_minutes_elapsed
+                from app.market_time import trading_minutes_elapsed, trading_minutes_elapsed_from_ts
                 instruments = self._repo.get_instruments()
                 # 将 API 直接提供的补充字段 JOIN 到 daily_df
                 today_ohlcv = daily_df
@@ -1875,6 +1875,7 @@ class QuoteService:
             # ---- 全量回退路径 ----
             if not use_incremental:
                 from datetime import timedelta
+
                 from app.indicators.pipeline import compute_enriched
                 from app.tickflow.repository import _live_agg_window_start
 

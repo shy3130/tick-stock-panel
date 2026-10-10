@@ -1,0 +1,24 @@
+{
+  "id": "ma5_breakdown",
+  "name": "跌破MA5",
+  "kind": "both",
+  "timeframe": "daily",
+  "enabled": true,
+  "conditions": [
+    {
+      "left": "close",
+      "op": "<",
+      "right": "field:ma5",
+      "leftDays": 0,
+      "rightDays": 0
+    },
+    {
+      "left": "close",
+      "op": ">=",
+      "right": "field:ma5",
+      "leftDays": 1,
+      "rightDays": 1
+    }
+  ],
+  "column": "signal_ma5_breakdown"
+}
