@@ -63,6 +63,39 @@ TSP_TOKEN=tsp_xxx uv run tsp-mcp-server   # stdio JSON-RPC, 供客户端拉起
 
 ## 设计说明
 
+### 只读外部资料研究示例
+
+[`examples/research.py`](examples/research.py) 先通过本服务器的 `search_instrument`
+确认完整标的代码, 再通过 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+搜索外部公开来源; `--url` 可额外读取指定网页。使用匿名 Streamable HTTP
+端点 `https://search.parallel.ai/mcp`, 搜索采用 Fast 模式, 免费且无需 Parallel
+账号或 API Key, 有匿名限流。面板仍需自己的 `read:market` Token。
+
+在已启动并同步标的列表的面板旁运行 (Python 3.11+, uv):
+
+```bash
+cd mcp-server
+uv sync --frozen
+export TSP_BASE=http://127.0.0.1:3018
+export TSP_TOKEN=tsp_xxxx  # 面板中创建的 read:market Token
+uv run --frozen python examples/research.py 600519.SH --topic '公司公告 年度报告'
+# 需要读取已选定的来源时:
+uv run --frozen python examples/research.py 600519.SH --url https://www.kweichowmoutai.com.cn/
+```
+
+输出 JSON 包含面板的 `instrument`、外部 `search` 来源 URL/摘录以及可选的
+`fetch` 结果。空结果和抓取失败详情保留在服务响应中; 连接、权限或工具错误以非零
+退出码结束。单次工具请求超时 60 秒, 整个流程最多 180 秒。脚本只执行读操作,
+不写扩展表、不触发回测, 也不接入面板内置助手或调用模型。只向 Parallel 发送
+标的名称/代码、搜索主题和显式提供的公开 URL; 面板 Token 不发送给 Parallel。
+这是来源检索示例, 不生成投资建议, 外部网页不替代面板行情或财务数据。
+
+示例验证 (本地网关 fixture, 不要求真实账号, 不调用外部搜索):
+
+```bash
+uv run --frozen python -m unittest discover -s examples -p 'test_research.py' -q
+```
+
 - **薄桥原则**: 所有权限/限流/契约由面板网关裁决, 本服务器不持有任何业务逻辑, 面板升级自动受益
 - 工具返回原文 JSON, 错误以可读文本返回 — LLM 可据此自行纠正参数
 - 更底层的 REST 契约与示例见 [examples/open-api](../examples/open-api/README.md) 与 [docs/features.md → 开放接口](../docs/features.md)
