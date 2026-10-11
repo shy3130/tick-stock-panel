@@ -1,0 +1,15 @@
+# AKShare — 开源财经数据接口库插件 (https://akshare.akfamily.xyz)
+# 财务数据源: 东财全市场批量报表(利润表/资产负债表/现金流量表/业绩报表)
+# 按报告期 1 次请求覆盖全市场, 股本结构单标的查询。
+# ⚠️ 合规提示: AKShare 底层抓取公开财经网站接口, 未经对方授权可能涉及
+#    服务条款与数据版权问题, 启用即视为使用者知悉并自行承担合规责任。
+
+name: akshare
+display_name: "akshare"
+runtime: python
+entry: app.plugins.akshare.provider:AkshareProvider
+check: app.plugins.akshare.provider:availability
+datasets: [financial]
+description: "开源财经数据库(东财公开接口)。财务五表: 三大报表/指标按报告期全市场批量拉取(1 次请求), 股本结构单标的带节流。无需 API Key。"
+install_hint: "点击安装自动执行 pip install(装入后端虚拟环境),或手动 pip install akshare"
+homepage: "https://akshare.akfamily.xyz"
