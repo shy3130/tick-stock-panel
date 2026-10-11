@@ -194,7 +194,7 @@ const BASIC_FILTER_RANGES = [
   { minKey: 'turnover_min', maxKey: 'turnover_max', label: '换手率', unit: '%', step: '0.5' },
 ]
 // 高级设置分区 — 与策略设置弹窗 (StrategySettingsDialog) 同一信息架构:
-// 策略条件(基础过滤+参数+叠加) / 策略权重 / 纪律与触发(风控+买卖触发) / 回测范围。
+// 策略条件(基础过滤+参数+叠加) / 策略权重 / 风控触发(风控+买卖触发) / 回测范围。
 // 回测抽屉编辑的是本次回测的 overrides, 策略弹窗编辑的是策略定义; 字段与口径两边一致。
 type AdvancedSettingsTab = 'conditions' | 'scoring' | 'trading' | 'range'
 type StrategyGroup = 'all' | 'custom' | 'ai' | 'composite'
@@ -207,7 +207,7 @@ const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
 const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string; icon: typeof Filter }[] = [
   { id: 'conditions', label: '策略条件', icon: Filter },
   { id: 'scoring', label: '策略权重', icon: Star },
-  { id: 'trading', label: '纪律与触发', icon: TrendingUp },
+  { id: 'trading', label: '风控触发', icon: TrendingUp },
   { id: 'range', label: '回测范围', icon: CalendarRange },
 ]
 const toSignalId = (sig: string) => (sig.startsWith('signal_') || sig.startsWith('csg_')) ? sig : `signal_${sig}`
@@ -3015,7 +3015,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 </ConfigSection>
               </div>
 
-              {/* 纪律与触发: 成交口径说明 + 风控与持仓纪律 + 买卖触发器 */}
+              {/* 风控触发: 成交口径说明 + 风控与持仓纪律 + 买卖触发器 */}
               <div className={settingsTab === 'trading' ? 'space-y-3' : 'hidden'}>
                 <div className="rounded-btn border border-accent/25 bg-accent/5 px-3 py-2.5 text-[11px] leading-5 text-secondary">
                   <div className="font-medium text-foreground">触发 / 成交 / 仓位关系</div>

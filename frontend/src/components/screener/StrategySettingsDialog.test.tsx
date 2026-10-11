@@ -118,7 +118,7 @@ it('renders section nav with 策略条件 page active by default', async () => {
 
   expect(container.textContent).toContain('策略条件')
   expect(container.textContent).toContain('策略权重')
-  expect(container.textContent).toContain('纪律与触发')
+  expect(container.textContent).toContain('风控触发')
   expect(container.textContent).toContain('基础参数')
   expect(container.textContent).toContain('叠加条件')
   // 默认页可见, 其他分区隐藏 (常驻挂载避免编辑草稿丢失)
@@ -134,14 +134,14 @@ it('switches pages through the nav rail', async () => {
   expect(pageHidden('对通过筛选的候选按因子加权打分排序')).toBe(false)
   expect(pageHidden('决定哪些股票进入候选')).toBe(true)
 
-  act(() => { findButton('纪律与触发').click() })
+  act(() => { findButton('风控触发').click() })
   expect(pageHidden('控制买卖时点')).toBe(false)
   expect(pageHidden('对通过筛选的候选按因子加权打分排序')).toBe(true)
 })
 
 it('shows unsaved-change hint on edit and clears it when reverted', async () => {
   await render()
-  act(() => { findButton('纪律与触发').click() })
+  act(() => { findButton('风控触发').click() })
 
   const stopLabel = [...container.querySelectorAll('span')].find(s => s.textContent === '止损')!
   const stopInput = stopLabel.parentElement!.querySelector('input[type="number"]') as HTMLInputElement
@@ -151,7 +151,7 @@ it('shows unsaved-change hint on edit and clears it when reverted', async () => 
 
   setNumberInput(stopInput, '9')
   expect(container.textContent).toContain('有未保存的改动')
-  const navBtn = [...container.querySelectorAll('nav button')].find(b => b.textContent?.includes('纪律与触发'))!
+  const navBtn = [...container.querySelectorAll('nav button')].find(b => b.textContent?.includes('风控触发'))!
   expect(navBtn.querySelector('.bg-amber-400')).toBeTruthy()
 
   setNumberInput(stopInput, '8')
@@ -161,7 +161,7 @@ it('shows unsaved-change hint on edit and clears it when reverted', async () => 
 
 it('trading page exposes full risk fields and save carries them', async () => {
   await render()
-  act(() => { findButton('纪律与触发').click() })
+  act(() => { findButton('风控触发').click() })
 
   // 与回测抽屉同构的 6 项纪律字段
   for (const label of ['止损', '止盈', '移动止损', '回撤止盈启动', '回撤止盈回撤', '最长持仓']) {
@@ -189,7 +189,7 @@ it('trading page exposes full risk fields and save carries them', async () => {
 
 it('drawdown clamps to activate value (与回测抽屉同联动)', async () => {
   await render()
-  act(() => { findButton('纪律与触发').click() })
+  act(() => { findButton('风控触发').click() })
 
   const taLabel = [...container.querySelectorAll('span')].find(s => s.textContent === '回撤止盈启动')!
   const tdLabel = [...container.querySelectorAll('span')].find(s => s.textContent === '回撤止盈回撤')!

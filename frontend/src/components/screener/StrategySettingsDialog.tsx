@@ -531,7 +531,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       : [
           { id: 'screen' as const, label: '策略条件', icon: Filter, accent: 'text-sky-400' },
           { id: 'scoring' as const, label: '策略权重', icon: Star, accent: 'text-amber-400' },
-          { id: 'trading' as const, label: '纪律与触发', icon: TrendingUp, accent: 'text-emerald-400' },
+          { id: 'trading' as const, label: '风控触发', icon: TrendingUp, accent: 'text-emerald-400' },
         ]
   }, [detail, isComposite])
 
@@ -771,7 +771,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                     </div>
                   </div>
 
-                  {/* 纪律与触发 */}
+                  {/* 风控触发 */}
                   <div className={page === 'trading' ? PAGE_ANIM : 'hidden'}>
                     <div className="space-y-3">
                       <p className="text-[11px] leading-5 text-muted/70">控制买卖时点：出入场触发器对回测与监控生效（任一命中即触发）；策略扫描不消费触发器，仍按策略自身规则。风控与持仓纪律作为策略默认值保存，回测 / 优化 / 走查打开时自动继承。</p>
