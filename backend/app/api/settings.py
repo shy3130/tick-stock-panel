@@ -424,7 +424,7 @@ def _realtime_allowed() -> bool:
 def _minute_history_days() -> int | None:
     """当前分钟源的 1 分钟历史深度(交易日); None = 深历史(tickflow 基准)。
 
-    provider 可选类属性 minute_history_days 声明 (如  = 5,
+    provider 可选类属性 minute_history_days 声明 (如浅源 = 5,
     免费分时接口只保留最近 5 个交易日); 未声明或走 tickflow 时视为深历史。
     前端分时档位/默认值据此收窄。
     """

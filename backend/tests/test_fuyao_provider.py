@@ -413,11 +413,15 @@ def test_loader_probe_plugin_key_dispatch(monkeypatch):
     assert loader.probe_plugin_key("fuyao", "bad") == (False, "bad")
 
 
-def test_loader_probe_plugin_key_unsupported_plugin():
+def test_loader_probe_plugin_key_unsupported_plugin(monkeypatch):
     from app.data_providers.custom import loader
 
-    #  未声明 api_key_env → 不支持界面配 Key
-    ok, reason = loader.probe_plugin_key("", "x")
+    # 未声明 api_key_env 的插件 → 不支持界面配 Key (桩 manifest 驱动, 不依赖具体内置插件)
+    monkeypatch.setattr(
+        loader, "plugin_manifest",
+        lambda name: {"name": name} if name == "no_key_plugin" else None,
+    )
+    ok, reason = loader.probe_plugin_key("no_key_plugin", "x")
     assert ok is False and "不支持" in reason
     ok, reason = loader.probe_plugin_key("no_such_plugin", "x")
     assert ok is False and "不存在" in reason

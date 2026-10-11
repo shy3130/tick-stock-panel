@@ -1,6 +1,6 @@
 # 数据源插件开发指南
 
-数据源插件是可选的行情数据来源(fuyao、、akshare 等),作为独立模块放在
+数据源插件是可选的行情数据来源(fuyao、akshare 等),作为独立模块放在
 `backend/app/plugins/` 下。services 层(kline_sync / quote_service / financial_sync)
 全部通过统一路由点分流:插件声明了某数据集就走插件,未声明自动回退 TickFlow。
 因此**一个合格的插件只需要正确实现契约,不需要改动任何 service / API 代码**;
@@ -57,12 +57,7 @@ TickFlow 的「先探后存」语义:
 | runtime | 含义 | 典型场景 |
 |---|---|---|
 | `python` | 纯 Python 依赖, `pip install` | akshare、tushare |
-| `node` | 需要 Node.js 运行时, `npm install` |  |
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
-
-> ⚠️  在 Docker 中默认不打包(合规考虑:它抓取第三方财经网站接口,存在版权与
-> 反爬风险)。如需启用,构建时传 `--build-arg INCLUDE_=1`,使用风险自负。
-> 详见 [deployment.md](./deployment.md)。
 
 `runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
 
@@ -218,7 +213,7 @@ provider 不应自行切换或回退到其他数据源。
 记日志；完全无法识别的口径 → 拒收并回退 TickFlow。契约仍要求源头写对，守卫只是兜底。
 
 可选类属性 `minute_history_days = 5` 声明 1 分钟历史深度（交易日）；未声明视为
-深历史（TickFlow 基准）。浅源（如  免费分时仅保留最近 5 个交易日）声明后，
+深历史（TickFlow 基准）。浅源（如免费分时仅保留最近 5 个交易日的源）声明后，
 个股分时档位自动收窄为可行选项并默认 5 日，深源默认 20 日。
 
 > **全量分钟 (full_minute) 数据集契约**:声明 `full_minute` 数据集并把
@@ -318,10 +313,6 @@ uv run --extra dev python -m ruff check app/plugins/<your_plugin>/ tests/test_<y
   - `client.py` — httpx 客户端(X-api-key 认证 + 统一信封解包 + 分页 + 页间隔限频 + 单标的日K + dump 预签名下载, S3 下载不带 Key 头)
   - `provider.py` — Provider 实现(实测/文档双字段名映射、百分数→小数制、volume 股→手、上海零点戳 +8h 时区、dump 按 release 版本缓存、软失败、Key 探测)
   - `tests/test_fuyao_provider.py` — 73 个契约测试, 是新插件的测试范本
-- **`backend/app/plugins//`** — Node 型插件, 通过 subprocess 桥接调用 
-  - `bridge.py` — Python↔Node 桥接 + availability 检测
-  - `bridge.mjs` — Node 端(并发池、重试、SDK 解析)
-  - `provider.py` — Provider 实现(归一化、分批、错误降级)
 
 ## 路由机制(无需关心, 仅参考)
 

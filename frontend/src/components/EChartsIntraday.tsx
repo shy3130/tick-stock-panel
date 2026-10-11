@@ -78,7 +78,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
 
   const volNeutral = 'rgba(161,161,170,0.5)'
   // 量柱着色基准: 前一分钟 close; 第一根用昨收。
-  // 不用 row.open —  历史日无真实分钟 open(为 null), close-vs-open 会全偏。
+  // 不用 row.open — 部分分钟源历史日无真实 open(为 null), close-vs-open 会全偏。
   let prevRef: number | null = prevClose ?? null
   for (let i = 0; i < data.length; i++) {
     const timeKey = formatMinuteTime(data[i].datetime)

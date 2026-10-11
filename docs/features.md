@@ -163,7 +163,7 @@
 
 ### 数据源插件化
 
-内置 [TickFlow](https://tickflow.org) 官方 SDK(日 K / 分钟 K / 指数 / 财务 / 实时行情),同时支持接入第三方数据源:YAML 声明自有 HTTP 接口,或开发插件源(参考实现 ,Docker 镜像已内置)。多个数据集(日K / 除权因子 / 实时行情 / 分钟K / 五档盘口 / 财务,注册表持续扩展)按源声明自由组合,在「设置 → 数据源」切换。
+内置 [TickFlow](https://tickflow.org) 官方 SDK(日 K / 分钟 K / 指数 / 财务 / 实时行情),同时支持接入第三方数据源:YAML 声明自有 HTTP 接口,或开发插件源。多个数据集(日K / 除权因子 / 实时行情 / 分钟K / 五档盘口 / 财务,注册表持续扩展)按源声明自由组合,在「设置 → 数据源」切换。
 
 详见 [custom-data-source.md](./custom-data-source.md) 与 [plugin-development.md](./plugin-development.md)。
 

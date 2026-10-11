@@ -2,12 +2,11 @@
 
 对应设计文档 §4 测试矩阵 (docs/superpowers/specs/2026-07-18-minute-provider-unification-design.md)。
 
-覆盖三个阻断问题:
-1.  默认 freq 漂移 (5m → 1m)
-2. 自定义源异常直接 500 (无 try/except)
-3. 插件化路由重复 + asset_type 未透传
+覆盖的阻断问题 (历史回归):
+1. 自定义分钟源异常直接 500 (无 try/except)
+2. 插件化路由重复 + asset_type 未透传
 
-mock 范式沿用 test__provider.py (monkeypatch 模块属性)。
+mock 范式: monkeypatch 模块属性。
 """
 from __future__ import annotations
 
@@ -19,8 +18,6 @@ from unittest.mock import MagicMock
 import httpx
 import polars as pl
 
-from app.plugins. import provider as sp
-from app.plugins..provider import Provider
 from app.services import kline_sync
 
 
@@ -98,30 +95,6 @@ def test_custom_minute_provider_returns_1m_k(monkeypatch):
     _, kwargs = spy.call_args
     assert kwargs.get("freq") == "1m"
     assert kwargs.get("asset_type") == "stock"
-
-
-# ---------- 测试 2:  收到 freq=1m → bridge job period="1" ----------
-
-def test__get_minute_receives_freq_1m(monkeypatch):
-    """§4 测试 2: Provider.get_minute(freq="1m") → bridge job period == "1"。
-
-    bridge.mjs opMinute 用 String(period), 1m → "1"。
-    """
-    captured: dict = {}
-
-    def fake_run_job(job, timeout=None):
-        captured["job"] = job
-        # 返回空结果, 测试只验证 job.period
-        return {"ok": True, "op": job["op"], "rows": {}}
-
-    monkeypatch.setattr(sp.bridge, "run_job", fake_run_job)
-
-    Provider().get_minute(
-        ["600519.SH"], None, None, freq="1m",
-    )
-
-    assert captured["job"]["op"] == "minute"
-    assert captured["job"]["period"] == "1"
 
 
 # ---------- 测试 3: 自定义源异常 + TickFlow 也失败 → 返回空 (非 500) ----------
@@ -265,7 +238,7 @@ def test_on_chunk_done_wrapped_to_3_args(monkeypatch):
     def provider_get_minute_side_effect(symbols, *, start_time, end_time,
                                         asset_type, freq, on_chunk_done):
         # 模拟 provider 实现内部以 2 参调用 on_chunk_done
-        # (如 GenericHTTPProvider/provider.py:127 / Provider/provider.py:166)
+        # (如 GenericHTTPProvider/provider.py:127)
         if on_chunk_done is not None:
             on_chunk_done(1, 3)
         return _mock_minute_df()

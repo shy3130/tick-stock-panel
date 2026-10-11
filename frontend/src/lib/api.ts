@@ -247,7 +247,7 @@ export interface AiStockReport {
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string
-  /** 分钟开盘价; 部分数据源( 历史日)无真实分钟 open, 为 null */
+  /** 分钟开盘价; 部分数据源历史日无真实分钟 open, 为 null */
   open: number | null
   high: number
   low: number
