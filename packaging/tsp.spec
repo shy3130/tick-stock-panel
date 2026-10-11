@@ -70,13 +70,10 @@ hiddenimports += collect_submodules("polars")
 # 注:  出于合规暂不进桌面包 (与 GHCR 镜像口径一致), 需要时仿照添加。
 datas += [
     (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
-    (str(ROOT / "backend" / "app" / "" / "plugin.yaml"), ""),
 ]
 hiddenimports += [
     "app.plugins.fuyao.provider",
     "app.plugins.fuyao.client",
-    "app..provider",
-    "app..client",
 ]
 
 # ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
