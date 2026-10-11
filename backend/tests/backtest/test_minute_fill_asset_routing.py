@@ -23,6 +23,14 @@ DAILY_OPEN = 11.0
 MINUTE_VWAP = 10.5
 
 
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    """注入迁移自内置的信号定义 (信号列定义驱动, 不依赖运行目录)。"""
+    from tests.signal_seeds import install_pipeline_caches
+
+    install_pipeline_caches(monkeypatch)
+
+
 class _MinuteRepo:
     """只在 ETF 分钟分区里有数据 (与真实仓库按资产类型分开存储一致)。"""
 
