@@ -283,6 +283,8 @@ export interface KlineRow {
   ma5?: number | null
   ma20?: number | null
   ma60?: number | null
+  ma120?: number | null
+  ma200?: number | null
   macd_dif?: number | null
   macd_dea?: number | null
   macd_hist?: number | null

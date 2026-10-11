@@ -1,11 +1,7 @@
-"""ETF / 指数盘中 enriched (全量回退路径) 的历史窗口必须真有 60 个交易日。
+"""ETF / 指数盘中 enriched (全量回退路径) 的历史窗口必须覆盖最长指标。
 
 ETF 与指数没有 live_agg, 每轮实时行情都走 _flush_live_enriched 的全量回退:
-读近「90 个自然日」的日K + 今日行情重算指标。春节/国庆长假后 90 个自然日只有
-56~59 个交易日, rolling_mean(60) / rolling_max(60) / shift(60) 窗口不满, 全部
-ETF 与指数盘中 MA60、60 日极值、60 日动量为空 (创60日新高/新低、MA20 上穿 MA60
-等信号一并失效), 而盘后缓存 (_refresh_etf_enriched / _refresh_index_enriched,
-300 个自然日) 有值。股票盘中递推窗口已按交易日计数 (_live_agg_window_start)。
+读近 320 个自然日的日K + 今日行情重算指标, 再按交易日裁剪到最长滚动窗口。
 """
 from __future__ import annotations
 
@@ -22,16 +18,16 @@ from app.indicators.pipeline import compute_enriched
 from app.services.quote_service import QuoteService
 
 TODAY = date(2026, 2, 26)
-# 2026 元旦 + 春节休市 (2/16~2/23): 2025-11-28 ~ 2026-02-25 只有 57 个交易日
+# 320 日历天窗口跨 2026 元旦与春节休市 (2/16~2/23)
 CLOSED = {date(2026, 1, 1), date(2026, 1, 2)} | {date(2026, 2, 16) + timedelta(days=i) for i in range(8)}
 SYMBOLS = ("510300.SH", "159915.SZ")
-WINDOW_COLUMNS = ("ma60", "high_60d", "low_60d", "momentum_60d")
+WINDOW_COLUMNS = ("ma60", "ma120", "ma200", "high_60d", "low_60d", "momentum_60d")
 TABLES = {"etf": "kline_etf_daily", "index": "kline_index_daily"}
 
 
 def _trading_days() -> list[date]:
     days: list[date] = []
-    d = TODAY - timedelta(days=299)
+    d = TODAY - timedelta(days=320)
     while d <= TODAY:
         if d.weekday() < 5 and d not in CLOSED:
             days.append(d)
@@ -67,10 +63,8 @@ class _StubRepo:
         self.flushed[asset_type] = df
 
 
-def test_fixture_holiday_window_has_fewer_than_60_trading_days():
-    days = _trading_days()
-    history = [d for d in days if TODAY - timedelta(days=90) <= d < TODAY]
-    assert len(history) < 60  # 构造前提: 长假让 90 个自然日不足 60 个交易日
+def test_fixture_has_enough_trading_days():
+    assert len(_trading_days()) >= 200
 
 
 @pytest.mark.parametrize("asset_type", ["etf", "index"])
