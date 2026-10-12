@@ -108,6 +108,16 @@ async def _application_lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    # 去内置化种子迁移必须赶在下方 refresh_cache 之前: enriched 缓存构建时
+    # 编译自定义信号表达式, 晚种会让本次启动的看板/梯队引用的 signal_limit_*
+    # 列缺失 (跌停恒 0、连板梯队无数据), 直到下一次缓存刷新才自愈。
+    _seeded_signals = 0
+    try:
+        from app.strategy import custom_signals as _cs_seed
+
+        _seeded_signals = _cs_seed.seed_if_empty(store.data_dir)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("signal seeding failed (ignored): %s", e)
     # 自定义/复合因子载入注册表 (P3); 单个失败只跳过该因子 (fail-隔离)
     from app.factors.store import load_into_registry
 
@@ -263,18 +273,16 @@ async def _application_lifespan(app: FastAPI):
         strategy_dirs=strategy_dirs,
         override_loader=lambda sid: strategy_config.load_override(store.data_dir, sid),
     )
-    # 去内置化一次性迁移: ①信号目录为空时种入 20 个默认定义;
+    # 去内置化一次性迁移: ①信号目录缺种子时补入 20 个默认定义;
     # ②内置残留类加载失败 (composite 断链 / import 已删模块) 的策略文件
     #   自动归档出扫描目录并重载。摘要挂到 app.state 供前端提示一次。
     legacy_migration: dict = {}
     try:
-        from app.strategy import custom_signals as _cs
         from app.strategy.legacy_migrate import archive_unloadable_strategies
 
-        seeded = _cs.seed_if_empty(store.data_dir)
-        if seeded:
-            legacy_migration["seeded_signals"] = seeded
-            logger.info("legacy migrate: seeded %d default signals", seeded)
+        if _seeded_signals:
+            legacy_migration["seeded_signals"] = _seeded_signals
+            logger.info("legacy migrate: seeded %d default signals", _seeded_signals)
         archived = archive_unloadable_strategies(strategy_engine.load_errors())
         if archived:
             strategy_engine.reload()

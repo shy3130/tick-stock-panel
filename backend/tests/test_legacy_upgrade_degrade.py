@@ -111,15 +111,61 @@ def test_seed_if_empty_writes_once_and_marks(tmp_path):
     assert not list((tmp_path / "user_data" / "custom_signals").glob("*.json"))
 
 
-def test_seed_if_empty_skips_when_user_signals_present(tmp_path):
+def test_seed_if_empty_merges_beside_user_signals(tmp_path):
+    """升级用户已有自定义信号时仍种入缺失的默认信号 (不覆盖用户文件)。
+
+    旧逻辑"目录非空即整体跳过"曾令升级用户丢失内置涨跌停信号:
+    看板跌停恒 0、连板梯队无数据。
+    """
     from app.strategy import custom_signals
 
     d = tmp_path / "user_data" / "custom_signals"
     d.mkdir(parents=True)
     (d / "my_own.json").write_text("{}", encoding="utf-8")
 
+    assert custom_signals.seed_if_empty(tmp_path) == 20
+    names = {f.name for f in d.glob("*.json")}
+    assert "my_own.json" in names
+    assert (d / "limit_up.json").exists()
+    assert (d / "limit_down.json").exists()
+    assert (d / "my_own.json").read_text(encoding="utf-8") == "{}"
+    # 补种完成后标记生效, 二次调用零写入
     assert custom_signals.seed_if_empty(tmp_path) == 0
-    assert [f.name for f in d.glob("*.json")] == ["my_own.json"]
+
+
+def test_seed_if_empty_remediates_legacy_skip_marker(tmp_path):
+    """旧逻辑写的 skipped 标记视为未种子化, 升级后自动补种。"""
+    from app.strategy import custom_signals
+
+    d = tmp_path / "user_data" / "custom_signals"
+    d.mkdir(parents=True)
+    (d / "my_own.json").write_text("{}", encoding="utf-8")
+    (d / ".seeded_v1").write_text("skipped: user signals present\n", encoding="utf-8")
+
+    assert custom_signals.seed_if_empty(tmp_path) == 20
+    assert (d / "limit_up.json").exists()
+    assert "skipped" not in (d / ".seeded_v1").read_text(encoding="utf-8")
+    # 补种后标记为正常 seeded, 不再重复
+    assert custom_signals.seed_if_empty(tmp_path) == 0
+
+
+def test_seed_if_empty_does_not_overwrite_existing_seed_ids(tmp_path):
+    """同 id 文件已存在 (用户改过种子) 时不覆盖, 只补缺失项。"""
+    import json
+
+    from app.strategy import custom_signals
+    from app.strategy.signal_seeds import SEED_SIGNALS
+
+    d = tmp_path / "user_data" / "custom_signals"
+    d.mkdir(parents=True)
+    sentinel = {"id": "limit_up", "name": "我改过的涨停", "enabled": False}
+    (d / "limit_up.json").write_text(
+        json.dumps(sentinel, ensure_ascii=False), encoding="utf-8"
+    )
+
+    n = custom_signals.seed_if_empty(tmp_path)
+    assert n == len(SEED_SIGNALS) - 1
+    assert json.loads((d / "limit_up.json").read_text(encoding="utf-8"))["name"] == "我改过的涨停"
 
 
 # ── 失效策略文件归档 ───────────────────────────────────────
