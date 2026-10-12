@@ -156,6 +156,9 @@ _GATE_HEDGES = ("可能", "或许", "还会", "几次", "多次", "预计", "有
 # 数字后面的单字量词是写完了，不是把词切断。例如 13.1元。
 _MEASURE_TAILS = frozenset("元吨点股成倍")
 _CN_NUMERALS = frozenset("一二三四五六七八九十百千万两")
+# 以数字开头、但其实是日期的标题：「10月以来…」「12月3日…」都是正常新闻。
+# 「以数字开头」这条门槛本来要拦的是「1. 」「2）」这类编号清单。
+_DATE_LIKE_OPENING = re.compile(r"^\d{1,2}\s*[月日]")
 # 词典词性里能当主体的标记。普通名词不算，避免「数据」混进去。
 _POS_ENTITY_FLAGS = frozenset({"ns", "nr", "nt", "nz", "j"})
 _POS_ENTITY_MARKS = ("价格", "股价", "公司", "股份", "集团", "指数", "电网", "机场", "银行")
@@ -650,6 +653,12 @@ def _compute(now: datetime, store: NewsStore, *, blocked: bool = True) -> dict:
     _label_with_llm(_events_for_titles(events))
     for event in events:
         _ensure_shown_name(event)
+    # 写要点会经 _apply_llm 改掉 importance（模型给的级别），而 breakdown/score
+    # 还是上面按规则级别算的。这里只把 importance 这一项和总分对齐，其余分项
+    # 不动：mapping 会随 concepts/stocks 变，一起重算就会让名次跟着写没写过
+    # 要点漂移，打破上面「前 20 必有要点」的保证。
+    for event in events:
+        _resync_importance_score(event)
     # 过滤会改变成员但不重排：名次以上一步为准，保证「前 20 有要点」成立。
     kept = [event for event in events if _keep_shown_event(event)]
     if not kept:
@@ -1160,6 +1169,37 @@ def _score_event(event: dict, now: datetime) -> None:
         "heat": round(heat_bonus, 4),
     }
     event["score"] = round(importance + confirmation + mapping + freshness + heat_bonus, 4)
+
+
+def _resync_importance_score(event: dict) -> None:
+    """importance 被 _apply_llm 改写成模型级别后，只把这一项和总分对齐。
+
+    写要点（_label_with_llm）会经 _apply_llm 用模型给的级别覆盖 importance，
+    而 breakdown/score 还是写要点前按规则级别算的 —— 实测前 20 名里 16 条的
+    标签和分数对不上（标签「一般」而 breakdown.importance=130）。
+    这里只补 importance 一项和总分：mapping 会随 concepts/stocks 变，
+    连它一起重算会让名次跟着「写没写过要点」漂移，打破 _compute 里
+    「前 20 必有要点」的保证，所以其余分项保持写要点前的值。
+    """
+    label = str(event.get("importance") or "一般")
+    if label not in _IMPORTANCE_POINTS:
+        label = "一般"
+        event["importance"] = label
+    breakdown = event.get("breakdown")
+    if not isinstance(breakdown, dict):
+        return
+    importance = _IMPORTANCE_POINTS[label]
+    if float(breakdown.get("importance") or 0.0) == float(importance):
+        return
+    breakdown["importance"] = importance
+    event["score"] = round(
+        importance
+        + float(breakdown.get("confirmation") or 0.0)
+        + float(breakdown.get("mapping") or 0.0)
+        + float(breakdown.get("freshness") or 0.0)
+        + float(breakdown.get("heat") or 0.0),
+        4,
+    )
 
 
 def _confirmation_mapping(event: dict) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -3073,6 +3113,15 @@ def _is_commentary(text: str) -> bool:
     body = _compact(text)
     if not body or not any(cue in body for cue in _COMMENTARY_CUES):
         return False
+    # 「要求」「实施」「印发」这类政策动词不在 _split_headline 的动词表里，
+    # 切分拿不到动作。于是「中共中央、国务院要求全面实施"人工智能+"行动…
+    # 分析师看好…」整条被当成点评丢掉 —— 那是国务院级政策，只因句尾挂了
+    # 一句点评就被连坐。豁免要同时满足两点：句里有国务院这类具名主体
+    # （「数据印证需求正在回暖」这种叙事句没有），且主体和动作站得住
+    # （_has_gate_subject_action 含词性和政策兜底）。实测它能把政策类
+    # （放行）和纯点评/研报口吻（仍拦）分开。
+    if _explicit_entities(body) and _has_gate_subject_action(body):
+        return False
     lead, action, _obj = _split_headline(body)
     return not (action and _subject_ok(lead))
 
@@ -3489,7 +3538,9 @@ def _original_reject_reason(title: str, sources: list[str] | None = None) -> str
         return "省略号"
     if _BROKER_NOTE.match(text) or _BROKER_TEAM_LEAD.match(text):
         return "券商前缀"
-    if text[0].isdigit():
+    # 「10月以来逾80家A股上市公司获机构调研」是正常标题。这条门槛本来拦的是
+    # 「1. 」「2）」这类编号清单，日期开头（10月/12日）不该连坐。
+    if text[0].isdigit() and not _DATE_LIKE_OPENING.match(text):
         return "以数字开头"
     if _is_commentary(text) or _watch_or_list_fragment(text) or _misordered_title(text):
         return "不是具体事件"
@@ -3578,6 +3629,36 @@ def _trailing_latin_fragment(text: str, blobs: list[str]) -> bool:
     return False
 
 
+def _measure_tail_after_number(words: list[str], last: str) -> bool:
+    """元/吨、成/股：量词跟在数字后面（中间可能再隔一个量词），不是词被切断。
+
+    「报114600元/吨」切出来是「114600元」「吨」两个词，只看前一个词的话
+    末字是「元」不是数字，老代码在这里误判「词中间截断」。往前多找一个词，
+    见到以数字或中文数字结尾的就放行。
+    """
+    if last not in _MEASURE_TAILS:
+        return False
+    for word in reversed(words[:-1]):
+        if word and (word[-1].isdigit() or word[-1] in _CN_NUMERALS):
+            return True
+    return False
+
+
+def _cut_off_by_longer_peer(body: str, blobs: list[str]) -> bool:
+    """同簇里有没有另一条更长、且以本条整体开头的标题。有才敢判词中间截断。
+
+    jieba 对未登录词本就会切成单字：「俄罗斯制裁法」「易方达创新高」
+    「三大指数集体低开」都是完整句子，老代码一律判「词中间截断」，
+    实测 4/4 抽样全错。改成与 _is_harmful_cutoff 同一口径 —— 只有簇里
+    另有一条更长、以本条整体开头（说明本条是被切剩的半句）时才判。
+    """
+    for blob in blobs or []:
+        other = _compact(str(blob or ""))
+        if len(other) > len(body) and other.startswith(body):
+            return True
+    return False
+
+
 def _boundary_reason(text: str, blobs: list[str]) -> str:
     body = _compact(text)
     if not body:
@@ -3602,10 +3683,13 @@ def _boundary_reason(text: str, blobs: list[str]) -> str:
         pair = prev + last
         if pair in _PRICE_NARRATIVE or pair in _ACTIONS or pair in _GATE_EXTRA_VERBS:
             return ""
-        # 13.1元、六成：量词跟在数字后面，不是把「从容应对」切成「应」。
-        if last in _MEASURE_TAILS and prev and (prev[-1].isdigit() or prev[-1] in _CN_NUMERALS):
+        # 13.1元、六成、114600元/吨：量词跟在数字后面，不是把「从容应对」切成「应」。
+        if _measure_tail_after_number(words, last):
             return ""
-        return "词中间截断"
+        # 单字收尾不等于截断，见 _cut_off_by_longer_peer。
+        if _cut_off_by_longer_peer(body, blobs):
+            return "词中间截断"
+        return ""
     return ""
 
 
@@ -3733,7 +3817,8 @@ def _display_gate_reason(title: str, sources: list[str] | None = None) -> str:
         return "含括号"
     if _BROKER_NOTE.match(text) or _BROKER_TEAM_LEAD.match(text):
         return "券商前缀"
-    if text[0].isdigit():
+    # 日期开头（10月/12日）不是编号清单，见 _DATE_LIKE_OPENING。
+    if text[0].isdigit() and not _DATE_LIKE_OPENING.match(text):
         return "以数字开头"
     if _cut_glued_sentence(text) != text:
         return "粘连了下一句"

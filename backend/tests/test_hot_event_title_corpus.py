@@ -6,6 +6,7 @@ from datetime import datetime
 from app.market_time import CN_TZ
 from app.news.hot_events import (
     _apply_llm,
+    _boundary_reason,
     _cleaned_display_ok,
     _cleaned_headline,
     _clip_at_boundary,
@@ -17,11 +18,13 @@ from app.news.hot_events import (
     _first_credible_title,
     _first_original_title,
     _headline_tier,
+    _is_commentary,
     _keyword_title,
     _llm_title_ok,
     _llm_title_reject_reason,
     _original_reject_reason,
     _parse_title_batch,
+    _resync_importance_score,
     _subtitle_reject_reason,
 )
 from app.news.service import get_store, reset_store_for_tests, top_hot_events
@@ -1329,3 +1332,124 @@ def test_miss_ttl_is_shorter_than_hot_refresh_period():
     from app.news.hot_snapshot import HOT_REFRESH_SECONDS
 
     assert _MISS_TTL_S < HOT_REFRESH_SECONDS
+
+
+def test_date_opening_titles_are_not_list_markers():
+    """「10月以来…」是日期不是编号清单。「以数字开头」只拦「1. 」「2）」这类。
+
+    线上实测被误杀 6 条，其中「10月以来逾80家A股上市公司获机构调研」是正常
+    机构调研新闻，只因为标题以日期开头就整条丢掉。
+    """
+    assert _original_reject_reason("10月以来逾80家A股上市公司获机构调研") == ""
+    assert _original_reject_reason("1. 财政部发布增量政策") == "以数字开头"
+    assert _original_reject_reason("32财政部发布2026年上半年中") == "以数字开头"
+    assert _original_reject_reason("2）橡胶价格大涨") == "以数字开头"
+
+
+def test_single_char_tail_is_not_a_cutoff_without_a_longer_peer():
+    """jieba 把未登录词切成单字不等于标题被截断，只有簇里有更长前缀才判。
+
+    实测 4/4 抽样全错：「俄罗斯制裁法」「易方达创新高」「三大指数集体低开」
+    都是完整句子，老代码一律判「词中间截断」；「报114600元/吨」的量词「吨」
+    前一个词是「元」不是数字，量词兜底也失效。
+    """
+    for whole in ("俄罗斯制裁法", "易方达创新高", "三大指数集体低开", "报114600元/吨"):
+        assert _boundary_reason(whole, [whole]) == "", whole
+    # 同簇有另一条更长、且以本条整体开头的标题时，才敢断这是被切剩的半句
+    # （与 _is_harmful_cutoff 同一口径）。
+    cut = "风险可控从容应"
+    assert _boundary_reason(cut, [cut, "风险可控从容应对"]) == "词中间截断"
+    assert _boundary_reason(cut, [cut]) == ""
+    # 没有更长 peer 时也不靠截断上屏：「缺少主体或动作」照样拦。
+    assert _display_gate_reason(cut) == "缺少主体或动作"
+
+
+def test_policy_line_with_trailing_commentary_is_not_commentary():
+    """国务院级政策句尾挂了点评不被连坐；纯点评、研报口吻和叙事句仍拦。
+
+    「要求」「实施」「印发」不在 _split_headline 的动词表里，老代码把整条
+    政策当成点评丢掉。豁免要求句里有国务院这类具名主体，且主体和动作站得住
+    —— 「数据印证需求正在回暖」没有具名主体，仍是叙事句。
+    """
+    policy = "中共中央、国务院要求全面实施\"人工智能+\"行动 分析师看好AI算力方向"
+    assert _is_commentary(policy) is False
+    assert _display_gate_reason(policy) == ""
+    assert _is_commentary("分析师看好AI安全 趋势明确") is True
+    assert _is_commentary("数据印证需求正在回暖") is True
+    assert _is_commentary("建议关注AI算力方向标的") is True
+
+
+def test_importance_resync_keeps_score_in_step_with_the_label():
+    """_apply_llm 改掉 importance 后，_resync_importance_score 只对齐这一项和总分。
+
+    写要点在排序之后，breakdown/score 还是规则级别算的 —— 实测前 20 名里 16 条
+    标签和分数对不上（标签「一般」而 breakdown.importance=130）。其余分项不重算：
+    mapping 会随 concepts/stocks 变，一起算会让名次跟着写没写过要点漂移。
+    """
+    event = {
+        "importance": "一般",
+        "breakdown": {
+            "importance": 20,
+            "confirmation": 10.0,
+            "mapping": 30.0,
+            "freshness": 12.5,
+            "heat": 5.0,
+        },
+        "score": 77.5,
+    }
+    _apply_llm(event, {"importance": "重大"})
+    assert event["importance"] == "重大"
+    # 修复前：标签已是「重大」，breakdown 还是「一般」的分。
+    assert event["breakdown"]["importance"] == 20
+    _resync_importance_score(event)
+    assert event["breakdown"]["importance"] == 130
+    assert event["score"] == round(130 + 10.0 + 30.0 + 12.5 + 5.0, 4)
+    # 其余分项保持写要点前的值。
+    assert event["breakdown"]["confirmation"] == 10.0
+    assert event["breakdown"]["mapping"] == 30.0
+    assert event["breakdown"]["freshness"] == 12.5
+    assert event["breakdown"]["heat"] == 5.0
+    # 已经对齐时不动（幂等）。
+    snapshot = dict(event["breakdown"])
+    _resync_importance_score(event)
+    assert event["breakdown"] == snapshot
+
+
+def test_llm_importance_leaves_score_consistent(tmp_path, monkeypatch):
+    """端到端：模型级别覆盖规则级别后，上榜事件的分数必须和 breakdown 对得上。"""
+    import json
+
+    from app.news import hot_events as hot_mod
+    from app.news import service as news_service
+    from app.news.hot_events import _IMPORTANCE_POINTS
+
+    reset_store_for_tests(tmp_path / "importance-resync.sqlite")
+    fed = "美联储宣布降息25基点"
+    oil = "WTI原油期货上涨报91.85美元"
+    _insert("fed", fed, 9, 10)
+    _insert("fed-b", fed, 9, 12, source="wscn")
+    _insert("oil", oil, 9, 11)
+    _insert("oil-b", oil, 9, 13, source="wscn")
+
+    def fake(prompt: str, **_kwargs: object) -> str:
+        rows = []
+        for line in prompt.splitlines():
+            head, sep, rest = line.partition(". ")
+            if not sep or not head.isdigit() or not rest.strip():
+                continue
+            # 模型把两条都标成「重大」，覆盖规则级别。
+            rows.append({"id": head, "title": "", "importance": "重大"})
+        return json.dumps({"events": rows}, ensure_ascii=False)
+
+    monkeypatch.setattr("app.news.config.llm_extract_enabled", lambda: True)
+    monkeypatch.setattr(news_service, "_llm_text", fake)
+    monkeypatch.setattr(news_service, "reserve_hot_title_call", lambda: True)
+    hot_mod.clear_hot_event_cache()
+    events = top_hot_events(NOW)["events"]
+    assert events
+    for event in events:
+        breakdown = event["breakdown"]
+        label = str(event["importance"])
+        assert label in _IMPORTANCE_POINTS
+        assert breakdown["importance"] == _IMPORTANCE_POINTS[label], label
+        assert event["score"] == round(sum(breakdown.values()), 4), label
