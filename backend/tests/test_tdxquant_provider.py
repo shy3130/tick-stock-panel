@@ -562,11 +562,12 @@ def test_get_intraday_latest_universe_default():
     assert all(c["count"] <= 30 for c in fake.his_calls)
 
 
-def test_test_dataset_minute():
+def test_test_dataset_minute(monkeypatch):
+    # 试拉窗口 [now-3d, now] 依赖真实时钟, 冻结到 _FixedDT 保证任意时区/时刻可复现
+    monkeypatch.setattr(tp, "datetime", _FixedDT)
     fake = _FakeClient()
-    today = date.today().strftime("%Y%m%d")
     fake.his = {"600519.SH": _minute_raw([
-        (today, "093100", 1255.0, 1256.0, 1254.9, 1255.5, 123_400.0, 15_500.0),
+        ("20261011", "093100", 1255.0, 1256.0, 1254.9, 1255.5, 123_400.0, 15_500.0),
     ])}
     out = _provider(fake).test_dataset("minute", ["600519.SH"])
     assert out["rows"] == 1

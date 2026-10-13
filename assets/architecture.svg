@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="780" viewBox="0 0 1120 780" font-family="-apple-system,'PingFang SC','Noto Sans SC','Microsoft YaHei','Segoe UI',sans-serif">
+  <defs>
+    <marker id="aGrey" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0L8,4L0,8z" fill="#94A3B8"/></marker>
+    <marker id="aDark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0L8,4L0,8z" fill="#64748B"/></marker>
+    <marker id="aBlue" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto"><path d="M0,0L9,4.5L0,9z" fill="#3B82F6"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="780" rx="16" fill="#FFFFFF" stroke="#E2E8F0"/>
+
+  <!-- ═══ 消费端 ═══ -->
+  <text x="560" y="56" text-anchor="middle" font-size="12" letter-spacing="6" fill="#94A3B8">消 费 端</text>
+  <g>
+    <rect x="132" y="70" width="216" height="64" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+    <text x="240" y="97" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0F172A">面板 UI</text>
+    <text x="240" y="117" text-anchor="middle" font-size="11" fill="#64748B">React · 19 页面</text>
+    <rect x="452" y="70" width="216" height="64" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+    <text x="560" y="97" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0F172A">MCP 服务器</text>
+    <text x="560" y="117" text-anchor="middle" font-size="11" fill="#64748B">12 工具 · scope 联动</text>
+    <rect x="772" y="70" width="216" height="64" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+    <text x="880" y="97" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0F172A">外部程序</text>
+    <text x="880" y="117" text-anchor="middle" font-size="11" fill="#64748B">脚本 · 看板</text>
+  </g>
+
+  <!-- 双通道边 -->
+  <line x1="240" y1="134" x2="240" y2="330" stroke="#94A3B8" stroke-width="1.2" marker-end="url(#aGrey)"/>
+  <text x="228" y="240" text-anchor="end" font-size="11" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">密码会话</text>
+  <line x1="560" y1="134" x2="560" y2="194" stroke="#94A3B8" stroke-width="1.2" marker-end="url(#aGrey)"/>
+  <text x="572" y="170" font-size="11" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">Bearer + scope</text>
+  <path d="M880,134 L880,228 L850,228" fill="none" stroke="#94A3B8" stroke-width="1.2" marker-end="url(#aGrey)"/>
+  <text x="892" y="188" font-size="11" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">Bearer + scope</text>
+
+  <!-- ═══ 开放网关 ═══ -->
+  <rect x="280" y="200" width="560" height="56" rx="8" fill="#F8FAFC" stroke="#64748B" stroke-width="1.4"/>
+  <text x="560" y="224" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0F172A">开放网关</text>
+  <text x="560" y="244" text-anchor="middle" font-size="11.5" fill="#64748B">Token 六档 scope · 限流 120/min · 65 端点契约</text>
+
+  <line x1="560" y1="256" x2="560" y2="330" stroke="#64748B" stroke-width="1.2" marker-end="url(#aDark)"/>
+  <text x="572" y="298" font-size="11" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">契约放行</text>
+
+  <!-- ═══ 应用层 ═══ -->
+  <rect x="200" y="336" width="720" height="56" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="560" y="360" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0F172A">应用层 · FastAPI</text>
+  <text x="560" y="380" text-anchor="middle" font-size="11.5" fill="#64748B">REST · SSE 事件流</text>
+
+  <line x1="560" y1="392" x2="560" y2="446" stroke="#3B82F6" stroke-width="2.4" marker-end="url(#aBlue)"/>
+  <text x="574" y="424" font-size="11" font-weight="600" fill="#3B82F6" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">数据与语义</text>
+
+  <!-- ═══ 核心域 ═══ -->
+  <rect x="60" y="452" width="1000" height="108" rx="10" fill="#FFFFFF" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="84" y="481" font-size="13" font-weight="600" fill="#1E40AF">核心域 core · 8 域 — 数据与语义的所有者</text>
+  <g>
+    <rect x="84" y="496" width="264" height="52" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+    <text x="216" y="518" text-anchor="middle" font-size="13" font-weight="600" fill="#1E40AF">① 数据底座</text>
+    <text x="216" y="537" text-anchor="middle" font-size="10.5" fill="#2563EB">能力路由矩阵 · Parquet · DuckDB</text>
+    <rect x="428" y="496" width="264" height="52" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+    <text x="560" y="518" text-anchor="middle" font-size="13" font-weight="600" fill="#1E40AF">② 计算与执行</text>
+    <text x="560" y="537" text-anchor="middle" font-size="10.5" fill="#2563EB">指标流水线 · 策略 · 因子 · 回测 · 挖掘</text>
+    <rect x="772" y="496" width="264" height="52" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+    <text x="904" y="518" text-anchor="middle" font-size="13" font-weight="600" fill="#1E40AF">③ 事件与开放</text>
+    <text x="904" y="537" text-anchor="middle" font-size="10.5" fill="#2563EB">监控引擎 · 事件总线 · SSE</text>
+  </g>
+  <line x1="348" y1="522" x2="422" y2="522" stroke="#94A3B8" stroke-width="1.2" marker-end="url(#aGrey)"/>
+  <text x="388" y="514" text-anchor="middle" font-size="9.5" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">enriched 口径</text>
+  <line x1="692" y1="522" x2="766" y2="522" stroke="#94A3B8" stroke-width="1.2" marker-end="url(#aGrey)"/>
+  <text x="732" y="514" text-anchor="middle" font-size="9.5" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">信号 · 事件</text>
+
+  <!-- ═══ 扩展域 → 核心域 ═══ -->
+  <line x1="560" y1="620" x2="560" y2="566" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#aGrey)"/>
+  <text x="574" y="598" font-size="11" fill="#64748B" paint-order="stroke" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">零核心改动</text>
+
+  <!-- ═══ 扩展域 ═══ -->
+  <rect x="60" y="620" width="1000" height="100" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="7 5"/>
+  <text x="84" y="649" font-size="13" font-weight="600" fill="#475569">扩展域 ext · 5 通道 — 只消费契约 · 可整体替换 / 移除</text>
+  <g>
+    <rect x="96" y="664" width="176" height="44" rx="6" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="184" y="682" text-anchor="middle" font-size="11.5" font-weight="600" fill="#334155">数据源插件</text>
+    <text x="184" y="699" text-anchor="middle" font-size="10" fill="#64748B">TickFlow · fuyao · TdxQuant</text>
+    <rect x="284" y="664" width="176" height="44" rx="6" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="372" y="682" text-anchor="middle" font-size="11.5" font-weight="600" fill="#334155">扩展数据表</text>
+    <text x="372" y="699" text-anchor="middle" font-size="10" fill="#64748B">两级拉取 · 读 + 写</text>
+    <rect x="472" y="664" width="176" height="44" rx="6" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="560" y="682" text-anchor="middle" font-size="11.5" font-weight="600" fill="#334155">自定义策略与信号</text>
+    <text x="560" y="699" text-anchor="middle" font-size="10" fill="#64748B">供策略 / 回测 / 监控取用</text>
+    <rect x="660" y="664" width="176" height="44" rx="6" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="748" y="682" text-anchor="middle" font-size="11.5" font-weight="600" fill="#334155">页面扩展</text>
+    <text x="748" y="699" text-anchor="middle" font-size="10" fill="#64748B">11 官方页 + 页面包</text>
+    <rect x="848" y="664" width="176" height="44" rx="6" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="936" y="682" text-anchor="middle" font-size="11.5" font-weight="600" fill="#334155">custom 后端</text>
+    <text x="936" y="699" text-anchor="middle" font-size="10" fill="#64748B">AI 助手参考实现</text>
+  </g>
+</svg>
