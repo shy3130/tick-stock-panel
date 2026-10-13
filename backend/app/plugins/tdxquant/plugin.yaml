@@ -1,0 +1,23 @@
+# TdxQuant — 通达信量化数据服务插件 (https://help.tdx.com.cn/quant/)
+# 原生 TCP 私有协议 (tdxaidata 包, ctypes 包装跨平台 DLL), runtime: python。
+# tdxaidata 已是后端默认依赖; 只需配置 TDXQUANT_API_KEY, 未配置时灰显不可切换。
+
+name: tdxquant
+display_name: "TdxQuant (TdxAiData)"
+runtime: python
+entry: app.plugins.tdxquant.provider:TdxQuantProvider
+check: app.plugins.tdxquant.provider:availability
+datasets: [realtime, depth5, daily, adj_factor, minute, full_minute]
+api_key_env: TDXQUANT_API_KEY   # 声明后设置页提供 Key 输入框(先探后存, secrets.json 优先)
+billing: points   # 积分计费标识: 设置页每个能力芯片/适配行标注「积分」, 消耗以商城积分明细为准
+key_manage_url: "https://vip.tdx.com.cn/site/app/pc-mall/main.html#/aiKey"   # Key/积分管理页(通达信商城), 设置页 Key 区提供入口
+description: "通达信 TdxAiData 数据服务(原生 TCP 协议, 依赖已内置): 全市场实时快照、五档盘口、日K、除权因子、分钟K、全量分钟六项能力; 按积分计费, 未接入财务, 自动回退 TickFlow。"
+billing_note: "积分消耗与轮询频率、拉取范围直接相关: 间隔越短、范围越大消耗越高。建议实时轮询间隔 ≥60 秒, 全量分钟按需启用; 具体扣减以商城「积分明细」为准。"
+usage_notes:
+  - "实时快照: 五市场全 A 股票池, 600 只/批, 全市场一轮约 10 批(30-60 秒)"
+  - "五档盘口: 随快照返回, 不产生额外请求"
+  - "日K / 除权因子: count 模式单标的拉取(原始价); 因子按交易所公式推导, 带涨跌停自检"
+  - "分钟K: 1m 逐标的, 240 根/日, 深度约 40 交易日"
+  - "全量分钟: 逐标的拉取, 全市场一轮约 10 分钟量级(上游无批量端点)"
+install_hint: "依赖已内置; 在下方输入框填写数据服务 Key(通达信个人版商城-会员中心-积分和Key管理创建), 或配置环境变量 TDXQUANT_API_KEY"
+homepage: "https://help.tdx.com.cn/quant/"

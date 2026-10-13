@@ -26,7 +26,7 @@ from app.market_time import cn_today
 from app.services import index_sync, instrument_sync, kline_sync
 from app.services import preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.pools import DEMO_SYMBOLS, get_pool
+from app.tickflow.pools import get_pool
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -139,35 +139,26 @@ def _invalidate(table: str | None = None) -> None:
 
 
 def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
-    """解析标的池 — 以 CN_Equity_A (沪深京A股 ~5522只) 为主。
+    """解析标的池 — 本地 instruments 维表 + 自选 (单一来源, 无池兜底)。
 
-    有 batch 能力 → 直接拉 CN_Equity_A universe
-    其他用户 → 用 instruments parquet + watchlist 兜底
+    不再拉 CN_Equity_A 池: 其 universe 匹配曾错配到 Expired 变体、触发
+    SW1 行业聚合兜底, 产出 4224 只的残缺池。维表由盘后管道 Step 0 先同步,
+    这里只读 parquet; 维表缺失时仅剩自选, 宁缺毋假 (不塞演示标的),
+    由上游按空池结果如实呈现。
 
-    repo 传入时过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    repo 传入时过滤自选里的指数 symbol (指数日K走独立 kline_index_* 存储,
     进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
     """
-    if capset.has(Cap.KLINE_DAILY_BATCH):
-        try:
-            all_a = get_pool("CN_Equity_A", refresh=True)
-            if all_a:
-                return sorted(all_a)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("CN_Equity_A pool unavailable, fallback: %s", e)
-
-    # Free 用户兜底: instruments parquet + watchlist + demo
-    base: set[str] = set(DEMO_SYMBOLS)
-    base.update(get_pool("watchlist"))
-    d = Path(settings.data_dir)
-    inst_path = d / "instruments" / "instruments.parquet"
+    base: set[str] = set(get_pool("watchlist"))
+    inst_path = Path(settings.data_dir) / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
             inst = pl.read_parquet(inst_path, columns=["symbol"])
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
-            logger.warning("instruments supplement failed: %s", e)
-    # 过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
-    # 进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
+            logger.warning("instruments 维表读取失败, 标的池仅剩自选: %s", e)
+    else:
+        logger.warning("instruments 维表缺失, 标的池仅剩自选 %d 只", len(base))
     if repo is not None:
         base -= set(repo.get_index_symbol_set())
     return sorted(base)

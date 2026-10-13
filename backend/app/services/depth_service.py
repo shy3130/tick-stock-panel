@@ -101,7 +101,7 @@ class DepthService:
     def boot_check(self) -> None:
         """启动补跑: 当天 depth5 文件不存在则 finalize 一次; 已存在则恢复内存缓存。"""
         if not self._has_capability():
-            logger.info("depth sealed: 无 DEPTH5_BATCH 能力, 跳过启动补跑")
+            logger.info("depth sealed: %s 不可用, 跳过启动补跑", self._capability_label())
             return
         today = cn_today()
         if self._persisted_for_date(today):
@@ -190,7 +190,7 @@ class DepthService:
         返回 {"ok": bool, "count": int, "msg": str}
         """
         if not self._has_capability():
-            return {"ok": False, "count": 0, "msg": "无五档盘口能力(需 Pro+)"}
+            return {"ok": False, "count": 0, "msg": f"{self._capability_label()} 不可用"}
         try:
             self._fetch_and_seal(persist=True)  # 落盘, 刷新页面不丢
             with self._lock:
@@ -631,9 +631,21 @@ class DepthService:
     # ================================================================
 
     def _has_capability(self) -> bool:
-        capset = self._get_capset()
-        from app.tickflow.capabilities import Cap
-        return capset.has(Cap.DEPTH5_BATCH)
+        """五档能力是否可用 — 以【生效源】为准, 与取数路径 (_call_depth_batch) 同口径。
+
+        不能只看 TickFlow 档位: 五档路由到声明了 depth5 的插件 (如 tdxquant) 时,
+        TickFlow 档位无关; 反之路由到 TickFlow 但档位不足时, 插件声明不该算数。
+        本轮修复前此处只查 capset, 导致「五档已切到插件但启动补跑被跳过」。
+        """
+        from app.data_providers.capabilities import capability_gate
+        ok, _ = capability_gate("depth5")
+        return ok
+
+    def _capability_label(self) -> str:
+        """门禁日志标签: "五档盘口 ← fuyao" / "…(档位不足)", 便于判断该切哪个源。"""
+        from app.data_providers.capabilities import capability_gate
+        _, label = capability_gate("depth5")
+        return label
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""

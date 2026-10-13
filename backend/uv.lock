@@ -2483,6 +2483,15 @@ wheels = [
 ]
 
 [[package]]
+name = "tdxaidata"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/a8/3b1a4341769c081b3bdbc4e6c9991ac05c49585e256965cd9402f066daa6/tdxaidata-1.2.2.tar.gz", hash = "sha256:794011131704a7827746b89da490e43345ddd442644d6100890d39063485171e", size = 4430612, upload-time = "2026-09-30T10:08:12.158Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dc/c1/29b840db422aa32c87baedf2d402ccb8cbba8964d33caff3b20e5b3ddad4/tdxaidata-1.2.2-py3-none-any.whl", hash = "sha256:ceaf0be18cb54cd197e79cca5590d4ba7d7c3620b899e818d472d032f2c33849", size = 4443080, upload-time = "2026-09-30T10:08:07.807Z" },
+]
+
+[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2538,6 +2547,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "sse-starlette" },
+    { name = "tdxaidata" },
     { name = "tickflow", extra = ["all"] },
     { name = "uvicorn", extra = ["standard"] },
     { name = "winotify", marker = "sys_platform == 'win32'" },
@@ -2590,6 +2600,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "sse-starlette", specifier = ">=2.0" },
+    { name = "tdxaidata", specifier = ">=1.2.2" },
     { name = "tickflow", extras = ["all"], specifier = ">=0.1.23" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vectorbt", marker = "extra == 'backtest'", specifier = ">=0.26" },

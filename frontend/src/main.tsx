@@ -4,6 +4,11 @@ import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryCache } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
+import { installTspExtBridge, loadRuntimePageExtensions } from './extensions/runtime'
+import { api } from './lib/api'
+import { QK } from './lib/queryKeys'
+import { cn } from './lib/cn'
+import * as format from './lib/format'
 import { createAppPersister, shouldPersistQuery, PERSIST_BUSTER } from './lib/queryPersist'
 // 字体自托管 (@fontsource): 替代 rsms.me / Google Fonts 渲染阻塞外链,
 // 内网/离线部署不再白屏等字体。权重覆盖 tailwind 全部用量 (300-900)。
@@ -58,6 +63,10 @@ const queryClient = new QueryClient({
 
 async function bootstrap() {
   await initializeFrontendExtensions()
+  // 页面包能力桥: 运行时页面包经 shim 读取宿主 api/QK/cn/format
+  installTspExtBridge({ api, QK, cn, format })
+  // 运行时页面包: 必须在 router 模块求值(finalize + 建路由表)之前挂载
+  await loadRuntimePageExtensions()
   const { router } = await import('./router')
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

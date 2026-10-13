@@ -804,7 +804,7 @@ researchUniverses()
 | price_limits.py:87-101 | numpy_limit_pct_vectors（当前名推断） | ✓ |
 | capabilities.py:44-45 | 复权口径一致性"不做路由耦合"注释 | ✓ |
 | index_const.py:12-15 | 核心四只代码（000001.SH/399001.SZ/399006.SZ/000680.SH） | ✓ |
-| daily_pipeline.py:92-125 | _resolve_universe（CN_Equity_A 当前池） | ✓ |
+| daily_pipeline.py | _resolve_universe（instruments 维表 + 自选，无池兜底） | ✓ |
 | kline_sync.py:358-367 | (symbol, trade_date) 去重 keep=last 原子合并 | ✓ |
 | scoring.py:13-51 / 53-66 / 91-104 / 108+ | VIRTUAL 依赖 35 项 / 预热表 / 依赖展开与预热推导 / scoring_value_expr | ✓（全文读取，附录A 由其逐字推导） |
 | monitor.py:1314-1322 | score_min/max 消费 result.scores | ✓ |

@@ -21,9 +21,20 @@ interface BallPos {
   y: number
 }
 
+/** 页面 CSS zoom (html 上): 视觉坐标(getBoundingClientRect/clientX) 与
+ * 布局坐标(style.left) 在 zoom≠1 时相差 zoom 倍, 拖拽换算必须经过它,
+ * 否则 90% 缩放下每次拖动球会向左上跳约 11%。 */
+function pageZoom(): number {
+  const v = parseFloat(getComputedStyle(document.documentElement).zoom)
+  return Number.isFinite(v) && v > 0 ? v : 1
+}
+
 function clampPos(pos: BallPos): BallPos {
-  const maxX = Math.max(0, window.innerWidth - SIZE)
-  const maxY = Math.max(0, window.innerHeight - SIZE)
+  // innerWidth/Height 是视觉像素, pos 是布局坐标 (style.left) —
+  // 边界须除以 zoom 换算, 否则 90% 缩放下右/下边缘约 10% 区域拖不进去。
+  const z = pageZoom()
+  const maxX = Math.max(0, window.innerWidth / z - SIZE)
+  const maxY = Math.max(0, window.innerHeight / z - SIZE)
   return { x: Math.min(Math.max(pos.x, 0), maxX), y: Math.min(Math.max(pos.y, 0), maxY) }
 }
 
@@ -37,7 +48,8 @@ function loadPos(): BallPos {
       }
     }
   } catch { /* 存储不可用时用默认位置 */ }
-  return { x: window.innerWidth - SIZE - 24, y: window.innerHeight - SIZE - 152 }
+  const z = pageZoom()
+  return { x: window.innerWidth / z - SIZE - 24, y: window.innerHeight / z - SIZE - 152 }
 }
 
 function savePos(pos: BallPos) {
@@ -47,7 +59,7 @@ function savePos(pos: BallPos) {
 }
 
 export function AssistantFloatingButton() {
-  const { open, sending } = useAssistantStore()
+  const { open, sending, fabVisible } = useAssistantStore()
   const [pos, setPos] = useState<BallPos>(() => loadPos())
   const ballRef = useRef<HTMLButtonElement>(null)
   const dragRef = useRef({ active: false, moved: false, offsetX: 0, offsetY: 0 })
@@ -60,15 +72,19 @@ export function AssistantFloatingButton() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // 关闭显示时不渲染 (须在全部 hooks 之后 return, 避免 hooks 数量变化)。
+  if (!fabVisible) return null
+
   const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     const rect = ballRef.current?.getBoundingClientRect()
     if (!rect) return
     event.currentTarget.setPointerCapture(event.pointerId)
+    const z = pageZoom()
     dragRef.current = {
       active: true,
       moved: false,
-      offsetX: event.clientX - rect.left,
-      offsetY: event.clientY - rect.top,
+      offsetX: (event.clientX - rect.left) / z,
+      offsetY: (event.clientY - rect.top) / z,
     }
   }
   const onPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -76,7 +92,8 @@ export function AssistantFloatingButton() {
     if (!drag.active) return
     const el = ballRef.current
     if (!el) return
-    const next = clampPos({ x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY })
+    const z = pageZoom()
+    const next = clampPos({ x: event.clientX / z - drag.offsetX, y: event.clientY / z - drag.offsetY })
     if (!drag.moved) {
       if (Math.abs(next.x - pos.x) + Math.abs(next.y - pos.y) <= DRAG_THRESHOLD) return
       drag.moved = true
@@ -93,7 +110,8 @@ export function AssistantFloatingButton() {
     suppressClickRef.current = true
     const rect = ballRef.current?.getBoundingClientRect()
     if (rect) {
-      const final = clampPos({ x: rect.left, y: rect.top })
+      const z = pageZoom()
+      const final = clampPos({ x: rect.left / z, y: rect.top / z })
       setPos(final)
       savePos(final)
     }

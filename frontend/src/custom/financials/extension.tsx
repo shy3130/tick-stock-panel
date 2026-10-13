@@ -13,6 +13,8 @@ import { LastStockChip } from '@/components/LastStockChip'
 import { useLastStock } from '@/lib/useLastStock'
 import { fmtBigNum } from '@/lib/format'
 import { toast } from '@/components/Toast'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconFinancials } from '@/components/BrandIcons'
 
 const TABLE_LABELS: Record<string, string> = {
   metrics: '核心指标',
@@ -343,3 +345,17 @@ export function Financials() {
     </>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.financials',
+  apiVersion: 1,
+  routes: [
+    { id: 'financials', path: '/financials', component: Financials },
+  ],
+  navigation: [
+    { id: 'financials', routeId: 'financials', label: '财务分析', icon: IconFinancials },
+  ],
+}
+
+export default extension

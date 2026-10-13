@@ -6,6 +6,7 @@
  */
 import type { CSSProperties } from 'react'
 import type { ReactNode } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, BarChart3, BellRing, Flame, Gauge, LineChart, Link2, Sparkles, Target, TrendingUp, TrendingDown, Coins, Repeat } from 'lucide-react'
 import type { AlertEvent, OverviewMarket } from '@/lib/api'
@@ -13,6 +14,7 @@ import { fmtBigNum } from '@/lib/format'
 import type { DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { SealedBadge } from '@/components/SealedBadge'
 import { scoreColor, fmtPrice, fmtStockPct, pctClass, compactCount, SectionTitle, MiniMetric, KpiCell } from './shared'
+import { EmotionScoreConfigDialog } from './EmotionScoreConfigDialog'
 import {
   IndexTicker, BreadthBar, DistributionBars, EmotionRadar, LadderMini, StockList, HotRankCard, MonitorWidget,
   stockListNav, rankNav,
@@ -54,6 +56,30 @@ function sectionCard(children: ReactNode, opts: { className?: string; style?: CS
     >
       {children}
     </section>
+  )
+}
+
+/** 情绪雷达卡片 — 自带评分口径配置入口 (齿轮 → 对话框)。
+ *  单独成组件是因为对话框开关是卡片级状态, 不放进全局 WidgetCtx。 */
+function EmotionRadarCard({ ctx }: { ctx: WidgetCtx }) {
+  const [configOpen, setConfigOpen] = useState(false)
+  return (
+    <>
+      {sectionCard(
+        <>
+          <SectionTitle
+            icon={Sparkles}
+            title="情绪雷达"
+            hint={`情绪评分 ${ctx.score}`}
+            onConfig={() => setConfigOpen(true)}
+            configTitle="配置情绪评分的计算方式"
+          />
+          <EmotionRadar radar={ctx.data.radar} score={ctx.score} />
+        </>,
+        { style: { borderColor: `${scoreColor(ctx.score)}40` } },
+      )}
+      {configOpen && <EmotionScoreConfigDialog onClose={() => setConfigOpen(false)} />}
+    </>
   )
 }
 
@@ -164,13 +190,7 @@ export const WIDGET_DEFS: WidgetDef[] = [
   },
   {
     id: 'radar', label: '情绪雷达', icon: Sparkles, minW: 3, minH: 7, defW: 4, defH: 8,
-    render: ctx => sectionCard(
-      <>
-        <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${ctx.score}`} />
-        <EmotionRadar radar={ctx.data.radar} score={ctx.score} />
-      </>,
-      { style: { borderColor: `${scoreColor(ctx.score)}40` } },
-    ),
+    render: ctx => <EmotionRadarCard ctx={ctx} />,
   },
   {
     id: 'trend', label: '趋势强度 / 实用监控', icon: LineChart, minW: 3, minH: 6, defW: 4, defH: 8,

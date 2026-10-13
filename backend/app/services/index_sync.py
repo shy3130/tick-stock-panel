@@ -205,6 +205,7 @@ def sync_and_persist_index_daily(
     on_chunk_done(current, total) 每个批次完成后回调。
     """
     if not capset.has(Cap.KLINE_DAILY_BATCH):
+        kline_sync._log_cap_unavailable("daily", "指数/ETF 日K同步")
         return 0
 
     if symbols_override:
@@ -340,6 +341,7 @@ def sync_and_persist_etf_daily(
     on_chunk_done(current, total) 每个批次完成后回调。
     """
     if not capset.has(Cap.KLINE_DAILY_BATCH):
+        kline_sync._log_cap_unavailable("daily", "ETF 日K同步")
         return 0
 
     if symbols_override:

@@ -83,6 +83,26 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* 选区用主色 (默认蓝底破坏暗色氛围) */
+::selection {
+  background: hsl(var(--accent) / 0.3);
+}
+
+/* 侧栏导航滚动条: 默认隐形, 悬停浮现 (长菜单不被常驻滚动条切割) */
+.tf-nav-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.tf-nav-scroll:hover {
+  scrollbar-color: hsl(var(--border) / 0.55) transparent;
+}
+.tf-nav-scroll::-webkit-scrollbar { width: 6px; }
+.tf-nav-scroll::-webkit-scrollbar-thumb { background: transparent; }
+.tf-nav-scroll:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--border) / 0.55);
+  border: none;
+}
+
 /* RunningHub 推广横幅跑马灯: 双份相同内容 + translateX(-50%) 无缝循环,
  * 悬停暂停由 Tailwind group-hover:[animation-play-state:paused] 控制 */
 @keyframes rh-marquee {
@@ -104,3 +124,19 @@ body {
 .animate-breath {
   animation: breath-glow 2.8s ease-in-out infinite;
 }
+
+/* 呼吸灯(同步按钮): 透明度起伏 + 主色光晕同步强弱 (数据页「立即同步」无数据态) */
+@keyframes breath-sync {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 10px 1px hsl(var(--accent) / 0.45);
+  }
+  50% {
+    opacity: 0.65;
+    box-shadow: 0 0 2px 0 hsl(var(--accent) / 0.12);
+  }
+}
+.animate-breath-sync {
+  animation: breath-sync 2.8s ease-in-out infinite;
+}
+

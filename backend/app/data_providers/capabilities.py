@@ -198,3 +198,92 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
             "pending": pending,
         })
     return {"tickflow_tier": tier_base, "capabilities": capabilities}
+
+
+# ---------------------------------------------------------------------------
+# 门禁视角 (面向各服务的启动/调度判断与日志)
+# ---------------------------------------------------------------------------
+
+def _cap_specs_by_id() -> dict[str, dict]:
+    return {c["id"]: c for c in CAPABILITY_REGISTRY}
+
+
+def _current_routing() -> dict[str, str]:
+    """偏好字段 → 当前生效源 (经 preferences getters, 非法值已回退默认)。
+
+    与 api/settings.py 的 capability-matrix 端点同一组 getter; 显式列全,
+    不用 getattr 拼函数名 (拼错会静默回退, 难排查)。
+    """
+    from app.services import preferences
+
+    return {
+        "realtime_data_provider": preferences.get_realtime_data_provider(),
+        "daily_data_provider": preferences.get_daily_data_provider(),
+        "minute_data_provider": preferences.get_minute_data_provider(),
+        "full_minute_data_provider": preferences.get_full_minute_data_provider(),
+        "depth5_data_provider": preferences.get_depth5_data_provider(),
+        "adj_factor_provider": preferences.get_adj_factor_provider(),
+        "financial_data_provider": preferences.get_financial_provider(),
+    }
+
+
+def resolve_capability_sources(tickflow_tier: str = "none") -> list[dict]:
+    """每个能力一行: 生效源 + 展示名 + 该源当前能否真正提供 (usable)。
+
+    与 build_capability_matrix 同口径 (复用同一 candidates 组装), 供服务层
+    的门禁判断与日志标签使用 —— 门禁必须看「生效源能否提供」, 而不是只看
+    TickFlow 套餐 (路由到插件时 TickFlow 档位无关; 同理路由到 TickFlow 而
+    档位不足时, 插件声明了也不该被算作可用)。
+
+    返回 [{id, label, field, source, source_display, usable, tf_available}]。
+    """
+    tier_rank = _TIER_RANK.get(_tier_base(tickflow_tier), -1)
+    sources = _declared_sources()
+    current = _current_routing()
+
+    rows: list[dict] = []
+    for cap in CAPABILITY_REGISTRY:
+        field = cap.get("field")
+        if not field:
+            continue
+        effective = current.get(field, cap["default"])
+        tf_available = tier_rank >= _TIER_RANK[cap["tf_tier"]]
+        provider_names = {"tickflow"} if tf_available else set()
+        provider_names |= {
+            s["name"] for s in sources
+            if cap["id"] in s["datasets"] and s["available"]
+        }
+        rows.append({
+            "id": cap["id"],
+            "label": cap["label"],
+            "field": field,
+            "source": effective,
+            "source_display": _display_of(sources, effective),
+            "usable": effective in provider_names,
+            "tf_available": tf_available,
+        })
+    return rows
+
+
+def capability_gate(cap_id: str, tickflow_tier: str | None = None) -> tuple[bool, str]:
+    """单个能力的门禁: (是否可用, 日志标签)。
+
+    标签形如 "日K ← fuyao" / "财务数据 ← TickFlow(档位不足)", 让「为什么没跑」
+    在日志里一眼可读, 而不必回设置页对照路由。
+
+    可用性以生效源为准 (与设置页 usable 同口径): 路由到已声明的插件即可用,
+    路由到 TickFlow 但档位不够则不可用。
+    """
+    if tickflow_tier is None:
+        from app.tickflow import policy
+        tickflow_tier = policy.base_tier_name()
+
+    for row in resolve_capability_sources(tickflow_tier):
+        if row["id"] == cap_id:
+            label = f"{row['label']} ← {row['source_display']}"
+            if not row["usable"] and row["source"] == "tickflow" and not row["tf_available"]:
+                label += "(档位不足)"
+            elif not row["usable"]:
+                label += "(当前源不可用)"
+            return row["usable"], label
+    return False, f"{cap_id}(未知能力)"

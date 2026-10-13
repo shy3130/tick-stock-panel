@@ -13,6 +13,8 @@ import { DateShortcuts } from '@/components/DateShortcuts'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems } from '@/lib/listNav'
 import { boardTag } from '@/components/stock-table/primitives'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconLots } from '@/components/BrandIcons'
 
 const emptyDraft = (): Lot => ({
   id: '',
@@ -413,3 +415,17 @@ function LotDialog({ lot, onClose }: { lot: Lot; onClose: () => void }) {
     </Modal>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.lots',
+  apiVersion: 1,
+  routes: [
+    { id: 'lots', path: '/lots', component: Lots },
+  ],
+  navigation: [
+    { id: 'lots', routeId: 'lots', label: '持仓提醒', icon: IconLots },
+  ],
+}
+
+export default extension

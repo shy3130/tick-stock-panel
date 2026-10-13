@@ -77,6 +77,7 @@ export const QK = {
   dimensionIntraday:    (id: string, field: string, value: string, date?: string) => ['dimension-intraday', id, field, value, date] as const,
   analysisMenus:        ['analysis-menus'] as const,
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
+  extPages:             ['ext-pages'] as const,
 
   // Kline
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>

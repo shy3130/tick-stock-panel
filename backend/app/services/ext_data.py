@@ -53,6 +53,7 @@ class PullConfig:
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
+        "fanout",
     )
 
     def __init__(
@@ -82,7 +83,9 @@ class PullConfig:
         page_size: int = 0,
         page_start: int = 1,
         max_pages: int = 20,
+        fanout: dict | None = None,
     ) -> None:
+        self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
         self.method = method              # GET | POST
         self.headers = headers or {}
@@ -163,6 +166,7 @@ class PullConfig:
             "page_size": self.page_size,
             "page_start": self.page_start,
             "max_pages": self.max_pages,
+            "fanout": self.fanout,
         }
 
     @classmethod
@@ -195,6 +199,7 @@ class PullConfig:
             page_size=d.get("page_size", 0),
             page_start=d.get("page_start", 1),
             max_pages=d.get("max_pages", 20),
+            fanout=d.get("fanout"),
         )
 
 

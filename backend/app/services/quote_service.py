@@ -383,7 +383,10 @@ class QuoteService:
         if not self.is_realtime_allowed():
             if preferences.get_realtime_quotes_enabled():
                 self._save_enabled(False)
-            logger.info("实时行情未启动:当前档位(none)无实时行情权限")
+            # 带生效源: 便于判断「该切哪个源」, 而不是只看到 TickFlow 档位
+            from app.data_providers.capabilities import capability_gate
+            _, label = capability_gate("realtime")
+            logger.info("实时行情未启动: %s 不可用", label)
             return
         if preferences.get_realtime_quotes_enabled():
             self.start()

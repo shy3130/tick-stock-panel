@@ -9,6 +9,8 @@
  */
 import type { FrontendExtension } from '@/extensions/types'
 import { AssistantLauncher } from './AssistantLauncher'
+import { AssistantHeaderEntry } from './ui/AssistantHeaderEntry'
+import { FabVisibilitySetting } from './ui/FabVisibilitySetting'
 
 const extension: FrontendExtension = {
   id: 'assistant.chat',
@@ -19,6 +21,18 @@ const extension: FrontendExtension = {
       id: 'assistant-entry',
       order: 10,
       component: AssistantLauncher,
+    },
+    {
+      name: 'layout.header.quick',
+      id: 'assistant-header-entry',
+      order: 10,
+      component: AssistantHeaderEntry,
+    },
+    {
+      name: 'settings.system.section',
+      id: 'assistant-fab-visibility',
+      order: 10,
+      component: FabVisibilitySetting,
     },
   ],
 }

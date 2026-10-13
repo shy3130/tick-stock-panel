@@ -84,6 +84,8 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "openai_compat"
+    # OpenAI 系请求协议: chat_completions (兼容面最广) | responses (OpenAI 官方新协议)。
+    ai_protocol: str = "chat_completions"
     ai_base_url: str = "https://llm.runninghub.ai/v1"
     ai_api_key: str = ""
     ai_model: str = "openai/gpt-6-astra-saver"

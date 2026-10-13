@@ -578,6 +578,14 @@ def _register_one_plugin(manifest: dict) -> None:
         "homepage": manifest.get("homepage", ""),
         "api_key_env": manifest.get("api_key_env", ""),
         "api_key_masked": _plugin_key_masked(name, manifest.get("api_key_env", "")),
+        # 计费标识 (可选): 如 "points" → 设置页能力芯片/适配行标注「积分」
+        "billing": manifest.get("billing", ""),
+        # 计费提示 (可选): 积分消耗与轮询频率/拉取范围的关系, 设置页按警示样式展示
+        "billing_note": manifest.get("billing_note", ""),
+        # 使用要点 (可选): 各能力的规模/节奏说明, 设置页详情卡以列表展示
+        "usage_notes": list(manifest.get("usage_notes", []) or []),
+        # Key/账务管理页 (可选): 设置页 Key 配置区展示入口
+        "key_manage_url": manifest.get("key_manage_url", ""),
     }
     if not available:
         return  # 依赖没装: 不注册, 但状态已记录供 UI 显示

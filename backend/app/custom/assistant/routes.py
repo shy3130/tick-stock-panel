@@ -3,11 +3,14 @@
 POST /api/custom/assistant/chat      NDJSON 事件流(协议见模块 __init__)
 GET  /api/custom/assistant/status     供应商配置状态(前端门控展示)
 GET  /api/custom/assistant/suggests   空会话快捷指令
+GET  /api/custom/assistant/sessions   会话历史(服务端, 跨设备)
+PUT  /api/custom/assistant/sessions   会话历史整体保存(前端防抖写入)
 POST /api/custom/assistant/actions/{call_id}/decision
                                      动作工具确认/拒绝(确认卡按钮回调)
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.custom.assistant import actions as assistant_actions
+from app.custom.assistant import sessions as assistant_sessions
 from app.custom.assistant import tools as assistant_tools
 from app.custom.assistant.chat_service import chat_stream
 from app.services.ai_provider import (
@@ -43,6 +47,19 @@ class ChatRequest(BaseModel):
 
 class ActionDecisionRequest(BaseModel):
     approve: bool
+
+
+class AssistantSessionsPayload(BaseModel):
+    """前端 store.ts 的持久化载荷: 会话数组 + 活跃会话 id。
+
+    sessions 用宽松的 list[dict] (消息形状由前端定义, 后端只裁剪条数),
+    上限与前端一致, 防御异常客户端把文件写爆。字段名对齐前端 (activeId)。
+    """
+
+    sessions: list[dict] = Field(max_length=assistant_sessions.MAX_SESSIONS)
+    active_id: str = Field(default="", max_length=64, alias="activeId")
+
+    model_config = {"populate_by_name": True}
 
 
 def build_router() -> APIRouter:
@@ -88,6 +105,24 @@ def build_router() -> APIRouter:
     @router.get("/suggests")
     def suggests() -> dict:
         return {"suggests": assistant_tools.QUICK_SUGGESTS}
+
+    @router.get("/sessions")
+    def sessions(request: Request) -> dict:
+        repo = getattr(request.app.state, "repo", None)
+        if repo is None:
+            raise HTTPException(status_code=503, detail="数据目录不可用")
+        return assistant_sessions.load_sessions(Path(repo.store.data_dir))
+
+    @router.put("/sessions")
+    def put_sessions(request: Request, req: AssistantSessionsPayload) -> dict:
+        repo = getattr(request.app.state, "repo", None)
+        if repo is None:
+            raise HTTPException(status_code=503, detail="数据目录不可用")
+        n = assistant_sessions.save_sessions(
+            Path(repo.store.data_dir),
+            {"sessions": req.sessions, "activeId": req.active_id},
+        )
+        return {"ok": True, "sessions": n}
 
     @router.post("/actions/{call_id}/decision")
     async def action_decision(call_id: str, req: ActionDecisionRequest) -> dict:

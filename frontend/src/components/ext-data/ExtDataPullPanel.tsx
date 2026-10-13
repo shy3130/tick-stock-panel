@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Search, Check, Clock, Zap, Settings2, AlertCircle, CheckCircle2, Calendar, History, KeyRound } from 'lucide-react'
+import { Loader2, Search, Check, Clock, Zap, Settings2, AlertCircle, CheckCircle2, Calendar, History, KeyRound, Layers } from 'lucide-react'
 import { api, type ExtDataBackfillResult, type ExtDataConfig, type ExtPullAuth } from '@/lib/api'
 import { toast } from '@/components/Toast'
 
@@ -15,6 +15,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
   onSaved: () => void
 }) {
   const pull = config.pull
+  const fanout = pull?.fanout
   const [url, setUrl] = useState(pull?.url ?? '')
   const [method, setMethod] = useState(pull?.method ?? 'GET')
   const [headerStr, setHeaderStr] = useState(
@@ -86,6 +87,8 @@ export function ExtDataPullPanel({ config, onSaved }: {
       type: authType,
       header: authHeader.trim() || 'Authorization',
       param: authParam.trim() || 'token',
+      // UI 不暴露 key_ref (复用其他插件的凭据): 保留已有值, 避免普通保存把它抹掉
+      ...(pull?.auth?.key_ref ? { key_ref: pull.auth.key_ref } : {}),
     }
     return {
       url, method, headers, body: body || undefined,
@@ -102,6 +105,8 @@ export function ExtDataPullPanel({ config, onSaved }: {
       page_size: pageSize > 0 ? pageSize : 0,
       page_start: pull?.page_start ?? 1,   // UI 不暴露, 保留已有值 (从 0 计数的接口手改 config.json)
       max_pages: maxPages >= 1 && maxPages <= 200 ? maxPages : 20,
+      // 两级拉取配方同样不在 UI 编辑: 保留已有值 (出厂配方 / 手改 config.json)
+      fanout: pull?.fanout ?? null,
     }
   }
 
@@ -206,11 +211,47 @@ export function ExtDataPullPanel({ config, onSaved }: {
 
   return (
     <div className="space-y-3">
+      {/* 两级拉取配方: 目录 → 逐条目明细。展示全部关键项, 便于照抄接入自有源 */}
+      {fanout && (
+        <div className="rounded-card border border-accent/25 bg-accent/[0.05] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+            <Layers className="h-3 w-3 text-accent/80" />
+            <span>两级拉取 (目录 → 逐条目)</span>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+            接口只提供「类别清单」+「单类别成员」时用这个配方：先取第一级目录，再按
+            <span className="mx-0.5 font-mono text-[10px] text-secondary">{fanout.param}</span>
+            参数并发拉每个条目的成员，最后反转为「标的 → {fanout.value_col}」。
+          </p>
+          <div className="mt-2 space-y-1 text-[10px] leading-relaxed">
+            {([
+              ['第二级 URL', fanout.url],
+              ['参数 / 取值字段', `${fanout.param} ← ${fanout.id_field}`],
+              ['成员提取路径', fanout.items_path || '(响应本身即数组)'],
+              ['成员字段 → 列', `${fanout.member_id_field} → ${fanout.symbol_col}${fanout.member_label_field ? `, ${fanout.member_label_field} → ${fanout.name_col}` : ''}`],
+              ['拼接列 / 分隔符', `${fanout.value_col} · "${fanout.separator || ';'}"`],
+              ['并发 / 重试', `${fanout.concurrency ?? 8} · ${fanout.retries ?? 1}`],
+            ] as const).map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="w-[92px] shrink-0 text-muted">{k}</span>
+                <span className="min-w-0 flex-1 break-all font-mono text-secondary">{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-muted">
+            接入自有源时，在「新建扩展数据 → URL」填写第一级地址，本配方存于表的
+            <span className="mx-0.5 rounded bg-elevated/70 px-1 py-px font-mono text-[10px]">config.json</span>
+            的 <span className="font-mono text-[10px]">pull.fanout</span> 字段；详见
+            <span className="mx-0.5 rounded bg-elevated/70 px-1 py-px font-mono text-[10px]">docs/custom-data-source.md</span>
+          </p>
+        </div>
+      )}
+
       {/* ===== 分区 ①: 请求配置 ===== */}
       <div className="space-y-2">
         <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
           <Settings2 className="h-3 w-3 text-muted" />
-          <span>请求配置</span>
+          <span>{fanout ? '第一级 (目录) 请求配置' : '请求配置'}</span>
         </div>
 
         <div className="flex gap-1.5">

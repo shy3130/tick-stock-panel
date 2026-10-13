@@ -18,6 +18,8 @@ import { boardTag } from '@/components/stock-table/primitives'
 import { PageHeader } from '@/components/PageHeader'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { useQuoteStatus } from '@/lib/useSharedQueries'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconAlert } from '@/components/BrandIcons'
 
 /**
  * 异动监控 — 全时段异动中心, 按交易时间线分三个 tab:
@@ -1143,3 +1145,17 @@ const FALLBACK_RULES: Array<{ board: string; st: boolean; thresholds: Record<str
   { board: '创业板/科创板', st: false, thresholds: { '3d': { up: 0.3, down: 0.3 }, '10d': { up: 1.0, down: 0.5 }, '30d': { up: 2.0, down: 0.7 } }, note: '' },
   { board: '北交所', st: false, thresholds: { '3d': { up: 0.4, down: 0.4 }, '10d': { up: 1.0, down: 0.5 }, '30d': { up: 2.0, down: 0.7 } }, note: '' },
 ]
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.abnormal',
+  apiVersion: 1,
+  routes: [
+    { id: 'abnormal', path: '/abnormal', component: AbnormalMoves },
+  ],
+  navigation: [
+    { id: 'abnormal', routeId: 'abnormal', label: '异动监控', icon: IconAlert },
+  ],
+}
+
+export default extension

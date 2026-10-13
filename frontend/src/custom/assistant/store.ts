@@ -1,9 +1,10 @@
 /**
  * AI 助手前端状态 — 会话/消息/发送编排, useSyncExternalStore 单例 store。
  *
- * 后端无状态, 会话历史仅存 localStorage(最近 20 个会话); 每轮请求把可见的
- * user/assistant 消息回传, 由后端负责截断。工具往返(footprint)只用于本地
- * 展示, 不进入请求历史。
+ * 会话历史双写: localStorage 即时缓存 (启动秒开/离线兜底) + 服务端同步
+ * (/api/custom/assistant/sessions, 防抖 1.5s fire-and-forget) — 换设备可见。
+ * 每轮请求把可见的 user/assistant 消息回传, 由后端负责截断。工具往返
+ * (footprint)只用于本地展示, 不进入请求历史。
  */
 import { useSyncExternalStore } from 'react'
 import {
@@ -14,6 +15,7 @@ import {
   type AssistantEvent,
   type ChatHistoryMessage,
 } from './client'
+import { mergeSessions } from './sessionsMerge'
 
 /**
  * running=执行中; awaiting=动作工具等待用户确认; approved/denied=用户已点
@@ -56,23 +58,35 @@ interface AssistantState {
   activeId: string
   open: boolean
   sending: boolean
+  /** 悬浮球是否显示 (纯 UI 偏好, 独立 localStorage, 不随会话持久化) */
+  fabVisible: boolean
 }
 
 const STORAGE_KEY = 'assistant.sessions.v1'
+const SESSIONS_URL = '/api/custom/assistant/sessions'
+const SERVER_SYNC_DEBOUNCE_MS = 1500
 const MAX_SESSIONS = 20
 const MAX_SESSION_MESSAGES = 200
 const MAX_INPUT_CHARS = 4000
+
+const FAB_STORAGE_KEY = 'assistant.fab.enabled'
+
+function loadFabVisible(): boolean {
+  try { return localStorage.getItem(FAB_STORAGE_KEY) !== '0' } catch { return true }
+}
 
 let state: AssistantState = {
   sessions: [],
   activeId: '',
   open: false,
   sending: false,
+  fabVisible: loadFabVisible(),
 }
 
 const listeners = new Set<() => void>()
 let abortController: AbortController | null = null
 let pageContext: AssistantContext = {}
+let serverSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 function emit() {
   for (const listener of listeners) listener()
@@ -84,13 +98,54 @@ function setState(partial: Partial<AssistantState>, persist = true) {
   emit()
 }
 
+function trimmedSessions() {
+  return state.sessions
+    .slice(0, MAX_SESSIONS)
+    .map(session => ({ ...session, messages: session.messages.slice(-MAX_SESSION_MESSAGES) }))
+}
+
 function persistSessions() {
   try {
-    const trimmed = state.sessions
-      .slice(0, MAX_SESSIONS)
-      .map(session => ({ ...session, messages: session.messages.slice(-MAX_SESSION_MESSAGES) }))
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions: trimmed, activeId: state.activeId }))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions: trimmedSessions(), activeId: state.activeId }))
   } catch { /* 存储满/隐私模式时静默降级为内存态 */ }
+  scheduleServerSync()
+}
+
+/** 服务端同步 (防抖 fire-and-forget): 消息边界触发, 流式 delta 不落盘不触发;
+ *  失败静默 — 旧后端无此端点/离线时退化为纯本地行为。 */
+function scheduleServerSync() {
+  if (serverSyncTimer) clearTimeout(serverSyncTimer)
+  serverSyncTimer = setTimeout(() => {
+    serverSyncTimer = null
+    void fetch(SESSIONS_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessions: trimmedSessions(), activeId: state.activeId }),
+    }).catch(() => { /* 静默降级 */ })
+  }, SERVER_SYNC_DEBOUNCE_MS)
+}
+
+/** 启动同步: 本地先渲染 (秒开), 再拉服务端合并 (换设备可见对方历史)。
+ *  拉取期间用户已开始交互 (会话被改动) 则放弃合并 — 本地更新会经防抖写回服务端。 */
+async function syncFromServer() {
+  const sessionsBefore = state.sessions
+  const sendingBefore = state.sending
+  try {
+    const resp = await fetch(SESSIONS_URL)
+    if (!resp.ok) return // 旧后端(404)/网关错误 → 保持本地
+    const data = await resp.json() as { sessions?: unknown; activeId?: unknown }
+    if (!Array.isArray(data.sessions)) return
+    if (state.sending || state.sessions !== sessionsBefore || sendingBefore) return
+    const remote = (data.sessions as AssistantSession[])
+      .filter(s => s && typeof s.id === 'string' && Array.isArray(s.messages))
+    if (!remote.length) return
+    const merged = mergeSessions(state.sessions, state.activeId, remote, typeof data.activeId === 'string' ? data.activeId : '', MAX_SESSIONS)
+    const unchanged = merged.sessions.length === state.sessions.length
+      && merged.sessions.every((s, i) => s === state.sessions[i])
+      && merged.activeId === state.activeId
+    if (unchanged) return
+    setState({ sessions: merged.sessions, activeId: merged.activeId })
+  } catch { /* 网络不可达: 保持本地 */ }
 }
 
 function loadSessions() {
@@ -326,6 +381,12 @@ export function closeAssistant() {
   setState({ open: false }, false)
 }
 
+/** 设置悬浮球可见性并持久化 (默认开启)。 */
+export function setFabVisible(visible: boolean) {
+  try { localStorage.setItem(FAB_STORAGE_KEY, visible ? '1' : '0') } catch { /* 存储不可用仅内存态 */ }
+  setState({ fabVisible: visible }, false)
+}
+
 export function toggleAssistant() {
   if (state.open) closeAssistant()
   else openAssistant()
@@ -394,3 +455,4 @@ export function useAssistantStore(): AssistantState {
 }
 
 loadSessions()
+void syncFromServer()

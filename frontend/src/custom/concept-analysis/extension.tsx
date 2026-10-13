@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { AnalysisConfigDialog, DimensionHeatmap, PresetFetchState, type AnalysisFieldConfig } from '@/components/analysis-shared'
+import { AnalysisConfigDialog, PresetFetchState, type AnalysisFieldConfig } from '@/components/analysis-shared'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
 import { RpsRotationDialog } from '@/components/RpsRotationDialog'
@@ -25,15 +25,19 @@ import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 import { SectorRotationCard } from '@/components/SectorRotationCard'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconConcept } from '@/components/BrandIcons'
 
-const KEYWORDS = ['industry', '行业', 'sector', '申万', '中信']
-const CANDIDATE_FIELDS = ['industry', '行业', 'sector', '申万', '中信', '行业名称', 'industry_name', 'sector_name']
+const KEYWORDS = ['concept', '概念', 'theme', '题材', '板块']
+const CANDIDATE_FIELDS = ['concept', '概念', 'theme', '题材', '板块', 'concept_name', '概念名称']
 const PAGE_LIMIT = 12000
-const MAX_RENDERED_INDUSTRIES = 120
+const MAX_RENDERED_CONCEPTS = 120
 const MAX_RENDERED_STOCKS = 160
 
+/** 内置概念预设 id — 本页的数据来源与「未获取」引导按钮都锚定它 */
+const PRESET_CONCEPT_ID = 'ext_gn_ths'
+
 type SortMode = 'heat' | 'avgPct' | 'leader' | 'amount' | 'down'
-type IndustryLevel = 1 | 2 | 3
 
 interface EnrichedStock extends MarketSnapshotRow {
   leaderScore: number
@@ -47,7 +51,7 @@ interface EnrichedStock extends MarketSnapshotRow {
   }
 }
 
-interface IndustryStat {
+interface ConceptStat {
   key: string
   stocks: EnrichedStock[]
   count: number
@@ -67,30 +71,33 @@ interface IndustryStat {
   riskScore: number
 }
 
-// ===== 配置持久化 =====
-
 function loadConfig(): AnalysisFieldConfig {
-  return storage.industryAnalysisConfig.get({}) as AnalysisFieldConfig
-}
-function saveConfig(c: AnalysisFieldConfig) {
-  storage.industryAnalysisConfig.set(c)
+  return storage.conceptAnalysisConfig.get({}) as AnalysisFieldConfig
 }
 
-// ===== 自动选取最佳数据源 =====
+function saveConfig(c: AnalysisFieldConfig) {
+  storage.conceptAnalysisConfig.set(c)
+}
 
 function pickBestConfig(
   configs: { id: string; label: string; description?: string; fields: { name: string; label: string }[] }[],
 ): string {
-  let best = '', bestScore = 0
+  // 内置预设优先: 关键词打分会被「描述里互相提及对方」污染 —— 概念表描述含
+  // "概念/行业页", 行业表描述含"板块", 导致本页可能选中行业表 (拿不到数据,
+  // 且「未获取」引导按钮因 id 不匹配而不渲染)。预设存在时直接用它。
+  if (configs.some(c => c.id === PRESET_CONCEPT_ID)) return PRESET_CONCEPT_ID
+  let best = ''
+  let bestScore = 0
   for (const c of configs) {
     const haystack = [c.id, c.label, c.description ?? '', ...c.fields.flatMap(f => [f.name, f.label])].join(' ').toLowerCase()
     const score = KEYWORDS.reduce((n, k) => n + (haystack.includes(k) ? 1 : 0), 0)
-    if (score > bestScore) { bestScore = score; best = c.id }
+    if (score > bestScore) {
+      bestScore = score
+      best = c.id
+    }
   }
   return best
 }
-
-// ===== 工具函数 =====
 
 function symbolKeys(symbol: unknown): string[] {
   const raw = String(symbol ?? '').trim()
@@ -126,8 +133,6 @@ function median(values: number[]) {
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
-
-// ===== 龙头算法 =====
 
 function leaderScore(stock: MarketSnapshotRow) {
   const pct = num(stock.change_pct) ?? 0
@@ -171,9 +176,7 @@ function enrichStock(stock: StockRow, marketMap: Map<string, MarketSnapshotRow>)
   }
 }
 
-// ===== 行业统计计算 =====
-
-function calcIndustryStat(group: DimensionGroup, marketMap: Map<string, MarketSnapshotRow>): IndustryStat {
+function calcConceptStat(group: DimensionGroup, marketMap: Map<string, MarketSnapshotRow>): ConceptStat {
   const seen = new Set<string>()
   const stocks = group.stocks
     .map(s => enrichStock(s, marketMap))
@@ -229,7 +232,7 @@ function calcIndustryStat(group: DimensionGroup, marketMap: Map<string, MarketSn
 }
 
 function statSort(mode: SortMode) {
-  return (a: IndustryStat, b: IndustryStat) => {
+  return (a: ConceptStat, b: ConceptStat) => {
     switch (mode) {
       case 'avgPct': return (b.avgPct ?? -Infinity) - (a.avgPct ?? -Infinity)
       case 'leader': return (b.leader?.leaderScore ?? -Infinity) - (a.leader?.leaderScore ?? -Infinity)
@@ -241,36 +244,7 @@ function statSort(mode: SortMode) {
   }
 }
 
-// ===== 行业层级分组 =====
-
-function industryLevelName(key: string, level: IndustryLevel) {
-  const parts = key.split('-').map(s => s.trim()).filter(Boolean)
-  return parts[level - 1] || parts[parts.length - 1] || key
-}
-
-function groupByIndustryLevel(groups: DimensionGroup[], level: IndustryLevel): DimensionGroup[] {
-  const map = new Map<string, DimensionGroup>()
-  for (const group of groups) {
-    const key = industryLevelName(group.key, level)
-    const existing = map.get(key)
-    if (existing) {
-      existing.stocks.push(...group.stocks)
-      existing.count = existing.stocks.length
-    } else {
-      map.set(key, {
-        key,
-        count: group.stocks.length,
-        stocks: [...group.stocks],
-        metrics: { ...group.metrics },
-      })
-    }
-  }
-  return [...map.values()].sort((a, b) => b.count - a.count)
-}
-
-// ===== 主页面 =====
-
-export function IndustryAnalysis() {
+export function ConceptAnalysis() {
   const [fieldConfig, setFieldConfig] = useState<AnalysisFieldConfig>(loadConfig)
   const [showConfig, setShowConfig] = useState(false)
   const [search, setSearch] = useState('')
@@ -301,19 +275,19 @@ export function IndustryAnalysis() {
     enabled: !!activeConfigId,
   })
 
-  // 内置行业预设 (ext_hy_ths) 手动获取数据
-  const PRESET_INDUSTRY_ID = 'ext_hy_ths'
+  // 内置概念预设 (ext_gn_ths) 无数据时的一键拉取: 走通用拉取端点
+  // (与「数据」页扩展表的「执行」同一路径, 配方由表的 pull 配置决定)
   const queryClient = useQueryClient()
   const fetchMutation = useMutation({
-    mutationFn: () => api.extDataPresetFetch(PRESET_INDUSTRY_ID),
+    mutationFn: () => api.extDataPullRun(PRESET_CONCEPT_ID),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.extData })
-      queryClient.invalidateQueries({ queryKey: QK.extDataRows(PRESET_INDUSTRY_ID, undefined, PAGE_LIMIT) })
+      queryClient.invalidateQueries({ queryKey: QK.extDataRows(PRESET_CONCEPT_ID, undefined, PAGE_LIMIT) })
     },
   })
-  // 是否处于「内置行业预设存在但无数据」状态 → 显示获取按钮
-  const needsIndustryFetch =
-    !!activeConfig && activeConfig.id === PRESET_INDUSTRY_ID &&
+  // 是否处于「内置概念预设存在但无数据」状态 → 显示获取按钮
+  const needsConceptFetch =
+    !!activeConfig && activeConfig.id === PRESET_CONCEPT_ID &&
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
@@ -328,14 +302,11 @@ export function IndustryAnalysis() {
     [rowsQuery.data, activeConfig, fieldConfig.dimensionField],
   )
 
-  const industryLevel = fieldConfig.hierarchyLevel ?? 2
-  const groups = useMemo(() => groupByIndustryLevel(resolved.groups, industryLevel), [resolved.groups, industryLevel])
-
   const stats = useMemo(() => {
-    return groups
-      .map(g => calcIndustryStat(g, marketMap))
+    return resolved.groups
+      .map(g => calcConceptStat(g, marketMap))
       .filter(s => s.count > 0)
-  }, [groups, marketMap])
+  }, [resolved.groups, marketMap])
 
   const filteredStats = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -346,8 +317,8 @@ export function IndustryAnalysis() {
   const selected = filteredStats.find(s => s.key === selectedKey) ?? filteredStats[0] ?? null
   const leading = useMemo(() => [...stats].sort(statSort('heat')).slice(0, 10), [stats])
   const falling = useMemo(() => [...stats].sort(statSort('down')).slice(0, 10), [stats])
-  const activeIndustry = useMemo(() => [...stats].sort(statSort('amount'))[0] ?? null, [stats])
-  const industryBreadth = useMemo(() => {
+  const activeConcept = useMemo(() => [...stats].sort(statSort('amount'))[0] ?? null, [stats])
+  const conceptBreadth = useMemo(() => {
     const priced = stats.filter(s => s.avgPct != null)
     return {
       up: priced.filter(s => (s.avgPct ?? 0) > 0).length,
@@ -362,19 +333,6 @@ export function IndustryAnalysis() {
     return set.size
   }, [stats])
 
-  // 热力图用的 quoteMap（兼容 DimensionHeatmap 组件接口）
-  const heatmapQuoteMap = useMemo(() => {
-    const map = new Map<string, { symbol: string; pct?: number; change_pct?: number; name?: string; [k: string]: unknown }>()
-    for (const [k, v] of marketMap) {
-      map.set(k, {
-        ...v,
-        change_pct: v.change_pct ?? undefined,
-        name: v.name ?? undefined,
-      })
-    }
-    return map
-  }, [marketMap])
-
   const handleSaveConfig = (c: AnalysisFieldConfig) => {
     setFieldConfig(c)
     saveConfig(c)
@@ -386,12 +344,12 @@ export function IndustryAnalysis() {
   }
 
   if (!activeConfig) {
-    // 极端情况: 无任何行业配置。仍提供一键获取内置行业数据入口
+    // 极端情况: 无任何概念配置。仍提供一键获取内置概念数据入口
     return (
       <>
         <div className="flex h-full flex-col">
           <PageHeader
-            title="行业分析"
+            title="概念分析"
             right={
               <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
                 <Settings2 className="h-4 w-4" />
@@ -399,34 +357,32 @@ export function IndustryAnalysis() {
             }
           />
           <PresetFetchState
-            title="暂无行业数据"
-            hint="从同花顺获取行业分类数据后即可使用行业分析"
+            title="暂无概念数据"
+            hint="从同花顺获取概念分类数据后即可使用概念分析"
             isLoading={fetchMutation.isPending}
             error={fetchMutation.error}
             onFetch={() => fetchMutation.mutate()}
           />
         </div>
         <AnimatePresence>
-          {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} showHierarchyLevel />}
+          {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
         </AnimatePresence>
       </>
     )
   }
 
-  const industryLevelLabel = `${industryLevel}级行业`
-
   return (
     <>
       <PageHeader
-        title="行业分析"
-        subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
+        title="概念分析"
+        subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">
-            {/* RPS 轮动: 打开行业涨幅轮动矩阵对话框 */}
+            {/* RPS 轮动: 打开涨幅轮动矩阵对话框 */}
             <button
               onClick={() => setShowRps(true)}
               className="inline-flex items-center gap-1 rounded-btn border border-amber-400/40 bg-amber-400/15 px-2.5 py-1.5 text-[11px] text-amber-400 font-medium transition-colors hover:bg-amber-400/25 hover:border-amber-400/60"
-              title="行业涨幅轮动矩阵"
+              title="概念涨幅轮动矩阵"
             >
               <Repeat className="h-3.5 w-3.5" />涨幅RPS轮动分析
             </button>
@@ -445,11 +401,11 @@ export function IndustryAnalysis() {
         }
       />
 
-      <div className="min-h-full bg-[radial-gradient(circle_at_12%_0%,rgba(245,158,11,0.12),transparent_28%),radial-gradient(circle_at_85%_8%,rgba(244,63,94,0.08),transparent_28%)] px-6 py-5">
+      <div className="min-h-full bg-[radial-gradient(circle_at_12%_0%,rgba(59,130,246,0.12),transparent_28%),radial-gradient(circle_at_85%_8%,rgba(244,63,94,0.08),transparent_28%)] px-6 py-5">
         <div className="mx-auto max-w-[1440px] space-y-5">
-          <SectorRotationCard kind="industry" />
+          <SectorRotationCard kind="concept" />
 
-          <HeroPanel leading={leading[0]} falling={falling[0]} activeIndustry={activeIndustry} industryBreadth={industryBreadth} />
+          <HeroPanel leading={leading[0]} falling={falling[0]} activeConcept={activeConcept} conceptBreadth={conceptBreadth} />
 
           <MarketPulse
             leading={leading}
@@ -460,21 +416,10 @@ export function IndustryAnalysis() {
             onStockClick={handleStockClick}
           />
 
-          {/* 热力图 */}
-          {groups.length > 0 && (
-            <DimensionHeatmap
-              groups={groups}
-              quoteMap={heatmapQuoteMap}
-              selectedKey={selectedKey}
-              onSelect={k => setSelectedKey(k)}
-              colorScheme="amber"
-            />
-          )}
-
           {stats.length > 0 ? (
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[18rem_1fr]">
-              <IndustryRail
-                stats={filteredStats.slice(0, MAX_RENDERED_INDUSTRIES)}
+              <ConceptRail
+                stats={filteredStats.slice(0, MAX_RENDERED_CONCEPTS)}
                 selectedKey={selected?.key ?? null}
                 search={search}
                 sortMode={sortMode}
@@ -482,26 +427,26 @@ export function IndustryAnalysis() {
                 onSort={setSortMode}
                 onSelect={setSelectedKey}
               />
-              <IndustryFocus stat={selected} activeSymbol={previewSymbol} onStockClick={handleStockClick} />
+              <ConceptFocus stat={selected} activeSymbol={previewSymbol} onStockClick={handleStockClick} />
             </div>
           ) : rowsQuery.isLoading ? (
-            <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
-          ) : needsIndustryFetch ? (
+            <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算概念强度...</div>
+          ) : needsConceptFetch ? (
             <PresetFetchState
-              title="未获取行业数据"
-              hint="内置行业数据源已就绪,点击下方按钮从同花顺获取行业分类数据"
+              title="未获取概念数据"
+              hint="内置概念数据源已就绪,点击下方按钮从同花顺获取概念分类数据"
               isLoading={fetchMutation.isPending}
               error={fetchMutation.error}
               onFetch={() => fetchMutation.mutate()}
             />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={resolved.hint || '请检查扩展数据是否包含行业/板块相关字段'} />
+            <EmptyState icon={Layers3} title="未匹配到概念数据" hint={resolved.hint || '请检查扩展数据是否包含概念/题材相关字段'} />
           )}
         </div>
       </div>
 
       <AnimatePresence>
-        {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} showHierarchyLevel />}
+        {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
       </AnimatePresence>
 
       {previewSymbol && (
@@ -513,36 +458,37 @@ export function IndustryAnalysis() {
           onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
         />
       )}
-      {showRps && <RpsRotationDialog onClose={() => setShowRps(false)} kind="industry" />}
+
+      <AnimatePresence>
+        {showRps && <RpsRotationDialog onClose={() => setShowRps(false)} />}
+      </AnimatePresence>
     </>
   )
 }
 
-// ===== HeroPanel =====
-
 function HeroPanel({
   leading,
   falling,
-  activeIndustry,
-  industryBreadth,
+  activeConcept,
+  conceptBreadth,
 }: {
-  leading?: IndustryStat
-  falling?: IndustryStat
-  activeIndustry?: IndustryStat | null
-  industryBreadth: { up: number; down: number; flat: number }
+  leading?: ConceptStat
+  falling?: ConceptStat
+  activeConcept?: ConceptStat | null
+  conceptBreadth: { up: number; down: number; flat: number }
 }) {
   return (
     <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-      <HeroMetric icon={TrendingUp} label="最强行业" value={leading?.key ?? '—'} hint={leading?.avgPct != null ? <span className={priceColorClass(leading.avgPct)}>{fmtPct(leading.avgPct)}</span> : '等待行情'} tone="up" />
+      <HeroMetric icon={TrendingUp} label="最强主线" value={leading?.key ?? '—'} hint={leading?.avgPct != null ? <span className={priceColorClass(leading.avgPct)}>{fmtPct(leading.avgPct)}</span> : '等待行情'} tone="up" />
       <HeroMetric icon={TrendingDown} label="最大风险" value={falling?.key ?? '—'} hint={falling?.avgPct != null ? <span className={priceColorClass(falling.avgPct)}>{fmtPct(falling.avgPct)}</span> : '等待行情'} tone="down" />
       <HeroMetric
         icon={Activity}
-        label="涨跌行业"
-        value={<><span className="text-bull">{industryBreadth.up}</span><span className="mx-1 text-muted">/</span><span className="text-bear">{industryBreadth.down}</span></>}
-        hint={<><span className="text-bull">上涨</span><span className="mx-1 text-muted">/</span><span className="text-bear">下跌</span>{industryBreadth.flat ? <span className="text-muted"> · 平 {industryBreadth.flat}</span> : null}</>}
+        label="涨跌板块"
+        value={<><span className="text-bull">{conceptBreadth.up}</span><span className="mx-1 text-muted">/</span><span className="text-bear">{conceptBreadth.down}</span></>}
+        hint={<><span className="text-bull">上涨</span><span className="mx-1 text-muted">/</span><span className="text-bear">下跌</span>{conceptBreadth.flat ? <span className="text-muted"> · 平 {conceptBreadth.flat}</span> : null}</>}
         tone="blue"
       />
-      <HeroMetric icon={Activity} label="资金活跃" value={activeIndustry?.key ?? '—'} hint={activeIndustry ? fmtBigNum(activeIndustry.totalAmount) : '等待行情'} tone="blue" />
+      <HeroMetric icon={Activity} label="资金活跃" value={activeConcept?.key ?? '—'} hint={activeConcept ? fmtBigNum(activeConcept.totalAmount) : '等待行情'} tone="blue" />
       <HeroMetric icon={Crown} label="龙头算法" value="6 因子" hint="强势 + 承接 + 容量" tone="gold" />
     </div>
   )
@@ -579,8 +525,6 @@ function HeroMetric({ icon: Icon, label, value, hint, tone }: {
   )
 }
 
-// ===== MarketPulse =====
-
 function MarketPulse({
   leading,
   falling,
@@ -589,8 +533,8 @@ function MarketPulse({
   onStockClick,
   activeSymbol,
 }: {
-  leading: IndustryStat[]
-  falling: IndustryStat[]
+  leading: ConceptStat[]
+  falling: ConceptStat[]
   selectedKey: string | null
   onSelect: (key: string) => void
   onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void
@@ -614,7 +558,7 @@ function PulseList({
   activeSymbol,
 }: {
   title: string
-  items: IndustryStat[]
+  items: ConceptStat[]
   mode: 'up' | 'down'
   selectedKey: string | null
   onSelect: (key: string) => void
@@ -698,9 +642,7 @@ function PulseList({
   )
 }
 
-// ===== IndustryRail（左侧列表面板） =====
-
-function IndustryRail({
+function ConceptRail({
   stats,
   selectedKey,
   search,
@@ -709,7 +651,7 @@ function IndustryRail({
   onSort,
   onSelect,
 }: {
-  stats: IndustryStat[]
+  stats: ConceptStat[]
   selectedKey: string | null
   search: string
   sortMode: SortMode
@@ -721,18 +663,18 @@ function IndustryRail({
     <section className="rounded-2xl border border-border bg-surface p-2.5">
       <div className="px-1 pb-2.5">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-foreground">行业矩阵</h3>
+          <h3 className="text-sm font-semibold text-foreground">概念矩阵</h3>
           <span className="text-[10px] text-muted">Top {stats.length}</span>
         </div>
         <div className="mt-2 relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索行业" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50" />
+          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索概念" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50" />
         </div>
         <div className="mt-2 grid grid-cols-5 overflow-hidden rounded-lg border border-border text-[10px]">
           {([
             ['heat', '强度'], ['avgPct', '涨幅'], ['leader', '龙头'], ['amount', '成交'], ['down', '跌幅'],
           ] as [SortMode, string][]).map(([key, label]) => (
-            <button key={key} onClick={() => onSort(key)} className={cn('py-1.5 transition-colors', sortMode === key ? 'bg-amber-500/15 text-amber-400' : 'bg-base text-muted hover:text-foreground')}>{label}</button>
+            <button key={key} onClick={() => onSort(key)} className={cn('py-1.5 transition-colors', sortMode === key ? 'bg-accent/15 text-accent' : 'bg-base text-muted hover:text-foreground')}>{label}</button>
           ))}
         </div>
       </div>
@@ -740,7 +682,7 @@ function IndustryRail({
         {stats.map(item => {
           const active = selectedKey === item.key
           return (
-            <button key={item.key} onClick={() => onSelect(item.key)} className={cn('w-full border-b border-border/50 px-2.5 py-2 text-left transition-colors last:border-b-0', active ? 'bg-amber-500/[0.08]' : 'hover:bg-elevated/40')}>
+            <button key={item.key} onClick={() => onSelect(item.key)} className={cn('w-full border-b border-border/50 px-2.5 py-2 text-left transition-colors last:border-b-0', active ? 'bg-blue-400/[0.08]' : 'hover:bg-elevated/40')}>
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{item.key}</span>
                 <span className={cn('font-mono text-xs', priceColorClass(item.avgPct))}>{item.avgPct != null ? fmtPct(item.avgPct) : '—'}</span>
@@ -759,9 +701,7 @@ function IndustryRail({
   )
 }
 
-// ===== IndustryFocus（右侧聚焦面板） =====
-
-function IndustryFocus({ stat, onStockClick, activeSymbol }: { stat: IndustryStat | null; onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void; activeSymbol: string | null }) {
+function ConceptFocus({ stat, onStockClick, activeSymbol }: { stat: ConceptStat | null; onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void; activeSymbol: string | null }) {
   if (!stat) return null
   const stocks = [...stat.stocks].sort((a, b) => b.leaderScore - a.leaderScore).slice(0, MAX_RENDERED_STOCKS)
   const topLeaders = stocks.slice(0, 3)
@@ -773,7 +713,7 @@ function IndustryFocus({ stat, onStockClick, activeSymbol }: { stat: IndustrySta
           <div className="min-w-0">
             <div className="flex items-center gap-3">
               <h3 className="truncate text-xl font-semibold text-foreground">{stat.key}</h3>
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-400">强度 {stat.heatScore.toFixed(0)}</span>
+              <span className="rounded-full bg-blue-400/10 px-2 py-0.5 text-[10px] text-blue-300">强度 {stat.heatScore.toFixed(0)}</span>
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
               <span>{stat.count} 只成分</span>
@@ -851,7 +791,7 @@ function LeaderStage({ stocks, onStockClick, activeSymbol }: { stocks: EnrichedS
     <div className="rounded-xl border border-border/60 bg-surface p-3">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-amber-300">
         <Crown className="h-3.5 w-3.5" />
-        本行业三龙头
+        本概念三龙头
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {stocks.map((stock, idx) => (
@@ -896,3 +836,17 @@ function ScoreExplain({ stock }: { stock?: EnrichedStock }) {
 function Part({ label, value, cls }: { label: string; value: number; cls: string }) {
   return <div className="rounded-lg bg-base/35 px-2 py-1.5"><div className="mb-1 flex justify-between text-[10px] text-muted"><span>{label}</span><span>{Math.round(value * 100)}</span></div><div className="h-1 rounded-full bg-elevated"><div className={cn('h-full rounded-full', cls)} style={{ width: `${Math.max(3, value * 100)}%` }} /></div></div>
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.concept-analysis',
+  apiVersion: 1,
+  routes: [
+    { id: 'concept-analysis', path: '/concept-analysis', component: ConceptAnalysis },
+  ],
+  navigation: [
+    { id: 'concept-analysis', routeId: 'concept-analysis', label: '概念分析', icon: IconConcept },
+  ],
+}
+
+export default extension

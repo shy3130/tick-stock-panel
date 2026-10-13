@@ -16,6 +16,8 @@ import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
 } from '@/lib/stockAnalysisStore'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconStockFocus } from '@/components/BrandIcons'
 
 /**
  * 个股分析页 —— 日 K + 关键价位(压力/支撑/密集区/枢轴/前高前低)+ AI 四维分析。
@@ -362,3 +364,17 @@ function fmtRelative(iso: string): string {
     return new Date(iso).toLocaleDateString('zh-CN')
   } catch { return iso }
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.stock-analysis',
+  apiVersion: 1,
+  routes: [
+    { id: 'stock-analysis', path: '/stock-analysis', component: StockAnalysis },
+  ],
+  navigation: [
+    { id: 'stock-analysis', routeId: 'stock-analysis', label: '个股分析', icon: IconStockFocus },
+  ],
+}
+
+export default extension

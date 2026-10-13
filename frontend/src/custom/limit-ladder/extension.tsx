@@ -18,6 +18,8 @@ import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import type { ExtColumnDisplayConfig } from '@/lib/watchlist-columns'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconLadder } from '@/components/BrandIcons'
 
 // ===== Ext 字段配置 =====
 
@@ -1858,3 +1860,17 @@ export function LimitUpLadder() {
     </div>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.limit-ladder',
+  apiVersion: 1,
+  routes: [
+    { id: 'limit-ladder', path: '/limit-ladder', component: LimitUpLadder },
+  ],
+  navigation: [
+    { id: 'limit-ladder', routeId: 'limit-ladder', label: '连板梯队', icon: IconLadder },
+  ],
+}
+
+export default extension

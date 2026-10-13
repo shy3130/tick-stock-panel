@@ -9,6 +9,8 @@ import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
 import { Skeleton } from '@/components/data/Skeleton'
 import { PageHeader } from '@/components/PageHeader'
 import { AnchorWrap } from '@/lib/useCardFlash'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconSignals } from '@/components/BrandIcons'
 
 const KIND_LABEL: Record<SignalKind, string> = { entry: '入场', exit: '出场', both: '出入通用' }
 const KIND_CLASS: Record<SignalKind, string> = {
@@ -208,3 +210,17 @@ function fieldWithDays(key: string, days: number | undefined, fields: { key: str
   const label = fieldLabel(key, fields)
   return days && days > 0 ? `${label}(前${days}日)` : label
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.signals',
+  apiVersion: 1,
+  routes: [
+    { id: 'signals', path: '/signals', component: Signals },
+  ],
+  navigation: [
+    { id: 'signals', routeId: 'signals', label: '信号库', icon: IconSignals },
+  ],
+}
+
+export default extension

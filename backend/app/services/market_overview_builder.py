@@ -70,14 +70,9 @@ def _board(symbol: str) -> str:
     return "其他"
 
 
-def _score(value: float, low: float, high: float) -> int:
-    if high <= low:
-        return 50
-    if not math.isfinite(value):
-        # 非有限输入不可映射: 取中性 50, 不得让 round(inf)/round(nan) 抛异常打断看板计算
-        # (与 app/services/regime_builder.py 的同名实现保持一致)
-        return 50
-    return max(0, min(100, round((value - low) / (high - low) * 100)))
+# 注: 原 _score(value, low, high) 已迁至 app.services.emotion_score.score_of ——
+# 情绪评分的区间与权重现由用户可配置, 归一化函数须与配置同处一个模块。
+# regime_builder 保留同名实现 (其区间是 A 股分位数校准的另一套口径, 不共用)。
 
 
 # ================================================================
@@ -568,27 +563,33 @@ def build_market_overview(
     mainline_items = [*concept_rank["leading"][:3], *industry_rank["leading"][:3]]
     mainline_avg = max([_finite(item.get("avg_pct")) or 0 for item in mainline_items], default=0)
     mainline_cover_pct = max([(_finite(item.get("count")) or 0) / total * 100 for item in mainline_items], default=0) if total else 0
-    mainline_score = round(_score(mainline_avg, -0.005, 0.03) * 0.65 + _score(mainline_cover_pct, 1, 12) * 0.35) if mainline_items else 50
 
-    radar = [
-        {"key": "index", "label": "指数", "value": _score(avg_index_pct, -2.5, 2.5)},
-        {"key": "profit", "label": "赚钱", "value": round(_score(up_pct, 20, 80) * 0.45 + _score(avg_pct, -0.02, 0.02) * 0.25 + _score(median_pct, -0.02, 0.02) * 0.20 + _score(strong_diff_pct, -8, 8) * 0.10)},
-        {"key": "money", "label": "量能", "value": round(_score(avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(high_vol_pct, 2, 12) * 0.30)},
-        {"key": "speculation", "label": "投机", "value": round(_score(limit_up, 5, 90) * 0.25 + _score(seal_rate, 30, 85) * 0.35 + _score(max_boards, 1, 8) * 0.25 + _score(tier2_count, 0, 30) * 0.15)},
-        {"key": "resilience", "label": "抗跌", "value": 100 - round(_score(down_pct, 20, 80) * 0.55 + _score(strong_down_pct, 1, 12) * 0.45)},
-        {"key": "mainline", "label": "主线", "value": mainline_score},
-    ]
-    emotion_score = round(sum(r["value"] for r in radar) / len(radar)) if radar else 50
-    if emotion_score >= 70:
-        emotion_label = "强势"
-    elif emotion_score >= 55:
-        emotion_label = "偏暖"
-    elif emotion_score >= 45:
-        emotion_label = "震荡"
-    elif emotion_score >= 30:
-        emotion_label = "偏冷"
-    else:
-        emotion_label = "冰点"
+    # 情绪评分 (维度/权重/区间/档位) 走可配置口径: 定义在 app.services.emotion_score,
+    # 用户可在看板「情绪雷达」卡片上改权重与区间。指标名即该模块的 term.key。
+    from app.services import preferences
+    from app.services.emotion_score import compute as compute_emotion
+
+    emotion = compute_emotion({
+        "avg_index_pct": avg_index_pct,
+        "up_pct": up_pct,
+        "avg_pct": avg_pct,
+        "median_pct": median_pct,
+        "strong_diff_pct": strong_diff_pct,
+        "avg_vol_ratio": avg_vol_ratio,
+        "high_vol_pct": high_vol_pct,
+        "limit_up": limit_up,
+        "seal_rate": seal_rate,
+        "max_boards": max_boards,
+        "tier2_count": tier2_count,
+        "down_pct": down_pct,
+        "strong_down_pct": strong_down_pct,
+        # 主线仅在有条目时才有意义: 无条目时该维度取中性 50 (与历史实现一致)
+        **({"mainline_avg": mainline_avg, "mainline_cover_pct": mainline_cover_pct} if mainline_items else {}),
+    }, preferences.get_emotion_score_config())
+
+    radar = emotion["radar"]
+    emotion_score = emotion["score"]
+    emotion_label = emotion["label"]
 
     return _json_safe({
         "as_of": str(as_of),

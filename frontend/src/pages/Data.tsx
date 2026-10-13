@@ -47,6 +47,7 @@ import { ScheduleEditor } from '@/components/data/ScheduleEditor'
 import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
+import { FinancialSyncPanel } from '@/components/data/FinancialSyncPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { AdjFactorSyncConfig } from '@/components/data/AdjFactorSyncConfig'
 import { RegimeConfigCard } from '@/components/data/RegimeConfigCard'
@@ -67,6 +68,8 @@ export function Data() {
 
   const caps = useCapabilities()
   const settings = useSettings()
+  // 测试端点仅探测 TickFlow 通道 — 未配置 TickFlow Key 时隐藏入口
+  const hasTickflowKey = settings.data?.has_tickflow_key ?? settings.data?.mode === 'api_key'
 
   const status = useDataStatus({
     refetchInterval: (query) => {
@@ -560,8 +563,11 @@ export function Data() {
             capLimits={mergedCaps}
             customProvider={routeProviderDisplay(matrix.data, 'financial')}
             subLabel={`历史股本 · ${historicalShareRows.toLocaleString()} 条`}
+            // 财务不在盘后管道内, 顶部「立即同步」不含它 —— 给出独立的拉取入口
+            onPull={() => setOpenSettings(v => v === 'financial-sync' ? null : 'financial-sync')}
+            pullTitle="手动拉取财务数据"
             onSettings={hasData ? () => setOpenSettings(v => v === 'financials' ? null : 'financials') : undefined}
-            settingsOpen={openSettings === 'financials'}
+            settingsOpen={openSettings === 'financials' || openSettings === 'financial-sync'}
           />
         )
       }
@@ -597,13 +603,12 @@ export function Data() {
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
           <div className="flex items-center gap-3">
-            {!hasData && !isLoading && (
-              <span className="text-xs text-accent animate-pulse">首次使用请点击右侧按钮同步数据</span>
-            )}
             <button
               onClick={() => adjGate.guard(() => startSync.mutate())}
               disabled={isStarting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150 ${
+                !hasData && !isLoading && !isStarting && !isRunning ? 'animate-breath-sync' : ''
+              }`}
             >
               {(isStarting || isRunning) ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -646,6 +651,7 @@ export function Data() {
                 <Plus className="h-3.5 w-3.5" />
                 扩展数据
               </button>
+              {hasTickflowKey && (
               <button
                 onClick={() => setShowEndpointTest(true)}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
@@ -653,6 +659,7 @@ export function Data() {
                 <Wifi className="h-3.5 w-3.5" />
                 测试端点
               </button>
+              )}
               <button
                 onClick={() => setOpenSettings('page-settings')}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
@@ -1056,6 +1063,11 @@ export function Data() {
               historicalShareRows={s?.financials?.tables?.shares?.rows ?? 0}
               onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
             />
+          </SettingsModal>
+        )}
+        {openSettings === 'financial-sync' && (
+          <SettingsModal title="财务数据 · 手动拉取" onClose={() => setOpenSettings(null)} width="max-w-lg">
+            <FinancialSyncPanel />
           </SettingsModal>
         )}
       </AnimatePresence>

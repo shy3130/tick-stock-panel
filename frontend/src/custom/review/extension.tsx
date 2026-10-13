@@ -5,6 +5,9 @@
  * 仅保留一行「市场摘要条」作为报告上下文参照;AI 报告 + 历史归档是页面主体。
  *  - 摘要数据:GET /api/overview/market
  *  - 报告流式:POST /api/market-recap/analyze
+ *
+ * 归属: 扩展域消费页 (官方), 经 custom/review/extension.tsx 注册路由与导航;
+ * 对核心能力均为只读 import (api/QK/组件/状态库), 不承载核心域语义。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -31,6 +34,8 @@ import {
   startReviewGeneration, resetReview, isReviewGenerating, cancelReviewGeneration,
   type ReviewPhase,
 } from '@/lib/reviewStore'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconReview } from '@/components/BrandIcons'
 
 // ================================================================
 // 涨跌幅格式化(注意单位差异)
@@ -65,7 +70,7 @@ function fmtArchivedAt(iso: string): string {
 
 // Phase 类型复用 store 的定义(单一来源)
 
-export function Review() {
+export function ReviewPage() {
   const qc = useQueryClient()
   // 复盘日期:当前固定取最新交易日(后续如需日期选择可改回 useState)
   const asOf: string | undefined = undefined
@@ -1393,3 +1398,17 @@ function DragonTigerCard({ date, onOpenStock }: {
     </div>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.review',
+  apiVersion: 1,
+  routes: [
+    { id: 'review', path: '/review', component: ReviewPage },
+  ],
+  navigation: [
+    { id: 'review', routeId: 'review', label: '复盘', icon: IconReview },
+  ],
+}
+
+export default extension

@@ -26,13 +26,15 @@ dependencies = [
     "pypinyin>=0.50",             # 股票名拼音首字母搜索 (同花顺式 payh → 平安银行)
     # TickFlow 官方 SDK
     "tickflow[all]>=0.1.23",
+    # TdxQuant 内置数据源插件的原生 TCP 客户端 (wheel 自带跨平台库, 无需系统依赖)
+    "tdxaidata>=1.2.2",
     # Scheduling
     "apscheduler>=3.10",
     # Config
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
     # AI(可选,但默认装上)
-    "openai>=1.40",               # OpenAI 兼容适配器复用 openai SDK
+    "openai>=1.66",               # OpenAI 兼容适配器复用 openai SDK; 1.66+ 提供 Responses API
     "httpx>=0.27",
     "platformdirs>=4.0",          # 桌面版用户数据目录 (跨平台持久可写)
     "winotify>=1.1; sys_platform == 'win32'",  # Windows 系统通知 (进操作中心)

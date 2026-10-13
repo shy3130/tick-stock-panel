@@ -17,6 +17,7 @@ tool_calls 分片, 流结束时统一返回本轮结果, 由 chat_service 决定
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -24,11 +25,13 @@ from openai import AsyncOpenAI
 
 from app import secrets_store
 from app.config import settings
+from app.services import ai_responses
 from app.services.ai_provider import (
     OPENAI_PROVIDER,
     current_ai_model,
     current_ai_provider,
     current_openai_reasoning_effort,
+    is_responses_protocol,
     normalize_openai_base_url,
 )
 
@@ -88,6 +91,14 @@ async def stream_openai_round(
     timeout: float = 240.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """执行一轮流式补全: yield 文本 delta, 最后 yield 一个 round_end 事件。"""
+    if is_responses_protocol():
+        # Responses 协议走平行实现, 事件输出与本函数同构, chat_service 无感。
+        async for event in ai_responses.stream_round(
+            messages, tools, temperature=temperature, timeout=timeout,
+        ):
+            yield event
+        return
+
     client = _client(timeout)
     model = current_ai_model()
     kwargs = _build_kwargs(temperature)
@@ -159,10 +170,14 @@ async def stream_openai_round(
                 if getattr(fn, "arguments", None):
                     entry["arguments"] += str(fn.arguments)
 
-    # 让 SDK 流对象尽快释放(部分兼容网关要求显式 close)。
+    # 让 SDK 流对象尽快释放(部分兼容网关要求显式 close); SDK 2.x 的
+    # AsyncStream.close 是协程, 必须区分同步/异步两种签名。
     close = getattr(stream, "close", None)
     if close is not None:
-        await asyncio.to_thread(close)
+        if inspect.iscoroutinefunction(close):
+            await close()
+        else:
+            await asyncio.to_thread(close)
 
     if calls:
         yield {

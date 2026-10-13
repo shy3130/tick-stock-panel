@@ -23,6 +23,8 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
 import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconMonitor } from '@/components/BrandIcons'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控',
@@ -1271,3 +1273,17 @@ function ExtFieldSection({ label, value, onChange, groups, loading }: {
     </div>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.monitor',
+  apiVersion: 1,
+  routes: [
+    { id: 'monitor', path: '/monitor', component: Monitor },
+  ],
+  navigation: [
+    { id: 'monitor', routeId: 'monitor', label: '监控中心', icon: IconMonitor },
+  ],
+}
+
+export default extension

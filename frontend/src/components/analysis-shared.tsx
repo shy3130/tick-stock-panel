@@ -9,10 +9,12 @@
  */
 
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
   AlertCircle,
+  ArrowRight,
   BarChart3,
   ChevronDown,
   Database,
@@ -456,10 +458,13 @@ export function ConfigButton({ onClick }: { onClick: () => void }) {
 }
 
 /**
- * 内置预设 (概念/行业) 数据获取空状态。
+ * 内置预设 (概念/行业) 无数据时的空状态。
  *
- * 当检测到内置预设存在但无数据时, 展示图标 + 提示 + 「获取数据」按钮,
- * 让用户手动触发拉取 (POST /api/ext-data/presets/{id}/fetch), 而非自动拉取。
+ * 内置表出厂即带完整拉取配方 (URL / 鉴权 / 两级请求), 此处按钮直接走通用
+ * 拉取端点 (POST /api/ext-data/{id}/pull/run), 与「数据」页的「执行」同一路径。
+ *
+ * 拉取需 fuyao 凭据 (X-api-key)。未配置时后端返回明确文案, 此处识别后
+ * 额外给一个直达设置页的入口, 免得用户自己摸到「设置 → 数据源」。
  */
 export function PresetFetchState({
   title,
@@ -475,6 +480,8 @@ export function PresetFetchState({
   onFetch: () => void
 }) {
   const errMsg = error instanceof Error ? error.message : error ? String(error) : ''
+  // 缺 Key 是「配置问题」而非「拉取失败」: 换引导文案 + 直达设置
+  const needKey = /API Key|凭据|未配置.*Key/i.test(errMsg)
   return (
     <div className="h-full grid place-items-center px-8 py-16">
       <div className="text-center max-w-md">
@@ -493,10 +500,33 @@ export function PresetFetchState({
           )}
         </button>
         {errMsg && (
-          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-bear">
-            <AlertCircle className="h-3.5 w-3.5" /> {errMsg}
-          </p>
+          needKey ? (
+            <div className="mt-3 rounded-lg border border-warning/30 bg-warning/[0.06] px-3 py-2.5 text-left">
+              <p className="flex items-start gap-1.5 text-xs text-warning">
+                <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                <span>
+                  该数据源需要 <span className="font-mono font-medium">fuyao API Key</span>
+                  ；其余功能不受影响。
+                </span>
+              </p>
+              <Link
+                to="/settings?tab=data-sources&highlight=fuyao"
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+              >
+                前往 设置 → 数据源 配置 <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
+          ) : (
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-bear">
+              <AlertCircle className="h-3.5 w-3.5" /> {errMsg}
+            </p>
+          )
         )}
+        <p className="mt-5 text-[11px] leading-relaxed text-muted">
+          这张表的完整拉取配方 (URL / 鉴权 / 两级请求) 可在
+          <Link to="/data" className="mx-0.5 text-accent hover:underline">数据</Link>
+          页展开本表 → <span className="text-secondary">拉取</span> 查看, 供接入自有源参考。
+        </p>
       </div>
     </div>
   )

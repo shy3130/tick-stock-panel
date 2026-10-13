@@ -140,6 +140,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 - `LOOKBACK_DAYS` 决定引擎加载多少天的数据，设为策略逻辑需要的最大回看天数
 - 优先使用 Polars 的 `with_columns`、`over("symbol")`、`group_by`、`join`、`filter` 实现历史逻辑，避免把数据转成 Python list/dict 循环
 - 只有遇到表达式难以描述的复杂状态机时，才使用 `partition_by("symbol")` + `to_dicts()` 逐股票分析
+- **`to_dicts()` 逐行攒下的命中行重建 DataFrame 必须显式带 schema**：写 `pl.DataFrame(hits, schema=df.schema)`，**不能裸写 `pl.DataFrame(hits)`**。原因：从 dict 列表建表只扫描前 100 行推断列类型（默认 `infer_schema_length=100`），若某列在前 100 个命中行里全为 `None`，该列会被推断成 Null 类型，之后某行这一列出现数值时直接报 `ComputeError: could not append value ... to the builder`——是否触发取决于命中行的排列顺序，数据一变就可能复现，非常隐蔽；显式带 schema 同时保住 date/整型等原始列类型不被重新推断
 - **返回所有匹配行，不要过滤 `latest`**；策略引擎会自动取最新日，回测引擎需要全区间命中
 - 未声明 `filter_history()` 的策略走普通 `filter()` 路径，不受影响
 - **date 类型参数必须先转换再与 `date` 列比较**：params 里的 `"type": "date"` 参数从 JSON 传来是字符串（如 `"2024-01-01"`），而数据中 `date` 列是 Polars Date 类型，**不能直接比较**，否则报错。必须先转换：
@@ -288,7 +289,7 @@ REQUIRED_FEATURES = {"ma20", "momentum_20d", "vol_ratio_5d"}
 6. Polars 策略允许 `import polars as pl` 和 `from datetime import date/datetime`；矩阵策略只允许 NumPy 和 `app.backtest.matrix` 协议/算子
 7. 禁止使用 `open()`, `exec()`, `eval()`, `os`, `sys`, `subprocess`
 8. **贴合用户需求优先**：第3/4节的指标列和信号列仅供参考，能用则用；如果用户需求需要自定义计算（如"前高""上次涨停价""N日内某个事件后X天"），直接在 `filter_history()` 中自行设计和计算，不需要局限于已有列
-9. `filter_history()` 中优先用 Polars 向量化语法；仅在复杂状态机无法清晰表达时，才用 `partition_by("symbol")` 逐股票分析
+9. `filter_history()` 中优先用 Polars 向量化语法；仅在复杂状态机无法清晰表达时，才用 `partition_by("symbol")` 逐股票分析；`to_dicts()` 逐行分析的命中行必须以 `pl.DataFrame(hits, schema=df.schema)` 重建，禁止裸 `pl.DataFrame(hits)`（dict 推断类型漂移，见第 2 节关键要点）
 
 ## 7. 策略示例
 

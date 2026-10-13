@@ -108,6 +108,8 @@ class PullConfigReq(BaseModel):
     auth: PullAuthReq | None = None
     # 单次拉取请求超时 (秒), 默认 30 与历史行为一致; 大响应接口可调高
     timeout_seconds: int = Field(30, ge=5, le=300)
+    # 两级拉取配方 (目录 → 逐条目明细); 缺省 (None) = 保留现有配置
+    fanout: dict | None = None
 
 
 class ApiKeyReq(BaseModel):
@@ -405,27 +407,6 @@ def list_configs(request: Request):
         d["date_range"] = _date_range(c, data_dir)
         items.append(d)
     return {"items": items}
-
-
-@router.post("/presets/{config_id}/fetch")
-async def fetch_preset_data(request: Request, config_id: str):
-    """手动触发内置预设 (概念/行业) 的数据拉取。
-
-    注意: 必须在 /{config_id}/... 动态路由之前声明, 否则 'presets' 会被当成 config_id。
-    与通用 pull/run 不同: 走 ext_presets 的结构转换 (接口的 concepts/industries
-    数组 → 拼接成字符串), 保证 schema 与现有数据一致。
-    """
-    from app.services.ext_presets import fetch_preset
-
-    try:
-        n = await fetch_preset(config_id, _data_dir(request))
-    except ValueError as e:
-        raise HTTPException(404, str(e)) from e
-    except Exception as e:
-        raise HTTPException(400, f"拉取失败: {e}") from e
-
-    _refresh_views(request)
-    return {"status": "ok", "rows": n}
 
 
 @router.post("")
@@ -1016,6 +997,15 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
 
     # 保留历史状态字段; auth 缺省时沿用现有配置 (关闭鉴权需显式传 {"type":"none"})
     old_pull = config.pull
+    # auth.key_ref / fanout: UI 未暴露的键在保存时沿用旧值, 避免一次普通保存
+    # 就把出厂配方里的凭据引用与两级请求配方抹掉。
+    old_auth = (old_pull.auth or {}) if old_pull else {}
+    if body.auth is not None:
+        new_auth: dict | None = body.auth.model_dump()
+        if new_auth and old_auth.get("key_ref") and not new_auth.get("key_ref"):
+            new_auth["key_ref"] = old_auth["key_ref"]
+    else:
+        new_auth = old_pull.auth if old_pull else None
     config.pull = PullConfig(
         url=body.url,
         method=body.method,
@@ -1030,8 +1020,9 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         date_param=body.date_param,
         date_format=body.date_format,
         time_field=body.time_field,
-        auth=body.auth.model_dump() if body.auth else (old_pull.auth if old_pull else None),
+        auth=new_auth,
         timeout_seconds=body.timeout_seconds,
+        fanout=body.fanout if body.fanout is not None else (old_pull.fanout if old_pull else None),
         last_run=old_pull.last_run if old_pull else None,
         last_status=old_pull.last_status if old_pull else None,
         last_message=old_pull.last_message if old_pull else None,

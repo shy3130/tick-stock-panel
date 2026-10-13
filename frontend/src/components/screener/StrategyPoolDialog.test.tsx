@@ -34,6 +34,7 @@ function mkStrategy(p: Partial<StrategyDetail> & Pick<StrategyDetail, 'id' | 'na
 const aiDraft = mkStrategy({ id: 'ai_breakout_v1', name: 'AI突破', source: 'ai', research_only: true })
 const builtinResearch = mkStrategy({ id: 'factor_rank_research', name: '因子排名研究', source: 'custom', research_only: true })
 const builtinPublic = mkStrategy({ id: 'trend_follow', name: '趋势跟随', source: 'custom' })
+const compositePublic = mkStrategy({ id: 'composite_mix_v1', name: '混合叠加', source: 'composite' })
 
 let root: Root | null = null
 const container = document.createElement('div')
@@ -49,16 +50,18 @@ async function render() {
   })
 }
 
-function clickAiTab() {
+function clickTab(label: string) {
   const tab = Array.from(container.querySelectorAll('button'))
-    .find(b => b.textContent?.startsWith('AI'))
+    .find(b => b.textContent?.startsWith(label))
   expect(tab).toBeTruthy()
   act(() => { tab!.click() })
 }
 
+const clickAiTab = () => clickTab('AI')
+
 beforeEach(() => {
   mockStrategyList.mockReset()
-  mockStrategyList.mockResolvedValue({ strategies: [aiDraft, builtinResearch, builtinPublic] })
+  mockStrategyList.mockResolvedValue({ strategies: [aiDraft, builtinResearch, builtinPublic, compositePublic] })
   mockStrategyPublish.mockClear()
 })
 afterEach(() => {
@@ -89,4 +92,23 @@ it('builtin research template is not offered for publish anywhere in the pool', 
   clickAiTab()
   // 草稿分区同样不列非 AI 来源的 research 项
   expect(container.textContent).not.toContain('因子排名研究')
+})
+
+it('composite strategies have their own tab and are excluded from custom tab', async () => {
+  await render()
+
+  // 「叠加」分组只列叠加策略
+  clickTab('叠加')
+  expect(container.textContent).toContain('混合叠加')
+  expect(container.textContent).not.toContain('趋势跟随')
+
+  // 「自定义」分组不再并入叠加策略
+  clickTab('自定义')
+  expect(container.textContent).toContain('趋势跟随')
+  expect(container.textContent).not.toContain('混合叠加')
+
+  // 「全部」分组仍同时可见两类
+  clickTab('全部')
+  expect(container.textContent).toContain('趋势跟随')
+  expect(container.textContent).toContain('混合叠加')
 })

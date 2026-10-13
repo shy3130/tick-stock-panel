@@ -20,7 +20,7 @@ import {
   Landmark,
   Database,
   Puzzle,
-  KeyRound,
+  Coins,
   Route,
 } from 'lucide-react'
 import { api, type ProviderField } from '@/lib/api'
@@ -272,7 +272,11 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   )
 }
 
-// ===== Step 2: 配置第三方数据源 (默认内置源; 可添加自有数据源) =====
+// ===== Step 2: 配置数据源 =====
+// 面板行 = 数据源的全部信息聚合 (图标 / 名称 / 能力 / Key / 说明), 取代"卡片只读 + 表单另排"
+// 的上下分离结构。三个源均为第三方数据服务 (与步骤 0 免责声明同口径): 归属只在名称行以弱化
+// 文字标注, 角色差异交给图标色与文案表达, 不再堆叠徽标。Key 为可选增强: 未配置直接给输入框,
+// 已配置折叠为脱敏串。
 
 /** datasets 标签的中文名 (与设置页数据集口径一致) */
 const DATASET_LABELS: Record<string, string> = {
@@ -280,7 +284,27 @@ const DATASET_LABELS: Record<string, string> = {
   adj_factor: '除权',
   realtime: '实时',
   minute: '分钟K',
+  full_minute: '全量分钟',
+  depth5: '五档',
   financial: '财务',
+}
+
+/** 面板行: 一个数据源的全部信息 (图标 / 名称 / 能力 / Key / 说明) 聚合在一行内 */
+type SourceRow = {
+  name: string
+  display: string
+  env: string
+  datasets: string[]
+  /** 图标块: Comp 取 lucide 组件, cls 同时给底色与图标色 (蓝=默认源 / 绿=增强 / 琥珀=积分) */
+  icon: { Comp: typeof LineChart; cls: string }
+  paid?: boolean        // 积分计费源: 名称行追加琥珀小标 (费用提示)
+  warn?: string         // 计费警示句: 频率/批量对积分消耗的影响, 行内以琥珀警示行展示
+  configured: boolean
+  masked: string
+  desc: string
+  link: { label: string; url: string } | null
+  slowProbe?: boolean   // TdxQuant: 子进程实探 ~30s, 按钮文案预定预告耗时
+  autoFocus?: boolean
 }
 
 function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
@@ -292,23 +316,18 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
     staleTime: 60_000,
   })
 
-  // 两个常驻 Key 表单 (不收起): 输入/错误/已保存提示按数据源名分槽
+  // Key 表单状态按数据源名分槽; expanded = 已配置源点开「替换」后的展开态
   const [inputs, setInputs] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string | null>>({})
   const [savedMsg, setSavedMsg] = useState<Record<string, string | null>>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const plugins = sources.data?.plugins ?? []
   const builtin = sources.data?.builtin ?? []
-  const custom = sources.data?.custom ?? []
-  const items = [
-    ...builtin.map(s => ({ ...s, kind: 'builtin' as const })),
-    ...plugins.map(s => ({ ...s, kind: 'plugin' as const })),
-    ...custom.map(s => ({ ...s, kind: 'custom' as const })),
-  ]
-
-  // 已配置态徽标: tickflow 看 settings.mode (free/api_key 均为已配 Key), fuyao 看插件 api_key_masked
-  const tfConfigured = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
-  const fuyaoConfigured = !!plugins.find(p => p.name === 'fuyao')?.api_key_masked
+  const customCount = (sources.data?.custom ?? []).length
+  const tfItem = builtin.find(b => b.name === 'tickflow')
+  const fyPlugin = plugins.find(p => p.name === 'fuyao')
+  const tdxPlugin = plugins.find(p => p.name === 'tdxquant')
 
   // 内联 Key 配置 (先探后存): 验证通过才落盘
   const saveKey = useMutation<any, Error, { name: string; key: string }>({
@@ -319,6 +338,7 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
       qc.invalidateQueries({ queryKey: QK.dataSources })
       qc.invalidateQueries({ queryKey: QK.capabilities })
       qc.invalidateQueries({ queryKey: QK.capabilityMatrix })
+      qc.invalidateQueries({ queryKey: QK.settings })   // TickFlow 脱敏串/档位随 settings 刷新
       const setError = (msg: string | null) => setErrors(s => ({ ...s, [vars.name]: msg }))
       const setSaved = (msg: string | null) => {
         setSavedMsg(s => ({ ...s, [vars.name]: msg }))
@@ -326,6 +346,7 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
       }
       if (data.ok) {
         setInputs(s => ({ ...s, [vars.name]: '' }))
+        setExpanded(s => ({ ...s, [vars.name]: false }))
         setError(null)
         if (vars.name === 'tickflow') {
           setSaved(`TickFlow Key 已保存${data.tier_label ? `,当前档位:${data.tier_label}` : ''}`)
@@ -333,6 +354,9 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
           // fuyao 定位为增强源: 仅实时行情 + 除权因子路由过去, 其余数据集保持 TickFlow
           routeFuyaoEnhanced.mutate()
           setSaved('fuyao Key 已保存:实时行情与除权因子已切换到 fuyao,其余数据集保持 TickFlow')
+        } else if (vars.name === 'tdxquant' && data.plugin_available) {
+          // 积分计费源不自动切路由: 消耗积分的选择权留给用户
+          setSaved('TdxQuant Key 已保存。该源按积分计费,请在「设置 → 数据源」按需启用')
         } else if (data.plugin_available) {
           setSaved('Key 已保存,该数据源已就绪')
         }
@@ -352,17 +376,47 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
   })
 
-  // 常驻展开的两个 Key 表单元数据 (卡片只读, Key 是向导里唯一可操作项)
-  const keyForms = [
+  const rows: SourceRow[] = [
     {
-      name: 'tickflow', display: 'TickFlow', env: 'TICKFLOW_API_KEY', configured: tfConfigured, autoFocus: true,
-      copy: '留空即免费 None 模式,可直接使用;填写 Key 后按订阅档位解锁实时 / 分钟 / 盘口 / 财务等更多数据集。仅存本地 (secrets.json),先验证后保存。',
-      register: { label: '前往 TickFlow 注册获取 Key', url: 'https://tickflow.org/auth/register?ref=V3KDKGXPEA' },
+      name: 'tickflow',
+      display: tfItem?.display_name || 'TickFlow',
+      env: 'TICKFLOW_API_KEY',
+      datasets: tfItem?.datasets ?? [],
+      icon: { Comp: LineChart, cls: 'bg-accent/12 text-accent' },
+      configured: !!settings.data?.has_tickflow_key,
+      masked: settings.data?.tickflow_api_key_masked ?? '',
+      desc: '不填 Key 即免费档(历史日K可用);填写后按订阅档位解锁实时、分钟、盘口、财务等能力。',
+      link: { label: '注册获取 Key', url: 'https://tickflow.org/auth/register?ref=V3KDKGXPEA' },
+      autoFocus: !settings.data?.has_tickflow_key,
     },
     {
-      name: 'fuyao', display: 'fuyao', env: 'FUYAO_API_KEY', configured: fuyaoConfigured, autoFocus: false,
-      copy: '仅存本地 (secrets.json),先验证后保存。保存成功后仅「实时行情」与「除权因子」切换到 fuyao,其余数据集保持 TickFlow。',
-      register: { label: '前往 fuyao 官网申请 Key', url: 'https://fuyao.aicubes.cn' },
+      name: 'fuyao',
+      display: fyPlugin?.display_name || 'fuyao',
+      env: fyPlugin?.api_key_env || 'FUYAO_API_KEY',
+      datasets: fyPlugin?.datasets ?? [],
+      icon: { Comp: Landmark, cls: 'bg-bear/10 text-bear' },
+      configured: !!fyPlugin?.api_key_masked,
+      masked: fyPlugin?.api_key_masked ?? '',
+      desc: '同花顺金融数据 API。保存后实时行情与除权因子自动切换到 fuyao,其余能力保持 TickFlow。',
+      link: { label: '前往官网申请 Key', url: 'https://fuyao.aicubes.cn' },
+    },
+    {
+      name: 'tdxquant',
+      display: tdxPlugin?.display_name || 'TdxQuant',
+      env: tdxPlugin?.api_key_env || 'TDXQUANT_API_KEY',
+      datasets: tdxPlugin?.datasets ?? [],
+      icon: { Comp: Coins, cls: 'bg-warning/12 text-warning' },
+      paid: true,
+      configured: !!tdxPlugin?.api_key_masked,
+      masked: tdxPlugin?.api_key_masked ?? '',
+      desc: '通达信 TdxAiData 数据服务,覆盖实时快照、盘口、日K、除权、分钟K 等六项能力。配置后不自动切换路由,可在「设置 → 数据源」按需启用。',
+      // 计费提示优先用清单 billing_note (单一来源); 缺失时用下方兜底文案
+      warn: tdxPlugin?.billing_note
+        || '积分消耗与频率、范围直接相关: 间隔越短、范围越大消耗越高,具体以商城「积分明细」为准。',
+      link: tdxPlugin?.key_manage_url
+        ? { label: '管理 Key / 查询积分', url: tdxPlugin.key_manage_url }
+        : { label: '通达信量化平台', url: 'https://help.tdx.com.cn/quant/' },
+      slowProbe: true,
     },
   ]
 
@@ -375,147 +429,170 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
         <h2 className="text-xl font-bold text-foreground">配置数据源</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        默认使用内置 <span className="text-foreground font-medium">TickFlow</span> 数据源(无需 Key 即可同步历史日K)。
-        可按下方的说明填写 API Key 增强数据能力;数据源的切换与增删随时在
-        <span className="text-foreground font-medium"> 设置 → 数据源 </span>中进行。
+        下方数据服务均由第三方提供。TickFlow 不填 Key 即可用,填写后按档位解锁更多能力;
+        其余服务填写 Key 后启用。所有 Key 仅存本地,保存前会先验证。
       </p>
 
-      {/* 数据源卡片 (只读展示): 不在向导中切换, 保留设置页完整能力 */}
+      {/* 数据源面板: 每行一个源, 行内完成「看懂 → 配 Key」的闭环 */}
       {sources.isLoading ? (
         <div className="mt-4 flex items-center gap-2 text-xs text-muted">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           正在加载数据源…
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {items.map(item => {
-            const plugin = item.kind === 'plugin' ? plugins.find(p => p.name === item.name) : undefined
-            // 缺 Key 型插件 (如 fuyao): 表单常驻下方, 卡片仅提示, 不可交互
-            const needsKey = item.kind === 'plugin' && !item.available && !!plugin?.api_key_env
-            const unavailable = item.kind === 'plugin' && !item.available && !needsKey
-            return (
-              <div
-                key={item.name}
-                className={`relative text-left rounded-card border px-3.5 py-3 ${
-                  unavailable
-                    ? 'border-border/40 bg-elevated/10 opacity-60'
-                    : needsKey
-                      ? 'border-warning/30 bg-elevated/20'
-                      : 'border-border/60 bg-elevated/20'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm truncate flex-1 font-medium text-foreground">
-                    {/* 卡片展示去掉声明里的括号备注 (如合规提示), 保持名称干净 */}
-                    {item.display_name.replace(/（.*?）|\(.*?\)/g, '').trim() || item.display_name}
-                  </span>
-                  {item.kind === 'builtin' ? (
-                    <span className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[9px] font-medium leading-none text-accent">内置</span>
-                  ) : item.kind === 'custom' ? (
-                    <span className="text-[9px] text-muted/50 tracking-wider shrink-0">自有</span>
-                  ) : (
-                    <span className="shrink-0 rounded bg-warning/15 px-1 py-0.5 text-[9px] font-medium leading-none text-warning">第三方</span>
-                  )}
+        <div className="mt-4 overflow-hidden rounded-card border border-border/70 bg-surface/60 backdrop-blur-sm">
+          <div className="divide-y divide-border/40">
+            {rows.map(row => {
+              const val = inputs[row.name] ?? ''
+              const err = errors[row.name] ?? null
+              const msg = savedMsg[row.name] ?? null
+              const pending = saveKey.isPending && saveKey.variables?.name === row.name
+              const showInput = !row.configured || expanded[row.name]
+              const Icon = row.icon.Comp
+              return (
+                <div key={row.name} className="px-4 py-4">
+                  <div className="flex gap-3">
+                    {/* 图标块: 每行视觉锚点 (蓝=默认源 / 绿=增强 / 琥珀=积分) */}
+                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${row.icon.cls}`}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      {/* 名称行: 名称 + 弱化归属 + 费用小标 + 右侧状态胶囊 */}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-[15px] font-semibold leading-5 text-foreground">{row.display}</span>
+                        <span className="text-[10px] leading-none text-muted/45">第三方</span>
+                        {row.paid && (
+                          <span className="rounded bg-warning/12 px-1 py-0.5 text-[9px] font-medium leading-none text-warning">消耗积分</span>
+                        )}
+                        <span className="ml-auto shrink-0">
+                          {row.configured ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-bear/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-bear">
+                              <CheckCircle2 className="h-2.5 w-2.5" />
+                              已配置
+                            </span>
+                          ) : row.name === 'tickflow' ? (
+                            <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-accent">免 Key 可用</span>
+                          ) : (
+                            <span className="rounded-full bg-elevated/60 px-1.5 py-0.5 text-[10px] leading-none text-muted/70">未配置</span>
+                          )}
+                        </span>
+                      </div>
+
+                      {/* 能力徽章 */}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        {row.datasets.length > 0 ? (
+                          row.datasets.map(ds => (
+                            <span key={ds} className="rounded-md bg-elevated/45 px-1.5 py-0.5 text-[10px] leading-none text-muted/85">
+                              {DATASET_LABELS[ds] ?? ds}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-muted/50">未声明数据集</span>
+                        )}
+                      </div>
+
+                      {/* Key 配置: 未配置直接给输入框; 已配置折叠为脱敏串, 点「替换」再展开 */}
+                      <div className="mt-2.5">
+                        {showInput ? (
+                          <form
+                            className="flex items-center gap-2"
+                            onSubmit={e => {
+                              e.preventDefault()
+                              if (val.trim() && !saveKey.isPending) saveKey.mutate({ name: row.name, key: val.trim() })
+                            }}
+                          >
+                            <input
+                              type="password"
+                              value={val}
+                              onChange={e => {
+                                setInputs(s => ({ ...s, [row.name]: e.target.value }))
+                                setErrors(s => ({ ...s, [row.name]: null }))
+                              }}
+                              placeholder={`粘贴 ${row.env}`}
+                              autoFocus={row.autoFocus}
+                              autoComplete="off"
+                              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-base px-2.5 font-mono text-xs text-foreground placeholder:text-muted/50 focus:border-accent/60 focus:outline-none transition-colors"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!val.trim() || saveKey.isPending}
+                              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
+                            >
+                              {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                              {pending ? (row.slowProbe ? '验证中(约 30 秒)…' : '验证中…') : '验证并保存'}
+                            </button>
+                            {row.configured && (
+                              <button
+                                type="button"
+                                onClick={() => setExpanded(s => ({ ...s, [row.name]: false }))}
+                                className="shrink-0 text-[11px] text-muted/60 hover:text-secondary transition-colors"
+                              >
+                                取消
+                              </button>
+                            )}
+                          </form>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <code className="truncate rounded-md bg-elevated/40 px-1.5 py-0.5 font-mono text-[11px] text-secondary">
+                              {row.masked || '已保存'}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => setExpanded(s => ({ ...s, [row.name]: true }))}
+                              className="shrink-0 text-[11px] text-accent/75 hover:text-accent transition-colors"
+                            >
+                              替换 Key
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 说明 + 申请/管理入口 */}
+                      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-relaxed text-muted/70">
+                        <span>{row.desc}</span>
+                        {row.link && (
+                          <a href={row.link.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                            {row.link.label} ↗
+                          </a>
+                        )}
+                      </div>
+
+                      {/* 计费警示 (如积分消耗与频率/范围的关系) */}
+                      {row.warn && (
+                        <p className="mt-1.5 flex items-start gap-1.5 rounded-md bg-warning/[0.08] px-2 py-1.5 text-[11px] leading-relaxed text-warning/90">
+                          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span className="min-w-0">{row.warn}</span>
+                        </p>
+                      )}
+
+                      {err && (
+                        <p className="mt-1.5 flex items-center gap-1 text-[11px] text-danger">
+                          <AlertCircle className="h-3 w-3 shrink-0" />
+                          {err}
+                        </p>
+                      )}
+                      {msg && (
+                        <p className="mt-1.5 flex items-center gap-1 text-[11px] text-bear">
+                          <CheckCircle2 className="h-3 w-3 shrink-0" />
+                          {msg}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-1.5 flex items-center gap-1 pl-0.5">
-                  {unavailable ? (
-                    <span className="text-[10px] text-muted">需安装依赖,见 设置 → 数据源</span>
-                  ) : needsKey ? (
-                    <span className="text-[10px] text-warning">需配置 API Key,见下方表单</span>
-                  ) : item.datasets.length > 0 ? (
-                    item.datasets.slice(0, 4).map(ds => (
-                      <span key={ds} className="rounded bg-elevated/60 px-1 py-0.5 text-[10px] text-muted">
-                        {DATASET_LABELS[ds] ?? ds}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-[10px] text-muted">未声明数据集</span>
-                  )}
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
       )}
-
-      {/* API Key 配置 (常驻展开, 不收起): TickFlow 解锁档位 + fuyao 实时/除权增强路由 */}
-      {keyForms.map(f => {
-        const val = inputs[f.name] ?? ''
-        const err = errors[f.name] ?? null
-        const msg = savedMsg[f.name] ?? null
-        const pending = saveKey.isPending && saveKey.variables?.name === f.name
-        return (
-          <div key={f.name} className="mt-3 rounded-card border border-border/70 bg-surface/60 px-3.5 py-3">
-            <div className="flex items-center gap-2">
-              <KeyRound className="h-3.5 w-3.5 text-accent/80" />
-              <span className="text-xs font-medium text-foreground">配置 {f.display} API Key</span>
-              <span className="rounded bg-elevated/70 px-1 py-px font-mono text-[9px] text-muted">{f.env}</span>
-              {f.configured ? (
-                <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-bull">
-                  <CheckCircle2 className="h-3 w-3" />
-                  已配置
-                </span>
-              ) : f.name === 'tickflow' && (
-                <span className="ml-auto text-[10px] text-muted/70">可选</span>
-              )}
-            </div>
-            <p className="mt-1.5 text-[11px] text-muted leading-relaxed">{f.copy}</p>
-            <a
-              href={f.register.url}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
-            >
-              {f.register.label} ↗
-            </a>
-            <form
-              className="mt-2.5 flex items-center gap-2"
-              onSubmit={e => {
-                e.preventDefault()
-                if (val.trim() && !saveKey.isPending) saveKey.mutate({ name: f.name, key: val.trim() })
-              }}
-            >
-              <input
-                type="password"
-                value={val}
-                onChange={e => {
-                  setInputs(s => ({ ...s, [f.name]: e.target.value }))
-                  setErrors(s => ({ ...s, [f.name]: null }))
-                }}
-                placeholder={`粘贴 ${f.env}`}
-                autoFocus={f.autoFocus}
-                className="h-8 flex-1 rounded-input border border-border bg-surface px-3 font-mono text-xs text-foreground placeholder:text-muted/60 focus:border-accent/60 focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={!val.trim() || saveKey.isPending}
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-btn bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
-              >
-                {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                {pending ? '验证中…' : '验证并保存'}
-              </button>
-            </form>
-            {err && (
-              <p className="mt-1.5 flex items-center gap-1 text-[11px] text-danger">
-                <AlertCircle className="h-3 w-3 shrink-0" />
-                {err}
-              </p>
-            )}
-            {msg && (
-              <p className="mt-1.5 flex items-center gap-1 text-[11px] text-bull">
-                <CheckCircle2 className="h-3 w-3 shrink-0" />
-                {msg}
-              </p>
-            )}
-          </div>
-        )
-      })}
 
       {/* 插件化提示: 自有数据源接入与切换在设置页, 向导保持极简 */}
       <div className="mt-3 flex items-start gap-2 rounded-card border border-border/60 bg-surface/60 px-3 py-2.5">
         <Puzzle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70" />
         <div className="text-[11px] leading-relaxed text-muted">
           <span className="text-secondary">数据源已插件化</span>
+          {customCount > 0 && <>,当前已加载 {customCount} 个自有数据源</>}
           ,接入自有行情或切换数据源请前往
           <span className="mx-0.5 rounded bg-elevated/70 px-1 py-px font-mono text-[10px] text-secondary">设置 → 数据源</span>
           ,方法详见

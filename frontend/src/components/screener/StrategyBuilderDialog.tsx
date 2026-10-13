@@ -556,9 +556,9 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
             {step === 1 ? (
               <>
                 <div className="space-y-2">
-                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="策略名称，如：强势反包"
+                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="策略名称，如：xx策略"
                     className="w-full h-9 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm font-medium text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />
-                  <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="一句话描述，如：筛选前日阴线下跌、今日放量阳线反包的短线强势股"
+                  <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="一句话描述，如：筛选满足 xx 条件的 yy 个股"
                     className="w-full h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />
                 </div>
                 <div>
@@ -579,7 +579,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                 <div>
                   <span className="text-[10px] text-muted/50 uppercase tracking-wider mb-1.5 block">策略规则</span>
                   <textarea value={rules} onChange={e => setRules(e.target.value)}
-                    placeholder="描述你的策略逻辑，AI 会自动提取参数。例如：\n前一交易日为明显阴线且跌幅不低于2%，今日阳线收盘反包前一日实体，收盘价接近或高于前一日高点，成交量较前一日放大1.2倍以上，当前 close > ma5 或 close > ma10；使用 filter_history，并优先用 Polars shift/with_columns/filter 实现。"
+                    placeholder="描述你的策略逻辑，AI 会自动提取参数。例如：\n前一交易日满足 xx 且跌幅不低于 x%，今日出现 yy 形态，成交量较前一日放大 z 倍以上，且 close > maN ..."
                     className="w-full h-28 px-3 py-2 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30" />
                 </div>
                 <button type="button" onClick={() => setIterateEnabled(v => !v)}
@@ -725,7 +725,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                 <div className="flex gap-2">
                   <input type="text" value={instruction} onChange={e => setInstruction(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleModify()}
-                    placeholder="调整策略逻辑，如：增加RSI超卖条件、要求今日放量、修改均线为30日..."
+                    placeholder="调整策略逻辑，如：增加 xx 条件、要求今日 yy、修改均线为 zz 日..."
                     className="flex-1 h-9 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />
                   <button onClick={handleModify} disabled={loading || !instruction.trim()}
                     className="h-9 px-4 rounded-lg bg-amber-400/15 border border-amber-400/30 text-amber-400 text-xs font-medium flex items-center gap-1.5 hover:bg-amber-400/20 disabled:opacity-40 transition-all">
@@ -741,7 +741,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               /* 自定义编写 */
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-2">
-                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="策略名称，如：我的反包策略"
+                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="策略名称，如：我的xx策略"
                     className="h-9 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm font-medium text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />
                   <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="一句话描述策略逻辑"
                     className="h-9 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />

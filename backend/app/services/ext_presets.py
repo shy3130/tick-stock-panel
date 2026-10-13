@@ -1,22 +1,29 @@
-"""内置扩展数据预设 — 概念/行业启动时只创建配置, 等待用户手动获取 (#199)。
+"""内置扩展数据预设 — 概念/行业。
 
 设计原则:
-  - 扩展数据通用逻辑零改动 (ExtConfig / fetch_and_ingest / API / 前端均不动)
-  - 仅在本模块做「接口结构 → 本地 schema」的转换
-  - 「已存在则跳过」: 绝不覆盖用户已有数据, 老用户零影响
-  - 拉取失败只记 warning, 不阻断启动 (保持「没数据也能跑」)
+  - 出厂即写【完整可用的拉取配置】(URL / 鉴权 / 两级请求配方), 不是空壳。
+    这样「数据」页展开表 → 拉取 就能看到一份真实可跑的配方, 照抄即可接入
+    自有源; 也免去"点获取按钮才拉"的隐藏路径。
+  - 扩展数据通用逻辑零改动 (ExtConfig / fetch_and_ingest / API / 前端均不动):
+    概念/行业所需的「目录 → 逐条目」形态由 PullConfig.fanout 声明式表达,
+    通用引擎 (ext_fanout) 执行, 无按 id 的特例分支。
+  - 「已存在则跳过」: 绝不覆盖用户已有配置与数据, 老用户零影响。
+  - 出厂值变更时定向迁移: 仅当现有配置的 pull 精确命中历代出厂值时整体替换,
+    用户自定义过的一律不碰 (见 _RETIRED_FACTORY_PULLS)。
+  - 拉取失败只记 warning, 不阻断启动 (保持「没数据也能跑」)。
 
-种子数据来源 (概念/行业各自独立配置):
-  - 概念: https://shy313.com/api/plugins/market_flow/exports/ths-concepts
-  - 行业: https://shy313.com/api/plugins/market_flow/exports/ths-industries
-作者更新数据只需改接口上的 JSON, 用户下次拉取自动同步, 无需发版。
+数据来源 (概念/行业共用 fuyao 同花顺指数接口):
+  - 板块清单: /api/a-share-index/catalog/ths-index-list (tag=cn_concept / industry)
+  - 板块成分: /api/a-share-index/constituents/ths-stock-list (单板块一次)
+  接口方向为「板块→股票」, fanout 反转为「股票→板块名清单」。
+  鉴权复用 fuyao 行情插件同一凭据 (auth.key_ref = fuyao_api_key), 用户只需
+  在一处填 Key。全量约 390+320 次成分股调用, 8 并发可承受。
 
 接入点: app.main.lifespan → ensure_builtin_presets(store.data_dir)
 """
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 
 from app.services.ext_data import (
@@ -24,25 +31,39 @@ from app.services.ext_data import (
     ExtConfigStore,
     ExtField,
     PullConfig,
-    rows_to_parquet,
 )
 
 logger = logging.getLogger(__name__)
 
-# 种子数据源 (概念/行业各自独立配置, 作者维护)
-_CONCEPT_DATA_URL = "https://shy313.com/api/plugins/market_flow/exports/ths-concepts"
-_INDUSTRY_DATA_URL = "https://shy313.com/api/plugins/market_flow/exports/ths-industries"
+# fuyao 同花顺指数接口 (鉴权 X-api-key, 信封 {code, message, data:{item:[...]}})
+_FUYAO_BASE = "https://fuyao.aicubes.cn"
+_FUYAO_CATALOG_PATH = "/api/a-share-index/catalog/ths-index-list"
+_FUYAO_CONSTITUENTS_PATH = "/api/a-share-index/constituents/ths-stock-list"
+# 成分股逐板块拉取: 全量 710 次调用, 8 并发 + 单板块失败重试 1 次 (实测无 429)
+_FUYAO_CONCURRENCY = 8
+_FUYAO_TIMEOUT_S = 20.0
+_FUYAO_BOARD_RETRIES = 1
+# 复用 fuyao 行情插件的凭据 (secrets.json: fuyao_api_key / 环境变量 FUYAO_API_KEY)
+_FUYAO_KEY_REF = "fuyao_api_key"
+
+_PRESET_IDS = ("ext_gn_ths", "ext_hy_ths")
 
 
 # ---------------------------------------------------------------------------
-# 预设定义: 字段结构 + 拉取配方
+# 预设定义: 字段结构 + 完整拉取配方
 # ---------------------------------------------------------------------------
+
+def _fuyao_auth() -> dict:
+    """fuyao 鉴权: X-api-key 头, 凭据复用行情插件的 fuyao_api_key。"""
+    return {"type": "header", "header": "X-api-key", "key_ref": _FUYAO_KEY_REF}
+
 
 def _concept_preset() -> ExtConfig:
     """扩展概念 (ext_gn_ths)。
 
-    接口结构: [{symbol, name, concepts: [概念1, 概念2, ...]}]
-    本地 schema: 股票代码 / 股票简称 / 所属概念(分号拼接) / symbol / code
+    两级拉取: 板块目录 (tag=cn_concept) → 逐板块成分股, 反转为
+    「股票 → 所属概念」, 多个概念以分号拼接。
+    输出 schema: 股票代码 / 股票简称 / 所属概念 / symbol / code
     """
     return ExtConfig(
         id="ext_gn_ths",
@@ -55,16 +76,32 @@ def _concept_preset() -> ExtConfig:
             ExtField("股票简称", "string", "股票简称"),
             ExtField("所属概念", "string", "所属概念"),
         ],
-        description="同花顺概念分类 (启动仅创建配置, 在概念/行业页手动获取)",
+        description="同花顺概念分类 (fuyao 同花顺指数接口; 拉取配方见「拉取」页, 可照抄接自有源)",
         symbol_map={"type": "mapped", "col": "股票代码"},
         code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
         pull=PullConfig(
-            url=_CONCEPT_DATA_URL,
+            url=f"{_FUYAO_BASE}{_FUYAO_CATALOG_PATH}?tag=cn_concept",
             method="GET",
+            response_path="data.item",
+            auth=_fuyao_auth(),
+            timeout_seconds=int(_FUYAO_TIMEOUT_S),
             schedule_minutes=1440,
-            # enabled=False: ensure_builtin_presets 承诺启动不拉取, PullScheduler
-            # 只调度 enabled 配置; 手动获取走 fetch_preset 独立路径不受影响 (#199)
-            enabled=False,
+            enabled=True,
+            fanout={
+                "url": f"{_FUYAO_BASE}{_FUYAO_CONSTITUENTS_PATH}",
+                "param": "thscode",
+                "id_field": "thscode",
+                "label_field": "name",
+                "items_path": "data.item",
+                "member_id_field": "thscode",
+                "member_label_field": "name",
+                "symbol_col": "股票代码",
+                "name_col": "股票简称",
+                "value_col": "所属概念",
+                "separator": ";",
+                "concurrency": _FUYAO_CONCURRENCY,
+                "retries": _FUYAO_BOARD_RETRIES,
+            },
         ),
     )
 
@@ -72,8 +109,8 @@ def _concept_preset() -> ExtConfig:
 def _industry_preset() -> ExtConfig:
     """扩展行业 (ext_hy_ths)。
 
-    接口结构: [{symbol, name, industries: [一级行业, 二级行业, 三级行业]}]
-    本地 schema: 股票代码 / 股票简称 / 所属同花顺行业(横杠拼接) / symbol / code
+    fuyao 为扁平板块清单, 无一/二/三级层级路径, 单级粒度。
+    输出 schema: 股票代码 / 股票简称 / 所属同花顺行业 / symbol / code
     """
     return ExtConfig(
         id="ext_hy_ths",
@@ -86,15 +123,32 @@ def _industry_preset() -> ExtConfig:
             ExtField("股票简称", "string", "股票简称"),
             ExtField("所属同花顺行业", "string", "所属同花顺行业"),
         ],
-        description="同花顺行业分类 (启动仅创建配置, 在概念/行业页手动获取)",
+        description="同花顺行业分类 (fuyao 同花顺指数接口, 扁平板块无层级; 拉取配方见「拉取」页)",
         symbol_map={"type": "mapped", "col": "股票代码"},
         code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
         pull=PullConfig(
-            url=_INDUSTRY_DATA_URL,
+            url=f"{_FUYAO_BASE}{_FUYAO_CATALOG_PATH}?tag=industry",
             method="GET",
+            response_path="data.item",
+            auth=_fuyao_auth(),
+            timeout_seconds=int(_FUYAO_TIMEOUT_S),
             schedule_minutes=1440,
-            # 同概念 preset: 出厂禁用, 避免启动即网络拉取 (#199)
-            enabled=False,
+            enabled=True,
+            fanout={
+                "url": f"{_FUYAO_BASE}{_FUYAO_CONSTITUENTS_PATH}",
+                "param": "thscode",
+                "id_field": "thscode",
+                "label_field": "name",
+                "items_path": "data.item",
+                "member_id_field": "thscode",
+                "member_label_field": "name",
+                "symbol_col": "股票代码",
+                "name_col": "股票简称",
+                "value_col": "所属同花顺行业",
+                "separator": "-",
+                "concurrency": _FUYAO_CONCURRENCY,
+                "retries": _FUYAO_BOARD_RETRIES,
+            },
         ),
     )
 
@@ -102,129 +156,6 @@ def _industry_preset() -> ExtConfig:
 def _presets() -> list[ExtConfig]:
     return [_concept_preset(), _industry_preset()]
 
-
-# ---------------------------------------------------------------------------
-# 接口结构 → 本地 schema 转换 (仅预设使用)
-# ---------------------------------------------------------------------------
-
-def _symbol_to_code(symbol: str) -> str:
-    """symbol (000001.SZ) → code (000001)。"""
-    return symbol.split(".", 1)[0] if "." in symbol else symbol
-
-
-def _dimension_label(value: object) -> str:
-    if value is None or (isinstance(value, float) and not math.isfinite(value)):
-        return ""
-    text = str(value).strip()
-    return "" if text.casefold() in {"nan", "none", "null"} else text
-
-
-def _flatten_concept_rows(raw_rows: list[dict]) -> list[dict]:
-    """概念: concepts 数组 → 分号拼接成「所属概念」字符串。
-
-    [{symbol, name, concepts:[...]}] → [{股票代码, 股票简称, 所属概念, symbol, code}]
-    注: code 由 symbol 派生 (000001.SZ → 000001), 因 rows_to_parquet 不执行 code_map。
-    """
-    out: list[dict] = []
-    for r in raw_rows:
-        sym = (r.get("symbol") or "").strip()
-        if not sym:
-            continue
-        concepts = r.get("concepts") or []
-        labels = [label for c in concepts if (label := _dimension_label(c))]
-        out.append({
-            "股票代码": sym,
-            "股票简称": r.get("name") or "",
-            "所属概念": ";".join(labels),
-            "symbol": sym,
-            "code": _symbol_to_code(sym),
-        })
-    return out
-
-
-def _flatten_industry_rows(raw_rows: list[dict]) -> list[dict]:
-    """行业: industries 数组 → 横杠拼接成「所属同花顺行业」字符串。
-
-    [{symbol, name, industries:[...]}] → [{股票代码, 股票简称, 所属同花顺行业, symbol, code}]
-    """
-    out: list[dict] = []
-    for r in raw_rows:
-        sym = (r.get("symbol") or "").strip()
-        if not sym:
-            continue
-        inds = r.get("industries") or []
-        labels = [label for i in inds if (label := _dimension_label(i))]
-        out.append({
-            "股票代码": sym,
-            "股票简称": r.get("name") or "",
-            "所属同花顺行业": "-".join(labels),
-            "symbol": sym,
-            "code": _symbol_to_code(sym),
-        })
-    return out
-
-
-# ---------------------------------------------------------------------------
-# 拉取执行 (复用 httpx, 不依赖 fetch_and_ingest 的 PullConfig 路径)
-# ---------------------------------------------------------------------------
-
-# 部分网络环境 (CDN/WAF/网关) 会把数组包成 {data: [...]}/{list: [...]}/{rows: [...]} 信封。
-# 这里做一次兼容解包, 避免误判为「接口返回不是数组」。
-_ENVELOPE_KEYS = ("data", "list", "rows", "result", "results")
-
-
-async def _fetch_json(url: str) -> list[dict]:
-    """请求 JSON 接口, 返回行数组。超时 30s, 失败抛异常由调用方兜底。
-
-    兼容两种上游返回形态:
-      - 直接是数组: [{...}, ...]          → 原样返回
-      - 信封包裹: {data: [{...}]} 等       → 自动解包
-    """
-    import httpx
-
-    # 延迟导入避免与 ext_pull 循环依赖; 出站请求带 tsp 标识头
-    from app.services.ext_pull import outbound_headers
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, headers=outbound_headers())
-        resp.raise_for_status()
-        data = resp.json()
-
-    if isinstance(data, list):
-        return data
-
-    # 信封解包: 在常见键里找第一个值为数组的
-    if isinstance(data, dict):
-        for key in _ENVELOPE_KEYS:
-            inner = data.get(key)
-            if isinstance(inner, list):
-                return inner
-        # 兜底: 遍历所有值, 取第一个数组
-        for v in data.values():
-            if isinstance(v, list):
-                return v
-
-    raise ValueError(
-        f"接口返回不是数组 (type={type(data).__name__}), "
-        f"响应预览: {str(data)[:200]}"
-    )
-
-
-async def _seed_one(config: ExtConfig, flatten, data_dir: Path) -> int:
-    """拉取 + 转换 + 写入单个预设。返回写入行数。"""
-    from datetime import date
-
-    raw = await _fetch_json(config.pull.url)
-    rows = flatten(raw)
-    if not rows:
-        raise ValueError(f"接口返回 0 行: {config.pull.url}")
-    n = rows_to_parquet(rows, config, data_dir, snapshot_date=date.today())
-    return n
-
-
-# ---------------------------------------------------------------------------
-# 对外入口
-# ---------------------------------------------------------------------------
 
 def get_preset(config_id: str) -> ExtConfig | None:
     """按 id 取预设定义 (供 API 层校验 id 合法性)。"""
@@ -234,48 +165,77 @@ def get_preset(config_id: str) -> ExtConfig | None:
     return None
 
 
-async def ensure_builtin_presets(data_dir: Path) -> None:
-    """启动时: 为缺失的预设创建 config.json (含 pull 配置), 但【不拉取数据】。
+# 历代出厂 pull 配方指纹 — 仅比对 url + fanout 是否存在, 命中即视为未改过的出厂值。
+# 换源/改配方后, 老用户的出厂配置需要整体替换为新配方; 用户自己填过 URL 的不动。
+_RETIRED_FACTORY_PULLS: dict[str, tuple[dict, ...]] = {
+    "ext_gn_ths": (
+        # 换源前的自维护种子源
+        {"url": "https://shy313.com/api/plugins/market_flow/exports/ths-concepts"},
+        # 过渡期的 fuyao 目录标记 (无 fanout, 拉不到成分股)
+        {"url": f"{_FUYAO_BASE}{_FUYAO_CATALOG_PATH}?tag=cn_concept"},
+    ),
+    "ext_hy_ths": (
+        {"url": "https://shy313.com/api/plugins/market_flow/exports/ths-industries"},
+        {"url": f"{_FUYAO_BASE}{_FUYAO_CATALOG_PATH}?tag=industry"},
+    ),
+}
+# 出厂 description 前缀 (历代文案) — 命中则同步为当前文案, 用户自定义描述不动
+_FACTORY_DESC_PREFIXES = (
+    "同花顺概念分类",
+    "同花顺行业分类",
+)
 
-    设计: 数据获取改为用户在概念/行业页手动点「获取数据」触发, 避免启动时
-    网络请求阻塞, 也避免「自动拉取」与「用户自主控制」的预期冲突。
+
+def _is_retired_factory_pull(config_id: str, pull: PullConfig | None) -> bool:
+    """现有 pull 是否为历代出厂值 (不含当前配方), 需要补齐/替换为当前配方。
+
+    True 的三种情形:
+      - pull 为 None / 空 URL: 出厂空壳 (#199 之后、本次改动之前的形态)
+      - URL 命中历代出厂源, 且未带 fanout (换源前的种子源 / 只有目录的过渡配方)
+    用户自定义过 URL 或已带 fanout 的配置一律 False (绝不覆盖)。
+    """
+    if pull is None:
+        return True
+    url = (pull.url or "").strip()
+    if not url:
+        return True   # 空 URL 的空壳配置: 由出厂空壳演进而来, 需补齐
+    if pull.fanout:
+        return False  # 已带两级配方 (当前形态或用户自建), 不碰
+    return any(url == retired["url"] for retired in _RETIRED_FACTORY_PULLS.get(config_id, ()))
+
+
+async def ensure_builtin_presets(data_dir: Path) -> None:
+    """启动时: 为缺失的预设创建配置, 并把历代出厂空壳/旧配方补齐为当前配方。
 
     安全保证:
-      - 已存在则完全跳过 (绝不覆盖用户数据)
-      - 只写 config.json, 失败只记 warning 不阻断启动
+      - 已存在且是用户自定义配置 → 跳过, 绝不覆盖用户数据
+      - 仅当 pull 为空 / 命中历代出厂配方指纹时, 用当前完整配方替换
+      - description 仅当命中出厂前缀时同步, 用户自定义描述不动
+      - 只写 config.json (不拉数据), 失败只记 warning 不阻断启动
+
+    数据获取: 由拉取调度器按 schedule_minutes 执行, 或用户在数据页点「拉取 → 执行」。
     """
     store = ExtConfigStore(data_dir)
-
     for config in _presets():
-        existing = store.get(config.id)
-        if existing is not None:
-            # 用户已有此表 (老用户 / 自己重建过) → 一律不动
-            continue
         try:
-            store.upsert(config)
-            logger.info("内置扩展表 %s 配置已就绪 (待用户手动获取数据)", config.id)
-        except Exception as e:
+            existing = store.get(config.id)
+            if existing is None:
+                store.upsert(config)
+                logger.info("内置扩展表 %s 配置已就绪 (含出厂拉取配方)", config.id)
+                continue
+
+            changed = False
+            if _is_retired_factory_pull(config.id, existing.pull):
+                existing.pull = config.pull
+                changed = True
+            if not (existing.description or "").strip() or \
+                    (existing.description or "").startswith(_FACTORY_DESC_PREFIXES):
+                if existing.description != config.description:
+                    existing.description = config.description
+                    changed = True
+
+            if changed:
+                store.upsert(existing)
+                logger.info("内置扩展表 %s 出厂配方已更新为当前版本", config.id)
+        except Exception as e:  # noqa: BLE001 — 启动契约: 预设写入失败不阻断
             logger.warning("内置扩展表 %s 配置写入失败 (不影响启动): %s", config.id, e)
-
-
-async def fetch_preset(config_id: str, data_dir: Path) -> int:
-    """手动触发某个预设的数据拉取 (供 API 调用)。
-
-    Raises:
-        ValueError: config_id 不是内置预设
-        Exception: 网络请求/解析/写入失败 (由 API 层转 HTTP 错误)
-    """
-    config = get_preset(config_id)
-    if config is None:
-        raise ValueError(f"未知的内置预设: {config_id}")
-
-    flatten = _flatten_concept_rows if config_id == "ext_gn_ths" else _flatten_industry_rows
-
-    # 确保 config.json 存在 (用户可能从未启动过 ensure_builtin_presets)
-    store = ExtConfigStore(data_dir)
-    if store.get(config_id) is None:
-        store.upsert(config)
-
-    n = await _seed_one(config, flatten, data_dir)
-    logger.info("内置扩展表 %s 手动拉取成功: %d 行", config_id, n)
-    return n

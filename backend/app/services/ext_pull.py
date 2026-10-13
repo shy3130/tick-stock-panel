@@ -117,19 +117,6 @@ def _apply_field_map(rows: list[dict], field_map: dict[str, str]) -> list[dict]:
 # 拉取执行
 # ---------------------------------------------------------------------------
 
-def _apply_preset_flatten(config_id: str, rows: list[dict]) -> list[dict]:
-    """对内置预设 (概念/行业) 应用结构转换, 与 fetch_preset 保持一致。
-
-    延迟导入避免与 ext_presets 形成循环依赖。
-    非预设 id 原样返回。
-    """
-    if config_id not in ("ext_gn_ths", "ext_hy_ths"):
-        return rows
-    from app.services.ext_presets import _flatten_concept_rows, _flatten_industry_rows
-    flatten = _flatten_concept_rows if config_id == "ext_gn_ths" else _flatten_industry_rows
-    return flatten(rows)
-
-
 def _format_date_value(day: date, date_format: str) -> str:
     """按配置格式把交易日序列化为接口参数值。
 
@@ -160,17 +147,31 @@ def _apply_auth(config_id: str, auth: dict | None, url: str, headers: dict[str, 
     header → {header: <key>}, query → ?{param}=<key>。Key 只存 secrets.json,
     不落 config.json; 配置了鉴权但未设置 Key 时 fail-closed 直接报错,
     避免不带凭据请求被服务端记成无效调用。返回 (可能追加了参数的) url。
+
+    auth.key_ref: 复用已有凭据而非本表专属 Key。值为 secrets.json 的字段名
+    (如 "fuyao_api_key"), 环境变量兜底取该名的大写形式。同一数据源被行情插件
+    与扩展表共用时, 用户只需在一处填 Key。
     """
     from urllib.parse import quote
+
+    from app import secrets_store
 
     from app.services.ext_data import get_ext_api_key
 
     auth_type = str((auth or {}).get("type") or "none").lower()
     if auth_type == "none":
         return url
-    key = get_ext_api_key(config_id)
-    if not key:
-        raise ValueError(f"已配置 {auth_type} 鉴权但未设置 API Key, 请在拉取设置中填写")
+    key_ref = str((auth or {}).get("key_ref") or "").strip()
+    if key_ref:
+        key = secrets_store.get_env_backed_secret(key_ref, key_ref.upper())
+        if not key:
+            raise ValueError(
+                f"已配置鉴权但未找到凭据 {key_ref} — 请在 设置 → 数据源 配置对应 API Key"
+            )
+    else:
+        key = get_ext_api_key(config_id)
+        if not key:
+            raise ValueError(f"已配置 {auth_type} 鉴权但未设置 API Key, 请在拉取设置中填写")
     if auth_type == "bearer":
         headers[str(auth.get("header") or "Authorization")] = f"Bearer {key}"
     elif auth_type == "header":
@@ -208,14 +209,21 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
 async def _request_json(
     pull: PullConfig, config_id: str, day: date | None = None,
     extra_params: dict[str, str] | None = None,
+    *,
+    url_override: str | None = None,
 ) -> Any:
     """发起一次拉取请求并返回解析后的 JSON。
 
     正式拉取 (带日期参数) 与设置页"测试" (不带) 共用同一实现,
     保证 UA 标识头与 API Key 鉴权注入只有一套口径。
     extra_params: 追加的 query 参数 (分页页码/每页条数), 值经 URL 编码。
+    url_override: 直接指定请求地址 (两级拉取的第二级请求用), 不再套用
+      date_param 与 pull.url。
     """
-    url = _with_date_param(pull.url, pull.date_param, day, pull.date_format) if day else pull.url
+    if url_override is not None:
+        url = url_override
+    else:
+        url = _with_date_param(pull.url, pull.date_param, day, pull.date_format) if day else pull.url
     if extra_params:
         url = _append_query_params(url, extra_params)
     # 每配置超时 (PullConfig.timeout_seconds, 默认 30 与历史行为一致);
@@ -251,15 +259,12 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
 
 
 def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[dict]:
-    """单次响应 → 行列表 (提取/预设转换/字段映射)。与写入链共用, 不含日期校验。"""
+    """单次响应 → 行列表 (提取/字段映射)。与写入链共用, 不含日期校验。
+
+    两级拉取 (pull.fanout) 不走这里 —— 它的行由多个响应聚合而来, 见
+    fetch_rows_for_date 的分支。
+    """
     rows = _extract_rows(data, pull.response_path)
-
-    # 内置预设 (概念/行业): 应用结构转换, 让产出 schema 与分析页一致。
-    # 否则 raw 接口列 (concepts/industries 数组、name) 会直接覆盖正确的 part.parquet,
-    # 导致分析页因找不到维度字段 (所属概念/所属同花顺行业) 而"数据消失"。
-    # 见 ext_presets._flatten_* —— 手动拉取 / 定时拉取都必须走同一套转换。
-    rows = _apply_preset_flatten(config.id, rows)
-
     # 字段映射
     return _apply_field_map(rows, pull.field_map)
 
@@ -267,15 +272,20 @@ def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[
 async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
     """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
 
-    与 fetch_and_ingest 共用同一解析链 (response_path/预设转换/字段映射/
-    关联字段校验), 历史回补与当日拉取不产生第二套口径。
+    与 fetch_and_ingest 共用同一解析链 (response_path/字段映射/关联字段校验),
+    历史回补与当日拉取不产生第二套口径。
     配置了 pull.page_param 时按页循环拉取 (仅 GET), 空页/短页/达 max_pages 停。
+    配置了 pull.fanout 时走两级拉取 (目录 → 逐条目明细), 见 ext_fanout。
     """
     pull = config.pull
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
 
-    if pull.page_param and pull.method.upper() == "GET":
+    if pull.fanout:
+        from app.services.ext_fanout import fetch_fanout_rows
+
+        rows = await fetch_fanout_rows(config, target_date)
+    elif pull.page_param and pull.method.upper() == "GET":
         collected: list[dict] = []
         page = pull.page_start
         for _ in range(pull.max_pages):

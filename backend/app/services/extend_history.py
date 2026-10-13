@@ -37,31 +37,29 @@ def _invalidate(table: str | None = None) -> None:
     invalidate_data_cache(table)
 
 
-def _resolve_universe(capset: CapabilitySet) -> list[str]:
-    """解析标的池 — 与 daily_pipeline 独立的副本。"""
-    if capset.has(Cap.KLINE_DAILY_BATCH):
-        try:
-            from app.tickflow.pools import get_pool
-            all_a = get_pool("CN_Equity_A", refresh=True)
-            if all_a:
-                return sorted(all_a)
-        except Exception as e:
-            logger.warning("CN_Equity_A pool unavailable: %s", e)
+def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
+    """解析标的池 — 与 daily_pipeline 同口径: instruments 维表 + 自选 (单一来源)。
 
-    from app.tickflow.pools import DEMO_SYMBOLS, get_pool as _get_pool
-    from app.config import settings
+    不再拉 CN_Equity_A 池 (含 SW1 聚合兜底); 维表由盘后管道同步维护。
+    repo 传入时过滤自选里的指数 symbol (指数日K走独立存储)。
+    """
     from pathlib import Path
+
     import polars as pl
-    base: set[str] = set(DEMO_SYMBOLS)
-    base.update(_get_pool("watchlist"))
-    d = Path(settings.data_dir)
-    inst_path = d / "instruments" / "instruments.parquet"
+
+    from app.config import settings
+    from app.tickflow.pools import get_pool
+
+    base: set[str] = set(get_pool("watchlist"))
+    inst_path = Path(settings.data_dir) / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
             inst = pl.read_parquet(inst_path, columns=["symbol"])
             base.update(inst["symbol"].to_list())
-        except Exception as e:
-            logger.warning("instruments supplement failed: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("instruments 维表读取失败, 标的池仅剩自选: %s", e)
+    if repo is not None:
+        base -= set(repo.get_index_symbol_set())
     return sorted(base)
 
 
@@ -131,7 +129,7 @@ def run_extend_history(
 
     # 2. 解析标的池
     emit("extend_history", 5, "解析标的池…")
-    universe = _resolve_universe(capset)
+    universe = _resolve_universe(capset, repo)
     if not universe:
         return {"error": "标的池为空"}
     emit("extend_history", 8, f"标的池: {len(universe)} 只")

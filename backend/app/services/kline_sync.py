@@ -31,6 +31,20 @@ from app.tickflow.repository import KlineRepository, replace_with_retry
 
 logger = logging.getLogger(__name__)
 
+
+def _log_cap_unavailable(cap_id: str, action: str) -> None:
+    """门禁未通过时记一条带生效源的日志。
+
+    原实现是静默 return —— 切换数据源后「什么都没发生」且无迹可循。
+    带源标签后可一眼看出是路由到不可用源, 还是 TickFlow 档位不足。
+    """
+    try:
+        from app.data_providers.capabilities import capability_gate
+        _, label = capability_gate(cap_id)
+    except Exception:  # noqa: BLE001 — 仅日志, 失败不应影响主流程
+        label = cap_id
+    logger.info("%s 跳过: %s 不可用", action, label)
+
 # ── SDK 批量调用守护 deadline ────────────────────────────────────────────
 # TickFlow SDK 自带 timeout=30s×3 重试, 但只保护其覆盖的请求阶段; 真挂死在
 # 不可中断的网络读里时调用永不返回 → 持有独占槽的重任务线程被连坐卡死,
@@ -365,6 +379,7 @@ def sync_and_persist_daily_batch(
         # 自定义源未配置 daily → 回退 TickFlow
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
+        _log_cap_unavailable("daily", "日K同步")
         return _finalize(0)
 
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH, default_batch=100)
@@ -653,6 +668,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         # 自定义源未配置 adj_factor → 回退 TickFlow
 
     if not capset.has(Cap.ADJ_FACTOR):
+        _log_cap_unavailable("adj_factor", "除权因子同步")
         return 0, []
 
     tf = get_client()

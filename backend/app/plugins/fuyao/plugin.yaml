@@ -9,6 +9,6 @@ entry: app.plugins.fuyao.provider:FuyaoProvider
 check: app.plugins.fuyao.provider:availability
 datasets: [realtime, daily, adj_factor, financial]
 api_key_env: FUYAO_API_KEY   # 声明后设置页提供 Key 输入框(先探后存, secrets.json 优先)
-description: "同花顺官方 REST 数据 API。A 股实时快照、日K(原始价: 近端走 10d dump, 深窗口走 10 年全量 dump 一次下载秒级筛选, 兜底单标的接口)、除权因子(事件 dump + 本地日K dump 配价推导, 涨跌停自检, 秒级)、财务(利润表/资产负债表/现金流量表/指标, 字段映射至项目口径, bps 由估值反推; 股本无上游接口, 指标历史期建议切回 TickFlow 补齐);分钟未接入,自动回退 TickFlow。"
+description: "同花顺官方金融数据 API。提供实时快照、日K(原始价)、除权因子、财务三表与指标;未接入分钟与股本,自动回退 TickFlow。"
 install_hint: "点击卡片中的输入框配置 API Key(https://fuyao.aicubes.cn 申请),或在 .env 中配置 FUYAO_API_KEY"
 homepage: "https://fuyao.aicubes.cn"

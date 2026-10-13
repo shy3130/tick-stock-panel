@@ -21,6 +21,8 @@ import { fmtPct, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/components/stock-table/primitives'
 import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
+import type { FrontendExtension } from '@/extensions/types'
+import { IconPaper } from '@/components/BrandIcons'
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
   market: '即时',
@@ -1936,3 +1938,17 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
     </div>
   )
 }
+
+// ── 扩展注册清单 — 本文件即完整扩展(组件+路由+导航), 单文件可整体摘除/导入 ──
+const extension: FrontendExtension = {
+  id: 'official.paper',
+  apiVersion: 1,
+  routes: [
+    { id: 'paper', path: '/paper', component: Paper },
+  ],
+  navigation: [
+    { id: 'paper', routeId: 'paper', label: '模拟盘', icon: IconPaper },
+  ],
+}
+
+export default extension

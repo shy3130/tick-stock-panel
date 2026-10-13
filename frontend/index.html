@@ -15,11 +15,13 @@
           document.documentElement.classList.add('dark')
         }
         try {
-          var z = JSON.parse(localStorage.getItem('tf-page-zoom') || '')
-          if (typeof z === 'number' && z >= 0.8 && z <= 1.5) {
-            document.documentElement.style.zoom = String(z)
-          }
-        } catch (e) { /* ignore */ }
+          var raw = localStorage.getItem('tf-page-zoom')
+          var z = raw == null ? 0.9 : JSON.parse(raw)
+          if (typeof z !== 'number' || z < 0.8 || z > 1.5) z = 0.9
+          document.documentElement.style.zoom = String(z)
+        } catch (e) {
+          document.documentElement.style.zoom = '0.9'
+        }
       })()
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

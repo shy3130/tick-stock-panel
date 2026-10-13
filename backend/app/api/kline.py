@@ -1265,19 +1265,19 @@ async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=N
 
         try:
             progress("sync_minute", 5, "解析标的池…")
-            universe = sorted(set(get_pool("watchlist")) | set(get_pool("CN_Equity_A")))
-            # 补充 instruments 全量标的，覆盖北交所、新股等
+            # 标的池 = instruments 维表 + 自选 (单一来源, 不拉 CN_Equity_A/SW1 池)
+            universe: set[str] = set(get_pool("watchlist"))
             inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
             if inst_path.exists():
                 try:
                     import polars as pl
                     inst = pl.read_parquet(inst_path, columns=["symbol"])
-                    universe = sorted(set(universe) | set(inst["symbol"].to_list()))
+                    universe.update(inst["symbol"].to_list())
                 except Exception:  # noqa: BLE001
                     pass
             # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute
             index_set = repo.get_index_symbol_set()
-            universe = [s for s in universe if s not in index_set]
+            universe = sorted({s for s in universe if s not in index_set})
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
             days = override_days if override_days else get_minute_sync_days()
