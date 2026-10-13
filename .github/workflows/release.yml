@@ -238,7 +238,7 @@ jobs:
             - **Windows**: 下载后双击运行, 按安装向导操作(无需管理员权限), 自动创建桌面/开始菜单快捷方式
             - **macOS**: 双击 dmg 打开, 将 TSP 拖入 Applications 文件夹; 首次启动需右键→打开(绕过 Gatekeeper)
             - **Linux**: 解压后运行可执行文件
-            - 数据存储在安装目录下的 `data/` 子文件夹, 卸载重装不丢数据
+            - 数据存储: Windows 在安装目录的 `data/` 子文件夹 (卸载重装不丢); macOS 在 `~/Library/Application Support/TSP` (替换 App 升级不丢)
             - 内置 Polars 兼容内核, 新老 CPU (无 AVX2) 均可运行
             - 含纯 Polars 回测引擎; 不含 vectorbt 回测(为控制体积)
             - 系统通知: 设置 → 实时监控 → 系统通知
