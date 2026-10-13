@@ -49,6 +49,18 @@ for pkg in ("polars", "pyarrow", "duckdb", "fastexcel"):
     binaries += b
     hiddenimports += h
 
+# tdxaidata (TdxQuant 插件依赖) — 后端对其全部懒导入, 必须显式声明:
+#   纯 Python 接口 (包 __init__ + tdxaidata.py) 进 PYZ; lib/ 是跨平台原生库
+#   合集 (win dll / mac dylib / linux so 同包), 运行时由 client.materialize_lib
+#   复制物化后 ctypes 加载, 属数据文件 — 只能整目录按 datas 复制。
+#   注意不能用 collect_all / collect_submodules: lib/ 下的 libTdxAiData.so
+#   会被当成 Python 扩展子模块收进 binaries, mac 构建的 macholib 解析
+#   Linux ELF 直接崩。
+if (spec_tdx := find_spec("tdxaidata")) is not None and spec_tdx.origin:
+    _tdx_pkg = Path(spec_tdx.origin).parent
+    datas += [(str(_tdx_pkg / "lib"), "tdxaidata/lib")]
+    hiddenimports += ["tdxaidata", "tdxaidata.tdxaidata"]
+
 # Polars 的发行包名为 polars-runtime-32 / polars-runtime-compat, 但实际
 # Python 导入包带前导下划线。release.yml 安装 legacy-cpu 后必须收集二者，
 # 否则 onedir 产物无法在没有 AVX2/FMA 的旧 CPU 上加载兼容内核。

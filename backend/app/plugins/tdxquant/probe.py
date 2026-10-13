@@ -21,84 +21,92 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _PROBE_ENV_KEY = "TDX_PROBE_CANDIDATE_KEY"
 _PROBE_ENV_TMP = "TDX_PROBE_TMP_DIR"
+# frozen 版哨兵: 桌面版没有可用的 python 解释器 (sys.executable 是应用本身,
+# -c 会被 PyInstaller bootloader 无视而重启整个桌面应用), 因此以
+# 「重执行自身 + 本哨兵」拉起 worker, 由 desktop.main 最先分发到 run_worker
+_PROBE_ENV_WORKER = "TDX_PROBE_WORKER"
 
-# 子进程入口: 复用 client.materialize_lib 保持与主进程同一套物化/写 token 逻辑
-_SCRIPT = """
-import json
-import os
-import time
-from pathlib import Path
-
-key = os.environ.pop("TDX_PROBE_CANDIDATE_KEY", "")
-tmp = Path(os.environ.pop("TDX_PROBE_TMP_DIR", ""))
-progress = tmp / "progress.json" if str(tmp) else None
+# dev 模式子进程入口: 直接调用本模块的 run_worker, 与 frozen 哨兵共用同一份实现
+_SCRIPT = "from app.plugins.tdxquant.probe import run_worker; run_worker()"
 
 
-def stage(name, **extra):
-    if progress is None:
-        return
-    try:
-        progress.write_text(json.dumps({"stage": name, **extra}), encoding="utf-8")
-    except Exception:
-        pass
+def run_worker() -> int:
+    """探测 worker — 必须在独立子进程内执行 (见 run 的拉起方式)。
 
+    从环境变量读候选 Key 与进度目录, 各阶段进度写入 progress.json,
+    结论以单行 JSON 打到 stdout 供父进程解析。复用 client.materialize_lib
+    保持与主进程同一套物化/写 token 逻辑。
+    """
+    key = os.environ.pop(_PROBE_ENV_KEY, "")
+    tmp = Path(os.environ.pop(_PROBE_ENV_TMP, ""))
+    os.environ.pop(_PROBE_ENV_WORKER, None)
+    progress = tmp / "progress.json" if str(tmp) else None
 
-try:
-    stage("imports")
-    from app.plugins.tdxquant import client as tc
-
-    stage("materialize")
-    dll = tc.materialize_lib(key, tmp)
-    os.environ[tc.LIB_ENV] = str(dll)
-
-    stage("load_dll")
-    from tdxaidata.tdxaidata import _NativeTdxAiData
-
-    native = _NativeTdxAiData.get_instance()
-
-    # 连通性判定: 快照端点不依赖 token 鉴权, 拿到数据即证明
-    # 服务器可达 + DLL 正常。轮询容忍 DLL 冷启动的未就绪窗口。
-    stage("start")
-    reachable = False
-    for _ in range(3):
+    def stage(name: str, **extra) -> None:
+        if progress is None:
+            return
         try:
-            if native.get_market_snapshot_batch("600519.SH", "Now"):
-                reachable = True
-                break
-        except Exception:
+            progress.write_text(json.dumps({"stage": name, **extra}), encoding="utf-8")
+        except Exception:  # noqa: BLE001
             pass
-        time.sleep(1.2)
-    if not reachable:
-        stage("done", ok=False)
-        print(json.dumps({"ok": False, "reason": "行情服务器连接失败(网络不可达)"}))
-        raise SystemExit(0)
 
-    # 日K仅作辅助信号(会话按 IP 复用时错误 Key 也能通过, 不能作拒绝依据)
-    stage("auth")
-    aux = ""
     try:
-        raw = native.get_his_dats(
-            "600519.SH", "", "2026-01-01 00:00:00", "1d", "none", 3
-        )
-        from tdxaidata import tqs
+        stage("imports")
+        from app.plugins.tdxquant import client as tc
 
-        v = tqs._clean(raw)
-        aux = "his_ok" if isinstance(v, dict) and v.get("Date") else "his_empty"
-    except Exception as exc:
-        aux = "his_exc"
+        stage("materialize")
+        dll = tc.materialize_lib(key, tmp)
+        os.environ[tc.LIB_ENV] = str(dll)
 
-    stage("done", ok=True)
-    print(json.dumps({"ok": True, "reason": "", "aux": aux}))
-except Exception as exc:
-    stage("exception", reason=str(exc)[:300])
-    print(json.dumps({"ok": False, "reason": str(exc)[:300]}))
-"""
+        stage("load_dll")
+        from tdxaidata.tdxaidata import _NativeTdxAiData
+
+        native = _NativeTdxAiData.get_instance()
+
+        # 连通性判定: 快照端点不依赖 token 鉴权, 拿到数据即证明
+        # 服务器可达 + DLL 正常。轮询容忍 DLL 冷启动的未就绪窗口。
+        stage("start")
+        reachable = False
+        for _ in range(3):
+            try:
+                if native.get_market_snapshot_batch("600519.SH", "Now"):
+                    reachable = True
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(1.2)
+        if not reachable:
+            stage("done", ok=False)
+            print(json.dumps({"ok": False, "reason": "行情服务器连接失败(网络不可达)"}))
+            return 0
+
+        # 日K仅作辅助信号(会话按 IP 复用时错误 Key 也能通过, 不能作拒绝依据)
+        stage("auth")
+        aux = ""
+        try:
+            raw = native.get_his_dats(
+                "600519.SH", "", "2026-01-01 00:00:00", "1d", "none", 3
+            )
+            from tdxaidata import tqs
+
+            v = tqs._clean(raw)
+            aux = "his_ok" if isinstance(v, dict) and v.get("Date") else "his_empty"
+        except Exception:  # noqa: BLE001
+            aux = "his_exc"
+
+        stage("done", ok=True)
+        print(json.dumps({"ok": True, "reason": "", "aux": aux}))
+    except Exception as exc:  # noqa: BLE001
+        stage("exception", reason=str(exc)[:300])
+        print(json.dumps({"ok": False, "reason": str(exc)[:300]}))
+    return 0
 
 
 def _read_stage(tmp_dir: str) -> str:
@@ -129,10 +137,17 @@ def run(api_key: str, timeout_s: float = 75.0) -> tuple[bool, str]:
         _PROBE_ENV_TMP: tmp_dir,
         "PYTHONPATH": str(backend_root),
     }
+    if getattr(sys, "frozen", False):
+        # 打包版 sys.executable 是应用本身, `-c` 会被 bootloader 无视并重启
+        # 整个桌面应用 — 必须裸重执行自身, 由 desktop.main 的哨兵分发 worker
+        cmd = [sys.executable]
+        env[_PROBE_ENV_WORKER] = "1"
+    else:
+        cmd = [sys.executable, "-c", _SCRIPT]
     try:
         try:
             proc = subprocess.run(
-                [sys.executable, "-c", _SCRIPT],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
