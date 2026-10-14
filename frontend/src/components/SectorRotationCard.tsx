@@ -694,6 +694,12 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   const latest = data?.timeline?.[data.timeline.length - 1]
   const heatHeight = Math.max(180, heatRows * HEAT_ROW_HEIGHT + 62)
 
+  // 未开启全量分钟落盘时整卡隐藏 (整卡空态占位过大, 白占首屏);
+  // 其余 reason (当日数据为空/成分缺失) 属"有能力缺数据", 保留引导文案
+  if (data && data.status !== 'ok' && data.reason === 'minute_missing') {
+    return null
+  }
+
   return (
     <section className="rounded-2xl border border-border bg-surface p-2.5">
       <div className="mb-2 flex flex-wrap items-center gap-2">
