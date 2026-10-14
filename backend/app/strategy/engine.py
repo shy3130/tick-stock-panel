@@ -396,13 +396,15 @@ class StrategyEngine:
                         "types",
                         "typing",
                     }),
-                    extra_allowed_calls=frozenset({"vars"}),
                 )
         except ValueError:
             raise
-        except Exception:  # noqa: BLE001
-            # 文件读不到/语法错等: 不阻断, 让下方 exec_module 抛原样错误
-            pass
+        except SyntaxError as e:
+            raise ValueError(f"策略语法错误: 第 {e.lineno} 行, {e.msg}") from e
+        except (OSError, UnicodeDecodeError) as e:
+            # fail-closed: 文件读不到/读不懂时不得放行到 exec_module,
+            # 否则异常输入即可让校验静默跳过 (GH #475 同类逃逸)。
+            raise ValueError(f"策略安全校验失败: {e}") from e
 
         spec = importlib.util.spec_from_file_location(path.stem, path)
         if spec is None or spec.loader is None:

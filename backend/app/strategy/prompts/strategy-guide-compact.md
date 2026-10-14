@@ -6,7 +6,7 @@
 
 1. Polars/历史策略限用 `polars/datetime`；矩阵策略限用 `numpy/app.backtest.matrix`。
 2. AI 策略位于 `data/strategies/ai/`，`META.id` 用指定的 `ai_` ID。
-3. 禁止文件读写和 `open/exec/eval/compile/__import__/globals/locals/vars/dir/getattr/setattr/delattr/type/input`。
+3. 禁止文件读写和 `open/exec/eval/__import__/getattr/…` 等危险调用；含 `__x__` 的名字/字符串(含拼接)与 `pl.os/np.lib` 等模块句柄一律禁用。
 4. `META.params` 只放可调项：必填 `id/label/type/default`；数值项加 `min/max/step`，select 加 `options`。
 5. `META.scoring` 只用真实数值字段或 `ma20_bias`，权重和为 1.0。
 6. `ENTRY_SIGNALS/EXIT_SIGNALS` 只选相关信号，无匹配项可为空。
