@@ -546,7 +546,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 flex items-center gap-3">
                 <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
                 <div className="flex-1 text-xs text-amber-400/80">AI API Key 未配置，无法生成策略。填写的内容会自动保存。</div>
-                <button onClick={() => { persist(); window.location.href = '/settings?tab=ai' }}
+                <button onClick={() => { persist(); window.location.href = `${import.meta.env.BASE_URL}settings?tab=ai` }}
                   className="h-7 px-3 rounded-lg bg-amber-400/15 border border-amber-400/30 text-amber-400 text-xs font-medium flex items-center gap-1.5 hover:bg-amber-400/20 shrink-0">
                   <Settings2 className="h-3 w-3" />去配置
                 </button>

@@ -178,7 +178,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                 <div className="text-sm font-medium text-foreground">分析失败</div>
                 <div className="text-xs text-secondary text-center max-w-md px-4">{error}</div>
                 {error.includes('AI') && (
-                  <button onClick={() => { window.location.href = '/settings?tab=ai' }}
+                  <button onClick={() => { window.location.href = `${import.meta.env.BASE_URL}settings?tab=ai` }}
                     className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
                     <Settings2 className="h-3.5 w-3.5" /> 去配置 AI
                   </button>

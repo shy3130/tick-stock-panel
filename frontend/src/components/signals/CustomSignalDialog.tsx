@@ -181,7 +181,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                     {aiConfigured === false ? (
                       <div className="text-xs text-amber-400/80">
                         AI 未配置，无法生成信号。{' '}
-                        <a href="/settings?tab=ai" className="underline hover:text-amber-300">去设置页配置 API Key</a>
+                        <a href={`${import.meta.env.BASE_URL}settings?tab=ai`} className="underline hover:text-amber-300">去设置页配置 API Key</a>
                       </div>
                     ) : (
                       <>
