@@ -1,19 +1,24 @@
 /**
  * 模拟盘 (虚拟账户) — 多账户对比主视图 + 行展开账户操作。
  *
- * 对比 (默认): 全账户收益降序榜单 (同本金同费率口径), 归一化净值叠加,
- * 点行展开即完整账户操作 (下单/跟单规则/费用/导出), 无需跳转页面;
- * 批量创建一次构造一批同规格账户各绑一条跟单规则。
+ * 对比 (默认): 全账户收益降序大列表 (每行一个账户, 同本金同费率口径),
+ * 盘中快照就绪时总资产/收益显示实时估算 (估 徽标), 归一化净值叠加;
+ * 行内直达冻结/删除 (强确认弹窗, 有持仓时后端先拒绝再显式强删);
+ * 批量创建一次构造一批同规格账户各绑一条跟单规则 (策略直接跟实时行情模拟)。
  *
- * 口径提示: 持仓现价用最近日线收盘价 (收盘定版一致, 盘中估算见设计方案
- * docs/paper-trading-plan.md)。费用/滑点参数与回测引擎同名同默认值。
+ * 行展开 = 完整账户操作: 总览/净值/持仓/订单 (全状态全量)/成交台账 (可导出
+ * CSV)/回合明细 (FIFO)/下单 (卖出带 T+1 可卖提示)/跟单规则/费用/冻结/删除。
+ *
+ * 口径提示: 定版字段按交易日收盘结算; 盘中实时估算与 /overview 同口径。
+ * 费用/滑点参数与回测引擎同名同默认值。
  * 多账户: 所有查询按账户隔离 (queryKey 前缀 'paper'), 切换即换一套数据。
  */
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, PieChart, Plus, RefreshCw, Settings, TrendingUp, Wallet, X } from 'lucide-react'
-import { api, type PaperCompareRow, type PaperFill, type PaperOrder } from '@/lib/api'
+import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, History, ListChecks, PieChart, Plus, RefreshCw, Settings, ShieldAlert, SlidersHorizontal, Snowflake, Trash2, TrendingUp, Wallet, X, Zap } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { api, type PaperCompareRow, type PaperFill, type PaperHolding, type PaperOrder, type PaperRound } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useQuoteStatus } from '@/lib/useSharedQueries'
 import { cn } from '@/lib/cn'
@@ -152,20 +157,24 @@ function StatCard({ label, value, sub, valueClass, icon: Icon, iconCls }: {
   )
 }
 
-/** 新建账户默认值 (localStorage): 上次创建用的初始资金/费用, 作为下次预填默认。 */
+/** 新建账户默认值 (localStorage), 字段级优先级: 基础配置 (用户显式设置) > 上次创建记忆 > 内置默认。 */
 const NEW_ACCOUNT_DEFAULTS_KEY = 'paper.newAccountDefaults'
+const PAPER_BASE_DEFAULTS_KEY = 'paper.baseDefaults.v1'
 type NewAccountDefaults = {
   cash?: string; commissionWan?: string; stampQian?: string; slippageBps?: string
 }
 
 function loadNewAccountDefaults(): Required<NewAccountDefaults> {
-  let saved: NewAccountDefaults = {}
-  try { saved = JSON.parse(localStorage.getItem(NEW_ACCOUNT_DEFAULTS_KEY) || '{}') } catch { /* 忽略坏数据 */ }
+  let base: NewAccountDefaults = {}
+  let last: NewAccountDefaults = {}
+  try { base = JSON.parse(localStorage.getItem(PAPER_BASE_DEFAULTS_KEY) || '{}') } catch { /* 忽略坏数据 */ }
+  try { last = JSON.parse(localStorage.getItem(NEW_ACCOUNT_DEFAULTS_KEY) || '{}') } catch { /* 忽略坏数据 */ }
+  const src = { ...last, ...base }
   return {
-    cash: saved.cash ?? '1000000',
-    commissionWan: saved.commissionWan ?? '2.5',   // 万2.5
-    stampQian: saved.stampQian ?? '1',             // 千1 (仅卖出)
-    slippageBps: saved.slippageBps ?? '5',         // 5bps
+    cash: src.cash ?? '1000000',
+    commissionWan: src.commissionWan ?? '2.5',   // 万2.5
+    stampQian: src.stampQian ?? '1',             // 千1 (仅卖出)
+    slippageBps: src.slippageBps ?? '5',         // 5bps
   }
 }
 
@@ -179,33 +188,100 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
   const [stampQian, setStampQian] = useState(defaults.stampQian)
   const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
   const [name, setName] = useState('')
+  // 自动执行策略 (可选): 创建后立即绑一条自动跟单规则, 策略/监控规则触发信号时按下方参数自动下单
+  const [autoKind, setAutoKind] = useState<'strategy' | 'rule'>('strategy')
+  const [autoId, setAutoId] = useState('')
+  const [autoName, setAutoName] = useState('')
+  const [autoSearch, setAutoSearch] = useState('')   // 未选中时的搜索词 (选中后显示中文名)
+  const [side, setSide] = useState<'buy' | 'sell' | 'auto'>('auto')
+  const [sizeMode, setSizeMode] = useState<'fixed_amount' | 'pct_equity'>('pct_equity')
+  const [sizeValue, setSizeValue] = useState('10')
+  const [orderType, setOrderType] = useState<'market' | 'next_open' | 'close'>('next_open')
+  const [cooldown, setCooldown] = useState('5')
+  const [maxPositions, setMaxPositions] = useState('10')
+  // 账户已建但规则绑定失败: 不静默吞掉 (账户已存在无法重提交), 行内警告 + 手动完成
+  const [ruleWarn, setRuleWarn] = useState<string | null>(null)
+
+  const strategiesQ = useQuery({
+    queryKey: QK.screenerStrategies('any', 'all'),
+    queryFn: () => api.screenerStrategies(undefined, 'all'),
+    staleTime: 60_000,
+  })
+  const rulesQ = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList, staleTime: 30_000 })
+
   const m = useMutation({
-    mutationFn: () =>
-      api.paperCreateAccount({
+    mutationFn: async () => {
+      // 账户名未填且已选策略/规则 → 自动用其名称 (不落到 "账户 acc_xxx")
+      const autoLabel = autoId.trim() ? (autoName || autoId.trim()) : ''
+      const r = await api.paperCreateAccount({
         initial_cash: Number(cash),
         account_id: accId,
-        name: name.trim() || undefined,
+        name: name.trim() || autoLabel || undefined,
         commission_pct: Number(commissionWan) / 10000,   // 万 X → pct
         stamp_tax_pct: Number(stampQian) / 1000,         // 千 X → pct
         slippage_bps: Number(slippageBps),
-      }),
-    onSuccess: r => {
+      })
+      if (autoId.trim()) {
+        try {
+          await api.paperAutoRuleCreate({
+            name: `跟${autoKind === 'strategy' ? '策略' : '规则'}·${autoName || autoId.trim()}`,
+            match_kind: autoKind,
+            match_id: autoId.trim(),
+            side,
+            size_mode: sizeMode,
+            size_value: Number(sizeValue),
+            order_type: orderType,
+            cooldown_days: Number(cooldown),
+            max_positions: Math.max(0, Math.round(Number(maxPositions) || 0)),
+            enabled: true,
+          }, r.account.id)
+        } catch (err) {
+          return { r, ruleError: String((err as Error).message || err) }
+        }
+      }
+      return { r, ruleError: null as string | null }
+    },
+    onSuccess: ({ r, ruleError }) => {
       // 记住本次取值, 作为下次新建账户的默认
       try {
         localStorage.setItem(NEW_ACCOUNT_DEFAULTS_KEY, JSON.stringify({
           cash, commissionWan, stampQian, slippageBps,
         }))
       } catch { /* 存储不可用时静默 */ }
+      if (ruleError) { setRuleWarn(ruleError); return }
       onDone(r.account.id)
     },
   })
+
+  const autoQuery = (autoId ? (autoName || autoId) : autoSearch).trim().toLowerCase()
+  const autoOptions: SuggestOption[] = autoKind === 'strategy'
+    ? (strategiesQ.data?.presets ?? [])
+        .filter(s => !autoQuery || s.name.toLowerCase().includes(autoQuery) || s.id.toLowerCase().includes(autoQuery) || (s.tags ?? []).some(t => t.toLowerCase().includes(autoQuery)))
+        .map(s => ({
+          value: s.id,
+          label: s.name || s.id,
+          desc: s.description || undefined,
+          badges: [
+            ...(s.timeframes ?? []).map(tf => tf === '1d' ? '日线' : tf === '1m' ? '分钟' : tf),
+            ...(s.tags ?? []).slice(0, 2),
+          ].slice(0, 3),
+        }))
+    : (rulesQ.data?.rules ?? [])
+        .filter(r => !autoQuery || r.name.toLowerCase().includes(autoQuery) || r.id.toLowerCase().includes(autoQuery))
+        .map(r => ({ value: r.id, label: r.name || r.id }))
+
   const valid = Number(cash) > 0
     && Number(commissionWan) >= 0 && Number(stampQian) >= 0 && Number(slippageBps) >= 0
+    && (!autoId.trim() || Number(sizeValue) > 0)
+  const segBtn = (active: boolean) => cn(
+    'whitespace-nowrap rounded-btn border px-2 py-1 text-[11px] transition-colors',
+    active ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted hover:text-secondary',
+  )
   return (
-    <div className="mx-auto mt-16 max-w-md rounded-card border border-border bg-surface p-6">
+    <div className="p-5">
       <div className="flex items-center gap-2">
         <CircleDollarSign className="h-5 w-5 text-accent" />
-        <h2 className="text-[16px] leading-6 font-semibold">创建虚拟账户</h2>
+        <h2 id="setup-card-title" className="text-[16px] leading-6 font-semibold">创建虚拟账户</h2>
       </div>
       <p className="mt-2 text-xs leading-relaxed text-muted">
         虚拟资金 + 真实行情价格模拟撮合, 不涉及任何真实资金。费用口径与回测一致,
@@ -216,7 +292,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
         value={name}
         onChange={e => setName(e.target.value)}
         className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-2 text-sm outline-none focus:border-accent/50"
-        placeholder={accId === 'default' ? '默认账户' : `账户 ${accId}`}
+        placeholder={autoId.trim() && autoName ? `默认用${autoKind === 'strategy' ? '策略' : '规则'}名: ${autoName}` : (accId === 'default' ? '默认账户' : `账户 ${accId}`)}
       />
       <label className="mt-3 block text-xs text-secondary">初始虚拟资金 (元)</label>
       <input
@@ -243,13 +319,98 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
             className="mt-1 w-full rounded-btn border border-border bg-base px-2 py-2 font-mono text-sm outline-none focus:border-accent/50" />
         </div>
       </div>
+
+      {/* 自动执行策略 (可选): 创建即绑定, 信号触发自动下单 */}
+      <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Zap className="h-3.5 w-3.5 text-warning" />
+          <span className="text-xs font-medium text-secondary">自动执行策略 (可选)</span>
+          <span className="text-[10px] text-muted">创建后立即生效 · 信号触发按参数自动下单</span>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="flex gap-1">
+            <button onClick={() => { setAutoKind('strategy'); setAutoId(''); setAutoName(''); setAutoSearch(''); setSide('auto') }} className={segBtn(autoKind === 'strategy')}>策略</button>
+            <button onClick={() => { setAutoKind('rule'); setAutoId(''); setAutoName(''); setAutoSearch(''); setSide(s => (s === 'auto' ? 'buy' : s)) }} className={segBtn(autoKind === 'rule')}>监控规则</button>
+          </div>
+          <div className="min-w-44 flex-1">
+            {/* 选中后显示中文名 (id 只做匹配键); 重新输入则回到搜索态 */}
+            <SuggestInput
+              value={autoId ? (autoName || autoId) : autoSearch}
+              onChange={v => { setAutoSearch(v); setAutoId(''); setAutoName('') }}
+              options={autoOptions}
+              onSelect={opt => { setAutoId(opt.value); setAutoName(opt.label === opt.value ? '' : opt.label); setAutoSearch('') }}
+              loading={autoKind === 'strategy' ? strategiesQ.isPending : rulesQ.isPending}
+              placeholder={autoKind === 'strategy' ? '搜索策略 (中文名 / ID)' : '搜索监控规则'}
+              className="w-full rounded-btn border border-border bg-base px-3 py-1.5 text-sm outline-none focus:border-accent/50"
+            />
+          </div>
+          {autoId.trim() && (
+            <button onClick={() => { setAutoId(''); setAutoName(''); setAutoSearch('') }} className="rounded-btn border border-border px-2 py-1 text-[10px] text-muted hover:text-danger" title="不绑定策略">清除</button>
+          )}
+        </div>
+        {/* 两行栅格: 5 组控件一行放不下会被压成竖排文字并相互叠压。
+            跟策略无方向概念 (固定 auto: 入场买/出场全平), 跟监控规则才显示方向。
+            输入搜索词即展开 (选中或搜索中都可见参数) */}
+        {(autoId || autoSearch).trim() && (
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {autoKind === 'strategy' ? (
+              // 策略执行语义说明: 双向自动, 无需选择
+              <div className="col-span-3 flex items-center gap-1.5 text-[10px] text-muted">
+                <Zap className="h-3 w-3 text-accent" />
+                入场信号自动买入 · 出场信号自动全平 — 完整执行策略周期
+              </div>
+            ) : (
+              <div>
+                <label className="block text-[10px] text-muted">方向</label>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <button onClick={() => setSide('buy')} className={segBtn(side === 'buy')}>买入</button>
+                  <button onClick={() => setSide('sell')} className={segBtn(side === 'sell')}>卖出</button>
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="block text-[10px] text-muted">{sizeMode === 'pct_equity' ? '仓位 (权益 %)' : '仓位 (元)'}</label>
+              <div className="mt-1 flex gap-1">
+                <input type="number" min="0" step={sizeMode === 'pct_equity' ? 1 : 1000} value={sizeValue}
+                  onChange={e => setSizeValue(e.target.value)}
+                  className="w-16 shrink-0 rounded-btn border border-border bg-base px-1.5 py-1 font-mono text-xs outline-none focus:border-accent/50" />
+                <button onClick={() => setSizeMode(m => m === 'pct_equity' ? 'fixed_amount' : 'pct_equity')}
+                  className="whitespace-nowrap rounded-btn border border-border px-1.5 py-1 text-[10px] text-muted hover:text-accent" title="切换仓位模式">
+                  {sizeMode === 'pct_equity' ? '按比例' : '按金额'}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] text-muted">最大持仓</label>
+              <input type="number" min="0" step="1" value={maxPositions} onChange={e => setMaxPositions(e.target.value)}
+                className="mt-1 w-full rounded-btn border border-border bg-base px-1.5 py-1 font-mono text-xs outline-none focus:border-accent/50"
+                title="最多同时持有的标的数 (买入开新仓受限, 加仓/卖出不受限, 0 = 不限) — 与回测 max_positions 同口径" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-[10px] text-muted">订单类型</label>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {([['market', '即时'], ['next_open', '次日开盘'], ['close', '当日收盘']] as const).map(([v, t]) => (
+                  <button key={v} onClick={() => setOrderType(v)} className={segBtn(orderType === v)}>{t}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] text-muted">冷却 (天)</label>
+              <input type="number" min="0" step="1" value={cooldown} onChange={e => setCooldown(e.target.value)}
+                className="mt-1 w-full rounded-btn border border-border bg-base px-1.5 py-1 font-mono text-xs outline-none focus:border-accent/50"
+                title="同标的触发后 N 个交易日内不重复下单" />
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="mt-4 flex gap-2">
         <button
           onClick={() => valid && m.mutate()}
           disabled={!valid || m.isPending}
           className="flex-1 rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity hover:bg-accent/90 disabled:opacity-50"
         >
-          {m.isPending ? '创建中…' : '创建账户'}
+          {m.isPending ? '创建中…' : ruleWarn ? '创建账户' : autoId.trim() ? '创建并绑定策略' : '创建账户'}
         </button>
         {onCancel && (
           <button
@@ -262,6 +423,12 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
           </button>
         )}
       </div>
+      {ruleWarn && (
+        <div className="mt-2 rounded-btn bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
+          账户已创建, 但策略绑定失败: {ruleWarn} — 可在账户面板「自动跟单规则」里手动补建。
+          <button onClick={() => onDone(accId)} className="ml-1 underline underline-offset-2">完成</button>
+        </div>
+      )}
       {m.isError && <div className="mt-2 text-xs text-danger">{String((m.error as Error).message)}</div>}
     </div>
   )
@@ -281,6 +448,10 @@ interface SuggestOption {
   left?: string
   /** 可选右槽 (板性徽标 / 来源等) */
   hint?: ReactNode
+  /** 可选副行描述 (策略简介), 有则渲染两行式选项 */
+  desc?: string
+  /** 可选名称右侧徽标组 (tags / 周期) */
+  badges?: string[]
 }
 
 function SuggestInput({
@@ -303,16 +474,52 @@ function SuggestInput({
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  // 下拉用 portal + fixed 渲染: 祖先链 (创建向导滚动容器 / Modal 的 max-h overflow)
+  // 会硬裁剪 absolute 下拉, 脱离文档流才能完整浮出; 位置实时贴输入框。
+  const [dropStyle, setDropStyle] = useState<CSSProperties | null>(null)
+  const syncDropPos = useCallback(() => {
+    const r = inputRef.current?.getBoundingClientRect()
+    if (!r) return
+    const below = window.innerHeight - r.bottom - 8
+    const above = r.top > 300 && below < 200
+    setDropStyle(above
+      ? { position: 'fixed', left: r.left, top: r.top - 6, width: Math.max(r.width, 280), transform: 'translateY(-100%)', maxHeight: Math.max(160, Math.min(320, r.top - 8)) }
+      : { position: 'fixed', left: r.left, top: r.bottom + 6, width: Math.max(r.width, 280), maxHeight: Math.max(160, Math.min(320, below)) })
+  }, [])
+  useEffect(() => {
+    if (!open) { setDropStyle(null); return }
+    syncDropPos()
+    // 滚动可来自任意祖先容器 (capture), 滚动/缩放时保持贴位
+    window.addEventListener('scroll', syncDropPos, true)
+    window.addEventListener('resize', syncDropPos)
+    return () => {
+      window.removeEventListener('scroll', syncDropPos, true)
+      window.removeEventListener('resize', syncDropPos)
+    }
+  }, [open, syncDropPos])
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const t = e.target as Element
+      // portal 下拉不在 containerRef 内, 须一并排除, 否则点选项先被判定外点而关闭
+      if (t.closest?.('[data-suggest-drop]')) return
+      if (containerRef.current && !containerRef.current.contains(t)) {
         setOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
+
+  // 键盘 active 项始终滚入可视区 (列表可长, 66+ 项)
+  useEffect(() => {
+    if (activeIdx < 0 || !listRef.current) return
+    listRef.current.querySelectorAll('button[data-idx]').forEach(btn => {
+      if (Number(btn.getAttribute('data-idx')) === activeIdx) btn.scrollIntoView({ block: 'nearest' })
+    })
+  }, [activeIdx])
 
   function handlePick(opt: SuggestOption) {
     onSelect(opt)
@@ -328,7 +535,7 @@ function SuggestInput({
       setActiveIdx(i => Math.min(i + 1, options.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActiveIdx(i => Math.max(i - 1, -1))
+      setActiveIdx(i => Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
       const pick = options[activeIdx >= 0 ? activeIdx : 0]
@@ -336,46 +543,79 @@ function SuggestInput({
     }
   }
 
+  const showList = open && dropStyle && (loading || options.length > 0 || value.trim().length > 0)
   return (
     <div ref={containerRef} className="relative">
       <input
+        ref={inputRef}
         type="text"
         value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true); setActiveIdx(-1) }}
-        onFocus={() => setOpen(true)}
+        onChange={e => { onChange(e.target.value); setOpen(true); setActiveIdx(0) }}
+        onFocus={() => { setOpen(true); syncDropPos(); setActiveIdx(0) }}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         className={className}
       />
-      {open && (loading || options.length > 0) && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-card border border-border bg-base shadow-xl">
-          {loading && options.length === 0 ? (
-            <div className="px-3 py-3 text-center text-[11px] text-muted">搜索中…</div>
-          ) : (
-            options.map((opt, i) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => handlePick(opt)}
-                className={cn(
-                  'flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors duration-100',
-                  i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground',
-                )}
-              >
-                {opt.left && <span className="shrink-0 font-mono text-[11px]">{opt.left}</span>}
-                <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                {opt.hint}
-              </button>
-            ))
-          )}
-        </div>
+      {showList && createPortal(
+        <div
+          data-suggest-drop
+          style={dropStyle}
+          className="z-[70] flex animate-[sg-drop-in_120ms_ease-out] flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl shadow-black/60 ring-1 ring-black/30"
+        >
+          {/* 结果计数 + 键盘操作提示 */}
+          <div className="flex shrink-0 items-center justify-between border-b border-border/60 bg-elevated/40 px-3 py-1.5 text-[10px] text-muted">
+            <span>{loading ? '搜索中…' : `${options.length} 个候选${value.trim() ? ` · “${value.trim()}”` : ''}`}</span>
+            <span className="font-mono tracking-tight">↑↓ 导航 · ↵ 选中 · esc 关闭</span>
+          </div>
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border">
+            {loading && options.length === 0 ? (
+              <div className="space-y-1 px-2 py-1.5">
+                {[0, 1, 2].map(i => <div key={i} className="h-9 animate-pulse rounded-lg bg-elevated/60" style={{ animationDelay: `${i * 120}ms` }} />)}
+              </div>
+            ) : options.length === 0 ? (
+              <div className="px-3 py-6 text-center text-[11px] text-muted">
+                无匹配候选 · 换个关键词或检查输入
+              </div>
+            ) : (
+              options.map((opt, i) => (
+                <button
+                  key={opt.value}
+                  data-idx={i}
+                  type="button"
+                  onClick={() => handlePick(opt)}
+                  className={cn(
+                    'relative mx-1 flex w-[calc(100%-8px)] flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-left transition-colors duration-75',
+                    i === activeIdx ? 'bg-accent/10' : 'hover:bg-elevated/70',
+                  )}
+                >
+                  {i === activeIdx && <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent" />}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {opt.left && <span className="shrink-0 font-mono text-[11px] text-secondary">{opt.left}</span>}
+                    <span className={cn('min-w-0 truncate text-xs', i === activeIdx ? 'text-accent' : 'text-foreground')}>{opt.label}</span>
+                    {(opt.badges ?? []).slice(0, 3).map(b => (
+                      <span key={b} className="shrink-0 rounded bg-elevated px-1 py-px text-[9px] leading-4 text-muted">{b}</span>
+                    ))}
+                    {opt.hint}
+                  </div>
+                  {(opt.desc || opt.value !== opt.label) && (
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      {opt.desc && <span className="min-w-0 flex-1 truncate text-[10px] leading-4 text-muted">{opt.desc}</span>}
+                      <span className="ml-auto shrink-0 font-mono text-[9px] text-muted/70">{opt.value}</span>
+                    </div>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
 }
 
 /** 下单面板 */
-function OrderForm({ acc, onDone }: { acc: string; onDone: () => void }) {
+function OrderForm({ acc, holdings = [], onDone }: { acc: string; holdings?: PaperHolding[]; onDone: () => void }) {
   const [symbol, setSymbol] = useState('')
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [qty, setQty] = useState('100')
@@ -383,6 +623,8 @@ function OrderForm({ acc, onDone }: { acc: string; onDone: () => void }) {
   const [qtyMode, setQtyMode] = useState<'qty' | 'amount'>('qty')
   const [orderType, setOrderType] = useState<'market' | 'next_open' | 'close'>('market')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // 卖出时的持仓可卖提示 (T+1): 按代码匹配持仓行
+  const sellPos = side === 'sell' ? holdings.find(h => h.symbol === symbol.trim().toUpperCase()) : undefined
 
   const m = useMutation({
     mutationFn: () =>
@@ -434,6 +676,13 @@ function OrderForm({ acc, onDone }: { acc: string; onDone: () => void }) {
             placeholder="600519.SH / 茅台 / MZ"
             className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-1.5 font-mono text-sm uppercase outline-none focus:border-accent/50"
           />
+          {side === 'sell' && (
+            <div className="mt-1 text-[10px] text-muted">
+              {sellPos
+                ? `持有 ${sellPos.qty} 股 · T+1 可卖 ${sellPos.available_qty} 股 (含费用成本 ${fmtMoney(sellPos.avg_cost, 3)})`
+                : symbol.trim() ? '该账户无此标的持仓' : '卖出前先选择持仓标的'}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           {(['buy', 'sell'] as const).map(s => (
@@ -682,8 +931,171 @@ function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
   )
 }
 
+/** 模拟盘基础配置: 新建账户的默认初始资金与费率 (localStorage, 不落盘后端)。
+ *  设置后创建表单 (单账户/批量) 优先加载它, 取代「记住上次取值」; 账户级费率
+ *  仍可在各账户「费用与撮合设置」单独调整。 */
+function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
+  const defaults = loadNewAccountDefaults()
+  const [cash, setCash] = useState(defaults.cash)
+  const [commissionWan, setCommissionWan] = useState(defaults.commissionWan)
+  const [stampQian, setStampQian] = useState(defaults.stampQian)
+  const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
+  const [saved, setSaved] = useState(false)
+  const hasBase = (() => { try { return !!localStorage.getItem(PAPER_BASE_DEFAULTS_KEY) } catch { return false } })()
+  const valid = Number(cash) > 0
+    && Number(commissionWan) >= 0 && Number(commissionWan) <= 100
+    && Number(stampQian) >= 0 && Number(stampQian) <= 50
+    && Number(slippageBps) >= 0 && Number(slippageBps) <= 200
+  const save = () => {
+    try {
+      localStorage.setItem(PAPER_BASE_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps }))
+      setSaved(true)
+      setTimeout(onClose, 600)
+    } catch { /* 存储不可用时静默 */ }
+  }
+  const reset = () => {
+    try { localStorage.removeItem(PAPER_BASE_DEFAULTS_KEY) } catch { /* 静默 */ }
+    setCash('1000000'); setCommissionWan('2.5'); setStampQian('1'); setSlippageBps('5')
+  }
+  const inputCls = 'mt-1 w-full rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-sm outline-none focus:border-accent/50'
+  return (
+    <Modal onClose={onClose} labelledBy="base-defaults-title">
+      <div className="p-5">
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4 text-accent" />
+          <h3 id="base-defaults-title" className="text-sm font-semibold text-foreground">基础配置 · 新账户默认</h3>
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted">
+          新建账户 (单账户 / 批量) 自动加载以下默认值, 优先于「记住上次取值」;
+          已有账户不受影响, 各账户费率仍可单独调整。
+        </p>
+        <label className="mt-4 block text-[11px] text-muted">初始虚拟资金 (元)</label>
+        <input type="number" min="1" value={cash} onChange={e => setCash(e.target.value)} className={inputCls} />
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <div>
+            <label className="block text-[11px] text-muted">佣金 (万)</label>
+            <input type="number" step="0.1" min="0" max="100" value={commissionWan} onChange={e => setCommissionWan(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-[11px] text-muted">印花税 (千, 卖出)</label>
+            <input type="number" step="0.1" min="0" max="50" value={stampQian} onChange={e => setStampQian(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-[11px] text-muted">滑点 (bps)</label>
+            <input type="number" step="1" min="0" max="200" value={slippageBps} onChange={e => setSlippageBps(e.target.value)} className={inputCls} />
+          </div>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={save}
+            disabled={!valid}
+            className="flex-1 rounded-btn bg-accent py-2 text-sm font-medium text-white transition-opacity hover:bg-accent/90 disabled:opacity-50"
+          >
+            {saved ? '已保存 ✓' : '保存为基础默认'}
+          </button>
+          {hasBase && (
+            <button
+              onClick={reset}
+              className="rounded-btn border border-border px-3 text-xs text-muted transition-colors hover:border-warning/40 hover:text-warning"
+              title="清除自定义基础配置, 回落内置默认 (100万 / 万2.5 / 千1 / 5bps)"
+            >
+              恢复内置默认
+            </button>
+          )}
+          <button onClick={onClose} className="rounded-btn border border-border px-4 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground">
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ================================================================
-// 多账户横向对比弹窗: 归一化净值叠加图 + 指标对比表 (行=指标, 列=账户)。
+// 删除账户强确认弹窗 (破坏性操作, per 设计规范必须二次确认):
+// 展示将丢失的数据统计 + 显式勾选; 有持仓/待成交时后端先拒绝一次,
+// 弹窗内呈现拒绝明细后再给「强制删除」(force) — 默认安全, 强删需两步。
+// ================================================================
+function DeleteAccountModal({ acc, name, holdingsCount, onClose, onDeleted }: {
+  acc: string
+  name?: string
+  holdingsCount: number
+  onClose: () => void
+  onDeleted: () => void
+}) {
+  const [ack, setAck] = useState(false)
+  const [forceHint, setForceHint] = useState<string | null>(null) // 后端拒绝明细 (有持仓/待成交)
+  const [forceMode, setForceMode] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const m = useMutation({
+    mutationFn: (force: boolean) => api.paperDeleteAccount(force, acc),
+    onSuccess: onDeleted,
+    onError: e => {
+      const msg = String((e as Error).message)
+      if (msg.includes('force')) {
+        // 后端 fail-closed 拒绝: 显示明细并解锁强制删除路径
+        setForceHint(msg)
+      } else {
+        setErr(msg)
+      }
+    },
+  })
+  return (
+    <Modal onClose={onClose} labelledBy="del-acc-title">
+      <div className="p-5">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-danger" />
+          <h3 id="del-acc-title" className="text-sm font-semibold text-foreground">
+            删除账户 <span className="font-medium">{name || acc}</span>
+          </h3>
+          <span className="font-mono text-[10px] text-muted">{acc}</span>
+        </div>
+        <p className="mt-2 rounded-btn bg-danger/[0.06] px-2.5 py-2 text-[11px] leading-relaxed text-danger">
+          将永久删除该账户的全部数据: 成交台账、持仓、净值曲线与跟单规则, <b>不可恢复</b>。
+          {holdingsCount > 0 && <> 当前还有 {holdingsCount} 个持仓标的。</>}
+        </p>
+        <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-secondary">
+          <input
+            type="checkbox"
+            checked={ack}
+            onChange={e => setAck(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0"
+          />
+          我已知晓该账户数据将被永久删除且无法找回
+        </label>
+        {forceHint && (
+          <div className="mt-3 rounded-btn border border-warning/30 bg-warning/[0.08] px-2.5 py-2 text-[11px] leading-relaxed text-warning">
+            {forceHint}
+            {!forceMode && (
+              <button onClick={() => setForceMode(true)} className="ml-1 underline underline-offset-2">
+                我仍要删除全部数据 →
+              </button>
+            )}
+          </div>
+        )}
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={() => m.mutate(forceMode)}
+            disabled={!ack || m.isPending || (!!forceHint && !forceMode)}
+            className={cn(
+              'flex-1 rounded-btn py-2 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40',
+              forceMode ? 'bg-danger hover:bg-danger/85' : 'bg-danger/70 hover:bg-danger',
+            )}
+          >
+            {m.isPending ? '删除中…' : forceMode ? '强制删除 (含持仓)' : '删除账户'}
+          </button>
+          <button onClick={onClose} className="rounded-btn border border-border px-4 py-2 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground">
+            取消
+          </button>
+        </div>
+        {err && <div className="mt-2 rounded-btn bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{err}</div>}
+      </div>
+    </Modal>
+  )
+}
+
+// ================================================================
+// 多账户横向对比: 归一化净值叠加图。
 // ================================================================
 const COMPARE_COLORS = ['#3B82F6', '#F59E0B', '#10B981', '#EF4444', '#8B5CF6', '#06B6D4', '#EC4899', '#84CC16']
 
@@ -741,10 +1153,13 @@ function CompareChart({ rows }: { rows: PaperCompareRow[] }) {
       series: rows.map((r, i) => ({
         name: r.name,
         type: 'line' as const,
-        showSymbol: false,
+        // 仅 1 个定版点时无线段可画, 显示为圆点 (否则曲线"消失")
+        showSymbol: r.nav.length <= 1,
+        symbolSize: 7,
         // 归一化: 定版净值 / 首日净值 (不同本金也能公平对比)
         data: r.nav.map(n => [n.date, Number((n.nav / (r.nav[0]?.nav || 1)).toFixed(4))]),
         lineStyle: { color: COMPARE_COLORS[i % COMPARE_COLORS.length], width: 2 },
+        itemStyle: { color: COMPARE_COLORS[i % COMPARE_COLORS.length] },
       })),
     })
   }, [rows])
@@ -793,11 +1208,14 @@ function AutoRulesPanel({ acc }: { acc: string }) {
               <span className="w-28 shrink-0 truncate font-medium">{r.name}</span>
               <span className="w-20 shrink-0 text-muted">{r.match_kind === 'strategy' ? '跟策略' : '跟规则'}</span>
               <span className="w-32 shrink-0 truncate font-mono text-[11px] text-muted" title={r.match_id}>{r.match_id}</span>
-              <span className={cn('w-8 shrink-0 font-medium', r.side === 'buy' ? 'text-bull' : 'text-bear')}>{r.side === 'buy' ? '买' : '卖'}</span>
+              <span className={cn('w-8 shrink-0 font-medium', r.side === 'buy' ? 'text-bull' : r.side === 'sell' ? 'text-bear' : 'text-accent')} title={r.side === 'auto' ? '自动: 入场信号买入 · 出场信号全平' : undefined}>{r.side === 'auto' ? '自动' : r.side === 'buy' ? '买' : '卖'}</span>
               <span className="w-24 shrink-0 font-mono text-[11px] text-muted">
                 {r.size_mode === 'fixed_amount' ? fmtMoney(r.size_value, 0) : `${r.size_value}% 权益`}
               </span>
               <span className="w-16 shrink-0 text-[11px] text-muted">{ORDER_TYPE_LABEL[r.order_type]} · 冷却{r.cooldown_days}天</span>
+              {r.max_positions != null && r.max_positions > 0 && (
+                <span className="shrink-0 text-[11px] text-muted" title="最大同时持仓标的数 (0 = 不限)">≤{r.max_positions}仓</span>
+              )}
               <button
                 onClick={() => toggleM.mutate({ id: r.id, enabled: !r.enabled })}
                 className={cn('ml-auto shrink-0 rounded-btn px-2 py-0.5 text-[10px] transition-colors',
@@ -820,11 +1238,12 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
   const [name, setName] = useState('')
   const [matchKind, setMatchKind] = useState<'strategy' | 'rule'>('strategy')
   const [matchId, setMatchId] = useState('')
-  const [side, setSide] = useState<'buy' | 'sell'>('buy')
+  const [side, setSide] = useState<'buy' | 'sell' | 'auto'>('auto')
   const [sizeMode, setSizeMode] = useState<'fixed_amount' | 'pct_equity'>('fixed_amount')
   const [sizeValue, setSizeValue] = useState('10000')
   const [orderType, setOrderType] = useState<'market' | 'next_open' | 'close'>('next_open')
   const [cooldown, setCooldown] = useState('5')
+  const [maxPositions, setMaxPositions] = useState('10')
   const [msg, setMsg] = useState<string | null>(null)
 
   const m = useMutation({
@@ -838,6 +1257,7 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
         size_value: Number(sizeValue),
         order_type: orderType,
         cooldown_days: Number(cooldown),
+        max_positions: Math.max(0, Math.round(Number(maxPositions) || 0)),
         enabled: true,
       }, acc),
     onSuccess: onDone,
@@ -892,7 +1312,7 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
           <label className="text-[11px] text-muted">跟什么</label>
           <div className="mt-1 flex gap-1.5">
             {(['strategy', 'rule'] as const).map(k => (
-              <button key={k} onClick={() => { setMatchKind(k); setMatchId('') }}
+              <button key={k} onClick={() => { setMatchKind(k); setMatchId(''); setSide(s => (k === 'strategy' ? 'auto' : s === 'auto' ? 'buy' : s)) }}
                 className={cn('flex-1 rounded-btn border py-1 text-[11px] transition-colors',
                   matchKind === k ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-muted hover:text-secondary')}>
                 {k === 'strategy' ? '跟策略' : '跟监控规则'}
@@ -912,18 +1332,24 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
             className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-1.5 font-mono text-sm outline-none focus:border-accent/50"
           />
         </div>
-        <div>
-          <label className="text-[11px] text-muted">方向</label>
-          <div className="mt-1 flex gap-1.5">
-            {(['buy', 'sell'] as const).map(sd => (
-              <button key={sd} onClick={() => setSide(sd)}
-                className={cn('flex-1 rounded-btn border py-1 text-[11px] font-medium transition-colors',
-                  side === sd ? (sd === 'buy' ? 'border-bull/50 bg-bull/10 text-bull' : 'border-bear/50 bg-bear/10 text-bear') : 'border-border text-muted')}>
-                {sd === 'buy' ? '买入' : '卖出'}
-              </button>
-            ))}
+        {matchKind === 'strategy' ? (
+          <div className="self-end pb-1.5 text-[10px] leading-4 text-muted">
+            入场信号买入 · 出场信号全平
           </div>
-        </div>
+        ) : (
+          <div>
+            <label className="text-[11px] text-muted">方向</label>
+            <div className="mt-1 flex gap-1.5">
+              {(['buy', 'sell'] as const).map(sd => (
+                <button key={sd} onClick={() => setSide(sd)}
+                  className={cn('flex-1 whitespace-nowrap rounded-btn border py-1 text-[11px] font-medium transition-colors',
+                    side === sd ? (sd === 'buy' ? 'border-bull/50 bg-bull/10 text-bull' : 'border-bear/50 bg-bear/10 text-bear') : 'border-border text-muted')}>
+                  {sd === 'buy' ? '买入' : '卖出'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <label className="text-[11px] text-muted">仓位</label>
           <div className="mt-1 flex gap-1.5">
@@ -953,6 +1379,11 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
         <div>
           <label className="text-[11px] text-muted">冷却天数 (同标的)</label>
           <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)}
+            className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-1.5 font-mono text-sm outline-none focus:border-accent/50" />
+        </div>
+        <div>
+          <label className="text-[11px] text-muted" title="最多同时持有的标的数 (买入开新仓受限, 0 = 不限) — 与回测 max_positions 同口径">最大持仓 (标的数)</label>
+          <input type="number" min="0" step="1" value={maxPositions} onChange={e => setMaxPositions(e.target.value)}
             className="mt-1 w-full rounded-btn border border-border bg-base px-3 py-1.5 font-mono text-sm outline-none focus:border-accent/50" />
         </div>
       </div>
@@ -1004,7 +1435,7 @@ function RankBadge({ rank, accent }: { rank: number; accent?: boolean }) {
 }
 
 /** 对比榜单可排序列 (表头点击切换) */
-type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'profit_loss_ratio' | 'rounds' | 'holdings_count' | 'last_nav_date'
+type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'profit_loss_ratio' | 'rounds' | 'holdings_count' | 'last_nav_date' | 'realized_pnl' | 'max_drawdown'
 
 /** 可空列: 无值行排序时恒垫底 (与方向无关), 见 sorted 比较器 */
 const CMP_NULLABLE: Partial<Record<CmpSortKey, (r: PaperCompareRow) => boolean>> = {
@@ -1012,6 +1443,7 @@ const CMP_NULLABLE: Partial<Record<CmpSortKey, (r: PaperCompareRow) => boolean>>
   day_change_pct: r => r.day_change_pct == null,
   profit_loss_ratio: r => r.profit_loss_ratio == null,
   last_nav_date: r => r.last_nav_date == null,
+  max_drawdown: r => r.max_drawdown == null,
 }
 
 function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
@@ -1025,6 +1457,8 @@ function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
     case 'rounds': return r.rounds ?? 0
     case 'holdings_count': return r.holdings_count ?? 0
     case 'last_nav_date': return r.last_nav_date ?? ''
+    case 'realized_pnl': return r.realized_pnl ?? 0
+    case 'max_drawdown': return -(r.max_drawdown ?? 0) // 回撤绝对值越小越优 → 取负后降序=回撤小在前
   }
 }
 
@@ -1061,11 +1495,19 @@ function SortTh({ label, sortKey, sort, onSort, align = 'left', title }: {
 
 function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const [createOpen, setCreateOpen] = useState(false)
+  const [baseOpen, setBaseOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<PaperCompareRow | null>(null)
+  const qc = useQueryClient()
   // 表头排序: 默认累计收益降序; 同列再点翻转方向, 换列时数值列默认降序、账户名默认升序
   const [sort, setSort] = useState<{ key: CmpSortKey; desc: boolean }>({ key: 'pnl_pct', desc: true })
   const onSortCmp = (k: CmpSortKey) =>
     setSort(s => (s.key === k ? { key: k, desc: !s.desc } : { key: k, desc: k !== 'name' }))
+  // 行内冻结/解冻 (与展开面板同一入口, 免展开直接切)
+  const freezeM = useMutation({
+    mutationFn: (args: { acc: string; frozen: boolean }) => api.paperFreeze(args.frozen, args.acc),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.paperAll }),
+  })
   // 60s 轻轮询: 盘中自动跟单下单 / 盘后结算后榜单自然刷新 (保留旧数据防闪烁)。
   // 非交易时段榜单不变, 降为 5 分钟兜底 (字段缺失保持 60s)
   const { data: quoteStatus } = useQuoteStatus()
@@ -1123,6 +1565,14 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
             >
               <Plus className="h-3 w-3" />
               单账户
+            </button>
+            <button
+              onClick={() => setBaseOpen(true)}
+              className="flex items-center gap-1 rounded-btn border border-border px-2 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+              title="新建账户的默认初始资金与费率 (佣金/印花税/滑点), 创建时自动加载"
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              基础配置
             </button>
             <button
               onClick={() => cmpQ.refetch()}
@@ -1199,24 +1649,30 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
               <div className="flex items-center gap-2">
                 <div className="text-sm font-medium">收益对比</div>
                 <span className="text-[10px] text-muted">点表头排序 · 点行展开完整账户操作</span>
-                <span className="ml-auto text-[10px] text-muted" title="结算后更新; 盘中自动跟单的单可见于展开区">数据截至最近结算日</span>
+                <span className="ml-auto text-[10px] text-muted" title="定版字段结算后更新; 盘中快照就绪时总资产/收益显示实时估算 (估 徽标)">
+                  {rows.some(r => r.estimating) ? '总资产 / 收益为盘中实时估算 · 其余截至最近结算日' : '数据截至最近结算日'}
+                </span>
               </div>
               <div className="mt-2 overflow-x-auto">
-                <table className="w-full min-w-[920px] text-xs">
+                <table className="w-full min-w-[1100px] text-xs">
                   <thead>
                     <tr className="border-b border-border text-left text-[10px] text-muted">
                       <th className="py-1.5 pr-1 font-medium">#</th>
                       <SortTh label="账户" sortKey="name" sort={sort} onSort={onSortCmp} />
-                      <SortTh label="总资产" sortKey="total" sort={sort} onSort={onSortCmp} align="right" />
+                      <SortTh label="总资产" sortKey="total" sort={sort} onSort={onSortCmp} align="right" title="定版口径; 盘中快照就绪时显示实时估算" />
                       <SortTh label="累计收益" sortKey="pnl_pct" sort={sort} onSort={onSortCmp} align="right" />
                       <SortTh label="最新日" sortKey="day_change_pct" sort={sort} onSort={onSortCmp} align="right" title="最近两个定版净值的涨跌" />
+                      <SortTh label="已实现" sortKey="realized_pnl" sort={sort} onSort={onSortCmp} align="right" title="FIFO 回合已落袋盈亏 (含费用)" />
+                      <SortTh label="回撤" sortKey="max_drawdown" sort={sort} onSort={onSortCmp} align="right" title="定版净值序列最大回撤" />
                       <SortTh label="胜率" sortKey="win_rate" sort={sort} onSort={onSortCmp} align="right" />
                       <SortTh label="盈亏比" sortKey="profit_loss_ratio" sort={sort} onSort={onSortCmp} align="right" title="平均盈利回合 / 平均亏损回合, 无亏损回合时为空" />
                       <SortTh label="回合" sortKey="rounds" sort={sort} onSort={onSortCmp} align="right" title="FIFO 配对的完整买卖回合" />
                       <SortTh label="持仓" sortKey="holdings_count" sort={sort} onSort={onSortCmp} align="right" />
                       <th className="py-1.5 text-center font-medium">净值趋势</th>
                       <SortTh label="最近结算" sortKey="last_nav_date" sort={sort} onSort={onSortCmp} align="right" />
-                      <th className="w-14 py-1.5" />
+                      {/* 操作列 sticky 贴右: 14 列宽表在窄视口横向滚动时, 冻结/删除入口始终可见。
+                          box-shadow 在 border-collapse 表格上不渲染, 分界用 1px 左边框。 */}
+                      <th className="sticky right-0 z-10 w-16 border-l border-border/60 bg-surface/95 py-1.5 text-center font-medium backdrop-blur-sm" title="冻结切换 / 删除账户">操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1225,7 +1681,11 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                       return (
                         <Fragment key={r.account}>
                           <tr
-                            className={cn('cursor-pointer border-t border-border/50 transition-colors hover:bg-elevated/40', open && 'bg-elevated/30')}
+                            className={cn(
+                              'cursor-pointer border-t border-border/50 transition-colors hover:bg-elevated/40',
+                              open && 'bg-elevated/30',
+                              r.status === 'frozen' && !open && 'opacity-60',
+                            )}
                             onClick={() => setExpanded(open ? null : r.account)}
                           >
                             <td className="py-2 pr-1" title="当前排序列位 (仅按累计收益降序时高亮为收益名次)"><RankBadge rank={i + 1} accent={sort.key === 'pnl_pct' && sort.desc} /></td>
@@ -1248,13 +1708,28 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                               </div>
                               <div className="font-mono text-[10px] text-muted">{r.account}</div>
                             </td>
-                            <td className="py-2 text-right font-mono tabular">{fmtMoney(r.total, 0)}</td>
+                            <td className="py-2 text-right font-mono tabular">
+                              <span className="inline-flex items-baseline justify-end gap-1">
+                                {fmtMoney(r.estimating ? (r.live_total ?? r.total) : r.total, 0)}
+                                {r.estimating && <span className="text-[9px] font-sans text-accent" title="盘中快照价实时估算, 收盘后定版">估</span>}
+                              </span>
+                            </td>
                             <td className="py-2 text-right font-mono font-semibold tabular">
-                              <span className={priceColorClass((r.pnl_pct ?? 0) / 100)}>{fmtPct((r.pnl_pct ?? 0) / 100)}</span>
+                              <span className={priceColorClass((r.estimating ? (r.live_pnl_pct ?? r.pnl_pct ?? 0) : (r.pnl_pct ?? 0)) / 100)}>
+                                {fmtPct(((r.estimating ? (r.live_pnl_pct ?? r.pnl_pct ?? 0) : (r.pnl_pct ?? 0))) / 100)}
+                              </span>
                             </td>
                             <td className="py-2 text-right font-mono tabular">
                               {r.day_change_pct != null
                                 ? <span className={priceColorClass(r.day_change_pct / 100)}>{fmtPct(r.day_change_pct / 100)}</span>
+                                : <span className="text-muted">—</span>}
+                            </td>
+                            <td className={cn('py-2 text-right font-mono tabular', priceColorClass(r.realized_pnl ?? 0))}>
+                              {(r.realized_pnl ?? 0) >= 0 ? '+' : ''}{fmtMoney(r.realized_pnl ?? 0, 0)}
+                            </td>
+                            <td className="py-2 text-right font-mono tabular text-secondary">
+                              {r.max_drawdown != null
+                                ? r.max_drawdown > 0 ? `-${r.max_drawdown.toFixed(1)}%` : '0.0%'
                                 : <span className="text-muted">—</span>}
                             </td>
                             <td className="py-2 text-right font-mono tabular text-secondary">{r.win_rate.toFixed(1)}%</td>
@@ -1265,14 +1740,34 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                             <td className="py-2 text-right font-mono tabular text-secondary">{r.holdings_count ?? 0}</td>
                             <td className="py-1.5"><NavSpark nav={r.nav} /></td>
                             <td className="py-2 text-right font-mono text-[11px] text-muted">{r.last_nav_date ?? '—'}</td>
-                            <td className="py-2 text-right">
-                              <ChevronDown className={cn('inline h-3.5 w-3.5 text-muted transition-transform duration-150', open && 'rotate-180')} />
+                            <td className="sticky right-0 z-10 border-l border-border/60 bg-surface/95 py-2 text-right backdrop-blur-sm" onClick={e => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-0.5">
+                                <button
+                                  onClick={() => freezeM.mutate({ acc: r.account, frozen: r.status !== 'frozen' })}
+                                  disabled={freezeM.isPending}
+                                  className={cn(
+                                    'rounded p-1 transition-colors',
+                                    r.status === 'frozen' ? 'text-warning hover:bg-warning/10' : 'text-muted hover:bg-elevated hover:text-warning',
+                                  )}
+                                  title={r.status === 'frozen' ? '解冻账户 (恢复下单与跟单)' : '冻结账户 (拒绝新订单, 持仓只读)'}
+                                >
+                                  <Snowflake className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => setDeleting(r)}
+                                  className="rounded p-1 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                                  title="删除账户 (含全部数据, 需二次确认)"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                                <ChevronDown className={cn('ml-0.5 inline h-3.5 w-3.5 text-muted transition-transform duration-150', open && 'rotate-180')} />
+                              </div>
                             </td>
                           </tr>
                           {open && (
                             <tr className="border-t border-border/50 bg-base/40">
-                              <td colSpan={12} className="px-4 py-4">
-                                <AccountPanel acc={r.account} name={r.name} />
+                              <td colSpan={14} className="px-4 py-4">
+                                <AccountPanel acc={r.account} name={r.name} onDeleted={() => setExpanded(null)} />
                               </td>
                             </tr>
                           )}
@@ -1287,6 +1782,20 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
         )}
       </div>
       {createOpen && <BatchCreateModal onClose={() => setCreateOpen(false)} onCreated={() => setCreateOpen(false)} />}
+      {baseOpen && <BaseDefaultsModal onClose={() => setBaseOpen(false)} />}
+      {deleting && (
+        <DeleteAccountModal
+          acc={deleting.account}
+          name={deleting.name}
+          holdingsCount={deleting.holdings_count ?? 0}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            setDeleting(null)
+            setExpanded(null)
+            qc.invalidateQueries({ queryKey: QK.paperAll })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1309,11 +1818,12 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [quickKind, setQuickKind] = useState<'strategy' | 'rule'>('strategy')
   const [quickId, setQuickId] = useState('')
   // 共享跟单参数 (应用到全部来源 → 同规格对比)
-  const [side, setSide] = useState<'buy' | 'sell'>('buy')
+  const [side, setSide] = useState<'buy' | 'sell' | 'auto'>('auto')
   const [sizeMode, setSizeMode] = useState<'fixed_amount' | 'pct_equity'>('pct_equity')
   const [sizeValue, setSizeValue] = useState('10')
   const [orderType, setOrderType] = useState<'market' | 'next_open' | 'close'>('next_open')
   const [cooldown, setCooldown] = useState('5')
+  const [maxPositions, setMaxPositions] = useState('10')
 
   const strategiesQ = useQuery({
     queryKey: QK.screenerStrategies('any', 'all'),
@@ -1339,6 +1849,7 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
           size_value: Number(sizeValue),
           order_type: orderType,
           cooldown_days: Number(cooldown),
+          max_positions: Math.max(0, Math.round(Number(maxPositions) || 0)),
         })),
       }),
     onSuccess: r => {
@@ -1352,6 +1863,8 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
   const addRow = (row: BatchSourceRow) => {
     setRows(prev => (prev.some(r => r.matchId === row.matchId) ? prev : [...prev, row]))
+    // 混入监控规则来源后 auto 不再合法 (后端校验拒绝), 落回买入
+    if (row.kind === 'rule') setSide(s => (s === 'auto' ? 'buy' : s))
   }
   const addAllStrategies = () => {
     const presets = (strategiesQ.data?.presets ?? []).slice(0, 20)
@@ -1370,13 +1883,19 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const quickQuery = quickId.trim().toLowerCase()
   const quickOptions: SuggestOption[] = quickKind === 'strategy'
     ? (strategiesQ.data?.presets ?? [])
-        .filter(s => !quickQuery || s.name.toLowerCase().includes(quickQuery) || s.id.toLowerCase().includes(quickQuery))
-        .slice(0, 8)
-        .map(s => ({ value: s.id, label: s.name || s.id, hint: <span className="shrink-0 font-mono text-[10px] text-muted">{s.id}</span> }))
+        .filter(s => !quickQuery || s.name.toLowerCase().includes(quickQuery) || s.id.toLowerCase().includes(quickQuery) || (s.tags ?? []).some(t => t.toLowerCase().includes(quickQuery)))
+        .map(s => ({
+          value: s.id,
+          label: s.name || s.id,
+          desc: s.description || undefined,
+          badges: [
+            ...(s.timeframes ?? []).map(tf => tf === '1d' ? '日线' : tf === '1m' ? '分钟' : tf),
+            ...(s.tags ?? []).slice(0, 2),
+          ].slice(0, 3),
+        }))
     : (rulesQ.data?.rules ?? [])
         .filter(r => !quickQuery || r.name.toLowerCase().includes(quickQuery) || r.id.toLowerCase().includes(quickQuery))
-        .slice(0, 8)
-        .map(r => ({ value: r.id, label: r.name || r.id, hint: <span className="shrink-0 font-mono text-[10px] text-muted">{r.id}</span> }))
+        .map(r => ({ value: r.id, label: r.name || r.id }))
 
   const inputCls = 'w-full rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-sm outline-none focus:border-accent/50'
   const labelCls = 'block text-[11px] text-muted'
@@ -1468,18 +1987,24 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
             <label className={labelCls}>账户名前缀 (可选)</label>
             <input value={prefix} onChange={e => setPrefix(e.target.value)} className={cn(inputCls, 'mt-1 font-sans')} placeholder="如: 第一期-" />
           </div>
-          <div>
-            <label className={labelCls}>方向 (全部来源)</label>
-            <div className="mt-1 flex gap-1.5">
-              {(['buy', 'sell'] as const).map(sd => (
-                <button key={sd} onClick={() => setSide(sd)}
-                  className={cn('flex-1 rounded-btn border py-1 text-[11px] font-medium transition-colors',
-                    side === sd ? (sd === 'buy' ? 'border-bull/50 bg-bull/10 text-bull' : 'border-bear/50 bg-bear/10 text-bear') : 'border-border text-muted')}>
-                  {sd === 'buy' ? '买入' : '卖出'}
-                </button>
-              ))}
+          {rows.length > 0 && rows.every(r => r.kind === 'strategy') ? (
+            <div className="self-end pb-1.5 text-[10px] leading-4 text-muted">
+              入场信号买入 · 出场信号全平
             </div>
-          </div>
+          ) : (
+            <div>
+              <label className={labelCls}>方向 (监控规则来源)</label>
+              <div className="mt-1 flex gap-1.5">
+                {(['buy', 'sell'] as const).map(sd => (
+                  <button key={sd} onClick={() => setSide(sd)}
+                    className={cn('flex-1 whitespace-nowrap rounded-btn border py-1 text-[11px] font-medium transition-colors',
+                      side === sd ? (sd === 'buy' ? 'border-bull/50 bg-bull/10 text-bull' : 'border-bear/50 bg-bear/10 text-bear') : 'border-border text-muted')}>
+                    {sd === 'buy' ? '买入' : '卖出'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label className={labelCls}>仓位模式 (全部来源)</label>
             <div className="mt-1 flex gap-1.5">
@@ -1508,6 +2033,10 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
           <div>
             <label className={labelCls}>冷却天数 (同标的)</label>
             <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className={cn(inputCls, 'mt-1')} />
+          </div>
+          <div>
+            <label className={labelCls} title="最多同时持有的标的数 (买入开新仓受限, 0 = 不限) — 与回测 max_positions 同口径">最大持仓 (标的数)</label>
+            <input type="number" min="0" step="1" value={maxPositions} onChange={e => setMaxPositions(e.target.value)} className={cn(inputCls, 'mt-1')} />
           </div>
           <div className="grid grid-cols-3 gap-2 md:col-span-2">
             <div>
@@ -1545,82 +2074,54 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 }
 
 export function Paper() {
-  const [view, setView] = useState<'compare' | 'setup'>('compare')
-  // 新建账户草稿 id: 非空 = 正在创建。点「单账户」只进入草稿态,
-  // 取消/返回即丢弃, 不写任何持久状态。
-  const [draftId, setDraftId] = useState<string | null>(null)
-
-  if (view === 'compare') {
-    return <CompareView onCreateSingle={() => { setDraftId(genAccountId()); setView('setup') }} />
-  }
-  return (
-    <SetupView
-      draftId={draftId}
-      setDraftId={setDraftId}
-      onBack={() => setView('compare')}
-    />
-  )
-}
-
-/** 新建单账户向导 (从对比页「单账户」进入; 返回/完成都回到对比页) */
-function SetupView({ draftId, setDraftId, onBack }: {
-  draftId: string | null
-  setDraftId: (id: string | null) => void
-  onBack: () => void
-}) {
   const qc = useQueryClient()
-  const accountsQ = useQuery({ queryKey: QK.paperAccounts, queryFn: api.paperAccounts })
-  const accounts = accountsQ.data?.accounts ?? []
-  const back = () => {
-    setDraftId(null)
-    onBack()
-  }
+  // 新建账户草稿 id: 打开弹窗时生成, 关闭即丢弃, 不写任何持久状态。
+  const [draftId, setDraftId] = useState<string | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
+  const close = () => { setSetupOpen(false); setDraftId(null) }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader
-        title="新建虚拟账户"
-        subtitle="单账户创建 · 批量对比请用对比页的「批量创建账户」"
-        right={
-          <button
-            onClick={back}
-            className="flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
-            title="返回多账户对比"
-          >
-            <GitCompare className="h-3 w-3" />
-            返回对比
-          </button>
-        }
-      />
-      <div className="flex-1 overflow-y-auto">
-        <SetupCard
-          accId={draftId ?? 'default'}
-          onDone={() => {
-            setDraftId(null)
-            qc.invalidateQueries({ queryKey: QK.paperAll })
-            onBack()
-          }}
-          onCancel={accounts.length > 0 ? back : undefined}
-        />
-      </div>
-    </div>
+    <>
+      <CompareView onCreateSingle={() => { setDraftId(genAccountId()); setSetupOpen(true) }} />
+      {setupOpen && (
+        <Modal onClose={close} labelledBy="setup-card-title" panelClassName="w-[94vw] max-w-md bg-surface border border-border rounded-card shadow-xl">
+          <SetupCard
+            accId={draftId ?? 'default'}
+            onDone={() => {
+              qc.invalidateQueries({ queryKey: QK.paperAll })
+              close()
+            }}
+            onCancel={close}
+          />
+        </Modal>
+      )}
+    </>
   )
 }
 
 /** 账户操作面板 (原单账户视图主体): 在对比榜单行展开内渲染, 免跳转。
- *  含总览卡/净值曲线/持仓/订单与成交/下单/跟单规则/费用设置/冻结。 */
-function AccountPanel({ acc, name }: { acc: string; name?: string }) {
+ *  含总览卡/净值曲线/持仓/订单与成交/回合明细/下单/跟单规则/费用设置/冻结/删除。 */
+function AccountPanel({ acc, name, onDeleted }: { acc: string; name?: string; onDeleted?: () => void }) {
   const qc = useQueryClient()
-  const [tab, setTab] = useState<'orders' | 'trades'>('orders')
+  const [tab, setTab] = useState<'orders' | 'trades' | 'rounds'>('orders')
   const [feeOpen, setFeeOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [showAllOrders, setShowAllOrders] = useState(false)
+  const [showAllTrades, setShowAllTrades] = useState(false)
 
   const overviewQ = useQuery({ queryKey: QK.paperOverview(acc), queryFn: () => api.paperOverview(acc) })
   const ordersQ = useQuery({ queryKey: QK.paperOrders(acc), queryFn: () => api.paperOrders(undefined, acc) })
   const tradesQ = useQuery({ queryKey: QK.paperTrades(acc), queryFn: () => api.paperTrades(acc) })
   const navQ = useQuery({ queryKey: QK.paperNav(acc), queryFn: () => api.paperNav(acc) })
   const statsQ = useQuery({ queryKey: QK.paperStats(acc), queryFn: () => api.paperStats(acc) })
+  const roundsQ = useQuery({ queryKey: QK.paperRounds(acc), queryFn: () => api.paperRounds(acc) })
+  const rounds: PaperRound[] = [...(roundsQ.data?.rounds ?? [])].reverse() // 最新回合在前
 
-  // 持仓代码→名称 (#454): 就地显示名称, 不用切页查询。股票/ETF/指数都覆盖。
-  const holdingSymbols = (overviewQ.data?.holdings ?? []).map(h => h.symbol)
+  // 持仓+回合代码→名称 (#454): 就地显示名称, 不用切页查询。股票/ETF/指数都覆盖。
+  // 回合标的可能已清仓 (不在持仓), 合并去重一起查
+  const holdingSymbols = Array.from(new Set([
+    ...(overviewQ.data?.holdings ?? []).map(h => h.symbol),
+    ...rounds.map(r => r.symbol),
+  ]))
   const namesQ = useQuery({
     queryKey: ['instrument-names', holdingSymbols.join(',')],
     queryFn: () => api.instrumentNames(holdingSymbols),
@@ -1665,10 +2166,12 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
     return <div className="py-8 text-center text-xs text-muted">账户未初始化</div>
   }
 
-  const holdings = ov.holdings ?? []
-  const orders = (ordersQ.data?.orders ?? []).filter(o => o.status === 'pending' || o.status === 'expired' || o.status === 'cancelled').slice(0, 20)
-  const trades: PaperFill[] = (tradesQ.data?.fills ?? []).slice(0, 30)
+  const holdings: PaperHolding[] = ov.holdings ?? []
+  // 全状态订单流水 (含已成交), 默认收最近 20 条, 可展开全部
+  const allOrders: PaperOrder[] = ordersQ.data?.orders ?? []
+  const orders = showAllOrders ? allOrders : allOrders.slice(0, 20)
   const allFills: PaperFill[] = tradesQ.data?.fills ?? []
+  const trades = showAllTrades ? allFills : allFills.slice(0, 30)
   const nav = navQ.data?.nav ?? []
   const stats = statsQ.data
   const pnlPct = ov.initial_cash && ov.initial_cash > 0 ? ((ov.total_pnl ?? 0) / ov.initial_cash) * 100 : 0
@@ -1723,6 +2226,13 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
           className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-warning/40 hover:text-warning"
         >
           {ov.status === 'frozen' ? '解冻账户' : '冻结账户'}
+        </button>
+        <button
+          onClick={() => setDeleteOpen(true)}
+          className="rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-danger/40 hover:text-danger"
+          title="删除账户及其全部数据 (不可恢复)"
+        >
+          删除账户
         </button>
       </div>
       <div>
@@ -1789,18 +2299,36 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
               )}
             </div>
 
-            {/* 订单 / 成交流水 */}
+            {/* 订单 / 成交 / 回合明细 */}
             <div className="rounded-card border border-border bg-surface p-4">
-              <div className="flex items-center gap-2">
-                {(['orders', 'trades'] as const).map(t => (
+              <div className="flex flex-wrap items-center gap-2">
+                {(['orders', 'trades', 'rounds'] as const).map(t => (
                   <button
                     key={t}
                     onClick={() => setTab(t)}
-                    className={cn('rounded-btn px-2.5 py-1 text-xs transition-colors', tab === t ? 'bg-elevated text-foreground' : 'text-muted hover:text-secondary')}
+                    className={cn('flex items-center gap-1 rounded-btn px-2.5 py-1 text-xs transition-colors', tab === t ? 'bg-elevated text-foreground' : 'text-muted hover:text-secondary')}
                   >
-                    {t === 'orders' ? '订单' : '成交台账'}
+                    {t === 'orders' && <><History className="h-3 w-3" />订单 {allOrders.length > 0 && <span className="text-[10px] text-muted">{allOrders.length}</span>}</>}
+                    {t === 'trades' && <>成交台账 {allFills.length > 0 && <span className="text-[10px] text-muted">{allFills.length}</span>}</>}
+                    {t === 'rounds' && <><ListChecks className="h-3 w-3" />回合明细 {rounds.length > 0 && <span className="text-[10px] text-muted">{rounds.length}</span>}</>}
                   </button>
                 ))}
+                {tab === 'orders' && allOrders.length > 20 && (
+                  <button
+                    onClick={() => setShowAllOrders(v => !v)}
+                    className="rounded-btn border border-border px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:border-accent/30 hover:text-accent"
+                  >
+                    {showAllOrders ? '收起' : `显示全部 ${allOrders.length} 条`}
+                  </button>
+                )}
+                {tab === 'trades' && allFills.length > 30 && (
+                  <button
+                    onClick={() => setShowAllTrades(v => !v)}
+                    className="rounded-btn border border-border px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:border-accent/30 hover:text-accent"
+                  >
+                    {showAllTrades ? '收起' : `显示全部 ${allFills.length} 条`}
+                  </button>
+                )}
                 {tab === 'trades' && (
                   <button
                     onClick={exportTradesCsv}
@@ -1814,7 +2342,7 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
                 {stats && (
                   <span className="ml-auto text-[11px] text-muted" title="回合为 FIFO 配对的完整买卖; 回撤按定版净值序列">
                     回合 {stats.rounds} · 胜率 {stats.win_rate}% · 盈亏比 {stats.profit_loss_ratio ?? '--'} · 均持 {stats.avg_holding_days}天 · 回撤{' '}
-                    {stats.max_drawdown != null ? `-${stats.max_drawdown}%` : '--'} ·{' '}
+                    {stats.max_drawdown != null ? (stats.max_drawdown > 0 ? `-${stats.max_drawdown}%` : '0%') : '--'} ·{' '}
                     <span className={cn('font-mono', priceColorClass(stats.realized_pnl))}>
                       已实现 {stats.realized_pnl >= 0 ? '+' : ''}{fmtMoney(stats.realized_pnl, 0)}
                     </span>
@@ -1857,7 +2385,7 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
                     </div>
                   ))}
                 </div>
-              ) : (
+              ) : tab === 'trades' ? (
                 <div className="mt-2 space-y-1">
                   {trades.length === 0 && <div className="py-6 text-center text-xs text-muted">暂无成交</div>}
                   {trades.map((f: PaperFill) => (
@@ -1879,13 +2407,53 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
                     </div>
                   ))}
                 </div>
+              ) : (
+                <div className="mt-2">
+                  {rounds.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted">暂无完整回合 — FIFO 配对买卖后在此展示每笔回合的盈亏明细</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-[10px] text-muted">
+                          <th className="py-1.5 font-normal">标的</th>
+                          <th className="py-1.5 text-right font-normal">数量</th>
+                          <th className="py-1.5 text-right font-normal">开仓日</th>
+                          <th className="py-1.5 text-right font-normal">平仓日</th>
+                          <th className="py-1.5 text-right font-normal">持有天数</th>
+                          <th className="py-1.5 text-right font-normal">回合盈亏</th>
+                          <th className="py-1.5 text-right font-normal">收益率</th>
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono">
+                        {rounds.map((rt, i) => (
+                          <tr key={`${rt.symbol}-${rt.open_date}-${rt.close_date}-${i}`} className="border-t border-border/50 transition-colors hover:bg-elevated/40">
+                            <td className="py-1.5 font-sans">
+                              {rt.symbol}
+                              {symbolNames[rt.symbol] && <span className="ml-1.5 text-[10px] text-muted">{symbolNames[rt.symbol]}</span>}
+                            </td>
+                            <td className="py-1.5 text-right">{rt.qty}</td>
+                            <td className="py-1.5 text-right text-muted">{rt.open_date}</td>
+                            <td className="py-1.5 text-right text-muted">{rt.close_date}</td>
+                            <td className="py-1.5 text-right text-secondary">{rt.holding_days}天</td>
+                            <td className={cn('py-1.5 text-right', priceColorClass(rt.pnl))}>
+                              {(rt.pnl >= 0 ? '+' : '') + fmtMoney(rt.pnl, 0)}
+                            </td>
+                            <td className={cn('py-1.5 text-right', priceColorClass(rt.pnl_pct))}>
+                              {fmtPct(rt.pnl_pct / 100)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               )}
             </div>
           </div>
 
           {/* 右列: 下单 + 自动跟单 + 策略对比 */}
           <div className="space-y-4">
-            <OrderForm acc={acc} onDone={invalidateAll} />
+            <OrderForm acc={acc} holdings={holdings} onDone={invalidateAll} />
             <AutoRulesPanel acc={acc} />
             <CandidateCompareCard paper={{
               total_return_pct: nav.length >= 2 && nav[0].nav > 0 ? (nav[nav.length - 1].nav / nav[0].nav - 1) * 100 : null,
@@ -1933,6 +2501,19 @@ function AccountPanel({ acc, name }: { acc: string; name?: string }) {
           queue={!!ov.queue_limit_orders}
           onSaved={() => setFeeOpen(false)}
           onClose={() => setFeeOpen(false)}
+        />
+      )}
+      {deleteOpen && (
+        <DeleteAccountModal
+          acc={acc}
+          name={name}
+          holdingsCount={holdings.length}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => {
+            setDeleteOpen(false)
+            qc.invalidateQueries({ queryKey: QK.paperAll })
+            onDeleted?.()
+          }}
         />
       )}
     </div>
