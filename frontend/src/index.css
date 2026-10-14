@@ -68,9 +68,9 @@ html.dark {
 /* 默认 1px 细分隔线(暗色用边框区分层次,不用 shadow) */
 * { border-color: hsl(var(--border)); }
 
-/* 页面缩放 (设置→系统→界面缩放) 用 CSS zoom 作用于 <html>:
- * vh 单位不随 zoom 缩放 (zoom<1 底部露底 / zoom>1 溢出), 百分比高度链才会 —
- * 根链路统一 % 高度, 主布局与加载占位用 h-full/min-h-full 而非 h-screen。 */
+/* 页面缩放 (设置→系统→界面缩放) 用 #root transform: scale 实现 (见 lib/pageZoom.ts):
+ * #root 宽高按 1/z 百分比补偿, 根链路必须是 % 高度链 (vh 不参与换算) —
+ * 主布局与加载占位用 h-full/min-h-full 而非 h-screen。 */
 html, body, #root { height: 100%; }
 
 body {
@@ -84,6 +84,12 @@ body {
 }
 
 /* 选区用主色 (默认蓝底破坏暗色氛围) */
+/* 联想下拉 (SuggestInput portal) 进入动画: 2px 上浮 + 淡入, 120ms 快进快出 */
+@keyframes sg-drop-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.995); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 ::selection {
   background: hsl(var(--accent) / 0.3);
 }

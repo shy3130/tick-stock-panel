@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, Check, AlertCircle } from 'lucide-react'
 import { useBubbleTasks, restoreDialog } from '@/lib/stockAnalysisStore'
 import type { ActiveTask } from '@/lib/stockAnalysisStore'
+import { getPageScale } from '@/lib/pageZoom'
 
 /**
  * AI 个股分析任务全局气泡 —— 与财务分析胶囊并列,蓝色主题区分。
@@ -30,8 +31,10 @@ export function StockAnalysisBubble() {
   }, [])
 
   const clamp = useCallback((x: number, y: number) => {
-    const maxX = window.innerWidth - BUBBLE_W - EDGE_MARGIN
-    const maxY = window.innerHeight - 80
+    // innerWidth 是视觉像素, translate3d 定位值是 #root 布局坐标 (缩放层), 需 ÷ scale。
+    const z = getPageScale()
+    const maxX = window.innerWidth / z - BUBBLE_W - EDGE_MARGIN
+    const maxY = window.innerHeight / z - 80
     return {
       x: Math.max(EDGE_MARGIN, Math.min(maxX, x)),
       y: Math.max(EDGE_MARGIN, Math.min(maxY, y)),
@@ -49,8 +52,10 @@ export function StockAnalysisBubble() {
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!draggingRef.current) return
-    const dx = e.clientX - dragData.current.mx
-    const dy = e.clientY - dragData.current.my
+    // clientX 是视觉像素, 位移需 ÷ scale 换算回布局坐标, 否则缩放下拖拽跟手速度偏差 1/z。
+    const z = getPageScale()
+    const dx = (e.clientX - dragData.current.mx) / z
+    const dy = (e.clientY - dragData.current.my) / z
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) movedRef.current = true
     const c = clamp(dragData.current.ox + dx, dragData.current.oy + dy)
     applyTransform(c.x, c.y)
@@ -186,16 +191,18 @@ function BubbleItem({ task, isLast, onPointerDown }: {
 const POS_KEY = 'sa_bubble_pos'
 function loadPos(): { x: number; y: number } {
   // 默认右下,偏上一点(避开财务胶囊的右下位置)
-  const defaultX = Math.max(EDGE_MARGIN, window.innerWidth - BUBBLE_W - EDGE_MARGIN)
-  const defaultY = Math.max(EDGE_MARGIN, window.innerHeight - 320)
+  // innerWidth 视觉像素 ÷ scale = #root 布局坐标 (缩放层)。
+  const z = getPageScale()
+  const defaultX = Math.max(EDGE_MARGIN, window.innerWidth / z - BUBBLE_W - EDGE_MARGIN)
+  const defaultY = Math.max(EDGE_MARGIN, window.innerHeight / z - 320)
   try {
     const v = localStorage.getItem(POS_KEY)
     if (v) {
       const p = JSON.parse(v)
       if (typeof p.x === 'number' && typeof p.y === 'number') {
         return {
-          x: Math.max(EDGE_MARGIN, Math.min(window.innerWidth - BUBBLE_W - EDGE_MARGIN, p.x)),
-          y: Math.max(EDGE_MARGIN, Math.min(window.innerHeight - 80, p.y)),
+          x: Math.max(EDGE_MARGIN, Math.min(window.innerWidth / z - BUBBLE_W - EDGE_MARGIN, p.x)),
+          y: Math.max(EDGE_MARGIN, Math.min(window.innerHeight / z - 80, p.y)),
         }
       }
     }

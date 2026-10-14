@@ -16,7 +16,24 @@
  *   非编辑状态下布局意外写回)。
  */
 import { useCallback, useMemo, type ReactNode } from 'react'
-import GridLayout, { useContainerWidth, type Layout } from 'react-grid-layout'
+import GridLayout, { useContainerWidth, setTransform, type Layout } from 'react-grid-layout'
+import { getPageScale } from '@/lib/pageZoom'
+
+/** RGL 2.x 的「容器被 transform: scale 缩放」定位策略 (包根未导出 createScaledStrategy,
+ *  按 dist 内官方实现等价构造): 定位走 transform, 拖拽像素位移按 scale 换算回布局坐标。
+ *  界面缩放挂在 #root (见 lib/pageZoom.ts), dashboard 网格在缩放层内, 不补偿则
+ *  缩放≠100% 时拖拽跟手速度偏差 1/scale。 */
+function scaledStrategy(scale: number) {
+  return {
+    type: 'transform' as const,
+    scale,
+    calcStyle: (pos: Parameters<typeof setTransform>[0]) => setTransform(pos),
+    calcDragPosition: (clientX: number, clientY: number, offsetX: number, offsetY: number) => ({
+      left: (clientX - offsetX) / scale,
+      top: (clientY - offsetY) / scale,
+    }),
+  }
+}
 import 'react-grid-layout/css/styles.css'
 import './grid.css'
 import { X } from 'lucide-react'
@@ -93,6 +110,7 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
         <GridLayout
           width={width}
           layout={rglLayout}
+          positionStrategy={scaledStrategy(getPageScale())}
           gridConfig={{ cols: GRID_COLS, rowHeight: GRID_ROW_HEIGHT, margin: [GRID_MARGIN, GRID_MARGIN], containerPadding: null, maxRows: Infinity }}
           dragConfig={{
             enabled: editing,

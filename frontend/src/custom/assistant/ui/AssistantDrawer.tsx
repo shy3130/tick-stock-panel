@@ -90,7 +90,8 @@ export function AssistantDrawer() {
         <DrawerPanel key="assistant-drawer" sending={sending} messages={messages} />
       )}
     </AnimatePresence>,
-    document.body,
+    // #root (缩放层): 抽屉随界面缩放, 且与 Modal 同层叠上下文保持 z 序设计。
+    document.getElementById('root') ?? document.body,
   )
 }
 

@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { getPageScale } from '@/lib/pageZoom'
 import { toggleAssistant, useAssistantStore } from '../store'
 
 const POS_STORAGE_KEY = 'assistant.fab.pos.v1'
@@ -21,12 +22,11 @@ interface BallPos {
   y: number
 }
 
-/** 页面 CSS zoom (html 上): 视觉坐标(getBoundingClientRect/clientX) 与
- * 布局坐标(style.left) 在 zoom≠1 时相差 zoom 倍, 拖拽换算必须经过它,
+/** 页面缩放 (#root transform scale): 视觉坐标(getBoundingClientRect/clientX) 与
+ * 布局坐标(style.left) 在 scale≠1 时相差 scale 倍, 拖拽换算必须经过它,
  * 否则 90% 缩放下每次拖动球会向左上跳约 11%。 */
 function pageZoom(): number {
-  const v = parseFloat(getComputedStyle(document.documentElement).zoom)
-  return Number.isFinite(v) && v > 0 ? v : 1
+  return getPageScale()
 }
 
 function clampPos(pos: BallPos): BallPos {
@@ -124,8 +124,9 @@ export function AssistantFloatingButton() {
     toggleAssistant()
   }
 
-  // Portal 到 body: 挂载点在侧栏 aside 内, 移动端 aside 带 transform,
-  // 会让 fixed 相对 aside 定位并被 overflow-hidden 裁剪。
+  // Portal 到 #root (缩放层): 与 Modal 同层叠上下文, z 序不变 (弹窗 z-50 盖住球 z-30)。
+  // 挂载点在侧栏 aside 内, 移动端 aside 带 transform 会让 fixed 相对 aside 定位并被
+  // overflow-hidden 裁剪; #root 的 transform 同理, 但 #root 占满视口且不裁剪, 等价于视口。
   return createPortal(
     <motion.button
       ref={ballRef}
@@ -161,6 +162,6 @@ export function AssistantFloatingButton() {
         />
       )}
     </motion.button>,
-    document.body,
+    document.getElementById('root') ?? document.body,
   )
 }

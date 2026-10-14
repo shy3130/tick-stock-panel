@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, Check, AlertCircle } from 'lucide-react'
 import { useActiveTasks, restoreDialog } from '@/lib/aiReportStore'
+import { getPageScale } from '@/lib/pageZoom'
 import type { ActiveTask } from '@/lib/aiReportStore'
 
 /**
@@ -42,8 +43,10 @@ export function AiReportBubble() {
   }, [])
 
   const clamp = useCallback((x: number, y: number) => {
-    const maxX = window.innerWidth - BUBBLE_W - EDGE_MARGIN
-    const maxY = window.innerHeight - 80
+    // innerWidth 是视觉像素, translate3d 定位值是 #root 布局坐标 (缩放层), 需 ÷ scale。
+    const z = getPageScale()
+    const maxX = window.innerWidth / z - BUBBLE_W - EDGE_MARGIN
+    const maxY = window.innerHeight / z - 80
     return {
       x: Math.max(EDGE_MARGIN, Math.min(maxX, x)),
       y: Math.max(EDGE_MARGIN, Math.min(maxY, y)),
@@ -61,8 +64,10 @@ export function AiReportBubble() {
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!draggingRef.current) return
-    const dx = e.clientX - dragData.current.mx
-    const dy = e.clientY - dragData.current.my
+    // clientX 是视觉像素, 位移需 ÷ scale 换算回布局坐标, 否则缩放下拖拽跟手速度偏差 1/z。
+    const z = getPageScale()
+    const dx = (e.clientX - dragData.current.mx) / z
+    const dy = (e.clientY - dragData.current.my) / z
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) movedRef.current = true
     const nx = dragData.current.ox + dx
     const ny = dragData.current.oy + dy
@@ -232,8 +237,10 @@ function BubbleItem({ task, isLast, onPointerDown }: {
 const POS_KEY = 'ai_bubble_pos'
 function loadPos(): { x: number; y: number } {
   // 默认:右下角(距右边缘 EDGE_MARGIN,距底部留出空间避开右下角元素)
-  const defaultX = Math.max(EDGE_MARGIN, window.innerWidth - BUBBLE_W - EDGE_MARGIN)
-  const defaultY = Math.max(EDGE_MARGIN, window.innerHeight - 200)
+  // innerWidth 视觉像素 ÷ scale = #root 布局坐标 (缩放层)。
+  const z = getPageScale()
+  const defaultX = Math.max(EDGE_MARGIN, window.innerWidth / z - BUBBLE_W - EDGE_MARGIN)
+  const defaultY = Math.max(EDGE_MARGIN, window.innerHeight / z - 200)
   try {
     const v = localStorage.getItem(POS_KEY)
     if (v) {
@@ -241,8 +248,8 @@ function loadPos(): { x: number; y: number } {
       if (typeof p.x === 'number' && typeof p.y === 'number') {
         // 钳制到当前视口(防止保存的位置在缩小后的窗口外)
         return {
-          x: Math.max(EDGE_MARGIN, Math.min(window.innerWidth - BUBBLE_W - EDGE_MARGIN, p.x)),
-          y: Math.max(EDGE_MARGIN, Math.min(window.innerHeight - 80, p.y)),
+          x: Math.max(EDGE_MARGIN, Math.min(window.innerWidth / z - BUBBLE_W - EDGE_MARGIN, p.x)),
+          y: Math.max(EDGE_MARGIN, Math.min(window.innerHeight / z - 80, p.y)),
         }
       }
     }
