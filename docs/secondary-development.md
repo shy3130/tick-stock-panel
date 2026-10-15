@@ -15,7 +15,7 @@
 
 当前已可用的主要扩展能力：
 
-- 自定义、AI 和叠加策略目录：`data/strategies/`。
+- 自定义、AI 和叠加策略目录：`data/strategies/`。策略与信号已全面去内置化——无内置策略目录，首次启动自动种入 25 个示例策略（按 ID 补缺不覆盖，删除后不复活；默认信号定义同样由种子自动种入；旧数据目录升级时自动迁移并归档失效策略文件）。策略参数类型支持 `float/int/bool/select/date/string`；每策略可配「叠加条件」（`overlay_filter`，存于策略 override）：字段+运算符+值的多行 AND 硬过滤，选股/回测/监控三处一致生效，不改策略代码。
 - 数据源 Provider 与 `plugin.yaml` 机制：详见 [`plugin-development.md`](plugin-development.md)。
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。

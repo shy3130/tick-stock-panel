@@ -18,7 +18,7 @@
 
 `backend/app/strategy/research/` 保留一个仅供挖掘 worker 使用的受控因子排名研究模板(research_only)。它不出现在普通策略列表，也不能通过普通策略 API 直接运行或删除；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
 
-策略引擎只加载用户数据目录(`data/strategies/custom|ai|composite`)与研究模板目录,**不再有内置策略目录**;新装环境策略库为空,需要手动导入或重建。AI 生成的策略只落入 `data/strategies/ai/`。
+策略引擎只加载用户数据目录(`data/strategies/custom|ai|composite`)与研究模板目录,**不再有内置策略目录**;新装环境首次启动自动种入 25 个示例策略为自定义文件(按 ID 补缺、不覆盖已有,删除后重启不复活)。AI 生成的策略只落入 `data/strategies/ai/`。
 
 ---
 
@@ -45,7 +45,7 @@
    AI_MODEL=deepseek-chat
    ```
 2. 在策略页打开「AI 策略生成器」,用自然语言描述你的策略思路
-3. 前端流式接收生成代码,后端经 `ast` 安全校验(禁止 import os/sys/subprocess 等危险模块)后返回结果
+3. 前端流式接收生成代码,后端经 `ast` 安全校验(import 白名单 + 危险内建引用/dunder 遍历/模块命名空间句柄/文件读写原语拦截,实现见 `ai_generator._validate_safety`)后返回结果
 4. 保存后落入 `data/strategies/ai/`,文件名/ID 用 `ai_` 前缀
 
 生成策略相关提示词位于 `backend/app/strategy/prompts/`:
