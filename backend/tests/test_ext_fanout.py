@@ -291,3 +291,80 @@ def test_pull_config_roundtrip_preserves_fanout(tmp_path: Path) -> None:
     loaded = ExtConfigStore(tmp_path).get("ext_gn_ths")
     assert loaded is not None and loaded.pull is not None
     assert loaded.pull.fanout == config.pull.fanout
+
+
+# ---- 429 限流: 配额窗口退避 + 失败补拉轮 ----
+
+@pytest.fixture(autouse=True)
+def _fast_fanout_sleep(monkeypatch: pytest.MonkeyPatch):
+    """补拉轮/限流退避不真实等待 (需要断言退避时长的用例再覆盖为记录型)。"""
+    import app.services.ext_fanout as fanout
+
+    async def _nosleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(fanout, "_sleep", _nosleep)
+
+
+def _flaky_transport(fail_times: dict[str, int]) -> tuple[httpx.MockTransport, dict[str, int]]:
+    """对指定 thscode 的前 N 次成分请求返回 429, 之后恢复成功。"""
+    calls: dict[str, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == _CATALOG:
+            return _ok(_CATALOG_CN_CONCEPT)
+        if request.url.path == _CONSTITUENTS:
+            code = request.url.params.get("thscode", "")
+            n = calls.get(code, 0)
+            calls[code] = n + 1
+            if n < fail_times.get(code, 0):
+                return httpx.Response(429, json={"code": 429, "message": "Too Many Requests"})
+            return _ok(_CONSTITUENTS_BY_CODE.get(code, []))
+        return httpx.Response(404, text="not found")
+
+    return httpx.MockTransport(handler), calls
+
+
+def test_fanout_429_replenish_round_recovers_entries(mock_http) -> None:
+    """主轮内 429 重试仍失败 → 补拉轮跨过配额窗口后补齐, 最终数据完整。"""
+    transport, calls = _flaky_transport({"B2.TI": 2})  # 主轮 2 次尝试均 429
+    mock_http(transport)
+
+    rows = asyncio.run(fetch_fanout_rows(_concept_config()))
+
+    labels = {r["所属概念"] for r in rows}
+    assert any("新能源汽车" in v for v in labels)      # B2 补拉成功
+    assert any("白酒概念" in v for v in labels)        # B1 不受影响
+    assert calls["B2.TI"] >= 3                          # 主轮 2 次 + 补拉至少 1 次
+
+
+def test_fanout_429_persistent_gives_up_after_replenish_rounds(mock_http) -> None:
+    """持续限流: 用尽 (retries+1)×(1+补拉轮) 次尝试后跳过该条目, 其余正常。"""
+    transport, calls = _flaky_transport({"B2.TI": 10_000})
+    mock_http(transport)
+
+    rows = asyncio.run(fetch_fanout_rows(_concept_config()))
+
+    labels = {r["所属概念"] for r in rows}
+    assert any("白酒概念" in v for v in labels)                    # B1 正常
+    assert not any("新能源汽车" in v for v in labels)               # B2 放弃
+    assert calls["B2.TI"] == 2 * 4  # retries=1 → 2 次/轮 × (主轮+3 补轮)
+
+
+def test_fanout_429_uses_quota_window_backoff(mock_http, monkeypatch: pytest.MonkeyPatch) -> None:
+    """429 的单条目退避 ≥ 配额窗口 (30s), 而非普通失败的 0.5s。"""
+    import app.services.ext_fanout as fanout
+
+    sleeps: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(fanout, "_sleep", record_sleep)
+    transport, _ = _flaky_transport({"B2.TI": 1})  # 第 1 次 429, 重试成功
+    mock_http(transport)
+
+    rows = asyncio.run(fetch_fanout_rows(_concept_config()))
+
+    assert any("新能源汽车" in r["所属概念"] for r in rows)
+    assert sleeps and max(sleeps) >= 30.0
