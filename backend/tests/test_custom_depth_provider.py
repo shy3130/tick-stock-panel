@@ -132,3 +132,54 @@ def test_invalid_custom_depth_contract_fails_closed(monkeypatch):
 
     assert _service()._call_depth_batch(["A"]) == {}
     get_provider.assert_not_called()
+
+
+def test_custom_depth_provider_maps_asks_and_bids(monkeypatch):
+    from app.data_providers.custom.config import config_from_dict
+    from app.data_providers.custom.provider import GenericHTTPProvider
+
+    provider = GenericHTTPProvider(config_from_dict({
+        "name": "eltdx",
+        "datasets": {
+            "depth5": {
+                "url": "http://example.test/depth5",
+                "response_path": "data",
+                "field_map": {
+                    "symbol": "symbol", "asks": "asks", "bids": "bids",
+                },
+            },
+        },
+    }))
+    monkeypatch.setattr(provider, "_request_rows", lambda cfg, **kwargs: [{
+        "symbol": "000001.SZ",
+        "asks": [[11.33, 1256]],
+        "bids": [[11.32, 857]],
+    }])
+
+    assert provider.get_depth_batch(["000001.SZ"]) == {
+        "000001.SZ": {
+            "ask_volumes": [1256],
+            "bid_volumes": [857],
+            "asks": [[11.33, 1256]],
+            "bids": [[11.32, 857]],
+        },
+    }
+
+
+def test_depth5_config_is_accepted_and_does_not_require_dates(monkeypatch):
+    from app.data_providers.custom.config import config_from_dict
+    from app.data_providers.custom.provider import GenericHTTPProvider
+
+    provider = GenericHTTPProvider(config_from_dict({
+        "name": "eltdx",
+        "datasets": {
+            "depth5": {
+                "url": "http://example.test/depth5",
+                "field_map": {"symbol": "symbol", "asks": "asks", "bids": "bids"},
+            },
+        },
+    }))
+
+    assert provider.validate() == []
+    monkeypatch.setattr(provider, "_request_rows", lambda cfg, **kwargs: [])
+    assert provider.test_dataset("depth5")["dataset"] == "depth5"

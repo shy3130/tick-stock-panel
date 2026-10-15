@@ -34,6 +34,7 @@ _REQUIRED = {
     "minute": {"symbol", "datetime", "open", "high", "low", "close", "volume"},
     # full_minute (全量分钟) 与 minute 同形: 当日窗口批量拉取, 字段映射一致
     "full_minute": {"symbol", "datetime", "open", "high", "low", "close", "volume"},
+    "depth5": {"symbol", "asks", "bids"},
     # minute/full_minute 的 amount(成交额)按契约可空 (docs/plugin-development.md:
     # 无法提供可靠成交额时应返回 null 不得伪造, 均价线降级显示 —), 不列为必填 —
     # 否则缺成交额的源整个被 validate 拒绝, 保存后源从列表消失
@@ -121,7 +122,7 @@ class GenericHTTPProvider:
                     errors.append(f"{dataset}: pct_unit 仅用于 realtime 数据集")
                 elif cfg.pct_unit not in ("percent", "decimal"):
                     errors.append(f"{dataset}: pct_unit 必须是 percent 或 decimal")
-            if dataset != "realtime":
+            if dataset not in {"realtime", "depth5"}:
                 request_params = [cfg.symbols_param, cfg.start_param, cfg.end_param]
                 if dataset in {"minute", "full_minute"}:
                     request_params.extend(
@@ -250,6 +251,36 @@ class GenericHTTPProvider:
         if df.is_empty():
             return []
         return df.to_dicts()
+
+    def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
+        """Return normalized five-level order books keyed by symbol."""
+        cfg = self._dataset("depth5")
+        result: dict[str, dict] = {}
+        chunks = chunked(symbols, cfg.batch)
+        for i, chunk in enumerate(chunks):
+            sleep_between_batches(i, cfg.rpm)
+            try:
+                rows = self._request_rows_retry(cfg, chunk)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "custom depth5: batch %d/%d failed (%d symbols), skipped: %s",
+                    i + 1, len(chunks), len(chunk), e,
+                )
+                continue
+            df = self._mapped_frame(cfg, rows)
+            for row in df.to_dicts():
+                symbol = row.get("symbol")
+                if not symbol:
+                    continue
+                asks = _normalize_depth_levels(row.get("asks"))
+                bids = _normalize_depth_levels(row.get("bids"))
+                result[str(symbol)] = {
+                    "asks": asks,
+                    "bids": bids,
+                    "ask_volumes": [level[1] for level in asks],
+                    "bid_volumes": [level[1] for level in bids],
+                }
+        return result
 
     def get_minute(
         self,
@@ -403,6 +434,8 @@ class GenericHTTPProvider:
         start_time = end_time - timedelta(days=7)
         if dataset == "realtime":
             rows = self._request_rows(cfg)
+        elif dataset == "depth5":
+            rows = self._request_rows(cfg, symbols=test_symbols)
         elif dataset in {"minute", "full_minute"}:
             override: dict[str, Any] = {}
             if cfg.asset_type_param:
@@ -501,6 +534,20 @@ class GenericHTTPProvider:
         if auth.type == "query":
             return {}, {auth.param: token}
         return {}, {}
+
+
+def _normalize_depth_levels(value: Any) -> list[list[float]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    levels: list[list[float]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            levels.append([float(item[0]), float(item[1])])
+        except (TypeError, ValueError):
+            continue
+    return levels
 
 
 def _token_from_env(name: str | None) -> str | None:
