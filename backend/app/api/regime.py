@@ -135,6 +135,42 @@ def regime_coverage(request: Request):
     return regime_builder.get_regime_coverage(_data_dir(request))
 
 
+# ───────────────────────── 市场宽度(R3) 风控提醒 ─────────────────────────
+# 只读端点: 返回近日 v_breadth 序列 + 最新档位/建议仓位。来源见
+# research/regime_sizing/REPORT_REGIME_SIZING.md; 仅"提醒", 不参与任何下单/配平。
+
+
+@router.get("/breadth")
+def regime_breadth(
+    request: Request,
+    days: int = Query(60, ge=1, le=500),
+):
+    """市场宽度(R3_breadth)时序: 20 日涨跌家数比 + 档位 + 建议仓位(提醒用)。
+
+    信号定义与 research/regime_sizing 一致; 阈值冻结为研究前段分位。
+    时点: t 日收盘后可算 → t+1 生效, 调用方按 t 日收盘价解读。
+    """
+    result = regime_builder.compute_breadth_latest(_data_dir(request), days=days)
+    result["note"] = "研究备注 · 非交易信号"
+    result["thresholds"] = {
+        "q1": regime_builder.BREADTH_THRESHOLDS[0],
+        "q2": regime_builder.BREADTH_THRESHOLDS[1],
+        "pos": regime_builder.BREADTH_POS,
+    }
+    return result
+
+
+@router.get("/breadth/latest")
+def regime_breadth_latest(request: Request):
+    """最新一日的市场宽度档位(轻量, 供横幅卡片)。"""
+    result = regime_builder.compute_breadth_latest(_data_dir(request), days=1)
+    return {
+        "latest": result["latest"],
+        "note": "研究备注 · 非交易信号",
+        "threshold_source": result["threshold_source"],
+    }
+
+
 @router.post("/recompute")
 def regime_recompute(request: Request, start: date | None = None, end: date | None = None):
     """手动触发重算(全量或指定区间)。管理员操作。

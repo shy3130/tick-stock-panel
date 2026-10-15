@@ -152,6 +152,115 @@ def classify_state(metrics: dict) -> tuple[str, int]:
     return state, score
 
 
+# ───────────────────────── 市场宽度(R3_breadth) 风控提醒 ─────────────────────────
+# 来源: research/regime_sizing/REPORT_REGIME_SIZING.md。研究里唯一可落地的结论是
+# R3_breadth(20 日涨跌家数比):低档时降低总仓位在前后两段方向上一致,故做成"提醒"。
+# 研究同时给出硬边界(见 NOTES.md): 超额收益 t 未过 Bonferroni 门槛 → 只提醒、不自动调仓;
+# 中证1000 上前后段方向不一致 → 文案限定"大盘/中盘宽度",不写"全市场万能"。
+#
+# 信号定义(与 research/regime_sizing/regime_sizing.py 完全一致, 不得改动):
+#   v_breadth = 近 20 个交易日, 每日 (上涨家数 / 下跌家数) 的均值
+#   股票池 = enriched 全 A(与 regime 时序同源)
+#   毛刺剔除: 个股日收益 r 满足 -0.25 < r < 0.25 才计入涨/跌家数
+#   下跌家数做分母下限 1.0(与 np.maximum(down, 1.0) 一致), 避免除零
+#
+# 阈值冻结: 研究"前段"(≤2026-04-01)分位数 33.33% / 66.67%, 上线后不得用全样本重估。
+BREADTH_WINDOW = 20
+BREADTH_OUTLIER = 0.25  # |日收益| 超过该值视为复权/数据毛刺, 不计入涨跌家数
+BREADTH_THRESHOLDS = (1.53761, 1.67424)  # (q1, q2) 前段 33.3% / 66.7% 分位, 冻结
+BREADTH_POS = {"low": 0.3, "mid": 0.6, "high": 1.0}  # 三档建议总仓位(仅提醒)
+BREADTH_THRESHOLD_SOURCE = "研究前段(≤2026-04-01)分位 · 冻结"  # 展示给用户的阈值来源
+
+# 档位 → 中文文案键(前端按 bucket 取文案; 后端也回一个 note)
+BREADTH_LABELS = {"low": "低档(宽度转弱)", "mid": "中档(中性)", "high": "高档(宽度健康)"}
+
+
+def classify_breadth(v_breadth: float | None) -> str | None:
+    """v_breadth → 档位 'low'/'mid'/'high'; 缺失返回 None。
+
+    与 research/regime_sizing 的 apply_bucket(direction=+1) 同口径:
+      值 ≤ q1 → low(最低仓位); q1 < 值 ≤ q2 → mid; 值 > q2 → high。
+    边界取"下闭"语义(≤ q1 归 low), 保证与 numpy percentile 分位分档一致。
+    """
+    if v_breadth is None:
+        return None
+    q1, q2 = BREADTH_THRESHOLDS
+    if v_breadth <= q1:
+        return "low"
+    if v_breadth <= q2:
+        return "mid"
+    return "high"
+
+
+def daily_breadth_ratio(up_count: int | None, down_count: int | None) -> float | None:
+    """单日涨跌家数比 = up / max(down, 1)。两值都无则返回 None。"""
+    if up_count is None and down_count is None:
+        return None
+    up = float(up_count or 0)
+    down = float(down_count or 0)
+    return up / max(down, 1.0)
+
+
+def compute_breadth_series(rows: list[dict], window: int = BREADTH_WINDOW) -> list[dict]:
+    """对按日期升序的 regime 行, 逐日算 20 日窗口的 v_breadth 与档位。
+
+    只用"当日及之前"的日比值(严格无未来数据)。窗口不足 window 日的头几天
+    v_breadth 为 None(档位也为 None → 前端不渲染, 不误报)。
+
+    入参 rows 需含 date / up_count / down_count(regime 时序即具备)。
+    返回与输入等长的列表, 每项: {date, v_breadth, bucket, suggested_pos}。
+    """
+    ratios: list[float | None] = [
+        daily_breadth_ratio(r.get("up_count"), r.get("down_count")) for r in rows
+    ]
+    out: list[dict] = []
+    for i, r in enumerate(rows):
+        lo = max(0, i - window + 1)
+        window_ratios = [x for x in ratios[lo : i + 1] if x is not None]
+        # 窗口内有效日不足 window 天 → 不产出信号(避免半窗样本口径漂移)
+        v = float(sum(window_ratios) / len(window_ratios)) if len(window_ratios) >= window else None
+        bucket = classify_breadth(v)
+        out.append(
+            {
+                "date": r.get("date"),
+                "v_breadth": (round(v, 5) if v is not None else None),
+                "bucket": bucket,
+                "suggested_pos": (BREADTH_POS[bucket] if bucket else None),
+            }
+        )
+    return out
+
+
+def compute_breadth_latest(data_dir: Path, days: int = 60) -> dict:
+    """读取 regime 时序, 返回最近 `days` 天的 v_breadth 序列 + 最新一日结果。
+
+    供只读 API 使用。regime 行按日期升序, 计算窗口自然回看 20 日, 不需要额外拉数据。
+    """
+    df = load_regime_history(data_dir)
+    if df.is_empty():
+        return {"latest": None, "series": [], "threshold_source": BREADTH_THRESHOLD_SOURCE}
+    cols = [c for c in ["date", "up_count", "down_count"] if c in df.columns]
+    if "date" not in cols:
+        return {"latest": None, "series": [], "threshold_source": BREADTH_THRESHOLD_SOURCE}
+    df = df.sort("date")
+    rows = df.select(cols).to_dicts()
+    series = compute_breadth_series(rows)
+    # 只回最近 days 天(计算已在全序上完成, 避免截断破坏窗口)
+    tail = series[-days:] if days and days > 0 else series
+    latest = None
+    for rec in reversed(series):
+        if rec["v_breadth"] is not None:
+            latest = rec
+            break
+    return {
+        "latest": latest,
+        "series": [
+            {**rec, "date": (str(rec["date"]) if rec["date"] is not None else None)} for rec in tail
+        ],
+        "threshold_source": BREADTH_THRESHOLD_SOURCE,
+    }
+
+
 # ───────────────────────── 批量聚合 ─────────────────────────
 
 def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.DataFrame:
@@ -181,11 +290,16 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
 
     # 基础聚合 — 全部用 group_by 一次性向量化算出, 避免逐日 filter 扫全表(OOM/超时元凶)。
     has_ma20 = "close" in avail and "ma20" in avail
+    # 涨跌家数按"剔除毛刺后"口径统计(|日收益| > BREADTH_OUTLIER 视为复权/数据毛刺),
+    # 与 research/regime_sizing 的 v_breadth 定义完全一致 — 否则宽度提醒会与研究对不上。
+    # 注: change_pct 在此为小数口径(与 compute_subscores 的 avg_pct 一致)。
+    _cp = pl.col("change_pct")
+    _cp_valid = _cp.is_not_null() & (_cp.abs() <= BREADTH_OUTLIER)
     grouped = df.group_by("date").agg(
         *[
-            pl.col("change_pct").gt(0).sum().alias("up_count")
+            (_cp.gt(0) & _cp_valid).sum().alias("up_count")
             if "change_pct" in avail else pl.lit(0).alias("up_count"),
-            pl.col("change_pct").lt(0).sum().alias("down_count")
+            (_cp.lt(0) & _cp_valid).sum().alias("down_count")
             if "change_pct" in avail else pl.lit(0).alias("down_count"),
             pl.len().alias("total_count"),
         ],

@@ -602,6 +602,25 @@ export interface RegimeCoverage {
   latest_date: string | null
 }
 
+// ── 市场宽度(R3) 风控提醒 ──
+// 只读展示: 20 日涨跌家数比 → 档位 → 建议总仓位。仅提醒意义, 不触达下单/配平。
+export type RegimeBreadthBucket = 'low' | 'mid' | 'high'
+
+export interface RegimeBreadthPoint {
+  date: string | null
+  v_breadth: number | null
+  bucket: RegimeBreadthBucket | null
+  suggested_pos: number | null
+}
+
+export interface RegimeBreadth {
+  latest: RegimeBreadthPoint | null
+  series: RegimeBreadthPoint[]
+  note: string
+  threshold_source: string
+  thresholds: { q1: number; q2: number; pos: Record<string, number> }
+}
+
 // ── 市场阶段(情绪周期) 与 主线 ──
 export type MarketPhase = 'ice' | 'ignite' | 'rally' | 'climax' | 'ebb' | 'repair'
 
@@ -2989,6 +3008,9 @@ export const api = {
   regimeLatest: () => request<{ row: RegimeRow | null }>('/api/regime/latest'),
   regimeStates: (days = 60) => request<RegimeStates>(`/api/regime/states?days=${days}`),
   regimeCoverage: () => request<RegimeCoverage>('/api/regime/coverage'),
+  // 市场宽度(R3) 风控提醒 — 只读, 非交易信号(见 NOTES.md)
+  regimeBreadth: (days = 60) => request<RegimeBreadth>(`/api/regime/breadth?days=${days}`),
+  regimeBreadthLatest: () => request<{ latest: RegimeBreadthPoint | null; note: string; threshold_source: string }>('/api/regime/breadth/latest'),
   regimeRecompute: (start?: string, end?: string) => {
     const params = new URLSearchParams()
     if (start) params.set('start', start)

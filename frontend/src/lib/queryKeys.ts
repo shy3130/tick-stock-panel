@@ -132,6 +132,7 @@ export const QK = {
   regimeLatest:         ['regime-latest'] as const,
   regimeStates:         (days: number) => ['regime-states', days] as const,
   regimeCoverage:       ['regime-coverage'] as const,
+  regimeBreadth:        (days: number) => ['regime-breadth', days] as const,
   regimePhases:         (start?: string, end?: string) => ['regime-phases', start ?? '', end ?? ''] as const,
   regimeMainline:       (kind: string, start?: string, end?: string) => ['regime-mainline', kind, start ?? '', end ?? ''] as const,
   // 板块切换 (盘中轮动, 全量分钟聚合) — 30s 前端轮询刷新; seriesKey = 自定义展示板块清单,

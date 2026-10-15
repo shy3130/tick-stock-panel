@@ -11,6 +11,7 @@ import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/l
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import type { NavItem } from '@/lib/listNav'
 import { SettingsModal } from '@/components/data/SettingsModal'
+import { BreadthBanner } from '@/components/data/BreadthBanner'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { scoreColor, quoteAge } from '@/components/dashboard/shared'
@@ -301,6 +302,9 @@ export function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* 市场宽度(R3) 风控提醒: 低档醒目 / 中档弱提示 / 高档与无数据不渲染 */}
+      <BreadthBanner />
 
       {/* 自选实时模式提示: 大盘看板为盘后数据, 仅自选实时。避免用户误读为全市场实时。 */}
       {quoteMode === 'watchlist' && (
