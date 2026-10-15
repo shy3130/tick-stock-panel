@@ -42,7 +42,7 @@ describe('packToExtension: 契约校验与转换', () => {
 })
 
 describe('loadRuntimePageExtensions', () => {
-  it('只加载已启用页面包, loader 键带 runtime: 前缀且完成契约转换', async () => {
+  it('只加载已启用页面插件, loader 键带 runtime: 前缀且完成契约转换', async () => {
     const rec = recorder()
     await loadRuntimePageExtensions({
       fetchList: async () => [

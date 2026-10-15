@@ -34,6 +34,6 @@ frontend/src/custom/<namespace>/extension.tsx
 
 以 [`_template/extension.tsx.example`](_template/extension.tsx.example) 为起点（模板文件不参与构建），并遵循 [`docs/secondary-development.md`](../../../docs/secondary-development.md)。
 
-## 不想重建宿主？用页面包
+## 不想重建宿主？用页面插件
 
-若目标是把页面打包成产物、在运行中的面板上直接上传使用（本地 / Docker / 桌面端一致），走**页面包**：用 [`frontend/page-pack-template`](../../page-pack-template) 打包单文件 ES 模块，在 设置 → 页面包 上传，刷新生效。契约与边界见 [`docs/page-sdk.md`](../../../docs/page-sdk.md)。
+若目标是把页面打包成产物、在运行中的面板上直接上传使用（本地 / Docker / 桌面端一致），走**页面插件**：用 [`frontend/page-pack-template`](../../page-pack-template) 打包单文件 ES 模块，在 设置 → 页面插件 上传，刷新生效。契约与边界见 [`docs/page-sdk.md`](../../../docs/page-sdk.md)。

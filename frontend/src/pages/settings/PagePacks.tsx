@@ -1,5 +1,5 @@
 /**
- * 设置 → 页面包: 运行时扩展页面的上传/试载/启停/删除。
+ * 设置 → 页面插件: 运行时扩展页面的上传/试载/启停/删除。
  *
  * 生命周期: 上传(后端存 pending) → 前端立即动态 import 试载并做契约校验
  * (packToExtension) → 校验结果回填 manifest(成功即启用) → 刷新页面后在
@@ -47,7 +47,7 @@ export function SettingsPagePacksPanel() {
   async function handleUpload() {
     const file = fileRef.current?.files?.[0]
     const id = idInput.trim()
-    if (!file) { toast('请选择页面包产物 (.js / .mjs)', 'error'); return }
+    if (!file) { toast('请选择页面插件产物 (.js / .mjs)', 'error'); return }
     if (!/^[a-zA-Z0-9_]{1,64}$/.test(id)) { toast('ID 仅允许字母/数字/下划线 (1-64 位)', 'error'); return }
     setBusy(true)
     try {
@@ -64,8 +64,8 @@ export function SettingsPagePacksPanel() {
       }
       await api.extPagesPutManifest(id, { label, path, error })
       await invalidate()
-      if (error) toast(`页面包校验失败: ${error}`, 'error')
-      else { toast('页面包已启用, 刷新页面后生效', 'success'); setIdInput(''); if (fileRef.current) fileRef.current.value = '' }
+      if (error) toast(`页面插件校验失败: ${error}`, 'error')
+      else { toast('页面插件已启用, 刷新页面后生效', 'success'); setIdInput(''); if (fileRef.current) fileRef.current.value = '' }
     } finally {
       setBusy(false)
     }
@@ -77,7 +77,7 @@ export function SettingsPagePacksPanel() {
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-border bg-surface p-6">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">页面包</div>
+        <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">页面插件</div>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">上传打包页面产物, 免重建挂载</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
           用 <span className="font-mono text-xs text-accent">frontend/page-pack-template</span> 打包页面
@@ -89,7 +89,7 @@ export function SettingsPagePacksPanel() {
           <input
             value={idInput}
             onChange={(e) => setIdInput(e.target.value)}
-            placeholder="页面包 ID (字母/数字/下划线)"
+            placeholder="页面插件 ID (字母/数字/下划线)"
             className="h-9 w-56 rounded-btn border border-border bg-elevated px-3 text-sm text-foreground placeholder:text-muted/60 focus:border-accent/50 focus:outline-none"
           />
           <input
@@ -121,7 +121,7 @@ export function SettingsPagePacksPanel() {
       {bootErrors.length > 0 && (
         <section className="rounded-card border border-danger/30 bg-danger/5 p-4 text-xs leading-5 text-secondary">
           <div className="mb-1 flex items-center gap-1.5 font-medium text-danger">
-            <AlertTriangle className="h-3.5 w-3.5" /> 本次启动有页面包挂载失败
+            <AlertTriangle className="h-3.5 w-3.5" /> 本次启动有页面插件挂载失败
           </div>
           {bootErrors.map((e, i) => (
             <div key={i} className="font-mono">{e.source}: {e.error}</div>
@@ -135,7 +135,7 @@ export function SettingsPagePacksPanel() {
           <div>页面 / ID</div><div>路径</div><div>大小 / 时间</div><div className="text-center">启用</div><div className="text-center">操作</div>
         </div>
         {packs.length === 0 && (
-          <div className="px-4 py-10 text-center text-sm text-muted">暂无页面包，用上方表单上传第一个。</div>
+          <div className="px-4 py-10 text-center text-sm text-muted">暂无页面插件，用上方表单上传第一个。</div>
         )}
         {packs.map(p => (
           <div key={p.id} className={cn(
@@ -176,7 +176,7 @@ export function SettingsPagePacksPanel() {
             <div className="flex justify-center">
               <button
                 type="button"
-                onClick={() => { if (confirm(`删除页面包 "${p.label || p.id}"?`)) deleteMut.mutate(p.id) }}
+                onClick={() => { if (confirm(`删除页面插件 "${p.label || p.id}"?`)) deleteMut.mutate(p.id) }}
                 className="rounded p-1.5 text-muted hover:bg-danger/10 hover:text-danger transition-colors"
                 title="删除"
               >

@@ -1,5 +1,5 @@
 /**
- * 页面包示例 — 复制本模板改造你的页面。
+ * 页面插件示例 — 复制本模板改造你的页面。
  *
  * 产物契约(v1):
  *   - default 导出清单对象; apiVersion 固定 1
@@ -51,9 +51,9 @@ function HelloPage() {
   return (
     <div style={{ minHeight: '100%' }}>
       <div style={card}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>页面包演示页</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>页面插件演示页</h1>
         <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.7 }}>
-          这是一个自包含的运行时页面: 打包成单文件 ES 模块后上传到「设置 → 页面包」,
+          这是一个自包含的运行时页面: 打包成单文件 ES 模块后上传到「设置 → 页面插件」,
           刷新即出现在侧栏。{serverTime}
         </p>
         <button style={button} onClick={() => setCount(n => n + 1)}>
@@ -79,7 +79,7 @@ const extension = {
     },
   ],
   navigation: [
-    { id: 'hello', routeId: 'hello', label: '页面包演示', icon: 'Sparkles' },
+    { id: 'hello', routeId: 'hello', label: '页面插件演示', icon: 'Sparkles' },
   ],
 }
 

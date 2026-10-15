@@ -1,4 +1,4 @@
-"""运行时页面包 API 测试 — 上传校验/生命周期/bundle 分发。
+"""运行时页面插件 API 测试 — 上传校验/生命周期/bundle 分发。
 
 TestClient 最小 app 风格(同 test_ext_market_level): 不起完整后端,
 app.state.repo 只提供 store.data_dir。

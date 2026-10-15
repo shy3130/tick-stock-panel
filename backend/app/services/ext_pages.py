@@ -1,6 +1,6 @@
-"""运行时页面包存储 — data/ext_pages/{id}/ 目录式持久化。
+"""运行时页面插件存储 — data/ext_pages/{id}/ 目录式持久化。
 
-页面包是前端扩展的打包产物(单文件 ES 模块): 上传后由前端在启动引导窗口
+页面插件是前端扩展的打包产物(单文件 ES 模块): 上传后由前端在启动引导窗口
 动态 import 挂载(见 frontend/src/extensions/runtime.ts)。后端只负责存储、
 元数据与分发, 不解析 JS 内容 —— 清单契约(能否 import、apiVersion、路由
 冲突)由前端注册表校验, 校验结果经 manifest 接口回填到 page.json。
@@ -41,7 +41,7 @@ def _sha256_file(path: Path) -> str:
 
 
 class PagePackStore:
-    """每个页面包一个目录: page.json(元数据) + bundle.js(产物)。
+    """每个页面插件一个目录: page.json(元数据) + bundle.js(产物)。
 
     元数据写入走 临时文件+rename, 与 ext_data 的原子写同语义, 避免半写
     状态被启动扫描读到。
@@ -53,7 +53,7 @@ class PagePackStore:
 
     def _dir(self, pack_id: str) -> Path:
         if not _VALID_ID.match(pack_id or ""):
-            raise ValueError("页面包 ID 仅允许字母/数字/下划线, 长度 1-64")
+            raise ValueError("页面插件 ID 仅允许字母/数字/下划线, 长度 1-64")
         return self.data_dir / pack_id
 
     def _write_meta(self, meta: PagePackMeta) -> None:
@@ -86,7 +86,7 @@ class PagePackStore:
         try:
             return PagePackMeta(**json.loads(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, TypeError):
-            # 半写/损坏的元数据按损坏页处理, 不阻断其他页面包
+            # 半写/损坏的元数据按损坏页处理, 不阻断其他页面插件
             return PagePackMeta(id=pack_id, error="page.json 损坏, 请重新上传")
 
     def bundle_path(self, pack_id: str) -> Path | None:

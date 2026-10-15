@@ -1,20 +1,20 @@
 /**
- * 运行时页面包加载 — 从后端拉取已启用清单, 在启动引导窗口动态 import。
+ * 运行时页面插件加载 — 从后端拉取已启用清单, 在启动引导窗口动态 import。
  *
  * 时机关键: 必须在 initializeFrontendExtensions() 之后、import('./router')
  * 之前调用(main.tsx 的 bootstrap)。router 模块求值时会 finalize 注册表
- * 并以冻结快照建路由表, 错过窗口的页面包只能等下次刷新生效。
+ * 并以冻结快照建路由表, 错过窗口的页面插件只能等下次刷新生效。
  *
- * fail-open: 后端不可达 / 未登录(401) / 超时一律静默跳过 —— 页面包是
+ * fail-open: 后端不可达 / 未登录(401) / 超时一律静默跳过 —— 页面插件是
  * 增强能力, 不得拖慢或阻断宿主启动; 单个包 import 失败由注册表记入
  * loadErrors, 不影响其他包与静态扩展。
  *
- * 契约(v1 自包含包): 页面包自带 React/路由(由 SDK 模板封装打包), 宿主不
+ * 契约(v1 自包含包): 页面插件自带 React/路由(由 SDK 模板封装打包), 宿主不
  * 与其共享模块实例 —— 页面通过 mount(el, ctx) 挂到宿主提供的容器里,
  * ctx 暴露宿主 api/QK/cn/format 能力桥。这与源码级扩展的 component 契约
  * 不同: 此处由 packToExtension 把 mount 包装成宿主 React 组件再交给注册
  * 表, 因此路由注册、冲突检测、错误隔离全部复用源码扩展的既有机制。
- * 后续若升级为 import map 共享实例, 只需改 SDK 与本文件, 已发布页面包
+ * 后续若升级为 import map 共享实例, 只需改 SDK 与本文件, 已发布页面插件
  * 源码不受影响。
  */
 import { useEffect, useRef, type ComponentType } from 'react'
@@ -46,7 +46,7 @@ export interface PagePackNavigation {
   icon?: string
 }
 
-/** 页面包产物 default 导出契约 — apiVersion 与源码扩展同源治理 */
+/** 页面插件产物 default 导出契约 — apiVersion 与源码扩展同源治理 */
 export interface PagePackExtension {
   id: string
   apiVersion: 1
@@ -94,12 +94,12 @@ function createMountComponent(mount: PagePackRoute['mount']): ComponentType {
 }
 
 /**
- * 页面包清单 → 注册表扩展。形态问题(缺字段/版本不符/路径非法)在此抛出,
+ * 页面插件清单 → 注册表扩展。形态问题(缺字段/版本不符/路径非法)在此抛出,
  * 经 loader 传给 loadFrontendExtensions 记入 loadErrors —— 与源码扩展
  * 的失败隔离同一出口。
  */
 export function packToExtension(pack: unknown): FrontendExtension {
-  if (!pack || typeof pack !== 'object') throw new Error('页面包必须 default 导出清单对象')
+  if (!pack || typeof pack !== 'object') throw new Error('页面插件必须 default 导出清单对象')
   const p = pack as Partial<PagePackExtension>
   if (p.apiVersion !== 1) throw new Error(`apiVersion 必须为 1, 收到 ${String(p.apiVersion)}`)
   if (typeof p.id !== 'string' || !p.id.includes('.')) throw new Error('id 必须是带命名空间的字符串 (如 demo.hello)')
@@ -179,7 +179,7 @@ export async function loadRuntimePageExtensions(opts: LoadRuntimeOptions = {}): 
 }
 
 /**
- * 宿主应用层能力桥: 页面包经 ctx 读取宿主 api/QK/cn/format。
+ * 宿主应用层能力桥: 页面插件经 ctx 读取宿主 api/QK/cn/format。
  * 安装在 main.tsx 引导早期, 生命周期与页面一致。
  */
 export function installTspExtBridge(bridge: PagePackCtx): void {
