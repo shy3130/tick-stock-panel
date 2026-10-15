@@ -18,7 +18,7 @@
 
 `backend/app/strategy/research/` 保留一个仅供挖掘 worker 使用的受控因子排名研究模板(research_only)。它不出现在普通策略列表，也不能通过普通策略 API 直接运行或删除；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
 
-策略引擎只加载用户数据目录(`data/strategies/custom|ai|composite`)与研究模板目录,**不再有内置策略目录**;新装环境首次启动自动种入 25 个示例策略为自定义文件(按 ID 补缺、不覆盖已有,删除后重启不复活)。AI 生成的策略只落入 `data/strategies/ai/`。
+策略引擎只加载用户数据目录(`data/strategies/custom|ai|composite`)与研究模板目录,**不再有内置策略目录**;新装环境策略库为空。旧版本升级用户首次启动时自动把 25 个原内置策略补回为自定义文件(按 ID 补缺、不覆盖已有,删除后重启不复活)。AI 生成的策略只落入 `data/strategies/ai/`。
 
 ---
 

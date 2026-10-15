@@ -278,8 +278,9 @@ async def _application_lifespan(app: FastAPI):
 
     _screener_svc = ScreenerService(repo)
     _etf_screener_svc = ScreenerService(repo, asset_type="etf")
-    # 去内置化补全: 原内置策略按 ID 种入 custom (一次性, 已自行迁移的不覆盖)。
-    # 必须在 StrategyEngine 创建前完成, 否则首载拿不到刚种入的文件。
+    # 去内置化补全(仅升级用户): 原内置策略按 ID 补回 custom (一次性,
+    # 已自行迁移的不覆盖; 新装无旧版使用痕迹, 跳过保持策略库为空)。
+    # 必须在 StrategyEngine 创建前完成, 否则首载拿不到刚补回的文件。
     _seeded_strategies = 0
     try:
         from app.strategy.strategy_seeds import seed_missing_builtins

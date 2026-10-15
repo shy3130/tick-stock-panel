@@ -8,7 +8,7 @@
 
 ## 🔍 策略引擎(Screener)
 
-**策略全部为用户自定义文件**(`data/strategies/custom/`,可编辑可删除;首次启动自动种入 25 个示例策略,升级缺失的按 ID 补回,删除后重启不复活)。挖掘用的研究模板保留在 `backend/app/strategy/research/`(research_only,不进策略列表),见 [strategy.md → 示例策略](./strategy.md#示例策略):
+**策略全部为用户自定义文件**(`data/strategies/custom/`,可编辑可删除;新装环境策略库为空,旧版本升级用户自动补回 25 个原内置策略)。挖掘用的研究模板保留在 `backend/app/strategy/research/`(research_only,不进策略列表),见 [strategy.md → 示例策略](./strategy.md#示例策略):
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
