@@ -167,7 +167,6 @@ function EpRow({ ep, result, testing, isCurrent, isFree, canUsePremium, switchin
   onApply: (url: string) => void
 }) {
   const isError = result && !result.ok
-  const canApply = result?.ok && !testing && !isCurrent
   const isPremium = ep.premium === true
   const median = result?.median_ms
 
@@ -240,7 +239,8 @@ function EpRow({ ep, result, testing, isCurrent, isFree, canUsePremium, switchin
         </div>
       </div>
 
-      {/* 应用按钮区域 —— Free 模式不可用任何付费端点；专线端点需 Expert+ */}
+      {/* 应用按钮区域 —— 打开即可应用(测速只是参考,不作为可用性门槛);
+          Free 模式不可用任何付费端点;专线端点需 Expert+ */}
       {isFree ? null : (isPremium && !canUsePremium) ? (
         // 专线端点:需 Expert 及以上套餐权限,当前套餐不足,不可应用
         <span
@@ -250,16 +250,17 @@ function EpRow({ ep, result, testing, isCurrent, isFree, canUsePremium, switchin
           <Crown className="h-3 w-3" />
           Expert+
         </span>
-      ) : canApply ? (
+      ) : isCurrent ? null : (
         <button
           onClick={() => onApply(ep.url)}
           disabled={switching !== null}
+          title="切换到此端点"
           className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-btn text-[11px] font-medium bg-accent/15 text-accent hover:bg-accent/25 disabled:opacity-50 transition-colors mt-0.5"
         >
           {switching === ep.url ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
           应用
         </button>
-      ) : null}
+      )}
     </div>
   )
 }
