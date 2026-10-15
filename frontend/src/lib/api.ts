@@ -2255,7 +2255,7 @@ export interface SectorRotationUniverseItem {
   excluded?: boolean
 }
 
-/** 页面包元数据 — data/ext_pages/{id}/page.json, 后端源 app/services/ext_pages.py */
+/** 页面插件元数据 — data/ext_pages/{id}/page.json, 后端源 app/services/ext_pages.py */
 export interface RuntimePagePack {
   id: string
   enabled: boolean
@@ -2933,7 +2933,7 @@ export const api = {
     const data = await request<{
       strategies: StrategyDetail[]
       load_errors?: StrategyLoadError[]
-      legacy_migration?: { seeded_signals?: number; archived_files?: string[] }
+      legacy_migration?: { seeded_signals?: number; seeded_strategies?: number; archived_files?: string[] }
     }>(
       `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}${timeframe !== 'all' ? `timeframe=${timeframe}` : ''}`,
     )
@@ -3382,7 +3382,7 @@ export const api = {
   analysisMenus: () =>
     request<{ items: AnalysisMenu[] }>('/api/analysis-menus'),
 
-  // ===== 页面包 (运行时扩展页面, 见 docs/page-sdk.md) =====
+  // ===== 页面插件 (运行时扩展页面, 见 docs/page-sdk.md) =====
   extPagesList: () =>
     request<RuntimePagePack[]>('/api/ext-pages'),
 

@@ -265,7 +265,7 @@ export function Screener() {
     prune(allStrategyIds)
   }, [allStrategyIds, prune, strategies.isError, strategies.isSuccess])
 
-  // 去内置化一次性迁移提示: 后端启动时自动种入默认信号/归档失效策略,
+  // 去内置化一次性迁移提示: 后端启动时自动种入原内置策略/默认信号/归档失效策略,
   // 摘要只在首次见到时提示一次 (localStorage 记录迁移指纹)。
   const legacyMigration = strategies.data?.legacy_migration
   useEffect(() => {
@@ -277,6 +277,9 @@ export function Screener() {
       localStorage.setItem(key, fingerprint)
     } catch { /* 隐私模式等存储不可用: 退化为每次提示 */ }
     const parts: string[] = []
+    if (legacyMigration.seeded_strategies) {
+      parts.push(`已补回 ${legacyMigration.seeded_strategies} 个原内置策略为自定义策略(可在策略页编辑或删除)`)
+    }
     if (legacyMigration.seeded_signals) {
       parts.push(`已将 ${legacyMigration.seeded_signals} 个原内置信号转为自定义信号(可在信号库编辑)`)
     }

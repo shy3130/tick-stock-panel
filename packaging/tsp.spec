@@ -32,6 +32,7 @@ ROOT = Path(SPECPATH).parent
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 RESEARCH_TEMPLATE = str(ROOT / "backend" / "app" / "strategy" / "research")
+# 内置策略种子目录 (strategy_seeds 按路径读文本, frozen 下需落盘, 同 research)
 # 图标按平台选: Windows 用 brand/icon.ico, macOS 用 brand/icon.icns —
 # 两者均由 brand/png/logo-tile-light-512.png 派生 (浅色圆角卡版, 品牌资产唯一来源,
 # 见 brand/README 接入指引), 无需 CI 现场生成。
@@ -164,6 +165,8 @@ datas += [(TIERS_YAML, ".")]
 datas += [(str(ROOT / "frontend" / "package.json"), ".")]
 # 研究模板 → app/strategy/research/ (importlib 动态加载, 不能进 PYZ; 挖掘功能依赖)
 datas += [(RESEARCH_TEMPLATE, "app/strategy/research")]
+# 策略种子 → app/strategy/seeds/ (启动时按路径读取种入 custom, 不进 PYZ)
+datas += [(str(ROOT / "backend" / "app" / "strategy" / "seeds"), "app/strategy/seeds")]
 
 # ── 排除不需要的重型依赖 (主包不含 vectorbt 回测链) ──────────────────
 excludes = [
