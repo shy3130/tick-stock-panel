@@ -207,7 +207,7 @@ function RhPromoBanner() {
     >
       <span className="font-medium text-amber-600 dark:text-amber-400">Claude、ChatGPT、Gemini</span>
       <span>等国际模型直连稳定不掉线，</span>
-      <span className="font-medium text-amber-600 dark:text-amber-400">DeepSeek v4.1 Flash 6 折</span>
+      <span className="font-medium text-amber-600 dark:text-amber-400">DeepSeek v4.1 Flash 3 折</span>
       <span>，</span>
       <span className="font-medium text-amber-600 dark:text-amber-400">注册赠送 1000 RH 积分</span>
       <span>🎁</span>
