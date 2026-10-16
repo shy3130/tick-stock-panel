@@ -156,3 +156,30 @@ def test_dimension_intraday_explicit_date_uses_that_partition(tmp_path: Path) ->
     explicit = _dimension_intraday_compute(_mk_config(), data_dir, "所属概念", "人工智能", "2026-08-27")
     assert explicit["date"] == "2026-08-27"
     assert explicit["points"][0]["sector"] == 0.05
+
+
+def test_dimension_intraday_dirty_point_filtered_gh473(tmp_path: Path) -> None:
+    """GH #473 同族: 单股某分钟脏 close (前收 19 倍) 被剔除, 分时不过载。
+
+    points[].pct 应保持正常量级, 脏分钟用剩余成分均值而非爆炸值。"""
+    data_dir = tmp_path / "data"
+    _write_ext(data_dir, {"000001.SZ": "人工智能", "000002.SZ": "人工智能"})
+    _write_daily(data_dir, "2026-08-27", {"000001.SZ": 10.0, "000002.SZ": 20.0})
+    _write_minute(data_dir, "2026-08-28", [
+        ("000001.SZ", "2026-08-28T09:31:00", 10.5),
+        ("000002.SZ", "2026-08-28T09:31:00", 20.4),
+        ("000001.SZ", "2026-08-28T09:32:00", 190.0),  # 脏点: +1800%
+        ("000002.SZ", "2026-08-28T09:32:00", 20.4),
+        ("000001.SZ", "2026-08-28T09:33:00", 10.4),
+        ("000002.SZ", "2026-08-28T09:33:00", 20.8),
+    ])
+
+    payload = _dimension_intraday_compute(_mk_config(), data_dir, "所属概念", "人工智能", None)
+
+    assert payload["status"] == "ok"
+    for point in payload["points"]:
+        assert point["sector"] is None or abs(point["sector"]) < 1.0
+    # 09:32 脏分钟: 000001 的脏行被剔, ffill 用它 09:31 的 +5% 填充 →
+    # (+5% + +2%) / 2 = 3.5%, 而不是 (+1800% + +2%) / 2
+    dirty = next(p for p in payload["points"] if p["time"] == "09:32")
+    assert dirty["sector"] == 0.035

@@ -668,6 +668,10 @@ _DIMENSION_INTRADAY_CACHE: dict[tuple[str, str, str, str | None], tuple[float, d
 _DIMENSION_INTRADAY_CACHE_TTL_S = 60.0
 # 成分股网格化 ffill 上限: 超大板块退化为逐时间戳可得均值 (内存保护)。
 _DIMENSION_INTRADAY_FFILL_CAP = 2000
+# 分钟 pct 物理边界 (与 services.sector_rotation._PCT_PHYSICAL_BOUND 同值,
+# A 股日涨跌停最大 ±30%): 超出视为脏点剔除 (GH #473 同族)。
+_DIMENSION_INTRADAY_PCT_BOUND = 0.30
+_DIMENSION_INTRADAY_PCT_EPS = 1e-9  # 浮点容差: 130/100-1 略大于 0.30, 真涨停勿滤
 
 
 def _bare_symbol_expr(col: str = "symbol") -> pl.Expr:
@@ -785,6 +789,8 @@ def _dimension_intraday_compute(
     joined = (
         joined.join(refs.select(["_bare", "_ref"]), on="_bare", how="left")
         .with_columns((pl.col("close") / pl.col("_ref") - 1.0).alias("_pct"))
+        # 物理边界外视为脏点剔除 (与 sector_rotation 同口径, GH #473 同族)
+        .filter(pl.col("_pct").abs() <= _DIMENSION_INTRADAY_PCT_BOUND + _DIMENSION_INTRADAY_PCT_EPS)
     )
 
     market = joined.group_by("datetime").agg(pl.col("_pct").mean().alias("_market"))

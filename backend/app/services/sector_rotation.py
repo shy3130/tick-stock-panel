@@ -9,7 +9,9 @@
 
 计算口径:
   - 个股分钟涨跌幅 pct = close/ref - 1, ref 优先前一交易日日K收盘
-    (开盘跳空体现在板块曲线起点), 缺日K退化为当日首根分钟 close (混合基准)
+    (开盘跳空体现在板块曲线起点), 缺日K退化为当日首根分钟 close (混合基准);
+    单股单分钟 pct 超出 A 股日涨跌停物理边界 (±30%, 覆盖主板/科创/北交所)
+    的视为脏点剔除 (GH #473: 小板块被单只脏点带飞到 1700%+)
   - 板块桶涨幅 = 成分股 pct 在桶内的等权均值 (停牌/无分钟按可得成分均值)
   - 切换走势 rotation(t) = 1 - top10 重合率 (t 与 t-1h 两个桶各自按板块涨幅
     取前 10, 交集占比); 越高代表领涨梯队换血越剧烈
@@ -75,6 +77,12 @@ _SORT_MODES = ("activity", "score", "pct", "rank_change", "momentum", "flow")
 _MAX_EXCLUDE_PARAM = 100
 # 结果缓存条目上限: 缓存键含用户参数组合, 有界淘汰防止无限增长
 _CACHE_MAX_ENTRIES = 32
+# 分钟 pct 物理边界 (小数制): A 股日涨跌停最大 ±30% (北交所), 主板 ±10% /
+# 科创创业 ±20% 全在界内。超出视为脏点 (脏 close/除权跳变/基准错配) 剔除,
+# 而非钳制 — 钳制会把假 -100% 写成真 -30% (GH #473)。比较带 1e-9 容差:
+# 130/100-1 的浮点结果是 0.30000000000000004, 不能把真 30% 涨停滤掉。
+_PCT_PHYSICAL_BOUND = 0.30
+_PCT_BOUND_EPS = 1e-9
 
 
 def invalidate_cache() -> None:
@@ -166,7 +174,15 @@ def _minute_pcts(minute_dir: Path, target: str) -> tuple[pl.DataFrame | None, st
         joined.join(refs.select(["_bare", "_ref"]), on="_bare", how="left")
         .with_columns((pl.col("close") / pl.col("_ref") - 1.0).alias("_pct"))
         .drop_nulls(subset=["_pct"])
+        # 物理边界外视为脏点剔除 (见模块 docstring; 全是脏点则 _ref 基准错配)
+        .filter(pl.col("_pct").abs() <= _PCT_PHYSICAL_BOUND + _PCT_BOUND_EPS)
     )
+    dropped = joined.height - out.height
+    if dropped:
+        logger.warning(
+            "sector_rotation dropped %d minute rows outside ±%.0f%% (dirty closes)",
+            dropped, _PCT_PHYSICAL_BOUND * 100,
+        )
     if out.is_empty():
         return None, "minute_empty", has_amount
     return out, basis, has_amount
