@@ -756,13 +756,24 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
                 : 'API Key 仅保存在本机项目文件, 不会上传到任何服务器。'}
             </p>
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {testResult && (
+              <span title="测试只验证当前表单, 不会保存配置; 通过后请点「保存配置」生效"
+                className={`inline-flex max-w-[280px] items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] ${testResult.ok ? 'border-bear/25 bg-bear/[0.06] text-bear' : 'border-danger/25 bg-danger/[0.06] text-danger'}`}>
+                <span className={`h-1 w-1 shrink-0 rounded-full ${testResult.ok ? 'bg-bear' : 'bg-danger'}`} />
+                <span className="min-w-0 truncate">{testResult.msg}</span>
+              </span>
+            )}
             {configured && (
               <button onClick={() => setConfirmClear(true)} disabled={clear.isPending} className="h-9 px-3.5 rounded-lg text-secondary hover:bg-danger/10 hover:text-danger text-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface active:scale-[0.98]" title="Clear AI provider configuration">
                 <Trash2 className="h-3.5 w-3.5" />
                 清空
               </button>
             )}
+            <button onClick={handleTest} disabled={testing || !canTest} className="h-9 px-3.5 rounded-lg text-secondary hover:bg-elevated hover:text-foreground text-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface active:scale-[0.98]" title="测试当前表单的连接, 不保存配置">
+              {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wifi className="h-3.5 w-3.5" />}
+              {testing ? '测试中' : '测试连接'}
+            </button>
             <button onClick={() => save.mutate()} disabled={save.isPending || !canSave} className="h-9 px-5 rounded-lg bg-accent text-white text-sm font-medium flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface active:scale-[0.98]">
               {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
               {save.isPending ? '保存中...' : saved ? '已保存' : '保存配置'}
