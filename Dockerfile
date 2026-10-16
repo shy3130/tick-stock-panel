@@ -101,6 +101,14 @@ ENV STATIC_DIR=/app/static \
 # Frontend 静态产物
 COPY --from=frontend-builder /build/dist ./static
 
+# 升级保护清单: 全量程序文件 sha256 基线 (二次开发升级对比用)。
+# 必须在 app/ 与 static/ 都落位之后生成; .venv/data 等由脚本排除规则剔除。
+# 版本号唯一权威 = frontend/package.json (与 app/__init__._load_version 同源)。
+COPY scripts/generate_manifest.py /tmp/generate_manifest.py
+COPY frontend/package.json /tmp/package.json
+RUN APP_VER=$(python3 -c "import json;print(json.load(open('/tmp/package.json'))['version'])") && \
+    python3 /tmp/generate_manifest.py --root /app --output /app/app/upgrade_manifest.json --version "$APP_VER"
+
 # Codex CLI 使用官方 npm 包携带的当前平台原生二进制，无需运行时 Node.js。
 COPY --from=codex-builder /opt/codex-native /usr/local/bin/codex
 RUN codex --version

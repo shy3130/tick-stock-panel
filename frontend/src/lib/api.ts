@@ -2282,6 +2282,42 @@ export interface RuntimePagePack {
   error: string
 }
 
+// ===== 升级保护 (二次开发) =====
+/** 报告文件分类: restorable=新版没动可恢复 / conflict=双方都改需手工合并 /
+ *  match=内容已一致 / added_lost=用户新建文件新版没有 */
+export type UpgradeGuardCategory = 'restorable' | 'conflict' | 'match' | 'added_lost'
+
+export interface UpgradeGuardReportFile {
+  relpath: string
+  category: UpgradeGuardCategory
+  current_exists: boolean
+}
+
+export interface UpgradeGuardReport {
+  id: string
+  from_version: string
+  to_version: string
+  created_at: string
+  counts: Record<UpgradeGuardCategory, number>
+  files: UpgradeGuardReportFile[]
+  dir: string
+}
+
+export interface UpgradeGuardStatus {
+  enabled: boolean
+  reason?: string
+  scanning?: boolean
+  program_root?: string
+  manifest_version?: string | null
+  current_version?: string
+  last_scan?: string
+  modified?: string[]
+  added?: string[]
+  backup_dir?: string
+  reports_dir?: string
+  pending_report?: UpgradeGuardReport | null
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -2339,6 +2375,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
+
+  upgradeGuardStatus: () => request<UpgradeGuardStatus>('/api/upgrade-guard/status'),
+  upgradeGuardScan: () => request<UpgradeGuardStatus>('/api/upgrade-guard/scan', { method: 'POST' }),
+  upgradeGuardRestore: (reportId: string, relpath: string) =>
+    request<{ ok: boolean; restored: string }>('/api/upgrade-guard/restore', {
+      method: 'POST',
+      body: JSON.stringify({ report_id: reportId, relpath }),
+    }),
+  upgradeGuardDismiss: () => request<{ ok: boolean }>('/api/upgrade-guard/dismiss-report', { method: 'POST' }),
 
   /** 赞助商(RunningHub)模型列表(后端代理, 规避其网关按 Origin 过滤) */
   sponsorModels: () =>

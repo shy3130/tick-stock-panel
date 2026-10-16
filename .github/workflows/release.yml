@@ -144,6 +144,16 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller ../packaging/tsp.spec --noconfirm
 
+      - name: 生成升级保护清单
+        # 二次开发升级对比基线: 对打包产出的 _internal 全量文件做 sha256。
+        # 相对路径与运行时 _MEIPASS 布局一致, 清单落 _internal/app/ 后随
+        # Inno/DMG/tar 一起分发, 运行时由 upgrade_guard 读取。
+        # uv run --no-project: 跨平台用 uv 管的 Python; 版本号唯一权威 =
+        # frontend/package.json (与 app/__init__._load_version 同源)。
+        run: |
+          APP_VER=$(node -p "require('./frontend/package.json').version")
+          uv run --no-project python scripts/generate_manifest.py --root backend/dist/TSP/_internal --output backend/dist/TSP/_internal/app/upgrade_manifest.json --version "$APP_VER"
+
       - name: 检查 Polars 兼容内核 (仅 Windows)
         if: matrix.platform == 'windows'
         shell: pwsh

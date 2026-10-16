@@ -4,10 +4,12 @@
  * 独立于实时监控, 放置影响整体应用行为的开关项。
  */
 import { useState, useCallback, useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
+import type { UpgradeGuardCategory } from '@/lib/api'
+import { toast } from '@/components/Toast'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
@@ -402,7 +404,189 @@ export function SettingsSystemPanel() {
         </div>
         <ExtensionSlot name="settings.system.section" context={{}} compact />
       </section>
+
+      <UpgradeGuardCard />
     </>
+  )
+}
+
+// ===== 升级保护 (二次开发) =====
+// 用户修改/新增的程序文件在每次启动时备份到 data/upgrade_guard/, 升级不丢;
+// 检测到版本变化时给出对比报告: 可恢复项一键还原, 冲突项保留三方材料手工合并。
+
+const UPGRADE_CATEGORY_LABEL: Record<UpgradeGuardCategory, string> = {
+  restorable: '可恢复',
+  conflict: '需手工合并',
+  match: '已一致',
+  added_lost: '新增文件可恢复',
+}
+
+function UpgradeGuardCard() {
+  const qc = useQueryClient()
+  const { data: st, isLoading } = useQuery({
+    queryKey: ['upgrade-guard', 'status'],
+    queryFn: api.upgradeGuardStatus,
+    staleTime: 30_000,
+    retry: 1,
+  })
+  const [busy, setBusy] = useState<'scan' | 'restore-all' | string | null>(null)
+  const [listOpen, setListOpen] = useState(false)
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ['upgrade-guard', 'status'] })
+
+  const scan = async () => {
+    setBusy('scan')
+    try {
+      await api.upgradeGuardScan()
+      await refresh()
+    } catch (e: any) {
+      toast(`扫描失败: ${e?.message ?? e}`, 'error')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const restore = async (reportId: string, relpath: string) => {
+    setBusy(relpath)
+    try {
+      await api.upgradeGuardRestore(reportId, relpath)
+      toast(`已恢复 ${relpath}`, 'success')
+      await refresh()
+    } catch (e: any) {
+      toast(`恢复失败: ${e?.message ?? e}`, 'error')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const restoreAll = async (reportId: string, files: { relpath: string }[]) => {
+    setBusy('restore-all')
+    let ok = 0
+    for (const f of files) {
+      try {
+        await api.upgradeGuardRestore(reportId, f.relpath)
+        ok += 1
+      } catch { /* 单个失败继续其余 */ }
+    }
+    toast(`已恢复 ${ok}/${files.length} 个文件`, ok === files.length ? 'success' : 'error')
+    await refresh()
+    setBusy(null)
+  }
+
+  const dismiss = async () => {
+    setBusy('dismiss')
+    try {
+      await api.upgradeGuardDismiss()
+      await refresh()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const report = st?.pending_report ?? null
+  const reportFiles = report?.files ?? []
+  const restorableFiles = reportFiles.filter(f => f.category === 'restorable' || f.category === 'added_lost')
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-secondary" />
+            <h3 className="text-sm font-medium text-foreground">升级保护（二次开发）</h3>
+          </div>
+          <div className="mt-1.5 text-[11px] leading-relaxed text-muted">
+            {isLoading ? '加载中…' : st?.enabled
+              ? <>修改/新增的程序文件每次启动自动备份到 <code className="text-secondary">{st?.backup_dir}</code>，升级不会丢失</>
+              : '当前安装未携带版本清单（源码运行）— 请使用 Git 管理二次开发改动，配合 scripts/upgrade_check.py 做升级预检'}
+          </div>
+        </div>
+        {st?.enabled && (
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-[10px] text-muted">清单 {st?.manifest_version ?? '—'} · 当前 {st?.current_version}</span>
+            <button onClick={scan} disabled={busy === 'scan' || !!st?.scanning}
+              title="重新扫描程序目录, 刷新常备备份 (修改程序文件后可手动执行)"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50">
+              <RefreshCw className={`h-3 w-3 ${busy === 'scan' || st?.scanning ? 'animate-spin' : ''}`} />
+              {busy === 'scan' || st?.scanning ? '扫描中' : '重新扫描'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {st?.enabled && (
+        <div className="mt-3 border-t border-border/60 pt-3">
+          <button onClick={() => setListOpen(v => !v)} className="flex w-full items-center gap-1.5 text-left text-xs text-secondary hover:text-foreground">
+            <ChevronDown className={`h-3 w-3 transition-transform ${listOpen ? '' : '-rotate-90'}`} />
+            当前检测到 <b className="text-foreground">{st?.modified?.length ?? 0}</b> 个修改文件、<b className="text-foreground">{st?.added?.length ?? 0}</b> 个新增文件
+            <span className="text-[10px] text-muted">（上次扫描 {st?.last_scan?.replace('T', ' ').slice(0, 19) ?? '—'}）</span>
+          </button>
+          {listOpen && (
+            <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-border/60 bg-base/40 p-2 font-mono text-[10px] leading-5">
+              {st?.modified?.map(f => <div key={f} className="truncate text-warning">✎ {f}</div>)}
+              {st?.added?.map(f => <div key={f} className="truncate text-bear">＋ {f}</div>)}
+              {(st?.modified?.length ?? 0) + (st?.added?.length ?? 0) === 0 && (
+                <div className="text-muted">无二次开发改动</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {report && (
+        <div className="mt-3 rounded-lg border border-warning/25 bg-warning/[0.05] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 text-xs">
+              <div className="font-medium text-foreground">
+                升级检测: {report.from_version} → {report.to_version}
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-muted">
+                你的 {reportFiles.length} 个二次开发文件已归档比对 —
+                可恢复 <b className="text-bear">{report.counts.restorable + report.counts.added_lost}</b> ·
+                需手工合并 <b className="text-warning">{report.counts.conflict}</b> ·
+                已一致 <b className="text-muted">{report.counts.match}</b>
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              {restorableFiles.length > 0 && (
+                <button onClick={() => restoreAll(report.id, restorableFiles)} disabled={!!busy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white hover:bg-accent/90 disabled:opacity-50">
+                  <RotateCcw className="h-3 w-3" />
+                  恢复可恢复项 ({restorableFiles.length})
+                </button>
+              )}
+              <button onClick={dismiss} disabled={busy === 'dismiss'}
+                className="rounded-lg px-2.5 py-1 text-[11px] text-secondary hover:bg-elevated hover:text-foreground disabled:opacity-50">
+                知道了
+              </button>
+            </div>
+          </div>
+          <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-border/40 bg-base/40 p-2">
+            {reportFiles.map(f => (
+              <div key={f.relpath} className="flex items-center justify-between gap-2 py-0.5">
+                <span className="min-w-0 truncate font-mono text-[10px] text-secondary" title={f.relpath}>{f.relpath}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className={`text-[10px] ${f.category === 'conflict' ? 'text-warning' : f.category === 'match' ? 'text-muted' : 'text-bear'}`}>
+                    {UPGRADE_CATEGORY_LABEL[f.category]}
+                  </span>
+                  {(f.category === 'restorable' || f.category === 'added_lost') && (
+                    <button onClick={() => restore(report.id, f.relpath)} disabled={busy === f.relpath}
+                      className="rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-accent/10 disabled:opacity-50">
+                      {busy === f.relpath ? '恢复中' : '恢复'}
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+          {report.counts.conflict > 0 && (
+            <div className="mt-2 text-[10px] leading-relaxed text-muted">
+              冲突项不自动合并: 你的版本已归档在 <code>{report.dir}</code>, 磁盘上是新版文件, 请对照手动合并后重新扫描。
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
