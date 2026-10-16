@@ -15,6 +15,7 @@ import {
   REGIME_STATE_COLORS,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { groupParams, visibleParams } from '@/lib/strategyParams'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
@@ -718,10 +719,12 @@ function ConfigSection({ title, hint, actions, children }: { title: string; hint
 
 
 // memo: 单参数修改只重渲本行 (父组件需传稳定回调, 否则 memo 失效)
-const StrategyParamInput = memo(function StrategyParamInput({ param, value, onChange }: {
+const StrategyParamInput = memo(function StrategyParamInput({ param, value, onChange, onApplyValues }: {
   param: StrategyParamDef
   value: any
   onChange: (pid: string, value: any) => void
+  /** select 带 option_applies 时, 选中某选项需批量应用一组参数值 (如标的池预设) */
+  onApplyValues?: (values: Record<string, any>) => void
 }) {
   if (param.type === 'bool') {
     const checked = value === true || value === 'true' || value === 'True' || value === true
@@ -747,7 +750,19 @@ const StrategyParamInput = memo(function StrategyParamInput({ param, value, onCh
     return (
       <label className="block">
         <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
-        <select value={value ?? param.default} onChange={e => onChange(param.id, e.target.value)} className={INPUT_CLS}>
+        <select
+          value={value ?? param.default}
+          onChange={e => {
+            const v = e.target.value
+            const applies = param.option_applies?.[v]
+            if (applies && onApplyValues) {
+              onApplyValues({ [param.id]: v, ...applies })
+              // 预设会覆盖其他参数的当前值, 显式提示避免静默改动
+              toast(`已应用预设「${v}」，覆盖 ${Object.keys(applies).length} 个参数`, 'success')
+            } else onChange(param.id, v)
+          }}
+          className={INPUT_CLS}
+        >
           {(param.options ?? []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
         </select>
       </label>
@@ -2935,14 +2950,25 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                   actions={detail.params.length > 0 ? <span className="text-[10px] text-muted">{detail.params.length} 项</span> : undefined}
                 >
                   {detail.params.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      {detail.params.map(param => (
-                        <StrategyParamInput
-                          key={param.id}
-                          param={param}
-                          value={strategyParams[param.id]}
-                          onChange={handleStrategyParamChange}
-                        />
+                    <div className="space-y-4">
+                      {groupParams(visibleParams(detail.params, strategyParams)).map((g, gi) => (
+                        <div key={g.name ?? `ug${gi}`}>
+                          {g.name && (
+                            <div className="mb-2 border-b border-border/40 pb-1 text-[11px] font-medium text-muted">{g.name}</div>
+                          )}
+                          {/* 命名组横排（如「入池开关 + 止盈 + 锁定」同组一行）；无名组回退网格 */}
+                          <div className={g.name ? 'flex flex-wrap items-end gap-x-4 gap-y-3' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
+                            {g.items.map(param => (
+                              <StrategyParamInput
+                                key={param.id}
+                                param={param}
+                                value={strategyParams[param.id]}
+                                onChange={handleStrategyParamChange}
+                                onApplyValues={values => setStrategyParams(prev => ({ ...prev, ...values }))}
+                              />
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   ) : (

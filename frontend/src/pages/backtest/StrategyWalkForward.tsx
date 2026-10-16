@@ -176,7 +176,7 @@ export function StrategyWalkForward() {
           </select>
         </div>
 
-        <SweepParamList params={sweep.params} sweeps={sweep.sweeps} updateSweep={sweep.updateSweep} />
+        <SweepParamList params={sweep.params} sweeps={sweep.sweeps} updateSweep={sweep.updateSweep} hiddenLabels={sweep.hiddenParamLabels} />
         <CombosHint show={!!sweep.strategyId} combos={sweep.combos} gridError={sweep.gridError} />
         <div className="text-[11px] text-secondary">每折跑 {sweep.combos || 0} 组优化 × N 折，耗时较长</div>
 

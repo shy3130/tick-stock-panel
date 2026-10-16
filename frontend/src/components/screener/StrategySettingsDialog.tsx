@@ -5,6 +5,8 @@ import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Down
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
+import { groupParams, visibleParams } from '@/lib/strategyParams'
+import { toast } from '@/components/Toast'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
@@ -167,10 +169,12 @@ function RiskPctField({ label, value, onChange, min, max, step = 0.5, unit = '%'
 
 // 策略参数字段
 // memo: 单参数修改只重渲本行 (父组件需传稳定回调, 否则 memo 失效)
-const ParamField = memo(function ParamField({ def, value, onChange }: {
+const ParamField = memo(function ParamField({ def, value, onChange, onApplyValues }: {
   def: StrategyParamDef
   value: any
   onChange: (pid: string, v: any) => void
+  /** select 带 option_applies 时, 选中某选项需批量应用一组参数值 (如标的池预设) */
+  onApplyValues?: (values: Record<string, any>) => void
 }) {
   if (def.type === 'bool') {
     const checked = value === true || value === 'true' || value === 'True'
@@ -199,7 +203,15 @@ const ParamField = memo(function ParamField({ def, value, onChange }: {
         <span className={PARAM_LABEL_CLS} title={def.label}>{def.label}</span>
         <select
           value={value ?? def.default}
-          onChange={e => onChange(def.id, e.target.value)}
+          onChange={e => {
+            const v = e.target.value
+            const applies = def.option_applies?.[v]
+            if (applies && onApplyValues) {
+              onApplyValues({ [def.id]: v, ...applies })
+              // 预设会覆盖其他参数的当前值, 显式提示避免静默改动
+              toast(`已应用预设「${v}」，覆盖 ${Object.keys(applies).length} 个参数`, 'success')
+            } else onChange(def.id, v)
+          }}
           className={`${FIELD_INPUT_CLS} w-full max-w-[240px] px-1.5`}
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -220,6 +232,7 @@ const ParamField = memo(function ParamField({ def, value, onChange }: {
       </div>
     )
   }
+
 
   return (
     <div className="flex items-center gap-2">
@@ -709,8 +722,17 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                           extra={detail.params.length > 0 ? <span className="text-[10px] text-muted/60">{detail.params.length} 项</span> : undefined}
                         >
                           {detail.params.length > 0 ? (
-                            <div className="space-y-2">
-                              {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={handleParamChange} />)}
+                            <div className="space-y-2.5">
+                              {groupParams(visibleParams(detail.params, params)).map((g, gi) => (
+                                <div key={g.name ?? `ug${gi}`}>
+                                  {g.name && (
+                                    <div className="mb-1 border-b border-border/20 pb-0.5 text-[10px] font-medium text-muted/70">{g.name}</div>
+                                  )}
+                                  <div className="space-y-1.5">
+                                    {g.items.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={handleParamChange} onApplyValues={values => setParams(prev => ({ ...prev, ...values }))} />)}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           ) : (
                             <div className="py-4 text-center text-xs text-muted/60">该策略无可调参数</div>
