@@ -30,6 +30,7 @@ from app.enriched_generation import (
     EnrichedGenerationUnavailableError,
     EnrichedPublication,
     bump_enriched_generation,
+    enriched_publication_incomplete,
     get_enriched_generation,
 )
 from app.market_time import cn_today
@@ -38,6 +39,12 @@ from app.polars_guard import guarded_collect
 from app.services.minute_adjust import apply_minute_adjustment, minute_basis_is_raw
 
 logger = logging.getLogger(__name__)
+
+# GH #480: 后台 warmup 因世代漂移被丢弃时的有界重建上限。compute 窗口长达
+# 数十秒, 启动期与 quote 实时刷新的 commit 撞车后若不重建, 历史缓存长期
+# 为空, K 线接口逐请求现算指标。仅 warmup 线程用, 同步/懒加载路径单次。
+_ENRICHED_WARMUP_MAX_ATTEMPTS = 3
+_ENRICHED_WARMUP_PUBLISH_WAIT_SECONDS = 5.0
 
 
 def replace_with_retry(src: Path, dst: Path, *, attempts: int = 10, delay_s: float = 0.5) -> None:
@@ -490,6 +497,8 @@ class KlineRepository:
 
         仿 QuoteService 的线程模式: 设 warming 标志 → 起 daemon → 完成后清标志 +
         触发回调。重复调用时若已有线程在跑则跳过 (避免重复预热)。
+        预热走 _warmup_enriched: 世代漂移导致丢弃时有界重建 (GH #480),
+        同步/懒加载路径仍走单次 _refresh_enriched, 不阻塞 HTTP。
         """
         with self._warmup_lock:
             if self._enriched_warming:
@@ -501,7 +510,7 @@ class KlineRepository:
             t0 = time.perf_counter()
             try:
                 logger.info("enriched warmup thread started")
-                self._refresh_enriched()
+                self._warmup_enriched()
                 logger.info("enriched warmup thread done (%.1fs)", time.perf_counter() - t0)
                 self._notify_refresh_done()
             except Exception:  # noqa: BLE001
@@ -567,11 +576,42 @@ class KlineRepository:
         self._index_enriched_cache = None
         self._index_enriched_cache_date = None
 
-    def _refresh_enriched(self) -> None:
+    def _refresh_enriched(self) -> bool:
+        """刷新 enriched 内存缓存。返回 True 表示因数据换代被丢弃、可重试。
+
+        返回 False 覆盖两种情形: 成功建成, 或非换代失败 (不重试, 保持降级)。
+        现有调用方均不读返回值, 行为不变; 仅后台 warmup 线程用返回值做有界重建。
+        """
         from app.services.heavy_job_limiter import shared_heavy_job_limiter
 
         with shared_heavy_job_limiter.slot("exclusive"):
-            self._refresh_enriched_impl()
+            try:
+                self._refresh_enriched_impl()
+            except EnrichedGenerationUnavailableError as e:
+                logger.warning("enriched 历史缓存因数据换代被丢弃 (可重试): %s", e)
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.warning("enriched 缓存刷新失败: %s", e)
+                return False
+        return False
+
+    def _warmup_enriched(self) -> None:
+        """仅后台预热线程调用: 世代漂移导致丢弃时以新世代有界重建。
+
+        warmup 的 compute 窗口长达数十秒, 启动期与 quote 实时刷新的 commit
+        撞车概率高; 丢弃后不重建会把缓存长期留冷, K 线接口逐请求现算指标
+        (GH #480)。每轮重新捕获世代、各自仍 fail-closed; 发布未完成时短暂
+        等待再试; 超过上限则放弃并保持冷缓存降级 (非无限重读)。
+        """
+        for attempt in range(_ENRICHED_WARMUP_MAX_ATTEMPTS):
+            if attempt and enriched_publication_incomplete(self.store.data_dir, "stock"):
+                time.sleep(_ENRICHED_WARMUP_PUBLISH_WAIT_SECONDS)
+            if not self._refresh_enriched():
+                return
+        logger.warning(
+            "enriched 历史缓存预热因持续换代被丢弃, %d 轮后放弃 (保持冷缓存降级)",
+            _ENRICHED_WARMUP_MAX_ATTEMPTS,
+        )
 
     def _refresh_enriched_impl(self) -> None:
         """从 parquet 加载 enriched 最新日到内存 + 构建聚合表。
@@ -706,8 +746,9 @@ class KlineRepository:
 
             logger.info("enriched 缓存已加载: %d 只, 日期 %s", len(df_latest), latest)
             logger.info("enriched refresh done fallback (%.2fs)", time.perf_counter() - started)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("enriched 缓存刷新失败: %s", e)
+        except EnrichedGenerationUnavailableError:
+            # 换代丢弃上抛给 _refresh_enriched: 后台 warmup 可重试, 同步路径记 warning 降级
+            raise
 
     def _restore_missing_latest_rows(
         self,
