@@ -7,6 +7,8 @@ import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from app.market_time import cn_today
+
 from app.factors import store
 from app.factors.dsl import FACTOR_COLUMN, compile_formula
 from app.factors.registry import all_factors, unregister_factor
@@ -78,13 +80,13 @@ def trial_formula(req: FormulaTrialRequest, request: Request) -> dict:
 
     # 交易日 → 自然日换算 (A股年均 243 交易日 ≈ 1.48 自然日/交易日), 留 buffer
     calendar_days = int((compiled.warmup_bars + req.days) * 1.6) + 15
-    start = date.today() - timedelta(days=calendar_days)
+    start = cn_today() - timedelta(days=calendar_days)
     # 面板基础物理列 (load_panel 只返回 parquet 物理列, 因子列由补算路径生成)
     base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
     if "consecutive_limit_ups" in compiled.dependencies:
         base_columns.append("consecutive_limit_ups")
     engine = _get_engine(request)
-    panel = engine.load_panel(None, start, date.today(), columns=base_columns, asset_type=req.asset_type)
+    panel = engine.load_panel(None, start, cn_today(), columns=base_columns, asset_type=req.asset_type)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前数据目录无可用历史数据, 无法试算")
 
@@ -241,7 +243,7 @@ def _trial_nonempty(request: Request, formula: str, asset_type: str = "stock") -
     calendar_days = int((compiled.warmup_bars + 40) * 1.6) + 15
     base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
     engine = _get_engine(request)
-    panel = engine.load_panel(None, date.today() - timedelta(days=calendar_days), date.today(), columns=base_columns, asset_type=asset_type)
+    panel = engine.load_panel(None, cn_today() - timedelta(days=calendar_days), cn_today(), columns=base_columns, asset_type=asset_type)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前无历史数据, 无法完成保存前试算 (fail-closed)")
     physical = set(panel.columns)

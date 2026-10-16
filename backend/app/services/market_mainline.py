@@ -21,6 +21,7 @@ from pathlib import Path
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.services.fs_utils import atomic_write_parquet
 from app.services.rps_rotation import _load_concept_map_df
 
@@ -280,7 +281,7 @@ def upsert_mainline_history(data_dir: Path, new_rows: pl.DataFrame) -> None:
 def compute_mainline_incremental(repo, data_dir: Path, *, today: date | None = None,
                                  kind: str = "concept") -> pl.DataFrame:
     """增量补算主线(供 daily_pipeline / 手动触发): 补 enriched 已有而主线缺失的日。"""
-    today = today or date.today()
+    today = today or cn_today()
     from app.services.regime_builder import enriched_date_set
 
     enriched_dates = enriched_date_set(repo)

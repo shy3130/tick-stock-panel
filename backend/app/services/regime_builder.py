@@ -20,6 +20,7 @@ from pathlib import Path
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.services.fs_utils import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
@@ -671,7 +672,7 @@ def compute_regime_incremental(repo, data_dir: Path, *, today: date | None = Non
     双检测: 1) 缺口(enriched 有但 regime 没有) 2) stale(enriched 被覆写)。
     自动补齐所有需要的日。返回本次新算的 DataFrame。
     """
-    today = today or date.today()
+    today = today or cn_today()
     existing = load_regime_history(data_dir)
 
     # 缺口: enriched 有哪些天, regime 缺哪些
