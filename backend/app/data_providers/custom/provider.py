@@ -117,12 +117,19 @@ class GenericHTTPProvider:
                 missing = sorted(required - mapped)
                 if missing:
                     errors.append(f"{dataset}: missing mapped fields: {', '.join(missing)}")
+            # 两个外部字段映射同一内部列: rename 阶段 DuplicateError → 整表拉空,
+            # 保存时拦截给明确提示 (前端映射行允许选重, 不拦会静默失败难排查)。
+            targets = list(cfg.field_map.values())
+            dup_targets = sorted({t for t in targets if targets.count(t) > 1})
+            if dup_targets:
+                errors.append(f"{dataset}: duplicate mapped target fields: {', '.join(dup_targets)}")
             if cfg.pct_unit is not None:
                 if dataset != "realtime":
                     errors.append(f"{dataset}: pct_unit 仅用于 realtime 数据集")
                 elif cfg.pct_unit not in ("percent", "decimal"):
                     errors.append(f"{dataset}: pct_unit 必须是 percent 或 decimal")
-            if dataset not in {"realtime", "depth5"}:
+            # depth5/financial 逐批只注入代码参数, 起止时间不参与请求, 不纳入重名检查
+            if dataset not in {"realtime", "depth5", "financial"}:
                 request_params = [cfg.symbols_param, cfg.start_param, cfg.end_param]
                 if dataset in {"minute", "full_minute"}:
                     request_params.extend(
@@ -436,6 +443,15 @@ class GenericHTTPProvider:
             rows = self._request_rows(cfg)
         elif dataset == "depth5":
             rows = self._request_rows(cfg, symbols=test_symbols)
+        elif dataset == "financial":
+            # 财务测试取 metrics 表: 与生产 get_financials("metrics") 同口径
+            override = {**cfg.params, "table": "metrics"}
+            rows = self._request_rows(
+                cfg,
+                symbols=test_symbols,
+                override_params=override,
+                override_body={**cfg.body, "table": "metrics"},
+            )
         elif dataset in {"minute", "full_minute"}:
             override: dict[str, Any] = {}
             if cfg.asset_type_param:

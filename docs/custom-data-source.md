@@ -4,7 +4,7 @@
 
 ## 支持范围
 
-当前自定义源支持六类数据:
+当前自定义源支持七类数据:
 
 | 数据集 | 配置名 | 说明 |
 | --- | --- | --- |
@@ -12,10 +12,9 @@
 | 除权因子 | `adj_factor` | 批量返回一组股票的复权因子 |
 | 实时行情 | `realtime` | 返回全市场快照,用于盘中 enriched 增量计算 |
 | 分钟K | `minute` | 返回 1m 分钟K(需映射出 symbol / datetime / OHLC / 量; amount 成交额可缺省, 缺省时均价线降级显示 —) |
+| 五档盘口 | `depth5` | 批量返回一组股票的买卖五档快照(逐批注入代码参数,无起止时间) |
 | 全量分钟 | `full_minute` | 与 `minute` 同形;声明后可被路由为「全量分钟」生效源,内置服务盘中按当日窗口全市场批量落盘(仅修复轮语义,节奏下限 60s) |
-| 财务数据 | `financial` | 一个配置覆盖全部财务表,请求时把表名作为参数传给上游;字段由数据源决定,仅需映射出 symbol |
-
-深度盘口(depth5)暂无数据集契约,仍由 TickFlow 提供。
+| 财务数据 | `financial` | 一个配置覆盖全部五张财务表;请求时注入 `table` 参数由上游分发,五表按报告期累积落库(见下 `financial` 字段契约) |
 
 `full_minute` 声明式源只提供修复轮(当日窗口批量);廉价增量端点
 (`get_intraday_latest`)是 Python 插件契约,见
@@ -152,12 +151,87 @@ datasets:
 | 未声明 | `change_pct` 按截面中位数归一(A 股涨跌停 30% 上限使两种单位物理可分);`amplitude` / `turnover_rate` **置 `None`** 交由 pipeline 按价格与股本口径重算,并记录 WARNING |
 | 列已配置 `transforms` | 视为用户已接管该列单位,原样透传 |
 
+### depth5 必填
+
+| 内部字段 | 含义 |
+| --- | --- |
+| `symbol` | 标准代码 |
+| `asks` | 卖五档,嵌套数组 `[[价,量], ...]`,按卖一至卖五顺序 |
+| `bids` | 买五档,嵌套数组 `[[价,量], ...]`,按买一至买五顺序 |
+
+`asks` / `bids` 每档取前两个元素按数值解析为 `[价格, 手数]`,无法解析的档位被跳过;数量单位沿用现有封单量口径(手),前端计算封单额时再乘 100 换算为股。示例响应行:
+
+```json
+{ "code": "000001.SZ", "sell": [[10.01, 1200], [10.02, 800], [10.03, 500], [10.04, 300], [10.05, 200]],
+  "buy":  [[10.00, 900], [9.99, 700], [9.98, 400], [9.97, 350], [9.96, 150]] }
+```
+
+对应映射 `code→symbol`、`sell→asks`、`buy→bids`。声明 depth5 后即可在设置 → 数据源 → 能力路由把五档生效源切到该自定义源;五档独立路由,失败不跨源回退。
+
+### financial 必填
+
+| 内部字段 | 含义 |
+| --- | --- |
+| `symbol` | 标准代码(唯一硬性要求,缺 symbol 的帧被丢弃) |
+| `period_end` | 报告期 `YYYY-MM-DD`;缺此列的帧不参与报告期合并,页面按时间排序失效 |
+| `announce_date` | 公告日期 `YYYY-MM-DD`;缺省时按报告期排序,换手率用公告日判业务可用性 |
+
+一个 `financial` 配置覆盖全部五张表,每次请求自动注入 `table`
+参数(`metrics` / `income` / `balance_sheet` / `cash_flow` / `shares`)
+由上游分发返回对应表数据;`shares` 表额外注入 `latest`(当期 `True` /
+全历史 `False`)。映射为「外部字段 → 内部列」一对一:同一外部字段名只能
+映射到一个内部列 — 若两张表存在同名字段且含义不同(如 `total` 在
+balance_sheet 是资产、在 shares 是股本),无法分别映射,需要上游区分字段名
+或只映射其一。两个外部字段映射同一内部列会在保存时被校验拒绝。某批响应
+里完全缺失(而非为 null)的字段该批不落该列,跨批/跨轮合并会自动补 null。
+
+每表 canonical 列(前端财务页与回测基本面因子按此消费;不映射的列在
+页面显示为 —,不影响其他列):
+
+- `metrics` 核心指标: `eps_basic` / `eps_diluted` / `bps`(每股净资产) /
+  `ocfps`(每股经营现金流) / `roe` / `roe_diluted` / `roa` /
+  `gross_margin`(毛利率) / `net_margin`(净利率) / `debt_to_asset_ratio`(资产负债率) /
+  `revenue_yoy`(营收同比) / `net_income_yoy`(净利同比) /
+  `operating_cash_to_revenue`(经营现金/营收) / `inventory_turnover`(存货周转率)
+  —— 注意: 百分比列存**百分点**(12.3 表示 12.3%),与 realtime 的小数制不同
+- `income` 利润表: `revenue`(营收) / `operating_cost`(营业成本) /
+  `operating_profit`(营业利润) / `selling_expense`(销售费用) /
+  `admin_expense`(管理费用) / `rd_expense`(研发费用) /
+  `financial_expense`(财务费用) / `non_operating_income`(营业外收入) /
+  `non_operating_expense`(营业外支出) / `total_profit`(利润总额) /
+  `income_tax`(所得税) / `net_income`(净利润) /
+  `net_income_attributable`(归母净利) / `net_income_deducted`(扣非净利) /
+  `basic_eps` / `diluted_eps` —— 金额单位元
+- `balance_sheet` 资产负债表: `total_assets`(资产总计) /
+  `total_current_assets`(流动资产) / `total_non_current_assets`(非流动资产) /
+  `cash_and_equivalents`(货币资金) / `accounts_receivable`(应收账款) /
+  `inventory`(存货) / `fixed_assets`(固定资产) / `intangible_assets`(无形资产) /
+  `goodwill`(商誉) / `total_liabilities`(负债合计) /
+  `total_current_liabilities`(流动负债) / `total_non_current_liabilities`(非流动负债) /
+  `short_term_borrowing`(短期借款) / `long_term_borrowing`(长期借款) /
+  `accounts_payable`(应付账款) / `total_equity`(所有者权益) /
+  `equity_attributable`(归母权益) / `retained_earnings`(未分配利润) /
+  `minority_interest`(少数股东权益) —— 金额单位元
+- `cash_flow` 现金流量表: `net_operating_cash_flow`(经营净额) /
+  `net_investing_cash_flow`(投资净额) / `net_financing_cash_flow`(筹资净额) /
+  `capex`(资本开支) / `net_cash_change`(现金净增加) —— 金额单位元
+- `shares` 股本: `total_shares`(总股本,股) / `float_shares`(流通股本,股) —
+  历史换手率按公告日(缺则报告期)取有效股本,无 `float_shares` 时回退维表最新股本
+
+被切为财务生效源后,财务同步走独立调度(每周 metrics + 手动全表),
+报告期合并按 `(symbol, period_end)` 逐列取最新非空值:多源字段可并集
+共存互不覆盖(如 TickFlow 补齐 metrics 历史各期,自定义源提供当期报表),
+但切换生效源后**不再拉取的表不会自动清空**,旧数据会保留到被新数据覆盖。
+声明了 financial 但上游某表无数据时返回空即可,已有存量靠合并写入保留。
+
 ## 请求约定
 
 - `daily` / `adj_factor` 会按 `batch` 切分 symbols。
 - POST 请求会发送 JSON body: `symbols`、`start_time`、`end_time`。
 - GET 请求会发送 query 参数: `symbols=000001.SZ,600000.SH`。
 - `realtime` 必须是全市场快照接口,不支持逐个 symbol 拉实时行情。
+- `depth5` 会按 `batch` 切分 symbols 逐批请求,只注入代码参数(无 `start_time` / `end_time`)。
+- `financial` 同样按 `batch` 切分逐批请求,只注入代码参数 + `table` 表名(无起止时间);`shares` 表额外注入 `latest`。
 
 可通过这些字段改参数名:
 

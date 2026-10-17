@@ -9,7 +9,7 @@ import { toast } from '@/components/Toast'
 const INPUT_CLS =
   'w-full h-9 px-2.5 rounded-lg bg-base border-0 ring-1 ring-border/40 text-xs text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/40 transition-shadow'
 
-const DATASETS = ['daily', 'adj_factor', 'realtime', 'minute', 'full_minute'] as const
+const DATASETS = ['daily', 'adj_factor', 'realtime', 'minute', 'depth5', 'full_minute', 'financial'] as const
 type DatasetKey = typeof DATASETS[number]
 
 const DATASET_LABEL: Record<DatasetKey, string> = {
@@ -17,16 +17,60 @@ const DATASET_LABEL: Record<DatasetKey, string> = {
   adj_factor: '除权因子',
   realtime: '实时行情',
   minute: '分钟K',
+  depth5: '五档盘口',
   full_minute: '全量分钟',
+  financial: '财务数据',
 }
+
+// 财务 canonical 全列 (与前端财务页 FIELD_DEFS / fuyao provider 映射对齐)。
+// 一个 financial 配置覆盖全部五表 (metrics/income/balance_sheet/cash_flow/shares),
+// 上游每个外部字段分别映射到其所属表的 canonical 列。
+const FINANCIAL_ALL_FIELDS = [
+  // 报告期骨架 (五表通用)
+  'symbol', 'period_end', 'announce_date',
+  // metrics: 核心指标 (pct 百分点制: 12.3 表示 12.3%)
+  'eps_basic', 'eps_diluted', 'bps', 'ocfps', 'roe', 'roe_diluted', 'roa',
+  'gross_margin', 'net_margin', 'debt_to_asset_ratio', 'revenue_yoy',
+  'net_income_yoy', 'operating_cash_to_revenue', 'inventory_turnover',
+  // income: 利润表
+  'revenue', 'operating_cost', 'operating_profit', 'selling_expense',
+  'admin_expense', 'rd_expense', 'financial_expense', 'non_operating_income',
+  'non_operating_expense', 'total_profit', 'income_tax', 'net_income',
+  'net_income_attributable', 'net_income_deducted', 'basic_eps', 'diluted_eps',
+  // balance_sheet: 资产负债表
+  'total_assets', 'total_current_assets', 'total_non_current_assets',
+  'cash_and_equivalents', 'accounts_receivable', 'inventory', 'fixed_assets',
+  'intangible_assets', 'goodwill', 'total_liabilities', 'total_current_liabilities',
+  'total_non_current_liabilities', 'short_term_borrowing', 'long_term_borrowing',
+  'accounts_payable', 'total_equity', 'equity_attributable', 'retained_earnings',
+  'minority_interest',
+  // cash_flow: 现金流量表
+  'net_operating_cash_flow', 'net_investing_cash_flow', 'net_financing_cash_flow',
+  'capex', 'net_cash_change',
+  // shares: 股本 (换手率历史股本用)
+  'total_shares', 'float_shares',
+] as const
 
 const TARGET_FIELDS: Record<DatasetKey, string[]> = {
   daily: ['symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount'],
   adj_factor: ['symbol', 'trade_date', 'ex_factor'],
   realtime: ['symbol', 'name', 'last_price', 'prev_close', 'open', 'high', 'low', 'volume', 'amount', 'change_pct', 'change_amount', 'amplitude', 'turnover_rate', 'timestamp', 'session'],
   minute: ['symbol', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'amount'],
+  depth5: ['symbol', 'asks', 'bids'],
   full_minute: ['symbol', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'amount'],
+  // 财务只预填骨架三列, 具体指标从"添加映射"下拉按表选择 (全预填 60 行太长)
+  financial: ['symbol', 'period_end', 'announce_date'],
 }
+
+// 财务的映射下拉选项 = 五表 canonical 全列 (预填只给骨架, 下拉覆盖全部)
+const TARGET_OPTIONS: Record<DatasetKey, string[]> = {
+  ...Object.fromEntries(
+    (['daily', 'adj_factor', 'realtime', 'minute', 'depth5', 'full_minute'] as DatasetKey[]).map(
+      k => [k, TARGET_FIELDS[k]],
+    ),
+  ),
+  financial: [...FINANCIAL_ALL_FIELDS],
+} as Record<DatasetKey, string[]>
 
 // 内部字段的中文说明 (下拉选项展示用)
 const FIELD_LABELS: Record<string, string> = {
@@ -50,6 +94,72 @@ const FIELD_LABELS: Record<string, string> = {
   turnover_rate: '换手率 (小数 0.05=5%)',
   timestamp: '时间戳',
   session: '交易时段',
+  asks: '卖五档 [[价,量]×5] (量:手)',
+  bids: '买五档 [[价,量]×5] (量:手)',
+  // 财务骨架
+  period_end: '报告期 (YYYY-MM-DD)',
+  announce_date: '公告日期 (YYYY-MM-DD)',
+  // 财务 metrics
+  eps_basic: '基本每股收益 EPS',
+  eps_diluted: '稀释每股收益 EPS',
+  bps: '每股净资产 BPS',
+  ocfps: '每股经营现金流',
+  roe: '净资产收益率 ROE (%)',
+  roe_diluted: '稀释 ROE (%)',
+  roa: '总资产收益率 ROA (%)',
+  gross_margin: '销售毛利率 (%)',
+  net_margin: '销售净利率 (%)',
+  debt_to_asset_ratio: '资产负债率 (%)',
+  revenue_yoy: '营收同比增长 (%)',
+  net_income_yoy: '净利润同比增长 (%)',
+  operating_cash_to_revenue: '经营现金/营收 (%)',
+  inventory_turnover: '存货周转率',
+  // 财务 income (金额:元)
+  revenue: '营业收入 (元)',
+  operating_cost: '营业成本 (元)',
+  operating_profit: '营业利润 (元)',
+  selling_expense: '销售费用 (元)',
+  admin_expense: '管理费用 (元)',
+  rd_expense: '研发费用 (元)',
+  financial_expense: '财务费用 (元)',
+  non_operating_income: '营业外收入 (元)',
+  non_operating_expense: '营业外支出 (元)',
+  total_profit: '利润总额 (元)',
+  income_tax: '所得税 (元)',
+  net_income: '净利润 (元)',
+  net_income_attributable: '归母净利润 (元)',
+  net_income_deducted: '扣非净利润 (元)',
+  basic_eps: '基本每股收益 (元)',
+  diluted_eps: '稀释每股收益 (元)',
+  // 财务 balance_sheet (金额:元)
+  total_assets: '资产总计 (元)',
+  total_current_assets: '流动资产合计 (元)',
+  total_non_current_assets: '非流动资产合计 (元)',
+  cash_and_equivalents: '货币资金 (元)',
+  accounts_receivable: '应收账款 (元)',
+  inventory: '存货 (元)',
+  fixed_assets: '固定资产 (元)',
+  intangible_assets: '无形资产 (元)',
+  goodwill: '商誉 (元)',
+  total_liabilities: '负债合计 (元)',
+  total_current_liabilities: '流动负债合计 (元)',
+  total_non_current_liabilities: '非流动负债合计 (元)',
+  short_term_borrowing: '短期借款 (元)',
+  long_term_borrowing: '长期借款 (元)',
+  accounts_payable: '应付账款 (元)',
+  total_equity: '所有者权益合计 (元)',
+  equity_attributable: '归母所有者权益 (元)',
+  retained_earnings: '未分配利润 (元)',
+  minority_interest: '少数股东权益 (元)',
+  // 财务 cash_flow (金额:元)
+  net_operating_cash_flow: '经营现金流净额 (元)',
+  net_investing_cash_flow: '投资现金流净额 (元)',
+  net_financing_cash_flow: '筹资现金流净额 (元)',
+  capex: '固定资产/无形资产投资 (元)',
+  net_cash_change: '现金净增加额 (元)',
+  // 财务 shares (股)
+  total_shares: '总股本 (股)',
+  float_shares: '流通股本 (股)',
 }
 
 function normalizeConfig(config: CustomSourceConfig): CustomSourceConfig {
@@ -62,6 +172,11 @@ function normalizeConfig(config: CustomSourceConfig): CustomSourceConfig {
         const normalized = { ...dataset }
         if (key === 'realtime') {
           delete normalized.symbols_param
+          delete normalized.start_param
+          delete normalized.end_param
+        }
+        // 五档/财务为逐批快照: 只注入代码参数(财务另注入 table 表名), 起止时间不参与请求
+        if (key === 'depth5' || key === 'financial') {
           delete normalized.start_param
           delete normalized.end_param
         }
@@ -343,7 +458,9 @@ function DatasetDetail({
   const enabled = !!cfg
   const [testSymbols, setTestSymbols] = useState('000001.SZ,600000.SH')
   const [showParams, setShowParams] = useState(false)
-  const showTimeParams = datasetKey !== 'realtime'
+  // realtime 为全市场快照不注入任何参数; depth5/financial 逐批注入代码参数但无起止时间
+  const showSymbolsParam = datasetKey !== 'realtime'
+  const showTimeParams = datasetKey !== 'realtime' && datasetKey !== 'depth5' && datasetKey !== 'financial'
   const test = useMutation({
     mutationFn: () => api.testDataSource(
       providerName,
@@ -450,6 +567,13 @@ function DatasetDetail({
               <div className="text-[10px] text-muted/50 mb-1.5">
                 改外部接口的参数名（留空用默认）
               </div>
+              {datasetKey === 'financial' && (
+                <div className="text-[10px] text-muted/50 mb-1.5">
+                  一个财务配置覆盖全部五表；请求时自动附带 <span className="font-mono">table</span> 参数
+                  (metrics/income/balance_sheet/cash_flow/shares)，上游据此返回对应表数据。
+                  shares 表额外附带 <span className="font-mono">latest</span> 参数（当期/历史）。
+                </div>
+              )}
               <AnimatePresence initial={false}>
                 {showParams && (
                   <motion.div
@@ -460,16 +584,18 @@ function DatasetDetail({
                     className="overflow-hidden"
                   >
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                      {showSymbolsParam && (
+                        <Field label="代码参数">
+                          <input
+                            value={cfg.symbols_param ?? ''}
+                            onChange={e => onUpdate({ symbols_param: e.target.value || undefined })}
+                            placeholder="symbols"
+                            className={`${INPUT_CLS} w-full`}
+                          />
+                        </Field>
+                      )}
                       {showTimeParams && (
                         <>
-                          <Field label="代码参数">
-                            <input
-                              value={cfg.symbols_param ?? ''}
-                              onChange={e => onUpdate({ symbols_param: e.target.value || undefined })}
-                              placeholder="symbols"
-                              className={`${INPUT_CLS} w-full`}
-                            />
-                          </Field>
                           <Field label="起始时间参数">
                             <input
                               value={cfg.start_param ?? ''}
@@ -538,6 +664,7 @@ function DatasetDetail({
                 key={datasetKey}
                 fieldMap={cfg.field_map}
                 targets={TARGET_FIELDS[datasetKey]}
+                options={TARGET_OPTIONS[datasetKey]}
                 onChange={onFieldMap}
               />
             </div>
@@ -600,12 +727,16 @@ function DatasetDetail({
 function FieldMapEditor({
   fieldMap,
   targets,
+  options,
   onChange,
 }: {
   fieldMap: Record<string, string>
   targets: string[]
+  // 下拉可选列; 缺省 = targets。财务预填仅骨架三列, 下拉给五表全列。
+  options?: string[]
   onChange: (fm: Record<string, string>) => void
 }) {
+  const choices = options ?? targets
   // 内部用数组维护行的稳定身份, 避免 Record 在编辑空行时 key 漂移导致输入框失焦
   const [rows, setRows] = useState<Array<{ src: string; target: string; id: number }>>(() => {
     const entries = Object.entries(fieldMap)
@@ -675,12 +806,12 @@ function FieldMapEditor({
           />
           <span className="text-muted/50 text-[10px]">→</span>
           <select
-            value={targets.includes(row.target) ? row.target : ''}
+            value={choices.includes(row.target) ? row.target : ''}
             onChange={e => updateRow(row.id, { target: e.target.value })}
-            className={`${INPUT_CLS} text-xs ${row.target && !targets.includes(row.target) ? 'text-warning' : ''}`}
+            className={`${INPUT_CLS} text-xs ${row.target && !choices.includes(row.target) ? 'text-warning' : ''}`}
           >
             <option value="">{row.target || '(选择)'}</option>
-            {targets.map(t => (
+            {choices.map(t => (
               <option key={t} value={t}>
                 {t}（{FIELD_LABELS[t] || t}）
               </option>

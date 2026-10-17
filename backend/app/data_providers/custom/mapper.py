@@ -31,7 +31,10 @@ def extract_rows(payload: Any, response_path: str = "") -> list[dict]:
 def map_rows(rows: list[dict], field_map: dict[str, str]) -> pl.DataFrame:
     if not rows:
         return pl.DataFrame()
-    df = pl.DataFrame(rows)
+    # 全量扫描推断: 默认 100 行采样会把稀疏列(前 100 行全 null, 如仅银行股
+    # 有值的财务费用)推断成 Null 列, 后续数值行 append 直接 ComputeError —
+    # 财务批 batch=100 时整表拉空 (与 fuyao 插件 infer_schema_length=None 同因)。
+    df = pl.DataFrame(rows, infer_schema_length=None)
     rename = {src: dst for src, dst in field_map.items() if src in df.columns and src != dst}
     if rename:
         df = df.rename(rename)
