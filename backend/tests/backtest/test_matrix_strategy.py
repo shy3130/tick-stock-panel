@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import threading
 from dataclasses import replace
 from datetime import date, timedelta
@@ -495,6 +496,110 @@ def test_direct_parquet_matrix_matches_panel_builder_and_reuses_mmap(tmp_path):
     target_asset = refreshed.symbols.index("000001.SZ")
     assert refreshed.close[-1, target_asset] == pytest.approx(12.5)
     assert len(list(cache_root.glob("v*-*"))) == 2
+
+
+def test_collect_parquet_axes_stringifies_numeric_symbols(tmp_path):
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+
+    day = date(2024, 2, 1)
+    root = tmp_path / "date=2024-02-01"
+    root.mkdir()
+    pl.DataFrame({"symbol": [1, 2], "date": [day, day]}).write_parquet(root / "part.parquet")
+    dataset = pads.dataset(
+        str(tmp_path), format="parquet",
+        partitioning=pads.partitioning(pa.schema([("date", pa.date32())]), flavor="hive"),
+    )
+    dates, symbols = matrix_module._collect_parquet_axes(
+        dataset, matrix_module._matrix_filter_expression(day, day, None), batch_size=1,
+    )
+    assert dates == [day]
+    assert symbols == ["1", "2"]
+
+
+def test_collect_parquet_axes_deduplicates_bounded_groups(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+
+    first = date(2024, 2, 1)
+    for offset in range(9):
+        day = first + timedelta(days=offset)
+        part = tmp_path / f"date={day}" / "part.parquet"
+        part.parent.mkdir()
+        pl.DataFrame({"symbol": ["000001.SZ"], "date": [day]}).write_parquet(part)
+    dataset = pads.dataset(
+        str(tmp_path), format="parquet",
+        partitioning=pads.partitioning(pa.schema([("date", pa.date32())]), flavor="hive"),
+    )
+    unique = matrix_module.pc.unique
+    calls = []
+
+    def counted_unique(values):
+        calls.append(len(values))
+        return unique(values)
+
+    monkeypatch.setattr(matrix_module.pc, "unique", counted_unique)
+    dates, symbols = matrix_module._collect_parquet_axes(
+        dataset, matrix_module._matrix_filter_expression(first, first + timedelta(days=8), None),
+        batch_size=1,
+    )
+    assert dates == [first + timedelta(days=offset) for offset in range(9)]
+    assert symbols == ["000001.SZ"]
+    assert calls == [8, 8, 1, 1]
+
+
+def test_collect_parquet_axes_cancels_before_processing_partial_group(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+
+    day = date(2024, 2, 1)
+    part = tmp_path / f"date={day}" / "part.parquet"
+    part.parent.mkdir()
+    pl.DataFrame({"symbol": ["000001.SZ"], "date": [day]}).write_parquet(part)
+    dataset = pads.dataset(
+        str(tmp_path), format="parquet",
+        partitioning=pads.partitioning(pa.schema([("date", pa.date32())]), flavor="hive"),
+    )
+    cancelled = threading.Event()
+    original = matrix_module._raise_if_matrix_cancelled
+    calls = 0
+
+    def cancel_after_first_batch(event):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            cancelled.set()
+        original(event)
+
+    monkeypatch.setattr(matrix_module, "_raise_if_matrix_cancelled", cancel_after_first_batch)
+    with pytest.raises(matrix_module.MatrixPrewarmCancelledError):
+        matrix_module._collect_parquet_axes(
+            dataset, matrix_module._matrix_filter_expression(day, day, None),
+            batch_size=1, cancel_event=cancelled,
+        )
+
+
+def test_matrix_cold_build_reports_axis_scan_breakdown(tmp_path, caplog):
+    root = tmp_path / "kline_daily_enriched"
+    day = date(2024, 2, 1)
+    partition = root / f"date={day}"
+    partition.mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"], "date": [day, day],
+        "open": [10.0, 11.0], "high": [10.0, 11.0],
+        "low": [10.0, 11.0], "close": [10.0, 11.0],
+        "volume": [1000.0, 1000.0],
+    }).write_parquet(partition / "part.parquet")
+
+    with caplog.at_level(logging.INFO, logger=matrix_module.__name__):
+        market = load_market_data_matrix_from_parquet(
+            root, day, day, field_columns=set(), cache_root=tmp_path / "cache",
+        )
+
+    assert market.symbols == ("000001.SZ", "600000.SH")
+    assert market.timestamp_labels == ("2024-02-01",)
+    assert any("matrix axes scan" in record.message and "read_ms=" in record.message
+               and "unique_ms=" in record.message for record in caplog.records)
 
 
 def test_covering_matrix_cache_reuses_wider_dates_and_fields(tmp_path):

@@ -2055,13 +2055,36 @@ def _collect_parquet_axes(
         batch_size=int(batch_size),
         use_threads=True,
     )
-    for batch in scanner.to_batches():
+    read_s = 0.0
+    unique_s = 0.0
+    group: list[pa.RecordBatch] = []
+    batches = scanner.to_batches()
+    while True:
+        step = time.perf_counter()
+        try:
+            batch = next(batches)
+        except StopIteration:
+            read_s += time.perf_counter() - step
+            break
+        read_s += time.perf_counter() - step
         _raise_if_matrix_cancelled(cancel_event)
-        dates.update(pc.unique(_batch_column(batch, "date")).to_pylist())
-        symbols.update(
-            str(value)
-            for value in pc.unique(_batch_column(batch, "symbol")).to_pylist()
-        )
+        group.append(batch)
+        if len(group) < 8:
+            continue
+        step = time.perf_counter()
+        table = pa.Table.from_batches(group)
+        dates.update(pc.unique(table["date"]).to_pylist())
+        symbols.update(str(value) for value in pc.unique(table["symbol"]).to_pylist())
+        unique_s += time.perf_counter() - step
+        group.clear()
+    if group:
+        _raise_if_matrix_cancelled(cancel_event)
+        step = time.perf_counter()
+        table = pa.Table.from_batches(group)
+        dates.update(pc.unique(table["date"]).to_pylist())
+        symbols.update(str(value) for value in pc.unique(table["symbol"]).to_pylist())
+        unique_s += time.perf_counter() - step
+    logger.info("matrix axes scan read_ms=%.1f unique_ms=%.1f", read_s * 1000, unique_s * 1000)
     return sorted(dates), sorted(symbols)
 
 
