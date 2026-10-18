@@ -388,3 +388,26 @@ def test_limit_down_recovery_uses_raw_low_under_later_ex_div():
     assert day2["signal_limit_down_recovery"][0] is False
     day3 = df.filter(pl.col("date") == date(2024, 1, 4))
     assert day3["signal_limit_down_recovery"][0] is True
+
+
+def test_chinext_302_codes_use_growth_board_rules():
+    """深交所创业板已启用 302 号段 (如 2025-02-17 起的 302132.SZ 中航成飞),
+    与 300/301 同为 ±20%, 注册制新股同样有 5 个交易日无涨跌幅窗口。"""
+    assert price_limit_pct("302132.SZ", date(2026, 10, 16)) == pytest.approx(0.20)
+
+    df = pl.DataFrame({
+        "symbol": ["302132.SZ", "000001.SZ"],
+        "trade_date": [date(2026, 10, 16)] * 2,
+        "is_risk_warning": [False, False],
+    })
+    pct = df.select(
+        polars_price_limit_pct(pl.col("symbol"), pl.col("trade_date"), pl.col("is_risk_warning"))
+    ).to_series()
+    assert pct.to_list() == pytest.approx([0.20, 0.10])
+
+
+def test_chinext_302_no_limit_window_follows_gem_registration_date():
+    from app.price_limits import no_limit_window_days
+
+    # 2023-02-17 主板注册制之前、2020-08-24 创业板注册制之后上市
+    assert no_limit_window_days("302001.SZ", date(2021, 6, 1)) == 5

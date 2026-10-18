@@ -683,3 +683,8 @@ def test_auto_order_events_shape(tmp_path):
     assert sell_ev["rule_id"] == "" and "卖出" in sell_ev["message"] and "即时" in sell_ev["message"]
     # 空列表 → 空
     assert paper_auto.auto_order_events([]) == []
+
+
+def test_limit_pct_chinext_302():
+    # 创业板 302 号段 (2025-02-17 起的 302132.SZ 中航成飞) 为 ±20%
+    assert paper.limit_pct("302132.SZ", "stock") == 0.20

@@ -203,7 +203,7 @@ def _json_safe(value: Any) -> Any:
 def _board(symbol: str) -> str:
     if symbol.endswith(".BJ"):
         return "北交所"
-    if symbol.startswith(("300", "301")):
+    if symbol.startswith(("300", "301", "302")):
         return "创业板"
     if symbol.startswith(("688", "689")):
         return "科创板"

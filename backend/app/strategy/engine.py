@@ -1733,6 +1733,7 @@ class StrategyEngine:
                     board_exprs.append(
                         pl.col("symbol").str.starts_with("300")
                         | pl.col("symbol").str.starts_with("301")
+                        | pl.col("symbol").str.starts_with("302")
                     )
                 elif b == "科创板":
                     board_exprs.append(pl.col("symbol").str.starts_with("688"))

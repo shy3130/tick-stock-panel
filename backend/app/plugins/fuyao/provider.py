@@ -187,7 +187,7 @@ def _ref_price(
 def _price_limit(symbol: str) -> float:
     """按代码前缀给涨跌停幅度(自检容差用): 创业板/科创板 20%, 北交所 30%, 主板 10%。"""
     code = symbol.split(".")[0]
-    if code.startswith(("300", "301", "688", "689")):
+    if code.startswith(("300", "301", "302", "688", "689")):
         return 0.20
     if code.startswith(("8", "4", "92")):
         return 0.30
