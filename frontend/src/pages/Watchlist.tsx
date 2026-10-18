@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Rows3, BarChart3, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, FileUp, FolderOpen, FolderMinus, FolderPlus } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type WatchlistGroupColor } from '@/lib/api'
+import { ExtSparkChart } from '@/components/screener/ExtSparkChart'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { extendMinuteTail } from '@/lib/minuteTailExtend'
 import { QK } from '@/lib/queryKeys'
@@ -190,6 +191,7 @@ function renderExtCell(
   expandedCells: Set<string>,
   onToggleExpand: (key: string) => void,
   onDimensionClick: (target: DimensionMembersTarget) => void,
+  extSeriesData?: Record<string, Record<string, [string, number][]>>,
 ): React.ReactNode {
   if (col.source.type !== 'ext') return null
   const { configId, fieldName } = col.source
@@ -202,6 +204,24 @@ function renderExtCell(
   const style: React.CSSProperties = {}
   if (col.extDisplay?.maxWidth) {
     style.maxWidth = col.extDisplay.maxWidth
+  }
+
+  // 日内多盘迷你图形态 (bar/line): 序列缺该标的时回退文字值 (与策略页同口径)
+  const sparkKind = col.extDisplay?.snapshotRender
+  const sparkPoints = (sparkKind === 'bar' || sparkKind === 'line')
+    ? extSeriesData?.[sourceField]?.[r.symbol]
+    : undefined
+  if (sparkPoints) {
+    return (
+      <td className="px-2 py-1" style={style}>
+        <ExtSparkChart
+          points={sparkPoints}
+          kind={sparkKind as 'bar' | 'line'}
+          width={col.extDisplay?.chartWidth || 150}
+          height={col.extDisplay?.chartHeight || 80}
+        />
+      </td>
+    )
   }
 
   // 根据值类型决定 td class
@@ -1229,6 +1249,38 @@ export function Watchlist() {
     [filteredRows, sortRows, columns],
   )
 
+  // 日内多盘扩展列 (集合竞价等) 迷你图: 每个 bar/line 图列按列表标的拉当日序列
+  // (与策略页同口径; 人气排行等每日截面表无时间列, 不会出现图列)
+  const extChartColumns = useMemo(
+    () => columns.filter(c =>
+      c.visible && c.source.type === 'ext'
+      && (c.extDisplay?.snapshotRender === 'bar' || c.extDisplay?.snapshotRender === 'line')),
+    [columns],
+  )
+  const extChartColsKey = extChartColumns
+    .map(c => `${(c.source as { configId: string }).configId}.${(c.source as { fieldName: string }).fieldName}`)
+    .join(',')
+  const extChartSymbolsKey = useMemo(
+    () => sortedRows.map(r => r.symbol as string).sort().join(','),
+    [sortedRows],
+  )
+  const extSeriesQuery = useQuery({
+    queryKey: QK.extSeries(extChartColsKey, null, extChartSymbolsKey),
+    queryFn: async () => {
+      const symbols = extChartSymbolsKey ? extChartSymbolsKey.split(',') : []
+      const entries = await Promise.all(extChartColumns.map(async c => {
+        const src = c.source as { type: 'ext'; configId: string; fieldName: string }
+        const r = await api.extDataSeries(src.configId, src.fieldName, undefined, symbols)
+        return [`${src.configId}.${src.fieldName}`, r.items ?? {}] as const
+      }))
+      return Object.fromEntries(entries) as Record<string, Record<string, [string, number][]>>
+    },
+    enabled: extChartColumns.length > 0 && extChartSymbolsKey.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: prev => prev,
+  })
+  const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
+
   // 切股导航列表: 按列表当前展示顺序 (与 sortedRows 一致, 排序/筛选后行序随之变化)。
   // 弹窗未打开时跳过构建 — sortedRows 随行情 tick 重建, 避免无谓分配。
   const previewNavItems = useMemo(
@@ -1709,7 +1761,7 @@ export function Watchlist() {
               renderCell={(r: any, col: ColumnConfig) => {
                 // ext 列
                 if (col.source.type === 'ext') {
-                  return renderExtCell(r, col, expandedCells, handleToggleExpand, setDimensionTarget)
+                  return renderExtCell(r, col, expandedCells, handleToggleExpand, setDimensionTarget, extSeriesData)
                 }
                 const key = col.source.key
                 const price = r.rt_price ?? r.close
