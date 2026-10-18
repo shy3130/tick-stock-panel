@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from pydantic import BaseModel
 
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
 
@@ -420,10 +423,27 @@ _DEMO_RULES_TEMPLATE = [
 ]
 
 # 策略类型单独声明 (格式不同: 含 strategy_id + direction)
+# 注意: 这些 id 只是演示候选, 内置策略已下线 → seed 时必须用引擎校验后再落盘,
+# 见 _strategy_available(); 不存在的直接跳过, 不生成死规则 (#490)。
 _DEMO_STRATEGY_RULES: list[dict] = [
     {"name": "策略监控 · 趋势突破", "strategy_id": "trend_breakout", "direction": "entry"},
     {"name": "策略监控 · MACD金叉", "strategy_id": "macd_golden", "direction": "both"},
 ]
+
+
+def _strategy_available(engine, strategy_id: str) -> bool:
+    """策略是否真实存在于引擎。
+
+    引擎未装配/查询异常时一律按「不可用」处理: 演示规则宁可不种,
+    也不要种一条永远不触发的死规则。
+    """
+    if engine is None:
+        return False
+    try:
+        return bool(engine.has(strategy_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("策略可用性检查失败: %s", strategy_id, exc_info=True)
+        return False
 
 
 @router.post("/seed")
@@ -438,8 +458,20 @@ def seed_demo_rules(request: Request):
         monitor_rules.save_one(_data_dir(request), rule)
         created.append(rule_id)
         i += 1
-    # 策略类型规则
+    # 策略类型规则: 只种引擎里真实存在的策略。
+    # 内置策略已下线 (去内置化), 硬编码的历史 id (trend_breakout / macd_golden)
+    # 会生成「列表里显示已启用、运行时永远不触发」的死规则——运行时还会把
+    # unknown strategy 异常吞成空列表, 从日志里也看不出来 (#490)。
+    engine = getattr(request.app.state, "strategy_engine", None)
+    skipped: list[str] = []
     for sr in _DEMO_STRATEGY_RULES:
+        if not _strategy_available(engine, sr["strategy_id"]):
+            skipped.append(sr["strategy_id"])
+            logger.warning(
+                "演示规则跳过: 策略 %s 不存在(内置策略已下线, 需先在「策略」页自建)",
+                sr["strategy_id"],
+            )
+            continue
         rule_id = f"demo_{ts}_{i}"
         rule = _demo_rule(
             rule_id, sr["name"], "strategy", "all", [], [], "and", 3600, "info",
@@ -449,7 +481,7 @@ def seed_demo_rules(request: Request):
         created.append(rule_id)
         i += 1
     _sync_engine(request)
-    return {"ok": True, "generated": len(created), "ids": created}
+    return {"ok": True, "generated": len(created), "ids": created, "skipped": skipped}
 
 
 # ── 封单监控模拟触发 (Dev 调试用) ─────────────────────
