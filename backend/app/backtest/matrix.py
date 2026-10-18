@@ -4275,9 +4275,9 @@ def _symbol_in_boards(symbol: str, boards: list[str]) -> bool:
             return True
         if board == "深主板" and symbol.startswith(("00", "001")):
             return True
-        if board == "创业板" and symbol.startswith(("300", "301")):
+        if board == "创业板" and symbol.startswith(("300", "301", "302")):
             return True
-        if board == "科创板" and symbol.startswith("688"):
+        if board == "科创板" and symbol.startswith(("688", "689")):
             return True
         if board == "北交所" and symbol.endswith(".BJ"):
             return True
