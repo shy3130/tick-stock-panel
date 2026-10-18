@@ -688,3 +688,9 @@ def test_auto_order_events_shape(tmp_path):
 def test_limit_pct_chinext_302():
     # 创业板 302 号段 (2025-02-17 起的 302132.SZ 中航成飞) 为 ±20%
     assert paper.limit_pct("302132.SZ", "stock") == 0.20
+
+
+def test_limit_pct_star_689():
+    # 科创板 689 号段 (存托凭证, 如 689009.SH 九号公司) 为 ±20%,
+    # 与 price_limits.board_limit_pct 一致
+    assert paper.limit_pct("689009.SH", "stock") == 0.20

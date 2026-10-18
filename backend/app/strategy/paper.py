@@ -307,12 +307,12 @@ def sell_fee(qty: int, price: float, commission_pct: float, stamp_tax_pct: float
 def limit_pct(symbol: str, asset_type: str) -> float:
     """涨跌停幅度。V1 简化: ST 未识别 (无名称数据), 基金统一 10%。
 
-    股票: 创业板 300/301/302 与科创板 688 → 20%; 北交所 43/83/87/92 开头 → 30%; 其余 10%。
+    股票: 创业板 300/301/302 与科创板 688/689 → 20%; 北交所 43/83/87/92 开头 → 30%; 其余 10%。
     """
     if asset_type == "etf":
         return 0.10
     code = symbol.split(".")[0]
-    if code.startswith(("300", "301", "302", "688")):
+    if code.startswith(("300", "301", "302", "688", "689")):
         return 0.20
     if code.startswith(("43", "83", "87", "92")):
         return 0.30
