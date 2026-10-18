@@ -95,6 +95,11 @@ class PullConfigReq(BaseModel):
     field_map: dict[str, str] | None = None  # external → internal field name
     schedule_minutes: int = Field(1440, ge=1)
     enabled: bool = False
+    # 每日固定拉取时刻 "HH:MM" (北京时间): 配置后按墙钟每天该时刻拉一次,
+    # 忽略 schedule_minutes; null = 间隔制 (清除固定时刻)
+    schedule_time: str | None = Field(
+        None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+    )
     time_window_start: str | None = None   # "HH:MM", None=不限
     time_window_end: str | None = None     # "HH:MM", None=不限
     # 接口按日查询的参数名 (如 "date"): 配置后支持历史回补, 且当日拉取也带日期参数
@@ -1021,6 +1026,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         field_map=body.field_map,
         schedule_minutes=body.schedule_minutes,
         enabled=body.enabled,
+        schedule_time=body.schedule_time,
         time_window_start=body.time_window_start,
         time_window_end=body.time_window_end,
         date_param=body.date_param,
@@ -1197,6 +1203,65 @@ def fix_symbol(request: Request, config_id: str):
 # ---------------------------------------------------------------------------
 # Schema 发现
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{config_id}/series")
+def ext_series(
+    request: Request,
+    config_id: str,
+    field: str = Query(..., min_length=1, description="数值字段名"),
+    date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区"),
+    symbols: str | None = Query(None, description="逗号分隔标的过滤, 缺省全表"),
+):
+    """日内多盘序列 — 每标的一天的 [HH:MM:SS, value] 点列 (列表迷你图列用)。
+
+    仅 timeseries 且配置了 time_field 的表有意义 (如集合竞价); 其他表 400。
+    value 为 null 的盘点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
+    控制响应体积; 无该日分区时 items 为空 (fail-closed, 不回退他日序列)。
+    """
+    config = _store(request).get(config_id)
+    if not config:
+        raise HTTPException(404, f"配置 '{config_id}' 不存在")
+    time_field = config.pull.time_field if config.pull else None
+    if config.mode != "timeseries" or not time_field:
+        raise HTTPException(400, "仅配置了时间列 (time_field) 的时序扩展表支持序列查询")
+
+    data_dir = _data_dir(request)
+    if date:
+        day = _partition_date(date)
+        path = data_dir / "ext_data" / config_id / "timeseries" / f"date={day}" / "part.parquet"
+        if not path.exists():
+            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+    else:
+        df_all, active = _read_ext_dataframe(config, data_dir)
+        day = active
+        if df_all.is_empty():
+            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+        path = None
+
+    df = pl.read_parquet(path) if path else df_all
+    if df.is_empty() or field not in df.columns or time_field not in df.columns:
+        return {"config_id": config_id, "field": field, "date": day, "items": {}}
+
+    if symbols:
+        wanted = [s.strip() for s in symbols.split(",") if s.strip()]
+        df = df.filter(pl.col("symbol").cast(pl.Utf8).is_in(wanted))
+
+    ts = pl.col(time_field).cast(pl.Utf8)
+    tod = pl.when(ts.str.len_chars() >= 11).then(ts.str.slice(11, 8)).otherwise(ts)
+    points = (
+        df.select(
+            pl.col("symbol").cast(pl.Utf8).alias("symbol"),
+            tod.alias("t"),
+            pl.col(field).cast(pl.Float64).alias("v"),
+        )
+        .filter(pl.col("v").is_not_null() & pl.col("t").is_not_null())
+        .sort(["symbol", "t"])
+    )
+    items: dict[str, list[list[str | float]]] = {}
+    for row in points.select("symbol", "t", "v").iter_rows(named=True):
+        items.setdefault(row["symbol"], []).append([row["t"], float(row["v"])])
+    return {"config_id": config_id, "field": field, "date": day, "items": items}
 
 
 @router.post("/detect-fields")
@@ -1378,6 +1443,9 @@ def discover_all_schemas(request: Request):
             "id": config.id,
             "label": config.label,
             "mode": config.mode,
+            # 日内多盘表的时间列名 (pull.time_field): 前端据此展示「选盘时刻/迷你图」
+            # 列配置; snapshot 表与未配置时间列的表为 null
+            "time_field": (config.pull.time_field if config.pull else None),
             "columns": columns,
         })
     return {"items": result}

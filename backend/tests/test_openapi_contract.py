@@ -29,6 +29,7 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/ext-data",
     "POST /api/ext-data/{config_id}/ingest",
     "GET /api/ext-data/{config_id}/rows",
+    "GET /api/ext-data/{config_id}/series",
     "GET /api/ext-data/{config_id}/values",
     "GET /api/ext-data/schema-all",
     "GET /api/ext-data/schema/{config_id}",

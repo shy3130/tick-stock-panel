@@ -633,12 +633,12 @@ def watchlist_enriched(
         db = repo.store.db
         data_dir = repo.store.data_dir
         from app.api.ext_data import _read_ext_dataframe
-        from app.services.ext_data import ExtConfigStore
+        from app.services.ext_data import ExtConfigStore, collapse_ext_rows_at
 
         ext_store = ExtConfigStore(data_dir)
         configs = {c.id: c for c in ext_store.load_all()}
 
-        for config_id, field_name in ext_specs:
+        for config_id, field_name, at in ext_specs:
             view_name = f"ext_{config_id}"
             ext_col_name = f"{config_id}__{field_name}"
             try:
@@ -651,10 +651,11 @@ def watchlist_enriched(
                         f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                     ).arrow())
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
+                    time_field = cfg.pull.time_field if cfg and cfg.pull else None
+                    # 收敛在 select 之前: 时间列被裁掉后 collapse 会静默回退末行
                     ext_df = (
-                        ext_df
+                        collapse_ext_rows_at(ext_df, at, time_field)
                         .select(["symbol", field_name])
-                        .unique(subset=["symbol"], keep="last")
                         .rename({field_name: ext_col_name})
                     )
                     df = df.join(ext_df.select(["symbol", ext_col_name]), on="symbol", how="left")
@@ -697,16 +698,28 @@ def watchlist_enriched(
             "elapsed_ms": elapsed, "dates": quote_dates}
 
 
-def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
-    """解析 'config_id1.field1,config_id2.field2' 为 [(config_id, field_name), ...]"""
+def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
+    """解析 'config_id1.field1@09:20,config_id2.field2' 为 [(config_id, field_name, at), ...]。
+
+    "@HH:MM[:SS]" 为日内多盘表的选盘时刻 (该时刻或之前最近一盘), 与 screener 同口径。
+    """
+    from app.services.ext_data import norm_ext_snapshot_at
+
     result = []
     for part in ext_columns.split(","):
         part = part.strip()
         if "." not in part:
             continue
         config_id, field_name = part.split(".", 1)
+        at: str | None = None
+        if "@" in field_name:
+            field_name, at_raw = field_name.rsplit("@", 1)
+            try:
+                at = norm_ext_snapshot_at(at_raw)
+            except ValueError:
+                continue
         config_id = config_id.strip()
         field_name = field_name.strip()
-        if config_id and field_name and is_valid_ext_ident(config_id):
-            result.append((config_id, field_name))
+        if config_id and field_name and is_valid_ext_ident(config_id) and "\x00" not in field_name:
+            result.append((config_id, field_name, at))
     return result

@@ -43,6 +43,55 @@ class ExtField:
 # 时间戳约定为该交易日北京时间 00:00:00
 PULL_DATE_FORMATS = ("iso", "compact", "ts_s", "ts_ms")
 
+# 每日固定拉取时刻 (schedule_time) 的合法格式: HH:MM (00:00~23:59)
+SCHEDULE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+# 多盘扩展列选盘时刻 (ext_columns 的 "@HH:MM[:SS]" 后缀) 的合法格式
+EXT_SNAPSHOT_AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$")
+
+
+def norm_ext_snapshot_at(raw: str) -> str:
+    """选盘时刻归一为 "HH:MM:SS" ("09:20" → "09:20:00"); 非法值抛 ValueError。"""
+    m = EXT_SNAPSHOT_AT_RE.match(raw or "")
+    if not m:
+        raise ValueError(f"非法选盘时刻 {raw!r} (应为 HH:MM 或 HH:MM:SS)")
+    return f"{raw}:00" if len(raw) == 5 else raw
+
+
+def collapse_ext_rows_at(
+    df: pl.DataFrame, at: str | None, time_field: str | None
+) -> pl.DataFrame:
+    """日内多盘行收敛为每标的一行 (列表/富化取值用)。
+
+    - at=None 或表未配置 time_field / 列缺失 → 末行收敛 (历史行为, 末盘定型值)。
+    - at="HH:MM[:SS]" → 时间列时刻部分 <= at 的行中取最后一行, 即「该时刻或
+      之前最近一盘」(与 tickflow-hub /snapshot?at= 同语义); 该时刻之前无任何
+      行的标的不出现 (fail-closed, 不拿后盘伪造前盘值)。
+
+    时间列兼容 ISO-T / 空格两种日期前缀 (时刻都在 [11:19]); 纯时刻列原样比较。
+    """
+    key_cols = ["symbol"] if "symbol" in df.columns else df.columns[:1]
+    if (
+        at is None
+        or not time_field
+        or time_field not in df.columns
+    ):
+        return df.unique(subset=key_cols, keep="last")
+    want = norm_ext_snapshot_at(at)
+    ts = pl.col(time_field).cast(pl.Utf8)
+    tod = (
+        pl.when(ts.str.len_chars() >= 11)
+        .then(ts.str.slice(11, 8))
+        .otherwise(ts)
+    )
+    return (
+        df.with_columns(tod.alias("_ext_tod"))
+        .filter(pl.col("_ext_tod") <= want)
+        .drop("_ext_tod")
+        .sort(["symbol", time_field] if "symbol" in df.columns else [time_field])
+        .unique(subset=key_cols, keep="last")
+    )
+
 
 class PullConfig:
     """定时拉取配置。"""
@@ -53,7 +102,7 @@ class PullConfig:
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
-        "fanout",
+        "fanout", "schedule_time",
     )
 
     def __init__(
@@ -84,6 +133,7 @@ class PullConfig:
         page_start: int = 1,
         max_pages: int = 20,
         fanout: dict | None = None,
+        schedule_time: str | None = None,
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -138,6 +188,14 @@ class PullConfig:
             int(max_pages) if isinstance(max_pages, (int, float))
             and 1 <= max_pages <= 200 else 20
         )
+        # 每日固定拉取时刻 "HH:MM" (北京时间): 间隔制锁相在启用时刻, 表达不了
+        # 「每天 09:30 拉一次」; 配置后调度器按墙钟对齐到该时刻每天拉一次,
+        # schedule_minutes 被忽略。config.json 手改写入非法值时归一 None
+        # (fail-closed, 回退间隔制)。
+        self.schedule_time = (
+            schedule_time if isinstance(schedule_time, str)
+            and SCHEDULE_TIME_RE.match(schedule_time) else None
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -167,6 +225,7 @@ class PullConfig:
             "page_start": self.page_start,
             "max_pages": self.max_pages,
             "fanout": self.fanout,
+            "schedule_time": self.schedule_time,
         }
 
     @classmethod
@@ -200,6 +259,7 @@ class PullConfig:
             page_start=d.get("page_start", 1),
             max_pages=d.get("max_pages", 20),
             fanout=d.get("fanout"),
+            schedule_time=d.get("schedule_time"),
         )
 
 

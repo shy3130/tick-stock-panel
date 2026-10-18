@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -133,3 +135,80 @@ def list_index_symbols() -> list[dict]:
         {"symbol": row["symbol"], "name": row.get("name")}
         for row in df.select(cols).iter_rows(named=True)
     ]
+
+
+# ── 扩展时序表原始行 (日内多盘不收敛) ──────────────────
+# config_id 进入文件路径, 必须与 ExtConfigStore._VALID_ID 同口径白名单校验
+_EXT_CONFIG_ID_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+_EXT_PARTITION_RE = re.compile(r"^date=(\d{4}-\d{2}-\d{2})$")
+
+
+def get_ext_timeseries(config_id, start=None, end=None, columns=None):
+    """读取扩展时序表 (timeseries 模式) 的原始行, 供策略计算日内序列特征。
+
+    与 ext_factors 因子通道的口径区别: 因子通道把每个 (symbol, 交易日) 收敛为
+    最后一行 (末盘定型值); 序列特征 (如集合竞价 9:15-9:25 走势) 需要全天快照,
+    这里原样返回全部行。date 列取分区目录名 (权威来源, 与因子通道同口径),
+    行内自带的 date 列被覆盖。
+
+    Args:
+        config_id: 扩展表 id (data/ext_data/{config_id}); 非法/不存在/非
+            timeseries 模式 → 空 DataFrame, 不抛异常。
+        start/end: 日期范围 (str/date), 缺省全量。
+        columns: 附加列白名单 (如 ["ts", "auction_price"]); symbol/date 恒有。
+            None = 全部列。指定列在某个分区缺失时跳过该分区并记 warning。
+
+    返回按 (symbol, date, ts?) 升序; 只读, 不写任何缓存。
+    """
+    if not isinstance(config_id, str) or not _EXT_CONFIG_ID_RE.match(config_id):
+        logger.warning("market_data: 非法扩展表 config_id %r", config_id)
+        return pl.DataFrame()
+    repo = _get_repo()
+    # 真仓是 KlineRepository (data_dir 挂在 .store 上); 测试 fake 直接挂 data_dir
+    base = getattr(repo, "data_dir", None) or getattr(
+        getattr(repo, "store", None), "data_dir", None
+    )
+    if base is None:
+        logger.warning("market_data: 仓库对象未暴露 data_dir, 无法读取扩展表")
+        return pl.DataFrame()
+    root = Path(base) / "ext_data" / config_id / "timeseries"
+    if not root.is_dir():
+        return pl.DataFrame()
+    s = _norm_date(start, _FULL_START)
+    e = _norm_date(end, cn_today())
+    want = (
+        [c for c in dict.fromkeys(columns) if c not in ("symbol", "date")]
+        if columns is not None else None
+    )
+    parts: list[pl.DataFrame] = []
+    for d in sorted(root.glob("date=*")):
+        m = _EXT_PARTITION_RE.match(d.name)
+        if not m or not d.is_dir():
+            continue
+        day = date.fromisoformat(m.group(1))
+        if not (s <= day <= e):
+            continue
+        part = d / "part.parquet"
+        if not part.exists():
+            continue
+        try:
+            frag = (
+                pl.read_parquet(part, columns=["symbol", *want])
+                if want is not None else pl.read_parquet(part)
+            )
+        except Exception as exc:  # noqa: BLE001 — 单分区损坏只跳过, 不炸整个调用
+            logger.warning(
+                "market_data: 扩展表 %s 分区 %s 读取失败, 跳过: %s",
+                config_id, d.name, exc,
+            )
+            continue
+        if frag.is_empty():
+            continue
+        if "date" in frag.columns:
+            frag = frag.drop("date")
+        parts.append(frag.with_columns(pl.lit(m.group(1)).alias("date")))
+    if not parts:
+        return pl.DataFrame()
+    frame = pl.concat(parts, how="diagonal")
+    sort_keys = ["symbol", "date"] + (["ts"] if "ts" in frame.columns else [])
+    return frame.sort(sort_keys)

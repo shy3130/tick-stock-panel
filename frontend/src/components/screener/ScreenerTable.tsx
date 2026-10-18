@@ -24,6 +24,7 @@ import {
 } from '@/components/DimensionMembersDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
 import { cn } from '@/lib/cn'
+import { ExtSparkChart } from '@/components/screener/ExtSparkChart'
 
 interface ScreenerTableProps {
   rows: any[]
@@ -61,6 +62,8 @@ interface ScreenerTableProps {
   onSortToggle?: (colId: string) => void
   /** 正在 K 线弹窗预览中的 symbol → 高亮该行 */
   activeSymbol?: string | null
+  /** 日内多盘扩展列迷你图序列: "configId.field" → symbol → [HH:MM:SS, value][] */
+  extSeriesData?: Record<string, Record<string, [string, number][]>>
 }
 
 /** 渲染标签数组（含 maxTags 折叠/展开、横竖排列）。策略列与 ext 列共用。
@@ -165,7 +168,7 @@ export function ScreenerTable({
   minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
   intradayAutoRefresh = false, onRefreshIntraday, intradayRefreshing = false,
   strategyTagsExpanded = false, onToggleStrategyTags,
-  sort, onSortToggle, activeSymbol,
+  sort, onSortToggle, activeSymbol, extSeriesData = {},
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
@@ -215,16 +218,30 @@ export function ScreenerTable({
       const expanded = expandedCells.has(cellKey)
       const sourceField = `${configId}.${fieldName}`
       const dimensionKind = dimensionKindForSourceField(sourceField)
-      const tdClass = val == null || Number.isNaN(val)
-        ? 'px-3 py-2 text-center text-muted'
-        : typeof val === 'number'
-          ? 'px-3 py-2 text-right num tabular-nums'
-          : 'px-3 py-2 text-center'
+      // 日内多盘迷你图形态 (bar/line): 序列缺该标的时回退文字值
+      const sparkKind = col.extDisplay?.snapshotRender
+      const sparkPoints = sparkKind === 'bar' || sparkKind === 'line'
+        ? extSeriesData[sourceField]?.[r.symbol]
+        : undefined
+      const tdClass = sparkPoints
+        ? 'px-2 py-1'
+        : val == null || Number.isNaN(val)
+          ? 'px-3 py-2 text-center text-muted'
+          : typeof val === 'number'
+            ? 'px-3 py-2 text-right num tabular-nums'
+            : 'px-3 py-2 text-center'
       const style: CSSProperties = {}
       if (col.extDisplay?.maxWidth) style.maxWidth = col.extDisplay.maxWidth
       return (
         <td key={col.id} className={tdClass} style={style}>
-          {renderExtValue(
+          {sparkPoints ? (
+            <ExtSparkChart
+              points={sparkPoints}
+              kind={sparkKind as 'bar' | 'line'}
+              width={col.extDisplay?.chartWidth || 150}
+              height={col.extDisplay?.chartHeight || 80}
+            />
+          ) : renderExtValue(
             val,
             col,
             expanded,

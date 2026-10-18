@@ -604,6 +604,37 @@ export function Screener() {
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
+  // 日内多盘扩展列 (集合竞价等) 迷你图: 每个 bar/line 图列按可见页标的拉当天序列
+  const extChartColumns = useMemo(
+    () => columns.filter(c =>
+      c.visible && c.source.type === 'ext'
+      && (c.extDisplay?.snapshotRender === 'bar' || c.extDisplay?.snapshotRender === 'line')),
+    [columns],
+  )
+  const extChartColsKey = extChartColumns
+    .map(c => `${(c.source as { configId: string }).configId}.${(c.source as { fieldName: string }).fieldName}`)
+    .join(',')
+  const extChartSymbolsKey = useMemo(
+    () => [...new Set(displayRows.map((r: any) => r.symbol as string))].sort().join(','),
+    [displayRows],
+  )
+  const extSeriesQuery = useQuery({
+    queryKey: QK.extSeries(extChartColsKey, asOf, extChartSymbolsKey),
+    queryFn: async () => {
+      const symbols = extChartSymbolsKey ? extChartSymbolsKey.split(',') : []
+      const entries = await Promise.all(extChartColumns.map(async c => {
+        const src = c.source as { type: 'ext'; configId: string; fieldName: string }
+        const r = await api.extDataSeries(src.configId, src.fieldName, asOf || undefined, symbols)
+        return [`${src.configId}.${src.fieldName}`, r.items ?? {}] as const
+      }))
+      return Object.fromEntries(entries) as Record<string, Record<string, [string, number][]>>
+    },
+    enabled: extChartColumns.length > 0 && extChartSymbolsKey.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: prev => prev,
+  })
+  const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
+
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
   useEffect(() => {
@@ -1190,6 +1221,7 @@ export function Screener() {
                     onToggleStrategyTags={toggleStrategyTags}
                     sort={sort}
                     onSortToggle={toggle}
+                    extSeriesData={extSeriesData}
                   />
                 </>
               )}

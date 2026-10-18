@@ -169,6 +169,10 @@ export function ListColumnCustomizerInner({
   })
   const backdrop = useDialogBackdrop(onClose)
 
+  // 多盘表识别用 ref 镜像 (schema 查询数据), 让 addExtColumn 保持稳定引用
+  const extTablesRef = useRef<readonly { id: string; time_field?: string | null }[]>([])
+  extTablesRef.current = extSchema.data?.items ?? []
+
   // columns/onChange 用 ref 镜像，让下方多数 useCallback 空依赖（addExtColumn 例外，
   // 依赖 props.extColumnAlign）。callback 引用稳定后，columns 变更不再导致
   // SortableActiveCol 等子组件因 props 变化而无谓重渲染。
@@ -233,12 +237,20 @@ export function ListColumnCustomizerInner({
       toggleVisible(colId)
       return
     }
+    // 日内多盘表 (配置了时间列, 如集合竞价) 的数值列: 添加即默认分时式迷你图
+    // (与「分时」列同尺寸 150×80), 文字形态在列配置里按需切换
+    const multiSnapshot = !!extTablesRef.current.find(
+      t => t.id === configId && (t as { time_field?: string | null }).time_field,
+    )
     const newCol: ColumnConfig = {
       id: colId,
       source: { type: 'ext', configId, fieldName, fieldLabel, fieldType },
       label: fieldLabel || fieldName,
       visible: true,
-      align: extColumnAlign,
+      align: multiSnapshot && isNumericFieldType(fieldType) ? 'center' : extColumnAlign,
+      ...(multiSnapshot && isNumericFieldType(fieldType)
+        ? { extDisplay: { displayMode: 'text' as const, snapshotRender: 'line' as const, chartWidth: 150, chartHeight: 80 } }
+        : {}),
     }
     const actionIdx = cols.findIndex(c => c.id === 'builtin:action')
     if (actionIdx >= 0) {
@@ -450,6 +462,59 @@ export function ListColumnCustomizerInner({
               >竖向</button>
             </div>
           </label>
+        )}
+        {/* 日内多盘表 (配置了时间列, 如集合竞价): 选盘时刻 + 展示形态 */}
+        {col.source.type === 'ext' && (extTables.find(t => t.id === (col.source as { configId: string }).configId) as { time_field?: string | null } | undefined)?.time_field != null && (
+          <>
+            <div className="border-t border-border/40 pt-2 mt-1 text-[10px] text-muted">日内多盘</div>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-secondary w-16 shrink-0">展示形态</span>
+              <select
+                value={col.extDisplay?.snapshotRender ?? 'text'}
+                onChange={e => updateExtDisplay(col.id, { snapshotRender: e.target.value as 'text' | 'bar' | 'line' })}
+                className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+              >
+                <option value="line">折线图 (分时式)</option>
+                <option value="bar">柱状图 (逐盘幅度)</option>
+                <option value="text">文字 (选定时刻值)</option>
+              </select>
+            </label>
+            {(col.extDisplay?.snapshotRender ?? 'text') === 'text' ? (
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-secondary w-16 shrink-0">取盘时刻</span>
+                <input
+                  type="time"
+                  value={(col.extDisplay?.snapshotAt ?? '').slice(0, 5)}
+                  onChange={e => updateExtDisplay(col.id, { snapshotAt: e.target.value ? `${e.target.value}:00` : undefined })}
+                  title="取该时刻或之前最近一盘的值; 留空=末盘定型值"
+                  className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+                />
+                <span className="text-[10px] text-muted shrink-0">留空=末盘</span>
+              </label>
+            ) : (
+              <div className="flex items-center gap-2 text-xs">
+                <label className="flex items-center gap-1">
+                  <span className="text-secondary shrink-0">宽</span>
+                  <input
+                    type="number" min={60} max={300} step={10}
+                    value={col.extDisplay?.chartWidth ?? 150}
+                    onChange={e => updateExtDisplay(col.id, { chartWidth: Math.max(60, Math.min(300, Number(e.target.value) || 150)) })}
+                    className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-secondary shrink-0">高</span>
+                  <input
+                    type="number" min={24} max={160} step={4}
+                    value={col.extDisplay?.chartHeight ?? 80}
+                    onChange={e => updateExtDisplay(col.id, { chartHeight: Math.max(24, Math.min(160, Number(e.target.value) || 80)) })}
+                    className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+                <span className="text-[10px] text-muted">px · 当天全序列</span>
+              </div>
+            )}
+          </>
         )}
         {/* 数字格式化配置: 千分位 + 单位换算 + 小数位(仅 number 类型字段) */}
         {col.source.type === 'ext' && isNumericFieldType(col.source.fieldType) && (

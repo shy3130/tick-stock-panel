@@ -27,6 +27,8 @@ export function ExtDataPullPanel({ config, onSaved }: {
     pull?.field_map ? JSON.stringify(pull.field_map, null, 2) : ''
   )
   const [schedule, setSchedule] = useState(pull?.schedule_minutes ?? 1440)
+  // 每日固定时刻 (北京时间): 填了忽略间隔, 每天该时刻拉一次
+  const [scheduleTime, setScheduleTime] = useState(pull?.schedule_time ?? '')
   const [timeWindowStart, setTimeWindowStart] = useState(pull?.time_window_start ?? '')
   const [timeWindowEnd, setTimeWindowEnd] = useState(pull?.time_window_end ?? '')
   const [dateParam, setDateParam] = useState(pull?.date_param ?? '')
@@ -94,6 +96,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
       url, method, headers, body: body || undefined,
       response_path: responsePath, field_map, auth,
       schedule_minutes: schedule, enabled: enabledOverride ?? enabled,
+      schedule_time: scheduleTime || null,
       time_window_start: timeWindowStart || null,
       time_window_end: timeWindowEnd || null,
       date_param: dateParam.trim() || null,
@@ -368,8 +371,32 @@ export function ExtDataPullPanel({ config, onSaved }: {
             <div className="text-[10px] text-muted mb-1">调度间隔 (分钟)</div>
             <input
               type="number" min={1} value={schedule} onChange={e => setSchedule(Number(e.target.value))}
-              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
+              disabled={!!scheduleTime}
+              title={scheduleTime ? '已配置每日固定时刻, 间隔被忽略' : '每隔 N 分钟拉取一次 (从启用时刻起算)'}
+              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground disabled:opacity-40"
             />
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] text-muted mb-1">每日固定时刻 (北京时间 · 留空=按间隔)</div>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)}
+              title="如 09:30 — 每天这个时刻拉取一次; 启用时若当天已过该时刻且未拉过会立即补拉一次"
+              className="flex-1 min-w-0 rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
+            />
+            {scheduleTime && (
+              <button
+                type="button" onClick={() => setScheduleTime('')}
+                className="shrink-0 rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] text-muted hover:text-foreground"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          <div className="text-[9px] text-muted/70 mt-0.5">
+            填写后忽略左侧间隔与拉取时间窗口, 每天固定该时刻拉一次 (间隔制锁相在启用时刻, 表达不了「每天 09:30」这类日程)
           </div>
         </div>
 
@@ -378,14 +405,18 @@ export function ExtDataPullPanel({ config, onSaved }: {
             <div className="text-[10px] text-muted mb-1">拉取起始时间 (留空=不限)</div>
             <input
               type="time" value={timeWindowStart} onChange={e => setTimeWindowStart(e.target.value)}
-              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
+              disabled={!!scheduleTime}
+              title={scheduleTime ? '已配置每日固定时刻, 窗口被忽略' : '仅间隔制生效: 每日允许拉取的时间窗口'}
+              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground disabled:opacity-40"
             />
           </div>
           <div>
             <div className="text-[10px] text-muted mb-1">拉取结束时间 (留空=不限)</div>
             <input
               type="time" value={timeWindowEnd} onChange={e => setTimeWindowEnd(e.target.value)}
-              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
+              disabled={!!scheduleTime}
+              title={scheduleTime ? '已配置每日固定时刻, 窗口被忽略' : '仅间隔制生效: 每日允许拉取的时间窗口'}
+              className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground disabled:opacity-40"
             />
           </div>
         </div>

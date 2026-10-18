@@ -3529,12 +3529,21 @@ export const api = {
     ),
 
   extDataSchemaAll: () =>
-    request<{ items: { id: string; label: string; mode: string; columns: { name: string; type: string; label: string }[] }[] }>('/api/ext-data/schema-all'),
+    request<{ items: { id: string; label: string; mode: string; time_field?: string | null; columns: { name: string; type: string; label: string }[] }[] }>('/api/ext-data/schema-all'),
+
+  /** 日内多盘序列 (列表迷你图列): 每标的一天的 [HH:MM:SS, value] 点列 */
+  extDataSeries: (configId: string, field: string, date?: string | null, symbols?: string[]) =>
+    request<{ config_id: string; field: string; date: string | null; items: Record<string, [string, number][]> }>(
+      `/api/ext-data/${configId}/series?field=${encodeURIComponent(field)}`
+        + (date ? `&date=${date}` : '')
+        + (symbols?.length ? `&symbols=${encodeURIComponent(symbols.join(','))}` : ''),
+    ),
 
   extDataPullConfig: (id: string, body: {
     url: string; method?: string; headers?: Record<string, string>; body?: string;
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
+    schedule_time?: string | null;
     time_window_start?: string | null; time_window_end?: string | null;
     date_param?: string | null;
     time_field?: string | null;
@@ -4389,6 +4398,8 @@ export interface PullConfig {
   field_map?: Record<string, string>
   schedule_minutes: number
   enabled: boolean
+  /** 每日固定拉取时刻 "HH:MM" (北京时间): 配置后忽略间隔, 每天该时刻拉一次; null=间隔制 */
+  schedule_time?: string | null
   last_run?: string | null
   last_status?: string | null
   last_message?: string | null

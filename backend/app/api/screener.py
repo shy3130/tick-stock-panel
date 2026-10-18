@@ -148,7 +148,7 @@ def _load_ext_value_maps(
     import polars as pl
 
     from app.api.ext_data import _read_ext_dataframe
-    from app.services.ext_data import ExtConfigStore
+    from app.services.ext_data import ExtConfigStore, collapse_ext_rows_at
 
     db = repo.store.db
     data_dir = repo.store.data_dir
@@ -157,10 +157,10 @@ def _load_ext_value_maps(
     value_maps: dict[str, dict[str, Any]] = {}
     want_date = str(as_of) if as_of else None
 
-    for config_id, field_name in ext_specs:
+    for config_id, field_name, at in ext_specs:
         out_col = f"{config_id}__{field_name}"
         cfg = configs.get(config_id)
-        cache_key = (config_id, field_name, want_date or "")
+        cache_key = (config_id, field_name, want_date or "", at or "")
         sig = _ext_parquet_signature(cfg, data_dir) if cfg else None
         try:
             if cfg:
@@ -187,7 +187,10 @@ def _load_ext_value_maps(
             if ext_df.is_empty() or "symbol" not in ext_df.columns or field_name not in ext_df.columns:
                 continue
 
-            ext_df = ext_df.select(["symbol", field_name]).unique(subset=["symbol"], keep="last")
+            # 日内多盘: @时刻 → 该时刻或之前最近一盘; 缺省 → 末盘。
+            # 收敛须在 select 之前 — 时间列被裁掉后 collapse 检测不到会静默回退末行
+            time_field = cfg.pull.time_field if cfg and cfg.pull else None
+            ext_df = collapse_ext_rows_at(ext_df, at, time_field).select(["symbol", field_name])
             vmap = {
                 str(row["symbol"]): _safe_ext_value(row.get(field_name))
                 for row in ext_df.to_dicts()
@@ -1070,23 +1073,27 @@ def limit_ladder(
         db = repo.store.db
         data_dir = repo.store.data_dir
         from app.api.ext_data import _read_ext_dataframe
-        from app.services.ext_data import ExtConfigStore
+        from app.services.ext_data import ExtConfigStore, collapse_ext_rows_at
 
         ext_store = ExtConfigStore(data_dir)
         configs = {c.id: c for c in ext_store.load_all()}
 
-        def _dedup_ext(frame: pl.DataFrame, field: str, out_col: str) -> pl.DataFrame | None:
-            """(symbol, 字段) 两列并按 symbol 去重; 缺列时返回 None。"""
+        def _dedup_ext(
+            frame: pl.DataFrame, field: str, out_col: str,
+            at: str | None, time_field: str | None,
+        ) -> pl.DataFrame | None:
+            """(symbol, 字段) 两列收敛为每标的一行; @时刻取该时刻或之前最近一盘
+            (与 _load_ext_value_maps 同口径), 缺列时返回 None。"""
             if frame.is_empty() or "symbol" not in frame.columns or field not in frame.columns:
                 return None
+            # 收敛在 select 之前: 时间列被裁掉后 collapse 会静默回退末行
             return (
-                frame
+                collapse_ext_rows_at(frame, at, time_field)
                 .select(["symbol", field])
-                .unique(subset=["symbol"], keep="last")
                 .rename({field: out_col})
             )
 
-        for config_id, field_name in ext_specs:
+        for config_id, field_name, at in ext_specs:
             view_name = f"ext_{config_id}"
             ext_col_name = f"{config_id}__{field_name}"
             try:
@@ -1099,7 +1106,8 @@ def limit_ladder(
                     ext_df = pl.from_arrow(db.query(
                         f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                     ).arrow())
-                joined = _dedup_ext(ext_df, field_name, ext_col_name)
+                time_field = cfg.pull.time_field if cfg and cfg.pull else None
+                joined = _dedup_ext(ext_df, field_name, ext_col_name, at, time_field)
                 if joined is not None:
                     df = df.join(joined, on="symbol", how="left")
                     ext_col_names.append(ext_col_name)
@@ -1108,7 +1116,8 @@ def limit_ladder(
                 if cfg:
                     try:
                         ext_df, _ = _read_ext_dataframe(cfg, data_dir)
-                        joined = _dedup_ext(ext_df, field_name, ext_col_name)
+                        time_field = cfg.pull.time_field if cfg.pull else None
+                        joined = _dedup_ext(ext_df, field_name, ext_col_name, at, time_field)
                         if joined is not None:
                             df = df.join(joined, on="symbol", how="left")
                             ext_col_names.append(ext_col_name)
@@ -1158,19 +1167,32 @@ def limit_ladder(
     }
 
 
-def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
-    """解析 'config_id1.field1,config_id2.field2' 为 [(config_id, field_name), ...]。"""
+def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
+    """解析 'config_id1.field1@09:20,config_id2.field2' 为 [(config_id, field_name, at), ...]。
+
+    可选 "@HH:MM[:SS]" 后缀: 日内多盘表取「该时刻或之前最近一盘」的值;
+    时刻非法时整条 spec 丢弃 (fail-closed, 不静默回退末盘造成口径混淆)。
+    """
+    from app.services.ext_data import norm_ext_snapshot_at
+
     result = []
     for part in ext_columns.split(","):
         part = part.strip()
         if "." not in part:
             continue
         config_id, field_name = part.split(".", 1)
+        at: str | None = None
+        if "@" in field_name:
+            field_name, at_raw = field_name.rsplit("@", 1)
+            try:
+                at = norm_ext_snapshot_at(at_raw)
+            except ValueError:
+                continue
         config_id = config_id.strip()
         field_name = field_name.strip()
         if not config_id or not field_name:
             continue
         if not is_valid_ext_ident(config_id) or "\x00" in field_name:
             continue
-        result.append((config_id, field_name))
+        result.append((config_id, field_name, at))
     return result
