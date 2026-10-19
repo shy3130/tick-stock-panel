@@ -434,8 +434,23 @@ def _persist_daily_chunks(chunks, repo: KlineRepository) -> int:
 
         for date_dir in sorted(root.glob("date=*")):
             files = sorted(date_dir.glob("*.parquet"))
-            if files:
-                repo.append_daily(pl.scan_parquet(files).collect(engine="streaming"))
+            if not files:
+                continue
+            target_dir = repo.store.data_dir / "kline_daily" / date_dir.name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            existing = sorted(target_dir.glob("*.parquet"))
+            if not existing:
+                for index, staged in enumerate(files):
+                    replace_with_retry(staged, target_dir / f"part-stream-{index}.parquet")
+                continue
+            base = pl.scan_parquet(existing).collect(engine="streaming")
+            incoming = pl.scan_parquet(files).collect(engine="streaming")
+            merged = pl.concat([base, incoming], how="diagonal_relaxed").unique(
+                subset=["symbol", "date"], keep="last"
+            )
+            repo.append_daily(merged)
+            for part in target_dir.glob("part-stream-*.parquet"):
+                part.unlink(missing_ok=True)
     finally:
         shutil.rmtree(root, ignore_errors=True)
         with contextlib.suppress(OSError):
