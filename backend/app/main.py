@@ -98,6 +98,18 @@ async def _application_lifespan(app: FastAPI):
         __version__, tf_client.current_mode(),
     )
 
+    # 同步路由线程池容量: Starlette 默认 40, 本地多标签页/自动刷新与长计算
+    # 路由并存时容易排队。调大只影响空闲线程上限 (按需创建), 无常驻代价。
+    try:
+        import anyio.to_thread
+
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            settings.api_sync_thread_pool
+        )
+        logger.info("sync route thread pool: %d", settings.api_sync_thread_pool)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("thread pool resize failed (ignored): %s", e)
+
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
     # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
     try:

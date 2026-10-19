@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { DEEPSEEK_FALLBACK_RANGE, discountRangeLabel, useSponsorModelItems } from '@/lib/sponsor-discount'
 import {
   fetchAssistantStatus,
   fetchAssistantSuggests,
@@ -192,6 +193,9 @@ function RhPromoBanner() {
       return Number.isFinite(ts) && Date.now() - ts < RH_PROMO_SNOOZE_MS
     } catch { return false }
   })
+  // 折扣区间来自实时模型定价 (与设置页共用 60s 缓存); 取不到时回退到集中的兜底文案
+  const items = useSponsorModelItems()
+  const range = (items && discountRangeLabel(items)) ?? DEEPSEEK_FALLBACK_RANGE
   if (dismissed) return null
   const snooze = () => {
     setDismissed(true)
@@ -207,7 +211,7 @@ function RhPromoBanner() {
     >
       <span className="font-medium text-amber-600 dark:text-amber-400">Claude、ChatGPT、Gemini</span>
       <span>等国际模型直连稳定不掉线，</span>
-      <span className="font-medium text-amber-600 dark:text-amber-400">DeepSeek v4.1 Flash 3 折</span>
+      <span className="font-medium text-amber-600 dark:text-amber-400">DeepSeek v4.1 Flash {range}</span>
       <span>，</span>
       <span className="font-medium text-amber-600 dark:text-amber-400">注册赠送 1000 RH 积分</span>
       <span>🎁</span>

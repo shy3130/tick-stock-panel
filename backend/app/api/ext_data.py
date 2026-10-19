@@ -100,6 +100,12 @@ class PullConfigReq(BaseModel):
     schedule_time: str | None = Field(
         None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
     )
+    # 固定时刻的重复周期: daily=每天 | weekly=每周 | monthly=每月 (仅 schedule_time 生效)
+    schedule_period: str | None = Field(None, pattern=r"^(daily|weekly|monthly)$")
+    # weekly: 1=周一..7=周日; monthly: 1..31 (短月无该日则该月跳过)
+    schedule_day: int | None = Field(None, ge=1, le=31)
+    # 仅交易日: 跳过周六日 (法定节假日无法离线判定, 仍会按期尝试, 拉取幂等)
+    schedule_trading_only: bool = False
     time_window_start: str | None = None   # "HH:MM", None=不限
     time_window_end: str | None = None     # "HH:MM", None=不限
     # 接口按日查询的参数名 (如 "date"): 配置后支持历史回补, 且当日拉取也带日期参数
@@ -1027,6 +1033,9 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         schedule_minutes=body.schedule_minutes,
         enabled=body.enabled,
         schedule_time=body.schedule_time,
+        schedule_period=body.schedule_period,
+        schedule_day=body.schedule_day,
+        schedule_trading_only=body.schedule_trading_only,
         time_window_start=body.time_window_start,
         time_window_end=body.time_window_end,
         date_param=body.date_param,

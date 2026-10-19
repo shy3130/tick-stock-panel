@@ -420,6 +420,8 @@ export interface ScreenerCachedSummary {
   results: Record<string, ScreenerResultSummary>
   today_ever_counts: Record<string, number>
   updated_at: number | null
+  /** 分钟策略后台批量计算中尚未完成的策略 (结果不落盘, 由 handle 快照合入) */
+  minute_pending?: string[]
 }
 
 /** run_all 渐进式返回: 快策略已算完, 慢策略后台继续算 */
@@ -1899,6 +1901,16 @@ export interface SponsorModelItem {
   discount_rate?: number
   input_price?: number | null
   output_price?: number | null
+  /** 忙时折扣率 (timePricing 的 BUSY 档); 无忙闲时定价的模型为 null */
+  busy_discount_rate?: number | null
+  /** 闲时折扣率 (timePricing 的 OFF_PEAK 档) */
+  offpeak_discount_rate?: number | null
+  /** 闲时时段说明, 上游原文 (如 "00:00-09:00、12:00-14:00、18:00-00:00") */
+  offpeak_label?: string | null
+  /** 上游判定的当前时段: BUSY / OFF_PEAK */
+  current_band?: string | null
+  /** 当前时段对应的折扣率 */
+  current_discount_rate?: number | null
 }
 
 export interface SettingsState {
@@ -3544,6 +3556,9 @@ export const api = {
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
     schedule_time?: string | null;
+    schedule_period?: 'daily' | 'weekly' | 'monthly' | null;
+    schedule_day?: number | null;
+    schedule_trading_only?: boolean;
     time_window_start?: string | null; time_window_end?: string | null;
     date_param?: string | null;
     time_field?: string | null;
@@ -4400,6 +4415,12 @@ export interface PullConfig {
   enabled: boolean
   /** 每日固定拉取时刻 "HH:MM" (北京时间): 配置后忽略间隔, 每天该时刻拉一次; null=间隔制 */
   schedule_time?: string | null
+  /** 固定时刻重复周期: daily=每天 | weekly=每周 | monthly=每月 (仅 schedule_time 生效) */
+  schedule_period?: 'daily' | 'weekly' | 'monthly' | null
+  /** weekly: 1=周一..7=周日; monthly: 1..31 (短月无该日则该月跳过) */
+  schedule_day?: number | null
+  /** 仅交易日: 跳过周六日 (节假日无法离线判定, 仍会按期尝试) */
+  schedule_trading_only?: boolean
   last_run?: string | null
   last_status?: string | null
   last_message?: string | null

@@ -480,6 +480,12 @@ class ScreenerService:
         history = None
         if history_bars > 1:
             history = self._load_enriched_history(as_of, history_bars)
+        # enriched 换代号: 供 engine.build_shared_matrix 的矩阵缓存做失效指纹
+        # (取不到时 None → 缓存 fail-closed 不启用)
+        try:
+            data_generation = self.repo.get_matrix_data_generation(self.asset_type)
+        except Exception:  # noqa: BLE001
+            data_generation = None
         return StrategyDataContext(
             asset_type=self.asset_type,
             timeframe=timeframe,
@@ -488,6 +494,7 @@ class ScreenerService:
             history=history,
             market=market,
             cache_key=cache_key,
+            data_generation=data_generation,
         )
 
     def _load_minute_history(self, as_of: date, current: pl.DataFrame | None) -> pl.DataFrame:

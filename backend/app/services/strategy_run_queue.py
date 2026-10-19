@@ -80,6 +80,7 @@ class StrategyRunHandle:
     def __init__(self, key: tuple, ordered_ids: list[str]) -> None:
         self.key = key
         self.started_at_ms = int(time.time() * 1000)
+        self.finished_at_ms: int | None = None
         self._lock = threading.Lock()
         self._results: dict[str, dict] = {}
         self._remaining: list[str] = list(ordered_ids)
@@ -108,6 +109,8 @@ class StrategyRunHandle:
     def finish(self) -> None:
         with self._lock:
             self._done = True
+            if self.finished_at_ms is None:
+                self.finished_at_ms = int(time.time() * 1000)
 
     def snapshot(self) -> dict:
         """线程安全快照: 结果拷贝 + 剩余/逐策略错误/整体错误/完成状态。"""
@@ -126,16 +129,23 @@ class StrategyRunManager:
     """run_all 单飞管理器。
 
     - 相同 key 且仍在执行 (含排队中) 的重复请求搭车现有执行, 不重复算
-      (页面 reload / StrictMode / 反复切换); 已完成的不再搭车, 重跑即新执行。
+      (页面 reload / StrictMode / 反复切换); 已完成的在 TTL 内仍可查询结果
+      (分钟策略结果不落盘, 靠 handle 快照轮询点亮), 超过 TTL 后重跑即新执行。
     - 不同 key 在唯一 daemon 工作线程里排队; 端点在首返时限内等不到也只能
       先返回 pending, 前端靠轮询缓存拿最终结果。
     - 工作线程为 daemon: 进程退出不等待剩余计算 (缓存写入均为原子替换,
       中断只留部分结果, 下次进入页面补算)。
     """
 
+    # 完成后 handle 保留时长: 前端 2s 轮询在几分钟内足够拿完全部结果
+    KEEP_DONE_MS = 5 * 60 * 1000
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._handles: dict[tuple, StrategyRunHandle] = {}
+        # 已完成的 handle 暂存区: 分钟策略结果不落盘, 轮询方靠它读最终结果;
+        # 与 _handles 分开存放, 保证「已完成不搭车, 重跑即新执行」语义不变
+        self._done_recent: dict[tuple, StrategyRunHandle] = {}
         self._queue: queue.Queue[tuple[StrategyRunHandle, Callable]] = queue.Queue()
         self._worker: threading.Thread | None = None
 
@@ -145,26 +155,63 @@ class StrategyRunManager:
         ordered_ids: list[str],
         job: Callable[[StrategyRunHandle], None],
     ) -> StrategyRunHandle:
+        now_ms = time.time() * 1000
         with self._lock:
-            # 顺手清理已完成的 handle, 防止字典随不同 key 无限增长
-            for k in [k for k, h in self._handles.items() if h.snapshot()["done"]]:
-                del self._handles[k]
+            # 顺手清理完成超过 TTL 的暂存 handle, 防止字典无限增长
+            for store in (self._handles, self._done_recent):
+                for k in [
+                    k for k, h in store.items()
+                    if h.snapshot()["done"] and h.finished_at_ms is not None
+                    and now_ms - h.finished_at_ms > self.KEEP_DONE_MS
+                ]:
+                    del store[k]
             existing = self._handles.get(key)
             if existing is not None:
-                return existing
+                return existing  # 执行中/排队中: 搭车, 不重复算
+            done = self._done_recent.get(key)
+            if done is not None:
+                del self._done_recent[key]  # 已完成: 重跑即新执行 (旧行为)
             handle = StrategyRunHandle(key, ordered_ids)
             self._handles[key] = handle
         self._ensure_worker()
         self._queue.put((handle, job))
         return handle
 
-    def _ensure_worker(self) -> None:
+    def _retire_if_done(self, handle: StrategyRunHandle) -> None:
+        """worker 收尾后调用: 把 done handle 从执行区挪到暂存区供轮询。"""
         with self._lock:
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(
-                    target=self._run_loop, name="runall", daemon=True
-                )
-                self._worker.start()
+            if self._handles.get(handle.key) is handle:
+                del self._handles[handle.key]
+                self._done_recent[handle.key] = handle
+
+    def minute_summaries(self) -> list[dict]:
+        """所有分钟 (timeframe='1m') handle 的结果摘要, 供 cached-summary 合并。
+
+        分钟策略结果不落 strategy_cache (日线语义), 渐进式转后台后前端靠
+        cached-summary 轮询点亮 — 这里把活跃/近完成分钟 handle 的 per-策略
+        摘要 (total/computed_at) 按快照导出。
+        """
+        out: list[dict] = []
+        with self._lock:
+            handles = list(self._handles.values()) + list(self._done_recent.values())
+        for h in handles:
+            if len(h.key) < 2 or h.key[1] != "1m":
+                continue
+            snap = h.snapshot()
+            out.append({
+                "as_of": h.key[2] if len(h.key) > 2 else None,
+                "results": {
+                    sid: {
+                        "total": int(payload.get("total") or 0),
+                        "as_of": payload.get("as_of"),
+                        "computed_at": payload.get("computed_at"),
+                    }
+                    for sid, payload in snap["results"].items()
+                },
+                "pending": snap["pending"],
+                "complete": snap["done"] and not snap["error"],
+            })
+        return out
 
     def _run_loop(self) -> None:
         while True:
@@ -176,6 +223,15 @@ class StrategyRunManager:
                 handle.fail(str(e))
             else:
                 handle.finish()
+            self._retire_if_done(handle)
+
+    def _ensure_worker(self) -> None:
+        with self._lock:
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._run_loop, name="runall", daemon=True
+                )
+                self._worker.start()
 
 
 # 进程级单例: 与 strategy_cache 的模块级锁同风格, 生命周期跟随进程

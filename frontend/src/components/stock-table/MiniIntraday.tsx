@@ -2,7 +2,8 @@
 
 用当日分钟K的 close 画一条折线 + 昨收水平基准线 + 分时均线。
 风格仿同花顺/东方财富分时图：
-- 价格折线：涨（收盘 ≥ 昨收）红色，跌绿色 — 以昨收价(prevClose)为基准, 不是当日开盘价
+- 价格折线：过昨收基准线红、不到绿、正好压线灰 — 与个股对话框 EChartsIntraday
+  同一逻辑 (最后一根实时分钟 close vs 图中灰线基准), 颜色永远与线的位置一致
 - 昨收基准线：浅灰实线（从开到右），比虚线更明显
 - 分时均线：黄色细线（成交均价，这里用 close 的累计均值近似）
 - 价格线下方渐变填充: 顶部半透明实色 → 底部全透明(与个股对话框 EChartsIntraday 一致)
@@ -15,7 +16,8 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
   rows: MinuteKlineRow[]
   /** 昨收价 (前收), 用于基准线。无则用 close/changePct 反算 */
   prevClose?: number | null
-  /** 涨跌幅 (小数, 如 -0.029 = -2.9%), 用于涨跌着色。优先级最高 */
+  /** 涨跌幅 (小数, 如 -0.029 = -2.9%)。仅用于 prevClose 缺失时反算基准线,
+   *  不参与着色 — 着色恒以最后一根分钟 close 相对基准线的实时位置为准 */
   changePct?: number | null
   width?: number
   height?: number
@@ -27,6 +29,7 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
 
   const BULL = '#C74040'
   const BEAR = '#2D9B65'
+  const FLAT = '#A1A1AA'              // 压线 (平盘): 灰, 与 EChartsIntraday 一致
   const LINE_PREV_CLOSE = '#7A7A85'   // 昨收基准线: 深灰实线
   const LINE_AVG = '#E0B84A'          // 均线: 暖黄
 
@@ -35,24 +38,22 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
   const padY = 3
   const n = rows.length
 
-  // 涨跌着色: 优先用 changePct (后端 enriched 字段, 最可靠);
-  // 其次用 prevClose vs lastClose; 最后回退到首根 open(可能为 null, 再退首根 close)
   const lastClose = rows[n - 1].close
   const firstRef = rows[0].open ?? rows[0].close
-  const isUp = changePct != null
-    ? changePct >= 0
-    : prevClose != null && prevClose > 0
-      ? lastClose >= prevClose
-      : lastClose >= firstRef
-  const color = isUp ? BULL : BEAR
 
-  // 昨收基准线: 优先用 prevClose; 其次用 changePct 反算 (close/(1+changePct));
+  // 昨收基准线 (0轴): 优先用 prevClose; 其次用 changePct 反算 (close/(1+changePct));
   // 最后回退到首根 open(为 null 时退首根 close)
   const baseline = (prevClose != null && prevClose > 0)
     ? prevClose
     : (changePct != null && changePct !== 0)
       ? lastClose / (1 + changePct)
       : firstRef
+
+  // 涨跌着色: 最后一根实时分钟 close 相对图中灰线基准的位置 — 过基准线红、
+  // 不到绿、正好压线灰, 与详情图 EChartsIntraday 同一逻辑。不用行数据的
+  // changePct (策略运行时刻的冻结快照): 盘中股价穿过昨收后, 线已站上基准线
+  // 却仍按旧快照涂绿, 与详情图和自身几何互相矛盾 (002469.SZ 2026-10-19 案例)。
+  const color = lastClose > baseline ? BULL : lastClose < baseline ? BEAR : FLAT
 
   // 价格区间: close + 昨收 + 均线 全部纳入, 确保都在可视范围
   let hi = -Infinity, lo = Infinity

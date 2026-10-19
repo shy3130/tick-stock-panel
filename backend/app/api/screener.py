@@ -287,7 +287,9 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
     from app.services import strategy_cache
     cached = strategy_cache.read_cache(data_dir)
     if cached and cached.get("as_of") == as_of:
-        results = cached.get("results", {})
+        # read_cache 返回进程内共享镜像, 先拷贝再改 (write_cache 的 read-merge-write
+        # 以这份拷贝为准, 不污染镜像)
+        results = dict(cached.get("results") or {})
         results[strategy_id] = {
             "total": safe_data.get("total", 0),
             "as_of": as_of,
@@ -501,11 +503,23 @@ def get_cached_summary(request: Request):
             if isinstance(row, dict) and row.get("symbol")
         }
         ever_counts[sid] = len(set((ever_rows.get(sid) or {}).keys()) | current_symbols)
+
+    # 分钟策略结果不落 strategy_cache (日线语义), 渐进式转后台算完后在这里
+    # 以 handle 快照合入 (仅 as_of 与日线缓存同日的), 前端轮询本端点点亮卡片。
+    minute_pending: list[str] = []
+    for m in strategy_run_queue.MANAGER.minute_summaries():
+        if m.get("as_of") != cached_as_of:
+            continue
+        for sid, item in (m.get("results") or {}).items():
+            summary[sid] = item
+        minute_pending.extend(m.get("pending") or [])
+
     return {
         "as_of": cached_as_of,
         "results": summary,
         "today_ever_counts": ever_counts,
         "updated_at": cached.get("updated_at"),
+        "minute_pending": minute_pending,
     }
 
 
@@ -692,14 +706,16 @@ def _run_all_progressive(
                     payload["warnings"] = w
             all_results[sid] = payload
             elapsed_map[sid] = (time.perf_counter() - t0) * 1000
-            # 逐策略增量落盘 (write_cache 同日按 sid 合并), 前端轮询即可逐个看到
-            try:
-                strategy_cache.write_cache(data_dir, str(as_of), {sid: payload})
-            except Exception:
-                logger.warning("run_all 渐进写入缓存失败: %s", sid, exc_info=True)
+            # 逐策略增量落盘 (write_cache 同日按 sid 合并), 前端轮询即可逐个看到。
+            # 分钟结果不落盘 (strategy_cache 为日线语义), 改经 handle 快照合入 summary
+            if timeframe == "1d":
+                try:
+                    strategy_cache.write_cache(data_dir, str(as_of), {sid: payload})
+                except Exception:
+                    logger.warning("run_all 渐进写入缓存失败: %s", sid, exc_info=True)
             handle.complete(sid, {k: v for k, v in payload.items() if k != "rows"})
-        # 收尾: 与旧版口径一致的整体重写 + 耗时落盘供下次排序
-        if all_results:
+        # 收尾: 与旧版口径一致的整体重写 + 耗时落盘供下次排序 (分钟不落盘)
+        if all_results and timeframe == "1d":
             with contextlib.suppress(Exception):
                 strategy_cache.write_cache(data_dir, str(as_of), all_results)
         strategy_run_queue.record_run_timings(data_dir, elapsed_map)
@@ -809,9 +825,10 @@ def run_all(request: Request, body: Optional[dict] = None):
 
     # 渐进式返回 (页面首屏路径): 按历史耗时升序执行, 首返时限内算完的随响应
     # 返回, 慢策略转后台继续算并逐个写入策略缓存, 前端轮询 cached-summary 点亮。
-    # 仅日线 + summary_only (策略页卡片) 启用; 分钟/明细请求保持整段阻塞。
+    # 日线与分钟都启用: 分钟策略结果不落盘, 后台算完经 handle 快照合入
+    # cached-summary (见 get_cached_summary) — 请求不再整段占用线程等计算。
     first_return_s = settings.strategy_run_all_first_return_s
-    if body.get("summary_only") and timeframe == "1d" and first_return_s > 0:
+    if body.get("summary_only") and first_return_s > 0:
         progressive = _run_all_progressive(
             repo=repo,
             engine=engine,

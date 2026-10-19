@@ -151,6 +151,10 @@ class Settings(BaseSettings):
     # 前端轮询 cached-summary 点亮卡片。0 = 关闭 (整段阻塞, 旧行为)。
     strategy_run_all_first_return_s: float = 15.0
 
+    # 同步路由 (def) 线程池容量: Starlette/anyio 默认 40。看板自动刷新 +
+    # 多标签页 + 长计算路由并存时 40 容易排队, 调大仅提高上限 (按需创建)。
+    api_sync_thread_pool: int = 100
+
     # Auth — 首次启动时预置访问密码(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
     # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
     auth_password: str = ""

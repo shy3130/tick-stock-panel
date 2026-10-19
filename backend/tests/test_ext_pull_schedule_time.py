@@ -186,3 +186,191 @@ async def test_daily_at_loop_catches_up_if_enabled_after_target(monkeypatch):
 
     await asyncio.wait_for(sched._run_daily_at("c1", store, "09:30"), timeout=10)
     assert cfg.pull.last_status == "success"  # 22:00 启用, 当天 09:30 已过 → 立即拉
+
+
+# ── 周期扩展: schedule_period / schedule_day / schedule_trading_only ──
+
+def test_schedule_period_defaults_and_roundtrips():
+    assert PullConfig().schedule_period == "daily"
+    assert PullConfig().schedule_day == 1
+    assert PullConfig().schedule_trading_only is False
+
+    p = PullConfig(url="https://x", schedule_time="09:30",
+                   schedule_period="weekly", schedule_day=3, schedule_trading_only=True)
+    d = p.to_dict()
+    assert d["schedule_period"] == "weekly"
+    assert d["schedule_day"] == 3
+    assert d["schedule_trading_only"] is True
+    r = PullConfig.from_dict(d)
+    assert (r.schedule_period, r.schedule_day, r.schedule_trading_only) == ("weekly", 3, True)
+
+
+def test_schedule_period_invalid_normalized():
+    for bad in ["hourly", "", None, 5]:
+        assert PullConfig(url="https://x", schedule_period=bad).schedule_period == "daily"
+    for bad in [0, 32, -1, "x", None]:
+        assert PullConfig(url="https://x", schedule_day=bad).schedule_day == 1
+
+
+def test_pull_config_req_accepts_period_fields():
+    from app.api.ext_data import PullConfigReq
+
+    req = PullConfigReq(url="https://x", schedule_time="09:30",
+                        schedule_period="weekly", schedule_day=3, schedule_trading_only=True)
+    assert (req.schedule_period, req.schedule_day, req.schedule_trading_only) == ("weekly", 3, True)
+
+    with pytest.raises(ValueError):
+        PullConfigReq(url="https://x", schedule_period="hourly")
+    with pytest.raises(ValueError):
+        PullConfigReq(url="https://x", schedule_day=0)
+    with pytest.raises(ValueError):
+        PullConfigReq(url="https://x", schedule_day=32)
+    # 旧调用方不带周期字段 → 缺省合法 (回退每日)
+    assert PullConfigReq(url="https://x").schedule_period is None
+
+
+def test_is_scheduled_day_by_period():
+    # 2026-03-02 是周一, 03-07 周六, 03-08 周日
+    daily = PullConfig(url="https://x", schedule_time="09:30")
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 2, tzinfo=CN_TZ), daily) is True
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 7, tzinfo=CN_TZ), daily) is True
+
+    weekly = PullConfig(url="https://x", schedule_period="weekly", schedule_day=1)
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 2, tzinfo=CN_TZ), weekly) is True
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 3, tzinfo=CN_TZ), weekly) is False
+
+    # 手改 config.json 写入越界 day (weekly 8..31) → 视为 1=周一
+    weekly_bad = PullConfig(url="https://x", schedule_period="weekly", schedule_day=9)
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 2, tzinfo=CN_TZ), weekly_bad) is True
+
+    monthly = PullConfig(url="https://x", schedule_period="monthly", schedule_day=15)
+    assert ext_pull._is_scheduled_day(datetime(2026, 4, 15, tzinfo=CN_TZ), monthly) is True
+    assert ext_pull._is_scheduled_day(datetime(2026, 4, 14, tzinfo=CN_TZ), monthly) is False
+
+    # 2 月无 30 日 → 整月不命中 (该月跳过)
+    m30 = PullConfig(url="https://x", schedule_period="monthly", schedule_day=30)
+    assert all(
+        ext_pull._is_scheduled_day(datetime(2026, 2, d, tzinfo=CN_TZ), m30) is False
+        for d in range(1, 29)
+    )
+
+
+def test_is_scheduled_day_trading_only_skips_weekend():
+    pull = PullConfig(url="https://x", schedule_trading_only=True)
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 6, tzinfo=CN_TZ), pull) is True   # 周五
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 7, tzinfo=CN_TZ), pull) is False  # 周六
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 8, tzinfo=CN_TZ), pull) is False  # 周日
+    assert ext_pull._is_scheduled_day(datetime(2026, 3, 9, tzinfo=CN_TZ), pull) is True   # 周一
+
+
+def test_next_scheduled_target_advances_to_plan_day():
+    weekly = PullConfig(url="https://x", schedule_period="weekly", schedule_day=1)
+
+    # 周二 10:00 (本周一已过) → 下周一 09:30
+    nxt = ext_pull._next_scheduled_target(datetime(2026, 3, 3, 10, 0, tzinfo=CN_TZ), "09:30", weekly)
+    assert nxt == datetime(2026, 3, 9, 9, 30, tzinfo=CN_TZ)
+
+    # 周一 08:00 (计划日, 时刻未到) → 今天
+    nxt2 = ext_pull._next_scheduled_target(datetime(2026, 3, 2, 8, 0, tzinfo=CN_TZ), "09:30", weekly)
+    assert nxt2 == datetime(2026, 3, 2, 9, 30, tzinfo=CN_TZ)
+
+    # 周一 10:00 (已过时刻) → 下周一
+    nxt3 = ext_pull._next_scheduled_target(datetime(2026, 3, 2, 10, 0, tzinfo=CN_TZ), "09:30", weekly)
+    assert nxt3.date().isoformat() == "2026-03-09"
+
+    # 仅交易日: 周五过点 → 跳过周末, 下一个是周一
+    daily_to = PullConfig(url="https://x", schedule_trading_only=True)
+    nxt4 = ext_pull._next_scheduled_target(datetime(2026, 3, 6, 10, 0, tzinfo=CN_TZ), "09:30", daily_to)
+    assert nxt4.date().isoformat() == "2026-03-09"
+
+    # 每月 31 号, 当前 2 月 (无 31 日) → 推进到 3 月 31
+    m31 = PullConfig(url="https://x", schedule_period="monthly", schedule_day=31)
+    nxt5 = ext_pull._next_scheduled_target(datetime(2026, 2, 1, 8, 0, tzinfo=CN_TZ), "09:30", m31)
+    assert nxt5.date().isoformat() == "2026-03-31"
+
+
+async def test_weekly_loop_waits_for_plan_day_no_catchup_on_off_day(monkeypatch):
+    """周二 10:00 启用「每周一 09:30」→ 今天非计划日不补拉, 等到下周一到点才拉。"""
+    cfg = ExtConfig(
+        id="c1", label="t", mode="timeseries", fields=[],
+        pull=PullConfig(url="https://x", enabled=True, schedule_time="09:30",
+                        schedule_period="weekly", schedule_day=1),
+    )
+    store = _FakeStore(cfg)
+    clock = {"now": datetime(2026, 3, 3, 10, 0, tzinfo=CN_TZ)}  # 周二 10:00
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            moment = clock["now"].astimezone(tz) if tz else clock["now"]
+            return cls(moment.year, moment.month, moment.day, moment.hour,
+                       moment.minute, moment.second, moment.microsecond, moment.tzinfo)
+
+    monkeypatch.setattr(ext_pull, "cn_now", lambda: clock["now"])
+    monkeypatch.setattr(ext_pull, "datetime", _FakeDateTime)
+
+    async def fake_fetch_ingest(config, data_dir, **_kw):
+        config.pull.enabled = False  # 拉一次即停
+        return 3, clock["now"].date().isoformat()
+
+    monkeypatch.setattr(ext_pull, "fetch_and_ingest", fake_fetch_ingest)
+
+    async def fake_sleep(sec):
+        clock["now"] += timedelta(seconds=sec + 1)
+
+    monkeypatch.setattr(ext_pull.asyncio, "sleep", fake_sleep)
+
+    sched = ext_pull.PullScheduler()
+    sched._running = True
+    sched._data_dir = "/tmp/nonexistent"
+
+    await asyncio.wait_for(sched._run_daily_at("c1", store, "09:30"), timeout=10)
+
+    # 拉取发生在下周一 2026-03-09 09:30 出头, 而非启用的周二 (无补拉)
+    assert cfg.pull.last_status == "success"
+    assert clock["now"].date().isoformat() == "2026-03-09"
+    assert clock["now"].hour == 9 and clock["now"].minute == 30
+
+
+async def test_trading_only_loop_skips_weekend(monkeypatch):
+    """仅交易日 + 周六启用 → 周六日不拉, 周一 09:30 到点拉。"""
+    cfg = ExtConfig(
+        id="c1", label="t", mode="timeseries", fields=[],
+        pull=PullConfig(url="https://x", enabled=True, schedule_time="09:30",
+                        schedule_trading_only=True),
+    )
+    store = _FakeStore(cfg)
+    clock = {"now": datetime(2026, 3, 7, 20, 0, tzinfo=CN_TZ)}  # 周六 20:00
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            moment = clock["now"].astimezone(tz) if tz else clock["now"]
+            return cls(moment.year, moment.month, moment.day, moment.hour,
+                       moment.minute, moment.second, moment.microsecond, moment.tzinfo)
+
+    monkeypatch.setattr(ext_pull, "cn_now", lambda: clock["now"])
+    monkeypatch.setattr(ext_pull, "datetime", _FakeDateTime)
+
+    async def fake_fetch_ingest(config, data_dir, **_kw):
+        config.pull.enabled = False
+        return 7, clock["now"].date().isoformat()
+
+    monkeypatch.setattr(ext_pull, "fetch_and_ingest", fake_fetch_ingest)
+
+    async def fake_sleep(sec):
+        clock["now"] += timedelta(seconds=sec + 1)
+
+    monkeypatch.setattr(ext_pull.asyncio, "sleep", fake_sleep)
+
+    sched = ext_pull.PullScheduler()
+    sched._running = True
+    sched._data_dir = "/tmp/nonexistent"
+
+    await asyncio.wait_for(sched._run_daily_at("c1", store, "09:30"), timeout=10)
+
+    # 注意: 周六 20:00 启用且当天已过 09:30, 若无交易日过滤会立即补拉;
+    # 过滤后应等到周一才拉
+    assert cfg.pull.last_status == "success"
+    assert clock["now"].date().isoformat() == "2026-03-09"
+    assert clock["now"].hour == 9 and clock["now"].minute == 30

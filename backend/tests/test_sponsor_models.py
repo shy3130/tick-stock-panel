@@ -82,6 +82,11 @@ async def test_sponsor_models_returns_trimmed_pricing(monkeypatch):
             "discount_rate": 0.6,
             "input_price": 0.000295,
             "output_price": 0.001177,
+            "busy_discount_rate": None,
+            "offpeak_discount_rate": None,
+            "offpeak_label": None,
+            "current_band": None,
+            "current_discount_rate": None,
         },
         {
             "id": "openai/gpt-6.1-sol",
@@ -89,6 +94,11 @@ async def test_sponsor_models_returns_trimmed_pricing(monkeypatch):
             "discount_rate": 1.0,
             "input_price": 0.002,
             "output_price": 0.01,
+            "busy_discount_rate": None,
+            "offpeak_discount_rate": None,
+            "offpeak_label": None,
+            "current_band": None,
+            "current_discount_rate": None,
         },
     ]
 
@@ -107,7 +117,50 @@ async def test_sponsor_models_tolerates_missing_pricing(monkeypatch):
         "discount_rate": 1.0,
         "input_price": None,
         "output_price": None,
+        "busy_discount_rate": None,
+        "offpeak_discount_rate": None,
+        "offpeak_label": None,
+        "current_band": None,
+        "current_discount_rate": None,
     }]
+
+
+@pytest.mark.asyncio
+async def test_sponsor_models_passes_through_busy_offpeak_bands(monkeypatch):
+    """忙闲时定价: 透传 BUSY / OFF_PEAK 两档折扣、时段说明与当前所处档位。"""
+    payload = {
+        "data": [{
+            "id": "deepseek/deepseek-v4.1-flash",
+            "context_length": 1048576,
+            "pricing": {
+                "discountRate": 0.6,
+                "input": {"amount": 0.000295},
+                "output": {"amount": 0.001177},
+                "timePricing": {
+                    "currentBand": "OFF_PEAK",
+                    "timeBands": [
+                        {"code": "BUSY", "discountRate": 0.6, "current": False},
+                        {
+                            "code": "OFF_PEAK",
+                            "discountRate": 0.3,
+                            "current": True,
+                            "label": "00:00-09:00、12:00-14:00、18:00-00:00",
+                        },
+                    ],
+                },
+            },
+        }],
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_upstream(payload))
+
+    item = (await settings_api.list_sponsor_models())["items"][0]
+
+    assert item["discount_rate"] == 0.6
+    assert item["busy_discount_rate"] == 0.6
+    assert item["offpeak_discount_rate"] == 0.3
+    assert item["offpeak_label"] == "00:00-09:00、12:00-14:00、18:00-00:00"
+    assert item["current_band"] == "OFF_PEAK"
+    assert item["current_discount_rate"] == 0.3
 
 
 @pytest.mark.asyncio

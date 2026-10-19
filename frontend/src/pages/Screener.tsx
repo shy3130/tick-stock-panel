@@ -343,6 +343,8 @@ export function Screener() {
 
   // 分钟策略批量计算: 结果不落盘后缓存 (strategy_cache 为日线语义), 只取 total
   // 合入 hitCounts 点亮卡片。传空日期让后端用分钟分区自身最新交易日 (与单跑同口径)。
+  // 与日线同走渐进式: 慢策略转后台, 结果经 cached-summary 合入, pending 复用
+  // 同一套 2s 轮询点亮 (arrived 判据用 computed_at)。
   const runAllMinute = useMutation({
     mutationFn: (strategyIds: string[]) =>
       api.screenerRunAll(undefined, strategyIds, assetType, '1m'),
@@ -352,6 +354,11 @@ export function Screener() {
         counts[id] = item.total
       }
       if (Object.keys(counts).length) setHitCounts(prev => ({ ...prev, ...counts }))
+      setPendingRun(
+        data.pending?.length
+          ? { ids: [...data.pending], startedAt: data.started_at ?? 0 }
+          : null,
+      )
     },
     onError: (e) => toast(`分钟策略计算失败：${String((e as any).message ?? e)}`, 'error'),
   })

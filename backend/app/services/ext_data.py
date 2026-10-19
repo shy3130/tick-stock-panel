@@ -102,7 +102,8 @@ class PullConfig:
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
-        "fanout", "schedule_time",
+        "fanout", "schedule_time", "schedule_period", "schedule_day",
+        "schedule_trading_only",
     )
 
     def __init__(
@@ -134,6 +135,9 @@ class PullConfig:
         max_pages: int = 20,
         fanout: dict | None = None,
         schedule_time: str | None = None,
+        schedule_period: str | None = None,
+        schedule_day: int | None = None,
+        schedule_trading_only: bool = False,
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -196,6 +200,22 @@ class PullConfig:
             schedule_time if isinstance(schedule_time, str)
             and SCHEDULE_TIME_RE.match(schedule_time) else None
         )
+        # 固定时刻的重复周期 (仅 schedule_time 配置时生效): daily=每天 |
+        # weekly=每周 (schedule_day 1=周一..7=周日) | monthly=每月 (schedule_day
+        # 1..31, 短月无该日则该月跳过)。手改非法值归一 daily (fail-closed)。
+        self.schedule_period = (
+            schedule_period if schedule_period in ("daily", "weekly", "monthly")
+            else "daily"
+        )
+        # weekly: ISO 周几 (1=周一..7=周日); monthly: 几号 (1..31)。
+        # 与 period 的合法交由调度侧解释 (weekly 配 8..31 视为 1=周一)。越界归一 1
+        self.schedule_day = (
+            int(schedule_day) if isinstance(schedule_day, (int, float))
+            and 1 <= schedule_day <= 31 else 1
+        )
+        # 仅交易日: 跳过周六日。法定节假日无法离线判定, 仍会按期尝试 —
+        # 拉取幂等且失败仅记 last_status, 不影响后续调度
+        self.schedule_trading_only = bool(schedule_trading_only)
 
     def to_dict(self) -> dict:
         return {
@@ -226,6 +246,9 @@ class PullConfig:
             "max_pages": self.max_pages,
             "fanout": self.fanout,
             "schedule_time": self.schedule_time,
+            "schedule_period": self.schedule_period,
+            "schedule_day": self.schedule_day,
+            "schedule_trading_only": self.schedule_trading_only,
         }
 
     @classmethod
@@ -260,6 +283,9 @@ class PullConfig:
             max_pages=d.get("max_pages", 20),
             fanout=d.get("fanout"),
             schedule_time=d.get("schedule_time"),
+            schedule_period=d.get("schedule_period"),
+            schedule_day=d.get("schedule_day"),
+            schedule_trading_only=d.get("schedule_trading_only", False),
         )
 
 

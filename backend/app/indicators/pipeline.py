@@ -495,10 +495,26 @@ def compute_indicators(
         )
     if "vol_ratio_5d" in want:
         # 标准量比(同花顺/东财): 今日成交量 / 前5日均量(不含当天)
-        # 盘后全量路径: 当日 volume 是完整全天量, 无需时间折算
-        df = df.with_columns(
-            (pl.col("volume") / pl.col("_vol_ma5_prev")).alias("vol_ratio_5d"),
-        )
+        # 盘后/历史: 当日 volume 是完整全天量, 直接相除。
+        # 盘中 refresh-cache 重建缓存: 最新分区是实时快照的「部分量」,
+        # 与 live 增量路径 (compute_enriched_today) 同口径, 按已交易分钟
+        # 折算到全天量级 — 否则量比被低估约 240/elapsed 倍 (盘中手动重载
+        # 曾出现放量占比 1.8% vs 实时路径 40% 的口径撕裂)。
+        from app.market_time import cn_today, trading_minutes_elapsed
+
+        _vr = pl.col("volume") / pl.col("_vol_ma5_prev")
+        elapsed = trading_minutes_elapsed()
+        if (
+            0 < elapsed < 240
+            and "date" in df.columns
+            and df["date"].max() == cn_today()
+        ):
+            _vr = (
+                pl.when(pl.col("date") == cn_today())
+                .then(pl.col("volume") * (240.0 / elapsed) / pl.col("_vol_ma5_prev"))
+                .otherwise(_vr)
+            )
+        df = df.with_columns(_vr.alias("vol_ratio_5d"))
     _p4mom: list[pl.Expr] = []
     if "momentum_5d" in want:
         _p4mom.append((pl.col("close") / pl.col("close").shift(5).over("symbol") - 1).alias("momentum_5d"))

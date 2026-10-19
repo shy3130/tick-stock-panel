@@ -51,6 +51,54 @@ export interface ListColumnCustomizerProps {
 /** 判断扩展数据字段类型是否为数字(int/float/double/number/decimal 等)。
  * 旧列 source 无 fieldType 时默认 true(放宽), 让旧列也能配置数字格式 ——
  * 若列实际非数字, 渲染时 typeof val==='number' 判断会跳过格式化, 无副作用。 */
+/** 数字输入: 聚焦期间完全自由编辑 (随意清空/输入中间态), 失焦时统一收敛 —
+ *  合法数字钳制到 [min, max] 后提交; 空或非数字恢复聚焦前的数字。
+ *  受控父值在聚焦期间不干扰草稿, 避免逐位输入被即时钳制/回填打断。 */
+export function RangeNumberInput({
+  value, min, max, step, onCommit, className,
+}: {
+  value: number
+  min: number
+  max: number
+  step?: number
+  onCommit: (v: number) => void
+  className?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  // 同步 ref: onBlur 在 setState 之后触发, 闭包里的 draft 会过期
+  const draftRef = useRef<string | null>(null)
+  const setDraftBoth = (v: string | null) => {
+    draftRef.current = v
+    setDraft(v)
+  }
+
+  return (
+    <input
+      type="number" min={min} max={max} step={step}
+      value={draft ?? String(value)}
+      onFocus={() => setDraftBoth(String(value))}
+      onChange={e => setDraftBoth(e.target.value)}
+      onBlur={() => {
+        const raw = draftRef.current
+        setDraftBoth(null)
+        if (raw == null) return
+        const num = Number(raw)
+        // 空 / 非数字 → 不提交, 草稿清空后自动显示聚焦前的数字
+        if (raw.trim() === '' || !Number.isFinite(num)) return
+        onCommit(Math.max(min, Math.min(max, num)))
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Escape') {
+          setDraftBoth(null)  // 丢弃草稿 → onBlur 读到 null, 恢复原值
+          e.currentTarget.blur()
+        }
+      }}
+      className={className}
+    />
+  )
+}
+
 function isNumericFieldType(ft?: string): boolean {
   if (!ft) return true
   const t = ft.toLowerCase()
@@ -495,19 +543,19 @@ export function ListColumnCustomizerInner({
               <div className="flex items-center gap-2 text-xs">
                 <label className="flex items-center gap-1">
                   <span className="text-secondary shrink-0">宽</span>
-                  <input
-                    type="number" min={60} max={300} step={10}
+                  <RangeNumberInput
                     value={col.extDisplay?.chartWidth ?? 150}
-                    onChange={e => updateExtDisplay(col.id, { chartWidth: Math.max(60, Math.min(300, Number(e.target.value) || 150)) })}
+                    min={60} max={300} step={10}
+                    onCommit={v => updateExtDisplay(col.id, { chartWidth: v })}
                     className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
                   />
                 </label>
                 <label className="flex items-center gap-1">
                   <span className="text-secondary shrink-0">高</span>
-                  <input
-                    type="number" min={24} max={160} step={4}
+                  <RangeNumberInput
                     value={col.extDisplay?.chartHeight ?? 80}
-                    onChange={e => updateExtDisplay(col.id, { chartHeight: Math.max(24, Math.min(160, Number(e.target.value) || 80)) })}
+                    min={24} max={160} step={4}
+                    onCommit={v => updateExtDisplay(col.id, { chartHeight: v })}
                     className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
                   />
                 </label>

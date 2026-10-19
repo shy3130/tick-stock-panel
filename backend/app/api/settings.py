@@ -475,6 +475,12 @@ async def list_sponsor_models() -> dict:
         value = (pricing.get(dim) or {}).get("amount")
         return float(value) if isinstance(value, (int, float)) else None
 
+    def _rate(band: dict | None) -> float | None:
+        if not isinstance(band, dict):
+            return None
+        value = band.get("discountRate")
+        return float(value) if isinstance(value, (int, float)) else None
+
     items: list[dict] = []
     for raw in data.get("data", []):
         if not isinstance(raw, dict):
@@ -485,12 +491,28 @@ async def list_sponsor_models() -> dict:
         pricing = raw.get("pricing") if isinstance(raw.get("pricing"), dict) else {}
         rate = pricing.get("discountRate")
         context_length = raw.get("context_length")
+        # 忙闲时定价: 上游把两档折扣放在 pricing.timePricing.timeBands。
+        # 顶层 discountRate 为忙时价, 忙闲时展示需单独透传。
+        time_pricing = pricing.get("timePricing")
+        time_pricing = time_pricing if isinstance(time_pricing, dict) else {}
+        bands = time_pricing.get("timeBands")
+        bands = [b for b in bands if isinstance(b, dict)] if isinstance(bands, list) else []
+        busy = next((b for b in bands if b.get("code") == "BUSY"), None)
+        offpeak = next((b for b in bands if b.get("code") == "OFF_PEAK"), None)
+        current_band = time_pricing.get("currentBand")
+        current = next((b for b in bands if b.get("code") == current_band), None) if isinstance(current_band, str) else None
         items.append({
             "id": model_id,
             "context_length": context_length if isinstance(context_length, int) else None,
             "discount_rate": float(rate) if isinstance(rate, (int, float)) else 1.0,
             "input_price": _amount(pricing, "input"),
             "output_price": _amount(pricing, "output"),
+            # 忙闲时 (无 timePricing 的模型为 None, 前端回退单一折扣)
+            "busy_discount_rate": _rate(busy),
+            "offpeak_discount_rate": _rate(offpeak),
+            "offpeak_label": offpeak.get("label") if isinstance(offpeak, dict) and isinstance(offpeak.get("label"), str) else None,
+            "current_band": current_band if isinstance(current_band, str) else None,
+            "current_discount_rate": _rate(current),
         })
     items.sort(key=lambda x: x["id"])
     return {"models": [item["id"] for item in items], "items": items}

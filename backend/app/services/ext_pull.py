@@ -529,6 +529,42 @@ def _ran_at_or_after(pull: PullConfig, target: datetime) -> bool:
     return dt.astimezone(CN_TZ) >= target
 
 
+def _is_scheduled_day(now: datetime, pull: PullConfig) -> bool:
+    """今天 (北京时间) 是否为固定时刻模式的计划日: 周期 + 交易日过滤。
+
+    weekly: schedule_day 1=周一..7=周日, 越界 (手改 config.json) 视为 1;
+    monthly: schedule_day 1..31, 短月无该日则当月自然不命中 (该月跳过);
+    trading_only: 跳过周六日 — 法定节假日无法离线判定, 仍会按期尝试,
+    拉取幂等且失败仅记 last_status, 不影响后续调度。
+    """
+    period = pull.schedule_period or "daily"
+    if period == "weekly":
+        day = pull.schedule_day if 1 <= (pull.schedule_day or 1) <= 7 else 1
+        if now.isoweekday() != day:
+            return False
+    elif period == "monthly":
+        day = pull.schedule_day if 1 <= (pull.schedule_day or 1) <= 31 else 1
+        if now.day != day:
+            return False
+    return not (pull.schedule_trading_only and now.isoweekday() > 5)
+
+
+def _next_scheduled_target(now: datetime, hhmm: str, pull: PullConfig) -> datetime:
+    """从 now 起下一个计划日的固定时刻 (供 next_run 预告与睡眠)。
+
+    今天是计划日且时刻未到 → 今天; 否则从明天起逐日推进。防御上限 400 天:
+    最苛刻组合 (每月 31 号 + 仅交易日) 最坏跨近一年, 超限回退明天 (不可达分支)。
+    """
+    tgt = _today_target(now, hhmm)
+    if _is_scheduled_day(now, pull) and now < tgt:
+        return tgt
+    for i in range(1, 400):
+        candidate = _today_target(now + timedelta(days=i), hhmm)
+        if _is_scheduled_day(candidate, pull):
+            return candidate
+    return tgt + timedelta(days=1)
+
+
 class PullScheduler:
     """后台调度器：为每个启用了 pull 的 ExtConfig 维护定时任务。
 
@@ -635,13 +671,15 @@ class PullScheduler:
             logger.warning("PullScheduler: %s error: %s", fresh.id, e)
 
     async def _run_daily_at(self, config_id: str, store: ExtConfigStore, hhmm: str) -> None:
-        """每日固定时刻 (北京时间) 拉取一次。
+        """固定时刻 (北京时间) 周期性拉取: 每天 / 每周 / 每月 / 仅交易日。
 
         间隔制 (schedule_minutes) 锁相在启用时刻 —— 表达不了「每天 09:30 拉一次」;
-        这里按墙钟对齐: 当前时刻已过当日目标且上次执行早于它 (重启安全) 就拉,
-        否则分片睡到下一个目标时刻。启用即对齐: 若启用时已过当日时刻且当日
-        未拉过, 立即补拉一次 (与间隔制「启用即拉取」同语义, 拉取本身幂等)。
-        本模式忽略时间窗口与调度间隔 (固定时刻本身就是完整日程)。
+        这里按墙钟对齐: 今天是计划日且当前时刻已过当日目标、上次执行早于它
+        (重启安全) 就拉, 否则分片睡到下一个计划日的目标时刻。启用即对齐: 若
+        启用时已过当日时刻、当日是计划日且未拉过, 立即补拉一次 (与间隔制
+        「启用即拉取」同语义, 拉取本身幂等)。周期/交易日中途修改在一分钟内
+        被下轮 fresh 重读生效。本模式忽略时间窗口与调度间隔 (固定时刻本身
+        就是完整日程)。
         """
         while self._running:
             fresh = store.get(config_id)
@@ -652,10 +690,13 @@ class PullScheduler:
                 return  # 停用 / 改时刻 / 切回间隔制 → 外层循环重读
             now = cn_now()
             target = _today_target(now, hhmm)
-            if now >= target and not _ran_at_or_after(fresh.pull, target):
+            if (
+                _is_scheduled_day(now, fresh.pull)
+                and now >= target and not _ran_at_or_after(fresh.pull, target)
+            ):
                 await self._execute_pull(fresh, store)
                 continue
-            nxt = target if now < target else target + timedelta(days=1)
+            nxt = _next_scheduled_target(now, hhmm, fresh.pull)
             # 预告下次运行时间 (UTC ISO, 与间隔制同口径), 供前端展示
             nxt_iso = nxt.astimezone(UTC).isoformat()
             latest = store.get(config_id)

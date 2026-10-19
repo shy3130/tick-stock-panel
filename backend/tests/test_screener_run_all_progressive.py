@@ -206,7 +206,12 @@ def test_run_all_job_level_error_without_results_is_500(
     assert "volume" in excinfo.value.detail
 
 
-def test_run_all_minute_timeframe_stays_blocking(monkeypatch, tmp_path, fast_first_return):
+def test_run_all_minute_timeframe_now_progressive(monkeypatch, tmp_path, fast_first_return):
+    """分钟 summary 请求也走渐进式: 后台队列执行、响应带 pending 形状、不写日线缓存。
+
+    旧行为 (整段阻塞) 会把 HTTP 线程占到全部分钟策略算完 — 分钟批量曾是最长的
+    阻塞路径; 现在与日线同走单飞队列, 结果经 handle 快照合入 cached-summary。
+    """
     engine = _FakeEngine({"m1": 0.01})
     monkeypatch.setattr(screener_api, "ScreenerService", _FakeService)
     resp = screener_api.run_all(
@@ -219,9 +224,11 @@ def test_run_all_minute_timeframe_stays_blocking(monkeypatch, tmp_path, fast_fir
             "summary_only": True,
         },
     )
-    # 分钟周期: 整段阻塞、旧响应形状 (无 pending), 且不写日线缓存
+    # 渐进式响应形状: 结果 + pending 字段; fast_first_return 内策略已完成
     assert set(resp["results"]) == {"m1"}
-    assert "pending" not in resp
+    assert resp["complete"] is True
+    assert resp["pending"] == []
+    # 分钟结果不落 strategy_cache (日线语义) — 只能经 handle 快照合入 summary
     assert not ((strategy_cache.read_cache(tmp_path) or {}).get("results") or {})
 
 

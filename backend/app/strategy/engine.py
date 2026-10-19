@@ -162,6 +162,9 @@ class StrategyDataContext:
     daily_history: pl.DataFrame | None = None
     market: Any | None = None
     cache_key: str | None = None
+    # enriched 数据换代号 (repo.get_matrix_data_generation, 详见 enriched_generation):
+    # 装配方填入, 消费方用作共享矩阵缓存的失效指纹 — 数据重建换代号变, 缓存自动失效。
+    data_generation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +249,11 @@ class StrategyEngine:
         self._strategy_dirs = strategy_dirs or []
         self._realtime_matrices: dict[str, _RealtimeMatrixEntry] = {}
         self._realtime_matrix_lock = threading.RLock()
+        # run_all 共享矩阵进程级缓存: 矩阵 = 纯函数(history, 字段并集), 矩阵数组
+        # 构建后只读, 同 generation 同窗口复用免重建 (全市场矩阵构建数秒)。
+        # 失效: 指纹含 enriched generation + 窗口范围 (数据/窗口变化自动重建),
+        # reload/删除策略时与 _realtime_matrices 一同清空。
+        self._shared_matrix_cache: dict[tuple, Any] = {}
         # 可选的 override 加载器: 叠加策略执行时用它查子策略的用户覆盖配置,
         # 保证 composite 内跑子策略与单独跑子策略使用同一口径(CONTRIBUTING §5.1)。
         # None 时(测试/无 data_dir) 子策略用默认参数, 不报错。
@@ -595,6 +603,7 @@ class StrategyEngine:
             raise ValueError(f"strategy reload failed: {details}")
         with self._realtime_matrix_lock:
             self._realtime_matrices.clear()
+            self._shared_matrix_cache.clear()
 
     # ================================================================
     # 查询
@@ -635,6 +644,7 @@ class StrategyEngine:
         self._strategies = strategies
         with self._realtime_matrix_lock:
             self._realtime_matrices.clear()
+            self._shared_matrix_cache.clear()
         return True
 
     def find_dependents(self, strategy_id: str) -> list[str]:
@@ -1304,6 +1314,34 @@ class StrategyEngine:
                     params_map.get(sid),
                 )
             )
+
+        # 纯函数缓存: 矩阵只由 (history 窗口, 字段并集) 决定且数组只读, 同指纹
+        # 直接复用。指纹含 enriched generation (数据换代自动失效) + 窗口范围
+        # (不同 lookback 的 history 不可混用)。generation 未知 (分钟/ETF/测试
+        # Fake 数据) 时 fail-closed 不缓存, 保持每次重建的旧行为。
+        generation = getattr(context, "data_generation", None)
+        fingerprint: tuple | None = None
+        if generation and "date" in history.columns:
+            window = (
+                str(history["date"].min()),
+                str(history["date"].max()),
+                history.height,
+            )
+            fingerprint = (
+                context.asset_type,
+                str(context.as_of),
+                tuple(sorted(field_columns)),
+                window,
+                generation,
+            )
+            with self._realtime_matrix_lock:
+                cached_matrix = self._shared_matrix_cache.get(fingerprint)
+            if cached_matrix is not None:
+                logger.info(
+                    "run_all: shared matrix cache hit (fields=%d)", len(field_columns)
+                )
+                return cached_matrix
+
         matrix_t0 = time.perf_counter()
         matrix = build_market_data_matrix(history, field_columns=field_columns)
         logger.info(
@@ -1311,6 +1349,11 @@ class StrategyEngine:
             (time.perf_counter() - matrix_t0) * 1000,
             len(field_columns),
         )
+        if fingerprint is not None:
+            with self._realtime_matrix_lock:
+                # 只保留最近一份: 字段并集随策略池变化, 旧矩阵价值低且占内存
+                self._shared_matrix_cache.clear()
+                self._shared_matrix_cache[fingerprint] = matrix
         return matrix
 
     @staticmethod
