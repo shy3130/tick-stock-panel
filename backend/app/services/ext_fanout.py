@@ -75,6 +75,13 @@ def _raise_on_envelope_error(data: Any) -> None:
 
 
 async def fetch_fanout_rows(config: ExtConfig, target_date=None) -> list[dict]:
+    from app.services.ext_pull import _pull_client_scope
+
+    async with _pull_client_scope():
+        return await _fetch_fanout_rows(config, target_date)
+
+
+async def _fetch_fanout_rows(config: ExtConfig, target_date=None) -> list[dict]:
     """执行两级拉取并反转为「成员 → 类别清单」行。"""
     from app.services.ext_pull import (
         _append_query_params,

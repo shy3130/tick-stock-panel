@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 import threading
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, timedelta, timezone
 from functools import reduce
 from pathlib import Path
@@ -21,6 +23,22 @@ from app.services.ext_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+_pull_client: ContextVar[httpx.AsyncClient | None] = ContextVar("ext_pull_client", default=None)
+
+
+@asynccontextmanager
+async def _pull_client_scope():
+    client = _pull_client.get()
+    if client is not None:
+        yield client
+        return
+    async with httpx.AsyncClient() as client:
+        token = _pull_client.set(client)
+        try:
+            yield client
+        finally:
+            _pull_client.reset(token)
 
 
 def outbound_headers(user_headers: dict[str, str] | None = None) -> dict[str, str]:
@@ -230,10 +248,10 @@ async def _request_json(
     # getattr 兜底测试用的简化 pull 对象
     timeout = getattr(pull, "timeout_seconds", None)
     timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 30
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with _pull_client_scope() as client:
         headers = outbound_headers(pull.headers)
         url = _apply_auth(config_id, pull.auth, url, headers)
-        kwargs: dict[str, Any] = {"headers": headers}
+        kwargs: dict[str, Any] = {"headers": headers, "timeout": timeout}
 
         if pull.method.upper() == "POST" and pull.body:
             kwargs["content"] = pull.body
@@ -270,6 +288,11 @@ def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[
 
 
 async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+    async with _pull_client_scope():
+        return await _fetch_rows_for_date(config, target_date)
+
+
+async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
     """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
 
     与 fetch_and_ingest 共用同一解析链 (response_path/字段映射/关联字段校验),
@@ -373,6 +396,16 @@ def _day_partition(data_dir, config_id: str, day: date) -> Path:
 
 
 async def backfill_history(
+    config: ExtConfig,
+    data_dir,
+    start: date,
+    end: date,
+) -> dict:
+    async with _pull_client_scope():
+        return await _backfill_history(config, data_dir, start, end)
+
+
+async def _backfill_history(
     config: ExtConfig,
     data_dir,
     start: date,

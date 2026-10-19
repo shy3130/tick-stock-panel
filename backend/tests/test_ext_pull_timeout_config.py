@@ -10,9 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.ext_data import PullConfig
 from app.services import ext_pull
-
+from app.services.ext_data import PullConfig
 
 # ── 模型: 默认值 / 序列化 / 非法值归一 ──────────────────────────────
 
@@ -47,9 +46,10 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    """捕获 timeout 构造参数的 httpx.AsyncClient 替身。"""
+    """捕获每次请求的 timeout。"""
 
     last_timeout: object = None
+    request_timeout: object = None
 
     def __init__(self, timeout=None, **kwargs):
         _FakeClient.last_timeout = timeout
@@ -61,6 +61,7 @@ class _FakeClient:
         return False
 
     async def request(self, method, url, **kwargs):
+        _FakeClient.request_timeout = kwargs.get("timeout")
         return _FakeResponse()
 
 
@@ -69,7 +70,7 @@ async def test_request_json_uses_configured_timeout(monkeypatch):
 
     pull = PullConfig(url="https://x", timeout_seconds=90)
     await ext_pull._request_json(pull, "cfg1")
-    assert _FakeClient.last_timeout == 90
+    assert _FakeClient.request_timeout == 90
 
 
 async def test_request_json_defaults_to_30_without_attr(monkeypatch):
@@ -81,7 +82,7 @@ async def test_request_json_defaults_to_30_without_attr(monkeypatch):
         method="GET", body=None, auth=None,
     )
     await ext_pull._request_json(pull, "cfg1")
-    assert _FakeClient.last_timeout == 30
+    assert _FakeClient.request_timeout == 30
 
 
 # ── 探测路径: detect-url 请求体带 timeout_seconds ───────────────────

@@ -3,8 +3,10 @@ max_pages 安全上限、非分页配置行为不变。mock _request_json, 不�
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 
+import httpx
 import pytest
 
 from app.services import ext_pull
@@ -36,6 +38,107 @@ def _install_pages(monkeypatch: pytest.MonkeyPatch, pages: dict[int, list[dict]]
 
 
 TARGET = date(2026, 9, 20)
+
+
+async def test_pagination_reuses_client_and_closes_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params["page"]
+        if page == "2":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"data": [{"symbol": "000001.SZ"}]})
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        client = real_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", client_factory)
+    cfg = _cfg(PullConfig(url="https://example.test/rank", response_path="data", page_param="page"))
+    with pytest.raises(httpx.HTTPStatusError):
+        await ext_pull.fetch_rows_for_date(cfg, TARGET)
+    assert len(created) == 1
+    assert created[0].is_closed
+
+
+async def test_fanout_reuses_client_for_concurrent_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.ext_fanout import fetch_fanout_rows
+
+    created = []
+    real_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/catalog":
+            return httpx.Response(200, json=[{"id": "one"}, {"id": "two"}])
+        return httpx.Response(200, json={"items": [{"symbol": request.url.params["id"]}]})
+
+    def client_factory(*args, **kwargs):
+        client = real_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", client_factory)
+    fanout = {
+        "url": "https://example.test/members", "param": "id", "id_field": "id",
+        "items_path": "items", "member_id_field": "symbol", "symbol_col": "symbol",
+        "name_col": "name", "value_col": "groups",
+    }
+    cfg = _cfg(PullConfig(url="https://example.test/catalog", fanout=fanout))
+    rows = await fetch_fanout_rows(cfg)
+    assert {row["symbol"] for row in rows} == {"one", "two"}
+    assert len(created) == 1
+    assert created[0].is_closed
+
+
+async def test_cancelled_pull_closes_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = []
+    real_client = httpx.AsyncClient
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise asyncio.CancelledError
+
+    def client_factory(*args, **kwargs):
+        client = real_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", client_factory)
+    with pytest.raises(asyncio.CancelledError):
+        await ext_pull.fetch_rows_for_date(_cfg(PullConfig(url="https://example.test/rank")), TARGET)
+    assert len(created) == 1
+    assert created[0].is_closed
+
+
+async def test_backfill_reuses_client_across_days(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    created = []
+    real_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"symbol": "000001.SZ", "date": request.url.params["date"]}])
+
+    def client_factory(*args, **kwargs):
+        client = real_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(
+        "app.services.dragon_tiger._local_trading_days",
+        lambda _: [date(2026, 9, 17), date(2026, 9, 18)],
+    )
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(ext_pull.asyncio, "sleep", no_sleep)
+    cfg = _cfg(PullConfig(url="https://example.test/rank", date_param="date"))
+    result = await ext_pull.backfill_history(cfg, tmp_path, date(2026, 9, 17), date(2026, 9, 18))
+    assert result["fetched"] == 2
+    assert len(created) == 1
+    assert created[0].is_closed
 
 
 async def test_pagination_collects_pages_and_stops_on_short_page(monkeypatch: pytest.MonkeyPatch) -> None:
