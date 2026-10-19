@@ -1202,6 +1202,9 @@ class MonitorRuleEngine:
         try:
             s = self._strategy_engine.get(sid)
         except Exception:
+            # 规则引用了不存在的策略(内置策略已下线): 静默空转最容易骗人,
+            # 至少留一条 debug 线索, 避免"看起来在监控其实什么都没跑" (#490)
+            logger.debug("monitor: 策略 %s 不存在, 规则 %s 本轮跳过", sid, rule.get("id"))
             return []
         if s is None:
             return []
