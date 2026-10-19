@@ -69,10 +69,18 @@ jobs:
           ver = '${{ github.event.inputs.version }}'.lstrip('v')  # v0.3.3 → 0.3.3
           all_platforms = json.loads('''$ALL''')
           selected = [p for p in all_platforms if p['platform'] in requested]
-          # 产物文件名带版本号 (TSP-Setup-x64-0.3.3.exe): 用户下载后一眼可辨版本
+          # 产物文件名带版本号 (TSP-Setup-x64-0.3.3.exe): 用户下载后一眼可辨版本。
+          # 按已知后缀插入版本号 — 不能用 rpartition('.') 拆扩展名:
+          # "TSP-linux-x64.tar.gz" 会拆成 stem=".tar" + ext="gz", 拼出
+          # "TSP-linux-x64.tar-0.3.9.gz", 与 latest.json 清单的通配格式不符。
           for p in selected:
-              stem, _, ext = p['artifact'].rpartition('.')
-              p['artifact'] = f'{stem}-{ver}.{ext}'
+              name = p['artifact']
+              for suffix in ('.tar.gz', '.dmg', '.exe'):
+                  if name.endswith(suffix):
+                      p['artifact'] = f'{name[:-len(suffix)]}-{ver}{suffix}'
+                      break
+              else:
+                  raise SystemExit(f'未知产物后缀: {name}')
           print('matrix=' + json.dumps({'include': selected}))
           with open('$GITHUB_OUTPUT', 'a') as f:
               f.write('matrix=' + json.dumps({'include': selected}) + '\n')
