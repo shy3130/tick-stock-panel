@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
 from app.market_time import cn_today
-from app.services import index_sync, kline_sync, preferences, trading_day
+from app.services import index_sync, kline_sync, preferences, trading_day  # noqa: F401
 from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ def get_index_minute(
             "rows": [],
             "source": "future",
         }
-    cache_key = (symbol, day.isoformat(), preferences.get_minute_data_provider())
+    cache_key = (symbol, day.isoformat(), kline_sync._selected_minute_provider_name())
     now = time.monotonic()
     with _index_minute_cache_lock:
         hit = _index_minute_cache.get(cache_key)

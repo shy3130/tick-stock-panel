@@ -147,10 +147,13 @@ def test_guard_string_datetimes_classified_after_parse():
     assert out["datetime"].to_list() == [datetime(2026, 1, 15, 9, 30)]
 
 
-# ---------- 路由级: 自定义源契约违规 → 回退 TickFlow ----------
+# ---------- 路由级: 自定义源契约违规 → fail-closed ----------
 
 def _setup_custom_provider(monkeypatch, provider: object) -> None:
     monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "mock_src")
+    provider.config = MagicMock(datasets={"minute": {}})
+    monkeypatch.setattr("app.data_providers.custom.names", lambda: {"mock_src"})
+    monkeypatch.setattr("app.data_providers.custom.get_provider", lambda name: provider)
     monkeypatch.setattr("app.data_providers.custom.provider_has_dataset", lambda name, ds: True)
     monkeypatch.setattr("app.data_providers.custom.get_provider", lambda name: provider)
 
@@ -170,8 +173,8 @@ def test_custom_provider_utc_frame_selfhealed(monkeypatch):
     assert df["datetime"].to_list() == [datetime(2026, 1, 15, 9, 30), datetime(2026, 1, 15, 13, 0)]
 
 
-def test_custom_provider_garbage_datetime_falls_back(monkeypatch):
-    """插件返回无法识别口径 → fail-closed 回退 TickFlow。"""
+def test_custom_provider_garbage_datetime_fails_closed(monkeypatch):
+    """插件返回无法识别口径 → fail-closed,不请求其他数据源。"""
     mock_provider = MagicMock()
     mock_provider.get_minute = MagicMock(return_value=_minute_frame(
         [datetime(2026, 1, 15, 21, 30)]))
@@ -181,5 +184,5 @@ def test_custom_provider_garbage_datetime_falls_back(monkeypatch):
         ["600519.SH"], datetime(2026, 1, 15, 9, 25), datetime(2026, 1, 15, 15, 5),
         asset_type="stock",
     )
-    assert fallback is True
-    assert df is None
+    assert fallback is False
+    assert df is not None and df.is_empty()

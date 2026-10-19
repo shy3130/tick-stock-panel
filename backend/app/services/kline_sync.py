@@ -956,32 +956,41 @@ def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
     return written
 
 
+def _selected_minute_provider_name() -> str:
+    """识别偏好 getter 静默回退的失效自定义分钟源。"""
+    saved = str(preferences.load().get("minute_data_provider", "tickflow") or "tickflow").lower()
+    selected = preferences.get_minute_data_provider()
+    if saved != "tickflow" and selected == "tickflow":
+        return f"unavailable:{saved}"
+    return selected
+
+
 def _resolve_minute_provider(
     provider_name: str,
 ) -> tuple[object | None, bool, str | None]:
     """统一解析 custom minute provider, 把所有 resolver 调用纳入同一异常边界。
 
-    供 _try_custom_minute 和 sync_and_persist_minute 共用, 避免两处分别调
-    provider_has_dataset / get_provider 时漏掉异常边界 (Issue 2 加固项)。
+    供分钟拉取和落盘共用，解析失败统一返回错误，不跨源补数据。
 
     返回 (provider, should_fallback_to_tickflow, error_msg):
-      - provider_name == "tickflow" 或未配 minute dataset → (None, True, None)  静默降级
-      - resolver 异常 (registry 损坏 / 插件失效 / provider name 不存在) → (None, True, str(e))
-      - 成功 → (provider, False, None)
+      - provider_name == "tickflow" → (None, True, None)
+      - 自定义源未配置 minute dataset 或解析失败 → (None, False, error_msg)
+      - 自定义源可用 → (provider, False, None)
 
-    上层依据 error_msg 决定是否 logger.warning (区分"未配"与"异常")。
+    只有用户明确选择 TickFlow 时才请求 TickFlow,避免静默跨源。
     注意: provider.get_minute() 仍由调用方在自身 try 块内调用 (业务异常, 非解析异常)。
     """
     if provider_name == "tickflow":
         return (None, True, None)
     from app.data_providers import custom as custom_sources
     try:
-        if not custom_sources.provider_has_dataset(provider_name, "minute"):
-            return (None, True, None)
         provider = custom_sources.get_provider(provider_name)
-        return (provider, False, None)
+        datasets = provider.config.datasets
     except Exception as e:  # noqa: BLE001
-        return (None, True, str(e))
+        return (None, False, str(e))
+    if "minute" not in datasets:
+        return (None, False, f"provider {provider_name} does not configure minute data")
+    return (provider, False, None)
 
 
 def _try_custom_minute(
@@ -995,11 +1004,11 @@ def _try_custom_minute(
     """尝试从自定义分钟源拉取。返回 (df, should_fallback_to_tickflow)。
 
     返回契约:
-      (None, True)   → 未配自定义源 / 未配 minute dataset / 自定义源异常 → 走 TickFlow
-      (df, False)    → 自定义源成功(含空 df) → 直接用, 不回退
+      (None, True)   → 用户明确选择 TickFlow
+      (df, False)    → 自定义源成功(含空 df)或失败 → 直接使用结果, 不回退
 
-    自定义源异常时返回 fallback=True。单股拉取调用方另行检查 TickFlow 原生
-    能力, 避免自定义源增广能力误放行无权限请求。
+    用户明确选择了自定义分钟源后,其请求失败或解析异常均 fail-closed;
+    避免自定义源增广的 batch 能力被误认为 TickFlow 原生权限,造成静默跨源请求。
 
     resolver 异常边界由 _resolve_minute_provider 统一兜底; 业务调用
     (provider.get_minute) 仍在本函数 try 块内, 与 resolver 异常分离
@@ -1009,13 +1018,23 @@ def _try_custom_minute(
     实现内部以 2 参 (cur, total) 调用。这里包装一层, provider 调 2 参时补
     默认 seg_label="custom" 转发给上层, 保证进度展示不降级。
     """
-    provider_name = preferences.get_minute_data_provider()
+    provider_name = _selected_minute_provider_name()
+    if provider_name.startswith("unavailable:"):
+        logger.warning("custom minute provider %s is unavailable; not falling back to TickFlow",
+                       provider_name.removeprefix("unavailable:"))
+        return (pl.DataFrame(), False)
     provider, fallback, err = _resolve_minute_provider(provider_name)
     if fallback:
         if err is not None:
-            logger.warning("custom minute provider %s resolution failed, falling back to TickFlow: %s",
-                           provider_name, err)
+            logger.warning(
+                "custom minute provider %s unavailable; not falling back to TickFlow: %s",
+                provider_name, err,
+            )
+            return (pl.DataFrame(), False)
         return (None, True)
+    if err is not None or provider is None:
+        logger.warning("custom minute provider %s has no usable minute dataset: %s", provider_name, err)
+        return (pl.DataFrame(), False)
 
     # 包装 on_chunk_done: provider 调 2 参 → 补 seg_label="custom" → 转发上层 3 参
     wrapped_cb: Callable[[int, int], None] | None = None
@@ -1029,17 +1048,21 @@ def _try_custom_minute(
             symbols, start_time=start_time, end_time=end_time,
             asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
         )
-    except Exception as e:
-        logger.warning("custom minute provider %s call failed, falling back to TickFlow: %s",
-                       provider_name, e)
-        return (None, True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "custom minute provider %s call failed; not falling back to TickFlow: %s",
+            provider_name, e,
+        )
+        return (pl.DataFrame(), False)
     try:
         # 时区契约守卫: 插件/自定义源帧同样收口为北京墙钟 (CONTRIBUTING §3.3)
         df = _enforce_minute_beijing_wallclock(df, source=provider_name)
-    except Exception as e:
-        logger.warning("custom minute provider %s datetime 契约校验失败, falling back to TickFlow: %s",
-                       provider_name, e)
-        return (None, True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "custom minute provider %s datetime 契约校验失败; not falling back to TickFlow: %s",
+            provider_name, e,
+        )
+        return (pl.DataFrame(), False)
     return (df, False)
 
 
@@ -1077,7 +1100,7 @@ def sync_minute_batch(
         asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
     )
     if not fallback:
-        # 自定义源成功: 遵守与 TickFlow 路径一致的 on_segment 契约。
+        # 自定义源已选中: 遵守与 TickFlow 路径一致的 on_segment 契约;失败时返回空帧。
         # 传了 on_segment (如 sync_and_persist_minute 流式落盘) → 调 on_segment, 返回空 df;
         # 未传 on_segment (如 fetch_minute_single 实时补拉) 或空 df → 原样返回 df。
         df = df if df is not None else pl.DataFrame()
@@ -1176,15 +1199,19 @@ def sync_minute_batch(
 
 def intraday_monitor_support(capset: CapabilitySet | None) -> dict[str, object]:
     """返回分时信号监控可用的数据能力和单轮标的上限。"""
-    provider_name = preferences.get_minute_data_provider()
+    provider_name = _selected_minute_provider_name()
     _, fallback, error = _resolve_minute_provider(provider_name)
+    if error is not None:
+        logger.warning("minute provider resolution failed while checking monitor support: %s", error)
+        return {
+            "available": False, "source": None, "max_symbols": 0,
+            "reason": "当前分钟数据源不可用，请检查数据源配置",
+        }
     if not fallback:
         return {
             "available": True, "source": "custom_minute", "max_symbols": 100,
             "reason": "使用已配置的分钟数据插件",
         }
-    if error is not None:
-        logger.warning("minute provider resolution failed while checking monitor support: %s", error)
     if capset is None:
         return {
             "available": False, "source": None, "max_symbols": 0,
@@ -1377,23 +1404,23 @@ def _resolve_full_minute_provider(
     provider_name: str,
 ) -> tuple[object | None, bool, str | None]:
     """解析全量分钟生效的自定义源。返回 (provider, should_use_tickflow, error_msg):
+返回 (provider, should_use_tickflow, error_msg):
 
-    - provider_name == "tickflow" / 未配 full_minute dataset → (None, True, None)
-    - resolver 异常 (registry 损坏 / 插件失效 / 源不存在) → (None, True, str(e))
+    - 明确选择 tickflow → (None, True, None)
+    - 自定义源缺少 full_minute 或解析失败 → (None, False, error_msg)
     - 成功 → (provider, False, None)
-
-    与 _resolve_minute_provider 同构, 仅数据集名不同。
     """
     if provider_name == "tickflow":
         return (None, True, None)
     from app.data_providers import custom as custom_sources
     try:
-        if not custom_sources.provider_has_dataset(provider_name, "full_minute"):
-            return (None, True, None)
         provider = custom_sources.get_provider(provider_name)
-        return (provider, False, None)
+        datasets = provider.config.datasets
     except Exception as e:  # noqa: BLE001
-        return (None, True, str(e))
+        return (None, False, str(e))
+    if "full_minute" not in datasets:
+        return (None, False, f"provider {provider_name} does not configure full_minute data")
+    return (provider, False, None)
 
 
 def fetch_intraday_custom_batch(
@@ -1477,8 +1504,8 @@ def fetch_minute_single(
 ) -> pl.DataFrame:
     """实时拉取单股单日分钟 K(不写入本地)。
 
-    优先使用当前自定义分钟源。仅当 TickFlow 原生单股分钟能力存在时才允许
-    回退 TickFlow; 自定义源增广只授予 batch 能力, 不会误放行该回退路径。
+    优先使用当前自定义分钟源。只有明确选择 TickFlow 且具备原生权限时才请求 TickFlow；
+    已选自定义源缺少能力或请求失败时 fail-closed，不混用来源。
     """
     from datetime import datetime
     # 北京时间窗口必须带时区: naive datetime 会被 .timestamp() 按服务器本地时区解释,
@@ -1486,8 +1513,7 @@ def fetch_minute_single(
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0, tzinfo=CN_TZ)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0, tzinfo=CN_TZ)
 
-    # 自定义数据源分流: 与 sync_minute_batch 一致, 配了自定义分钟源时走 custom provider,
-    # 避免无 TickFlow Pro+ 权限的用户分时图首次打开(本地无数据)时补拉失败返回空。
+    # 按用户当前选择的分钟数据源路由，避免无提示跨源。
     df, fallback = _try_custom_minute(
         [symbol], start_time=start_time, end_time=end_time,
         asset_type=asset_type, freq="1m",
@@ -1665,18 +1691,18 @@ def sync_and_persist_minute(
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     force_full_days=True 时强制回溯 days 自然日 (不增量补, 用于个股补齐历史)。
     """
-    minute_provider = preferences.get_minute_data_provider()
-    # resolver 调用统一走 _resolve_minute_provider, 与 _try_custom_minute 共用异常边界。
-    # resolver 异常时视为非 custom (minute_is_custom=False), 走 capset 检查 →
-    # sync_minute_batch 内 _try_custom_minute 会再次 resolver 异常 → fallback TickFlow。
-    _, fallback, resolve_err = _resolve_minute_provider(minute_provider)
-    minute_is_custom = not fallback
-    if resolve_err is not None:
-        logger.warning("custom minute provider %s resolution failed at sync_and_persist_minute, treating as non-custom: %s",
-                       minute_provider, resolve_err)
+    minute_provider = _selected_minute_provider_name()
+    # 自定义源的能力和请求失败时都 fail-closed；共享能力集可能包含第三方源增补。
     if not symbols:
         return 0
-    if not minute_is_custom and not capset.has(Cap.KLINE_MINUTE_BATCH):
+    _, fallback, resolve_err = _resolve_minute_provider(minute_provider)
+    if resolve_err is not None:
+        logger.warning(
+            "custom minute provider %s resolution failed at sync_and_persist_minute: %s",
+            minute_provider, resolve_err,
+        )
+        return 0
+    if fallback and not capset.has(Cap.KLINE_MINUTE_BATCH):
         return 0
 
     # 迁移:旧版 _normalize_minute 未转换 timestamp→datetime,导致全部 datetime 为 null

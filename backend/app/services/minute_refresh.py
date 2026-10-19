@@ -150,17 +150,21 @@ class MinuteRefreshService:
             return False
 
     def active_provider(self) -> str:
-        """全量分钟生效源名 ("tickflow" 或自定义源名, 偏好 full_minute_data_provider)。"""
+        """全量分钟生效源名；失效的自定义源不得静默伪装成 TickFlow。"""
         try:
-            return preferences.get_full_minute_data_provider()
-        except Exception:  # noqa: BLE001 — 偏好文件异常按 TickFlow 处理
-            return "tickflow"
+            saved = str(preferences.load().get("full_minute_data_provider", "tickflow") or "tickflow").lower()
+            selected = preferences.get_full_minute_data_provider()
+            if saved != "tickflow" and selected == "tickflow":
+                return f"unavailable:{saved}"
+            return selected
+        except Exception:  # noqa: BLE001
+            return "unavailable:unknown"
 
     def _resolve_custom(self) -> tuple[object | None, str]:
         """解析自定义源。返回 (provider_or_None, effective_name):
 
-        - 偏好 tickflow / 源未声明 full_minute 数据集 / 解析异常 → (None, "tickflow")
-          (与 minute 数据集同纪律: 静默降级 TickFlow, 能力门控决定能否真正运行)
+        - 明确偏好 tickflow → (None, "tickflow")
+        - 自定义源失效或缺少 full_minute → (None, "unavailable:<name>")
         - 成功 → (provider, name)
         """
         from app.services import kline_sync
@@ -168,13 +172,17 @@ class MinuteRefreshService:
         name = self.active_provider()
         if name == "tickflow":
             return (None, "tickflow")
-        provider, use_tickflow, err = kline_sync._resolve_full_minute_provider(name)
-        if use_tickflow:
-            if err is not None:
-                logger.warning(
-                    "full_minute provider %s 解析失败, 本轮降级 TickFlow: %s", name, err,
-                )
-            return (None, "tickflow")
+        if name.startswith("unavailable:"):
+            logger.warning("full_minute provider %s unavailable; not falling back to TickFlow",
+                           name.removeprefix("unavailable:"))
+            return (None, name)
+        provider, _use_tickflow, err = kline_sync._resolve_full_minute_provider(name)
+        if err is not None or provider is None:
+            logger.warning(
+                "full_minute provider %s unavailable; not falling back to TickFlow: %s",
+                name, err,
+            )
+            return (None, f"unavailable:{name}")
         return (provider, name)
 
     def _custom_supports_increment(self, provider: object) -> bool:
@@ -183,7 +191,7 @@ class MinuteRefreshService:
 
     def repair_only(self) -> bool:
         """当前生效源只能全天修复轮 (无廉价增量端点) — 节奏下限抬到 60s。"""
-        provider, name = self._resolve_custom()
+        provider, _name = self._resolve_custom()
         return provider is not None and not self._custom_supports_increment(provider)
 
     def _effective_interval(self) -> int:
@@ -282,6 +290,11 @@ class MinuteRefreshService:
 
         t0 = time.perf_counter()
         custom, provider_name = self._resolve_custom()
+        if provider_name.startswith("unavailable:"):
+            self._state.last_error = f"full_minute provider unavailable: {provider_name.removeprefix('unavailable:')}"
+            self._state.last_requests = 0
+            self._state.last_symbols = 0
+            return
         mode = self._select_mode()
         if mode == "increment" and custom is not None and not self._custom_supports_increment(custom):
             # 无廉价增量端点的源: 增量轮退化为修复轮 (全天批量幂等覆盖, 数据不丢)

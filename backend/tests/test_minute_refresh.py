@@ -102,7 +102,7 @@ def test_gate_disabled(tmp_path, monkeypatch):
 
 def test_gate_full_minute_custom_provider_runs(tmp_path, monkeypatch):
     """全量分钟路由到自定义源: 不再让位 — 能力口径统一 (capset 增广后放行)。"""
-    class _P:  # noqa: D401 — fake provider
+    class _P:
         def get_intraday_batch(self, symbols, count=300, asset_type="stock"):
             return pl.DataFrame()
     svc = _svc(tmp_path, monkeypatch, full_minute_provider="myfm", custom=_P())
@@ -369,9 +369,8 @@ def test_custom_provider_latest_missing_forces_full_with_minute_fallback(tmp_pat
     assert svc._effective_interval() == 60
 
 
-def test_custom_provider_unresolved_degrades_to_tickflow(tmp_path, monkeypatch):
-    """路由指向未声明 full_minute 数据集的源 (真实 resolver 判定) → 降级
-    TickFlow 路径, 门控口径不变。"""
+def test_custom_provider_unresolved_fails_closed(tmp_path, monkeypatch):
+    """失效的 full_minute 自定义源不再静默降级并请求 TickFlow。"""
     svc = _svc(tmp_path, monkeypatch, full_minute_provider="not-registered")
     monkeypatch.setattr(
         minute_refresh.MinuteRefreshService, "_today_coverage_lag_minutes",
@@ -388,10 +387,47 @@ def test_custom_provider_unresolved_degrades_to_tickflow(tmp_path, monkeypatch):
         lambda symbols, capset, *, count=300: (modes.append("tf-full"), (_full_df(), 28))[1],
     )
     svc._run_round()
-    assert modes == ["tf-inc"]
+    assert modes == []
     st = svc.status()
-    assert st["provider_effective"] == "tickflow"
-    assert st["last_mode"] == "increment"
+    assert st["provider_effective"] == "unavailable:not-registered"
+    assert "provider unavailable" in st["last_error"]
+    assert st["last_requests"] == 0
+    assert st["last_symbols"] == 0
+
+
+def test_unloaded_full_minute_provider_does_not_fall_back_to_tickflow(tmp_path, monkeypatch):
+    """偏好仍选自定义源但插件卸载后，不能借旧能力快照发 TickFlow 请求。"""
+    svc = _svc(tmp_path, monkeypatch, full_minute_provider="tickflow")
+    preferences.save({"full_minute_data_provider": "missing_src"})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.kline_sync.fetch_intraday_universe_increment",
+        lambda *args, **kwargs: (calls.append("tickflow"), (pl.DataFrame(), 1))[1],
+    )
+    svc._run_round()
+    assert calls == []
+    assert svc.status()["provider_effective"] == "unavailable:missing_src"
+
+
+def test_custom_provider_without_full_minute_dataset_fails_closed(tmp_path, monkeypatch):
+    """已注册但未声明 full_minute 的源不能借共享能力集合请求 TickFlow。"""
+    from app.data_providers import custom as custom_sources
+
+    svc = _svc(tmp_path, monkeypatch, full_minute_provider="other")
+    provider = type("Provider", (), {"config": type("Config", (), {"datasets": {"minute": object()}})()})()
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.kline_sync.fetch_intraday_universe_increment",
+        lambda *args, **kwargs: (calls.append("tickflow"), (pl.DataFrame(), 1))[1],
+    )
+    monkeypatch.setattr(minute_refresh.MinuteRefreshService, "_today_coverage_lag_minutes", lambda self: 0.2)
+
+    svc._run_round()
+
+    assert calls == []
+    assert svc.status()["provider_effective"] == "unavailable:other"
+    assert "provider unavailable" in svc.status()["last_error"]
 
 
 def test_status_reports_gate_reason_when_stopped(tmp_path, monkeypatch):
