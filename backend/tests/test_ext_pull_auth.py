@@ -99,11 +99,42 @@ def test_apply_auth_unknown_type_rejected(monkeypatch) -> None:
         ext_pull._apply_auth("demo", {"type": "digest"}, "https://x.test/d", {})
 
 
+def test_apply_auth_rejects_hub_admin_session_cookie(monkeypatch) -> None:
+    """定时拉取不能用管理后台会话 Cookie: 它会过期, 换机器也无法沿用。"""
+    _seed_key(monkeypatch, "tickflow_hub_access=eyJleHAiOjE3OTI0OTAwMDB9.sig")
+    with pytest.raises(ValueError) as err:
+        ext_pull._apply_auth(
+            "demo", {"type": "header", "header": "Cookie"}, "https://x.test/d", {},
+        )
+    message = str(err.value)
+    assert "会话 Cookie" in message
+    assert "API Key" in message
+
+
+def test_apply_auth_rejects_session_cookie_even_when_mixed(monkeypatch) -> None:
+    _seed_key(monkeypatch, "foo=1; tickflow_hub_access=abc.def; bar=2")
+    with pytest.raises(ValueError):
+        ext_pull._apply_auth(
+            "demo", {"type": "header", "header": "cookie"}, "https://x.test/d", {},
+        )
+
+
+def test_apply_auth_allows_plain_cookie_header_value(monkeypatch) -> None:
+    """非会话 Cookie 的普通 header 凭据不受影响。"""
+    _seed_key(monkeypatch, "sk-12345678")
+    headers: dict[str, str] = {}
+    ext_pull._apply_auth("demo", {"type": "header", "header": "Cookie"}, "https://x.test/d", headers)
+    assert headers["Cookie"] == "sk-12345678"
+
+
 # ---------------------------------------------------------------------------
 # _request_json 共用请求链 (标识头 + 鉴权 + UA 不被覆盖)
 # ---------------------------------------------------------------------------
 
 class _FakeResp:
+    status_code = 200
+    text = ""
+
     def raise_for_status(self) -> None:
         pass
 
@@ -147,6 +178,28 @@ def test_request_json_injects_auth_and_keeps_user_headers(monkeypatch) -> None:
     assert kwargs["headers"]["Authorization"] == "Bearer sk-12345678"
     # 用户显式设置的 User-Agent 优先, 不被标识头覆盖
     assert kwargs["headers"]["User-Agent"] == "my-agent/1.0"
+
+
+def test_request_json_surfaces_auth_rejection_with_actionable_message(monkeypatch) -> None:
+    """401/403 不应只抛裸 HTTP 错误: 要提示改用服务方签发的 API Key。"""
+    _seed_key(monkeypatch, "sk-12345678")
+
+    class _Unauthorized(_FakeResp):
+        status_code = 401
+        text = '{"detail":"access gate required"}'
+
+    class _Client(_FakeClient):
+        async def request(self, method, url, **kwargs):
+            return _Unauthorized()
+
+    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", _Client)
+    pull = PullConfig(url="https://x.test/d", auth={"type": "bearer"})
+
+    with pytest.raises(ValueError) as err:
+        asyncio.run(ext_pull._request_json(pull, "demo"))
+    message = str(err.value)
+    assert "HTTP 401" in message
+    assert "API Key" in message
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +292,73 @@ def test_get_ext_api_key_env_fallback(monkeypatch) -> None:
     monkeypatch.setattr("app.secrets_store.load", lambda: {})
     monkeypatch.setenv("EXT_DEMO_API_KEY", "env-key-123456")
     assert get_ext_api_key("demo") == "env-key-123456"
+
+
+# ---------------------------------------------------------------------------
+# 保存阶段拦截会话 Cookie (配置/Key 两处)
+# ---------------------------------------------------------------------------
+
+def test_configure_pull_rejects_session_cookie_key(tmp_path, monkeypatch) -> None:
+    """保存拉取配置时, 已存的会话 Cookie 凭据必须被拒绝 (不能让坏配置继续跑)。"""
+    from app.api import ext_data as ext_api
+
+    config = ExtConfig(
+        id="demo",
+        label="demo",
+        mode="snapshot",
+        fields=[ExtField("symbol"), ExtField("score", "float")],
+        pull=PullConfig(url="https://x.test/d"),
+    )
+    store = ExtConfigStore(tmp_path)
+    store.upsert(config, keep_strategy_cache=True)
+
+    monkeypatch.setattr(
+        "app.secrets_store.load",
+        lambda: {ext_api_key_field("demo"): "tickflow_hub_access=abc.def"},
+    )
+    monkeypatch.delenv("EXT_DEMO_API_KEY", raising=False)
+
+    monkeypatch.setattr(ext_api, "_store", lambda request: store)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as err:
+        ext_api.configure_pull(
+            request,
+            "demo",
+            PullConfigReq(url="https://x.test/d", auth={"type": "header", "header": "Cookie"}),
+        )
+    assert err.value.status_code == 400
+    assert "API Key" in err.value.detail
+
+
+def test_set_pull_api_key_rejects_session_cookie(tmp_path, monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    from app.api import ext_data as ext_api
+
+    config = ExtConfig(
+        id="demo",
+        label="demo",
+        mode="snapshot",
+        fields=[ExtField("symbol")],
+        pull=PullConfig(url="https://x.test/d", auth={"type": "header", "header": "Cookie"}),
+    )
+    store = ExtConfigStore(tmp_path)
+    store.upsert(config, keep_strategy_cache=True)
+    monkeypatch.setattr(ext_api, "_store", lambda request: store)
+
+    with pytest.raises(HTTPException) as err:
+        ext_api.set_pull_api_key(
+            SimpleNamespace(), "demo",
+            ApiKeyReq(key="tickflow_hub_access=eyJleHAiOjF9.sig"),
+        )
+    assert err.value.status_code == 400
+    assert "会话 Cookie" in err.value.detail

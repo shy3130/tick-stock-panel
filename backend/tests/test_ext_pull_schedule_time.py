@@ -374,3 +374,40 @@ async def test_trading_only_loop_skips_weekend(monkeypatch):
     assert cfg.pull.last_status == "success"
     assert clock["now"].date().isoformat() == "2026-03-09"
     assert clock["now"].hour == 9 and clock["now"].minute == 30
+
+
+def test_interval_sleep_wakes_when_switched_to_daily_at(tmp_path, monkeypatch) -> None:
+    """间隔制睡眠期间切到固定时刻: 必须一分钟内生效, 不能睡满整个间隔。
+
+    回归: 24h 间隔制的旧任务会把新设置的 09:30 调度推迟到第二天。
+    """
+    import asyncio
+
+    from app.services.ext_data import ExtConfig, ExtConfigStore, ExtField, PullConfig
+    from app.services.ext_pull import PullScheduler
+
+    store = ExtConfigStore(tmp_path)
+    store.upsert(ExtConfig(
+        id="demo", label="demo", mode="snapshot",
+        fields=[ExtField("symbol")],
+        pull=PullConfig(url="https://x.test/d", enabled=True, schedule_minutes=1440),
+    ), keep_strategy_cache=True)
+
+    scheduler = PullScheduler()
+    scheduler.start(tmp_path)
+    scheduler._running = True
+    wake = {"n": 0}
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(_seconds):
+        wake["n"] += 1
+        # 第一次分片睡眠后模拟用户改成固定时刻
+        cfg = store.get("demo")
+        cfg.pull.schedule_time = "09:30"
+        cfg.pull.schedule_period = "daily"
+        store.upsert(cfg, keep_strategy_cache=True)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    asyncio.run(scheduler._sleep_interval_reloading("demo", store, 1440 * 60))
+    assert wake["n"] == 1  # 只睡了一个分片就返回, 交回外层重排

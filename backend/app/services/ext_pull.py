@@ -158,6 +158,45 @@ def _with_date_param(url: str, date_param: str | None, day: date, date_format: s
     return f"{url}{sep}{date_param}={_format_date_value(day, date_format)}"
 
 
+# Hub 管理后台的会话 Cookie 名。它是有有效期的浏览器会话(默认 24h),
+# 换机器/换部署即失效, 不能当作定时拉取的长期凭据。
+_HUB_SESSION_COOKIES = frozenset({"tickflow_hub_access"})
+
+
+def _hub_session_cookie_name(header: str, value: str) -> str | None:
+    """返回值里是否携带 Hub 管理后台会话 Cookie; 是则返回 Cookie 名。"""
+    if str(header or "").strip().lower() != "cookie":
+        return None
+    for item in str(value or "").split(";"):
+        name = item.partition("=")[0].strip().lower()
+        if name in _HUB_SESSION_COOKIES:
+            return name
+    return None
+
+
+def session_cookie_rejection(auth: dict | None, key: str = "") -> str | None:
+    """拉取鉴权是否为「管理后台会话」; 是则返回面向用户的拒绝原因。
+
+    服务间定时同步必须是长期凭据。管理后台会话最长 24 小时, 过期后所有拉取
+    都会 401; 换机器或重新部署也无从复用。保存配置、保存 Key 与实际发请求
+    三处都调用本函数, 让这条纪律在 UI 与后台都无法绕过。
+
+    key 为空时无法判断 (Key 可能稍后再填), 返回 None。
+    """
+    if not key:
+        return None
+    header = str((auth or {}).get("header") or "Authorization")
+    session_cookie = _hub_session_cookie_name(header, key)
+    if not session_cookie:
+        return None
+    return (
+        f"拉取鉴权不能使用管理后台会话 Cookie({session_cookie}): 它有有效期, "
+        "过期后定时拉取会全部失败, 换机器或重新部署也无法沿用。"
+        "请改用服务方签发的 API Key(如 X-API-Key / Bearer), "
+        "并在服务方后台把对应数据接口开放给该 Key。"
+    )
+
+
 def _apply_auth(config_id: str, auth: dict | None, url: str, headers: dict[str, str]) -> str:
     """把 secrets_store 里的 API Key 注入出站请求。
 
@@ -190,10 +229,14 @@ def _apply_auth(config_id: str, auth: dict | None, url: str, headers: dict[str, 
         key = get_ext_api_key(config_id)
         if not key:
             raise ValueError(f"已配置 {auth_type} 鉴权但未设置 API Key, 请在拉取设置中填写")
+    header_name = str((auth or {}).get("header") or "Authorization")
+    rejected = session_cookie_rejection(auth, key)
+    if rejected:
+        raise ValueError(rejected)
     if auth_type == "bearer":
-        headers[str(auth.get("header") or "Authorization")] = f"Bearer {key}"
+        headers[header_name] = f"Bearer {key}"
     elif auth_type == "header":
-        headers[str(auth.get("header") or "Authorization")] = key
+        headers[header_name] = key
     elif auth_type == "query":
         name = str(auth.get("param") or "token")
         sep = "&" if "?" in url else "?"
@@ -259,6 +302,14 @@ async def _request_json(
                 kwargs["headers"]["Content-Type"] = "application/json"
 
         resp = await client.request(pull.method.upper(), url, **kwargs)
+        status_code = getattr(resp, "status_code", None)
+        if status_code in (401, 403):
+            # 鉴权失败几乎都是凭据类型/权限不对, 给出可执行提示而不是裸 HTTP 错误。
+            detail = (getattr(resp, "text", "") or "").strip()[:160]
+            raise ValueError(
+                f"鉴权被拒绝 (HTTP {status_code}): {detail or '无响应体'} — "
+                "请确认使用服务方签发的 API Key, 且该 Key 已被授权访问此接口"
+            )
         resp.raise_for_status()
         try:
             return resp.json()
@@ -707,6 +758,26 @@ class PullScheduler:
                 min(_DAILY_POLL_SECONDS, max((nxt - now).total_seconds(), 1.0))
             )
 
+    async def _sleep_interval_reloading(
+        self, config_id: str, store: ExtConfigStore, interval: float,
+    ) -> None:
+        """间隔制睡眠, 但每 60s 重读配置。
+
+        用户把间隔制改成固定时刻 (或改间隔/停用) 时, 旧实现要等整段间隔睡完
+        才生效 —— 24h 间隔意味着新时刻要推迟一天。这里分片睡眠, 让配置改动
+        在一分钟内生效。
+        """
+        remaining = float(interval)
+        while remaining > 0 and self._running:
+            chunk = min(_DAILY_POLL_SECONDS, remaining)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
+            fresh = store.get(config_id)
+            if not fresh or not fresh.pull or not fresh.pull.enabled:
+                return
+            if fresh.pull.schedule_time or max(fresh.pull.schedule_minutes * 60, 60) != interval:
+                return  # 调度形态或间隔变了 → 回外层重读并重新安排
+
     async def _run_loop(self, config: ExtConfig) -> None:
         """单个配置的定时拉取循环。
 
@@ -736,7 +807,7 @@ class PullScheduler:
                     store.upsert(fresh, keep_strategy_cache=True)
                     logger.info("PullScheduler: %s skipped (outside time window)", config.id)
                     interval = max(pull.schedule_minutes * 60, 60)
-                    await asyncio.sleep(interval)
+                    await self._sleep_interval_reloading(config.id, store, interval)
                     continue
 
                 # 先执行一次 (启用即拉取, 让用户立刻看到生效)
@@ -753,7 +824,7 @@ class PullScheduler:
                     ).isoformat()
                     store.upsert(latest, keep_strategy_cache=True)
 
-                await asyncio.sleep(interval)
+                await self._sleep_interval_reloading(config.id, store, interval)
                 if not self._running:
                     break
         except asyncio.CancelledError:

@@ -1023,6 +1023,14 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
             new_auth["key_ref"] = old_auth["key_ref"]
     else:
         new_auth = old_pull.auth if old_pull else None
+    # 会话 Cookie 不能当服务间长期凭据: 保存时就拒绝, 让问题在配置阶段暴露,
+    # 而不是等 24 小时会话过期后定时拉取集体 401。
+    if new_auth:
+        from app.services.ext_pull import session_cookie_rejection
+
+        rejected = session_cookie_rejection(new_auth, get_ext_api_key(config_id))
+        if rejected:
+            raise HTTPException(400, rejected)
     config.pull = PullConfig(
         url=body.url,
         method=body.method,
@@ -1090,6 +1098,11 @@ def set_pull_api_key(request: Request, config_id: str, body: ApiKeyReq):
 
     value = body.key.strip()
     if value:
+        from app.services.ext_pull import session_cookie_rejection
+
+        rejected = session_cookie_rejection(config.pull.auth if config.pull else None, value)
+        if rejected:
+            raise HTTPException(400, rejected)
         secrets_store.save({ext_api_key_field(config_id): value})
     else:
         secrets_store.clear(ext_api_key_field(config_id))
