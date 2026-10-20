@@ -41,6 +41,7 @@ import { QK } from '@/lib/queryKeys'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { AnchorWrap } from '@/lib/useCardFlash'
 import { CAP_LABELS, TIER_RANK, tierRank, tierStyle, TierTag } from '@/lib/capability-labels'
+import { DEFAULT_ROUTING, buildProviderRouting } from '@/lib/provider-routing'
 import { toast } from '@/components/Toast'
 import { DataSourceEditor } from './DataSourceEditor'
 import { TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from './Keys'
@@ -144,16 +145,6 @@ function patchMatrix(
     }
   }
   return { ...matrix, capabilities: caps }
-}
-
-const DEFAULT_ROUTING: Record<ProviderField, string> = {
-  daily_data_provider: 'tickflow',
-  adj_factor_provider: 'tickflow',
-  minute_data_provider: 'tickflow',
-  full_minute_data_provider: 'tickflow',
-  depth5_data_provider: 'tickflow',
-  realtime_data_provider: 'tickflow',
-  financial_data_provider: 'tickflow',
 }
 
 /** 单个能力卡: 当前生效提供方 + 候选切换标签。
@@ -685,18 +676,13 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
       if (name === 'tickflow') {
         return api.updateDataProviders(DEFAULT_ROUTING)
       }
-      const supported = new Set(
-        allItems.find(s => s.name === name)?.datasets ?? []
+      return api.updateDataProviders(
+        buildProviderRouting(
+          name,
+          allItems.find(s => s.name === name)?.datasets ?? [],
+          matrix.data?.capabilities ?? [],
+        ),
       )
-      const pick = (dataset: string) =>
-        supported.has(dataset) ? name : DEFAULT_ROUTING[`${dataset}_data_provider` as ProviderField] ?? 'tickflow'
-      return api.updateDataProviders({
-        daily_data_provider: pick('daily'),
-        adj_factor_provider: pick('adj_factor'),
-        realtime_data_provider: pick('realtime'),
-        minute_data_provider: pick('minute'),
-        financial_data_provider: pick('financial'),
-      })
     },
     onSuccess: (_d, name) => {
       invalidateSources()
