@@ -8,6 +8,7 @@ Starter+ 盘后可用 quotes.get(universes) 顺便补充 name。
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.tickflow.client import get_client
 logger = logging.getLogger(__name__)
 
 _EXCHANGES = ["SH", "SZ", "BJ"]
+_EXCHANGE_RETRIES = 2  # 单交易所失败重试次数; 仍失败则整表不覆盖(见 sync_instruments)
 
 
 def _flatten_instruments(items: list[dict]) -> list[dict]:
@@ -72,27 +74,60 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
     return rows
 
 
+def _fetch_all_exchanges_tickflow() -> tuple[list[dict], list[str]]:
+    """逐交易所拉标的, 单交易所带重试。返回 (flatten 行, 失败交易所列表)。"""
+    tf = get_client()
+    all_rows: list[dict] = []
+    failed: list[str] = []
+    for ex in _EXCHANGES:
+        items: list[dict] | None = None
+        last_err: Exception | None = None
+        for attempt in range(_EXCHANGE_RETRIES + 1):
+            try:
+                items = tf.exchanges.get_instruments(ex, instrument_type="stock")
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if attempt < _EXCHANGE_RETRIES:
+                    time.sleep(3 * (attempt + 1))
+        if items:
+            all_rows.extend(_flatten_instruments(items))
+            logger.info("instruments %s: %d stocks", ex, len(items))
+        else:
+            failed.append(ex)
+            logger.error(
+                "get_instruments(%s) 重试 %d 次仍失败: %s", ex, _EXCHANGE_RETRIES, last_err
+            )
+    return all_rows, failed
+
+
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
-    返回写入的行数。
+    返回写入的行数。fail-closed: 部分交易所失败时保留旧维表不覆盖 —
+    否则一次上游瞬断就让该所全部标的从维表静默消失(2026-10-12 实测:
+    SZ 瞬断一次, SH+BJ 残表覆盖写盘, 财务/管道/实时全链路丢 SZ 半天)。
     """
     all_rows = _fetch_instruments_via_provider()
+    failed_exchanges: list[str] = []
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
-        tf = get_client()
-        all_rows = []
-        for ex in _EXCHANGES:
-            try:
-                items = tf.exchanges.get_instruments(ex, instrument_type="stock")
-                if items:
-                    all_rows.extend(_flatten_instruments(items))
-                    logger.info("instruments %s: %d stocks", ex, len(items))
-            except Exception as e:
-                logger.warning("get_instruments(%s) failed: %s", ex, e)
+        all_rows, failed_exchanges = _fetch_all_exchanges_tickflow()
 
     if not all_rows:
         return 0
+
+    existing = data_dir / "instruments" / "instruments.parquet"
+    if failed_exchanges:
+        if existing.exists():
+            logger.error(
+                "instruments 同步不完整(缺 %s), 保留旧维表不覆盖 — 等下次调度或手动重跑",
+                ",".join(failed_exchanges),
+            )
+            return 0
+        logger.warning(
+            "instruments 首建即遇交易所失败(缺 %s), 降级写入部分数据", ",".join(failed_exchanges)
+        )
 
     df = pl.DataFrame(all_rows)
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
