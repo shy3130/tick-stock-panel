@@ -31,6 +31,10 @@ from app.tickflow.repository import KlineRepository, replace_with_retry
 
 logger = logging.getLogger(__name__)
 
+# 自定义分钟源流式落盘的块大小(标的数): 每块拉完立即 on_segment 写盘,
+# 长任务中断只丢当前块; 与 cnfree 内部 _HIST_SYMBOL_BATCH 同量级。
+_CUSTOM_MINUTE_CHUNK = 50
+
 
 def _log_cap_unavailable(cap_id: str, action: str) -> None:
     """门禁未通过时记一条带生效源的日志。
@@ -1072,20 +1076,37 @@ def sync_minute_batch(
         不进入全局 out → 内存峰值从「全量」降到「单段」。适用于 sync_and_persist_minute。
         不传时 (如 get_minute_batch 的实时补拉) 保持原契约: 累积进 out 末尾一次性返回。
     """
-    df, fallback = _try_custom_minute(
-        symbols, start_time=start_time, end_time=end_time,
-        asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
-    )
-    if not fallback:
-        # 自定义源成功: 遵守与 TickFlow 路径一致的 on_segment 契约。
-        # 传了 on_segment (如 sync_and_persist_minute 流式落盘) → 调 on_segment, 返回空 df;
-        # 未传 on_segment (如 fetch_minute_single 实时补拉) 或空 df → 原样返回 df。
-        df = df if df is not None else pl.DataFrame()
-        if on_segment and not df.is_empty():
-            # 空 df 不调 on_segment, 与 TickFlow 路径 `if seg_out:` (L684) 对称
-            on_segment(df)
+    if on_segment is not None:
+        # 流式落盘(持久化路径, 如 sync_and_persist_minute): 自定义源按块拉取,
+        # 每块立即 on_segment 落盘。原实现整表攒齐后一次落盘, 全市场同步在
+        # 中途重启/异常时全量丢弃(实测 2026-09-30: 4h 进度归零)。
+        # 任一块 fallback → 停止自定义拉取, 落到下方 TickFlow 分段路径(原语义:
+        # 自定义源不可用整体回退); 已落盘块由分区 merge-upsert 幂等去重。
+        chunk_list = list(chunked(symbols, _CUSTOM_MINUTE_CHUNK)) or []
+        any_fallback = False
+        for idx, chunk_syms in enumerate(chunk_list, start=1):
+            sub_df, sub_fallback = _try_custom_minute(
+                chunk_syms, start_time=start_time, end_time=end_time,
+                asset_type=asset_type, freq="1m", on_chunk_done=None,
+            )
+            if sub_fallback:
+                any_fallback = True
+                break
+            if sub_df is not None and not sub_df.is_empty():
+                on_segment(sub_df)
+            if on_chunk_done is not None:
+                on_chunk_done(idx, len(chunk_list), "custom")
+        if not any_fallback:
             return pl.DataFrame()
-        return df
+    else:
+        df, fallback = _try_custom_minute(
+            symbols, start_time=start_time, end_time=end_time,
+            asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
+        )
+        if not fallback:
+            # 自定义源成功: 未传 on_segment (如 fetch_minute_single 实时补拉)
+            # → 原样返回 df。
+            return df if df is not None else pl.DataFrame()
 
     tf = get_client()
 
