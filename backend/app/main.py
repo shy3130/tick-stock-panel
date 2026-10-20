@@ -255,6 +255,21 @@ async def _application_lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("integrity boot check scheduling failed: %s", e)
 
+    # 启动自愈: 上次进程异常退出可能残留 enriched 发布标记 (state=publishing),
+    # 会让所有读写持续报"数据正在发布", 且停止实时行情后没有写入方来接管。
+    # 本进程刚启动、不可能持有活跃发布, 因此可直接判定残留并在锁内恢复。
+    try:
+        from app.enriched_generation import recover_stale_publications
+
+        recovered_publications = recover_stale_publications(store.data_dir)
+        if recovered_publications:
+            logger.warning(
+                "已恢复上次中断的 enriched 发布标记: %s",
+                ", ".join(recovered_publications),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("enriched 发布标记自愈失败 (不影响启动): %s", e)
+
     # 企业微信智能机器人长连接(可选通道, 失败不阻断启动)
     try:
         from app.services.wecom_bot_service import WecomBotService

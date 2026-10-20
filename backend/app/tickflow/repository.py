@@ -2396,8 +2396,16 @@ class KlineRepository:
         if publication is None:
             self._atomic_write_parquet(merged, out)
         else:
-            publication.write_parquet(merged, out)
-            publication.commit()
+            # 写/提交失败必须结束发布会话, 否则一次瞬时失败会把 publishing
+            # 标记挂到心跳超时, 期间所有读写都报"正在发布"。abandon 按是否
+            # 已有分区落盘决定: 未写入 → 恢复 ready; 已写入 → 保持 fail-closed
+            # (磁盘可能已换新内容, 不能沿用旧 generation 放行缓存)。
+            try:
+                publication.write_parquet(merged, out)
+                publication.commit()
+            except BaseException:
+                publication.abandon()
+                raise
 
     def merge_live_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天指定资产日K分区。用于少量自选实时，不覆盖全市场。"""
