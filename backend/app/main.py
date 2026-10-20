@@ -686,22 +686,32 @@ async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> 
     )
 
 # 生产期静态文件(前端 dist)
-_static = Path(settings.static_dir)
-if _static.exists():
-    if (_static / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
+def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
+    """挂载前端构建产物: /assets 走静态服务, 根级文件直出, 其余回退 SPA。
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def spa_fallback(full_path: str):  # noqa: ARG001
-        """所有未匹配路径回退到 index.html — React Router 接管。
+    根级静态文件 (favicon.svg / donate-wechat.jpg 等) 必须原样返回。此前所有
+    未匹配路径都回退 index.html, 浏览器把 HTML 当图标解析失败, Docker 与桌面
+    安装包的浏览器页签因此没有图标。
+    """
+    if (static_dir / "assets").exists():
+        target.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
 
-        index.html 禁止缓存 (Cache-Control: no-store), 确保浏览器每次拿到
-        最新版本引用的 JS/CSS 文件名 (assets 带 hash, 可长缓存)。
-        """
-        index = _static / "index.html"
+    @target.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        # 只直出 dist 根目录文件 (单段路径); index.html 仍走下方 no-store 分支。
+        if full_path and "/" not in full_path and full_path not in (".", ".."):
+            asset = static_dir / full_path
+            if full_path != "index.html" and asset.is_file():
+                return FileResponse(asset)
+        index = static_dir / "index.html"
         if index.exists():
             return FileResponse(
                 index,
                 headers={"Cache-Control": "no-store, must-revalidate"},
             )
         return {"error": "frontend not built"}
+
+
+_static = Path(settings.static_dir)
+if _static.exists():
+    _register_static_routes(app, _static)
