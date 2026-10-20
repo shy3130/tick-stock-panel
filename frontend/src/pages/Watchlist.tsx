@@ -40,10 +40,12 @@ import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
-import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
+import { MiniIntraday, type MiniIntradayYMode } from '@/components/stock-table/MiniIntraday'
+import { boardLimitRate } from '@/lib/price-limit'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, getIntradaySortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import { useAuctionConfig, useAuctionSeries } from '@/lib/intraday-auction'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import {
   type ColumnConfig,
@@ -693,6 +695,9 @@ export function Watchlist() {
   const [intradayChartVisible, setIntradayChartVisible] = useState(() => {
     return storage.watchlistIntraday.get(true)
   })
+  // 分时纵轴模式: adaptive=实际价格区间, limit=按涨跌停带 (持久化, 默认自适应)
+  const [intradayYMode, setIntradayYMode] = useState<MiniIntradayYMode>(() =>
+    storage.watchlistIntradayYMode.get('adaptive') === 'limit' ? 'limit' : 'adaptive')
 
   // 列配置 — 从后端/localStorage 异步加载
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
@@ -779,6 +784,13 @@ export function Watchlist() {
     setIntradayChartVisible(v => {
       const next = !v
       storage.watchlistIntraday.set(next)
+      return next
+    })
+  }, [])
+  const toggleIntradayYMode = useCallback(() => {
+    setIntradayYMode(v => {
+      const next: MiniIntradayYMode = v === 'adaptive' ? 'limit' : 'adaptive'
+      storage.watchlistIntradayYMode.set(next)
       return next
     })
   }, [])
@@ -1281,6 +1293,11 @@ export function Watchlist() {
   })
   const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
 
+  // 分时列集合竞价叠加: 左侧窄栏价格/匹配量/未匹配量 (来自同一张时序扩展表)
+  const auctionCfg = useAuctionConfig(columns)
+  const auctionSymbols = useMemo(() => sortedRows.map(r => r.symbol as string), [sortedRows])
+  const auctionData = useAuctionSeries(auctionCfg, auctionSymbols)
+
   // 切股导航列表: 按列表当前展示顺序 (与 sortedRows 一致, 排序/筛选后行序随之变化)。
   // 弹窗未打开时跳过构建 — sortedRows 随行情 tick 重建, 避免无谓分配。
   const previewNavItems = useMemo(
@@ -1753,6 +1770,22 @@ export function Watchlist() {
                       {intradayChartVisible && intradayAutoRefresh && (
                         <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
                       )}
+                      {/* 纵轴模式切换: 自适应区间 ⇄ 涨跌停带 */}
+                      {intradayChartVisible && (
+                        <button
+                          type="button"
+                          onClick={(event) => { event.stopPropagation(); toggleIntradayYMode() }}
+                          className={`inline-flex items-center justify-center h-5 px-1 rounded text-[10px] whitespace-nowrap transition-colors ${
+                            intradayYMode === 'limit'
+                              ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                              : 'text-muted hover:text-foreground hover:bg-elevated'
+                          }`}
+                          title={intradayYMode === 'limit' ? '纵轴按涨跌停显示 (点击切回自适应)' : '纵轴自适应 (点击按涨跌停显示)'}
+                          aria-label={intradayYMode === 'limit' ? '纵轴按涨跌停' : '纵轴自适应'}
+                        >
+                          {intradayYMode === 'limit' ? '涨跌停' : '自适应'}
+                        </button>
+                      )}
                     </span>
                   )
                 }
@@ -1921,7 +1954,18 @@ export function Watchlist() {
                     <td className="pl-3 pr-2 py-1.5 border-l border-border/30" style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}>
                       <div className="flex items-center justify-center">
                         {intradayChartVisible
-                          ? <MiniIntraday rows={rows} prevClose={r.prev_close} changePct={r.change_pct} width={iw - 4} height={ih} />
+                          ? <MiniIntraday
+                              rows={rows}
+                              prevClose={r.prev_close}
+                              changePct={r.change_pct}
+                              width={iw - 4}
+                              height={ih}
+                              yMode={intradayYMode}
+                              limitRate={r.asset_type === 'etf' || r.asset_type === 'index' ? null : boardLimitRate(r.symbol)}
+                              auction={auctionData[r.symbol] ?? null}
+                              volume={intradayResolved.volume}
+                              auctionWidth={intradayResolved.auctionWidth}
+                            />
                           : <span className="text-[10px] text-muted">分时</span>}
                       </div>
                     </td>

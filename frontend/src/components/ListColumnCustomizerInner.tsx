@@ -21,8 +21,10 @@ import { X, GripVertical, Plus, ChevronDown, ChevronRight, Database, Settings2, 
 import { api } from '@/lib/api'
 import { useQuery } from '@tanstack/react-query'
 import { QK } from '@/lib/queryKeys'
-import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig } from '@/lib/list-columns'
-import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig, AuctionBarWidth } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig, hasAuctionVolumeField, isAuctionActive, AUCTION_WIDTH_RATIOS } from '@/lib/list-columns'
+import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
+import type { MinuteKlineRow } from '@/lib/api'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 export interface ListColumnCustomizerProps {
@@ -111,6 +113,23 @@ function isNumericFieldType(ft?: string): boolean {
 
 /** 模块级空数组常量：extSchema 未加载时用，避免 `?? []` 每次创建新引用导致 useMemo 失效。 */
 const EMPTY_EXT_TABLES: readonly { id: string; label: string; mode: string; columns: { name: string; label: string; type: string }[] }[] = []
+
+/** 分时列「效果预览」固定样例数据 (零网络依赖): 6 根分钟K 围绕昨收 10 波动,
+ *  竞价价格/匹配量/未匹配量各给少量点 — 配置面板据此即时反映当前配置效果 */
+const PREVIEW_ROWS: MinuteKlineRow[] = [
+  { datetime: '2026-10-20 09:31:00', open: 9.96, high: 9.97, low: 9.95, close: 9.96, volume: 320, amount: 3187 },
+  { datetime: '2026-10-20 09:32:00', open: 9.90, high: 9.91, low: 9.89, close: 9.90, volume: 540, amount: 5346 },
+  { datetime: '2026-10-20 09:33:00', open: 9.94, high: 9.95, low: 9.93, close: 9.94, volume: 210, amount: 2077 },
+  { datetime: '2026-10-20 09:34:00', open: 10.02, high: 10.03, low: 10.01, close: 10.02, volume: 760, amount: 7615 },
+  { datetime: '2026-10-20 09:35:00', open: 10.08, high: 10.09, low: 10.07, close: 10.08, volume: 900, amount: 9072 },
+  { datetime: '2026-10-20 09:36:00', open: 10.05, high: 10.06, low: 10.04, close: 10.05, volume: 430, amount: 4321 },
+]
+/** 竞价预览序列: 价格 3 点 (<2 点会退化, 预览需要成线) + 匹配量/未匹配量各 2 点 */
+const PREVIEW_AUCTION = {
+  price: [['09:15:00', 9.92], ['09:20:00', 9.98], ['09:25:00', 10.02]] as [string, number][],
+  match: [['09:15:00', 120], ['09:25:00', 480]] as [string, number][],
+  unmatched: [['09:15:00', 260], ['09:25:00', -180]] as [string, number][],
+}
 
 function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel, extConfig, candleConfig: candlePanel, intradayConfig: intradayPanel, strategiesConfig, showStandaloneToggle, onToggleStandalone }: {
   col: ColumnConfig
@@ -759,7 +778,7 @@ export function ListColumnCustomizerInner({
   const renderIntradayConfig = (col: ColumnConfig) => {
     const cfg = resolveIntradayConfig(col.intradayConfig)
     const numInput = (
-      field: keyof IntradayColumnConfig,
+      field: 'width' | 'height',
       label: string,
     ) => (
       <label key={field} className="flex items-center gap-2 text-xs">
@@ -780,6 +799,50 @@ export function ListColumnCustomizerInner({
         />
       </label>
     )
+
+    // 竞价叠加: 仅「时序 + 配置了时间列」的表可选 (竞价是日内多盘序列,
+    // 每日截面表没有时间轴, 无法画轨迹)。
+    const auction = col.intradayConfig?.auction
+    const updateAuction = (patch: Partial<NonNullable<IntradayColumnConfig['auction']>>) =>
+      updateIntradayConfig(col.id, { auction: { ...auction, ...patch } })
+    // R2 强制联动: 竞价已配量字段 → 副图开关置灰、显示态视为开 (仅影响 UI,
+    // 渲染侧竞价量柱本就不受 volume 开关控制, 存储值不回写)
+    const forced = hasAuctionVolumeField(auction)
+    const multiTables = extTables.filter(t => (t as { time_field?: string | null }).time_field != null)
+    const auctionTable = multiTables.find(t => t.id === auction?.configId)
+    // schema-all 的列类型键是 dtype (api.ts 的 type 标注为历史遗留), 两者都认
+    const numericFields = (auctionTable?.columns ?? []).filter(c =>
+      isNumericFieldType((c as { dtype?: string; type?: string }).dtype ?? (c as { type?: string }).type))
+    const fieldSelect = (
+      label: string,
+      key: 'priceField' | 'matchField' | 'unmatchedField',
+      hint?: string,
+    ) => (
+      <label className="flex items-center gap-2 text-xs">
+        <span className="text-secondary w-16 shrink-0">{label}</span>
+        <select
+          value={auction?.[key] ?? ''}
+          onChange={e => updateAuction({ [key]: e.target.value || undefined })}
+          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+        >
+          <option value="">{hint ?? '不显示'}</option>
+          {numericFields.map(f => (
+            <option key={f.name} value={f.name}>{f.label || f.name}</option>
+          ))}
+        </select>
+      </label>
+    )
+
+    // 预览竞价序列: 按当前字段选择裁剪样例数据 (未启用/未配表/未配价格 → null,
+    // 预览无窄栏; 只配价格 → 窄栏价格线无量带)
+    const previewAuction = isAuctionActive(auction)
+      ? {
+          price: PREVIEW_AUCTION.price,
+          ...(auction?.matchField ? { match: PREVIEW_AUCTION.match } : {}),
+          ...(auction?.unmatchedField ? { unmatched: PREVIEW_AUCTION.unmatched } : {}),
+        }
+      : null
+
     return (
       <motion.div
         initial={{ height: 0, opacity: 0 }}
@@ -794,6 +857,117 @@ export function ListColumnCustomizerInner({
           <div className="text-[10px] text-muted leading-relaxed pt-0.5">
             宽度 60–300 / 高度 32–200，越界自动钳制到边界
           </div>
+
+          {/* 成交量副图 (R1): 分钟量柱独立开关; 竞价配了量字段时强制开启 (R2) */}
+          <div className="border-t border-border/40 pt-2 mt-1 flex items-center justify-between">
+            <div className="text-[10px] text-muted">成交量副图</div>
+            <button
+              type="button"
+              disabled={forced}
+              onClick={() => updateIntradayConfig(col.id, { volume: !cfg.volume })}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                cfg.volume || forced ? 'bg-accent' : 'bg-elevated'
+              }`}
+              aria-pressed={cfg.volume || forced}
+              aria-label="显示成交量副图"
+            >
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                cfg.volume || forced ? 'translate-x-[14px]' : 'translate-x-0.5'
+              }`} />
+            </button>
+          </div>
+          <div className="text-[10px] text-muted leading-relaxed">
+            {forced
+              ? '竞价量柱画在量带内，已配量字段时副图强制开启；清除匹配量/未匹配量字段后可关闭。'
+              : '开启后在价格区下方显示分钟成交量柱（量带有数据时显示）；关闭且无竞价量时保持整幅价格。'}
+          </div>
+
+          <div className="border-t border-border/40 pt-2 mt-1 flex items-center justify-between">
+            <div className="text-[10px] text-muted">集合竞价叠加</div>
+            <button
+              type="button"
+              onClick={() => updateAuction({ enabled: !auction?.enabled })}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${
+                auction?.enabled ? 'bg-accent' : 'bg-elevated'
+              }`}
+              aria-pressed={!!auction?.enabled}
+              aria-label="显示集合竞价窄栏"
+            >
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                auction?.enabled ? 'translate-x-[14px]' : 'translate-x-0.5'
+              }`} />
+            </button>
+          </div>
+          {auction?.enabled && (
+            <>
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-secondary w-16 shrink-0">扩展表</span>
+                <select
+                  value={auction?.configId ?? ''}
+                  onChange={e => {
+                    const next = e.target.value || undefined
+                    // 仅切换表时才清空字段; 选回同一张表不动已有配置
+                    if (next === auction?.configId) return
+                    updateAuction({ configId: next, priceField: undefined, matchField: undefined, unmatchedField: undefined })
+                  }}
+                  className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+                >
+                  <option value="">选择时序扩展表</option>
+                  {multiTables.map(t => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+              </label>
+              {multiTables.length === 0 && (
+                <div className="text-[10px] text-amber-500 leading-relaxed">
+                  暂无可用的日内多盘扩展表 — 需先在「数据 → 扩展数据」创建时序表并配置时间列（如集合竞价）。
+                </div>
+              )}
+              {auction?.configId && (
+                <>
+                  {fieldSelect('价格字段', 'priceField', '选择价格字段')}
+                  {fieldSelect('匹配量', 'matchField')}
+                  {fieldSelect('未匹配量', 'unmatchedField')}
+                  {/* 栏宽三档 (R3): 只改窄栏占宽, 分桶数随宽度自适应 */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-secondary w-16 shrink-0">栏宽</span>
+                    <div className="flex rounded overflow-hidden border border-border">
+                      {([['narrow', '窄'], ['standard', '标准'], ['wide', '宽']] as [AuctionBarWidth, string][]).map(([v, text], i) => (
+                        <button
+                          key={v}
+                          onClick={() => updateAuction({ width: v })}
+                          className={`px-3 py-1 text-xs transition-colors ${i > 0 ? 'border-l border-border' : ''} ${
+                            cfg.auctionWidth === v
+                              ? 'bg-accent/15 text-accent' : 'bg-elevated text-secondary hover:text-foreground'
+                          }`}
+                        >{text}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-muted leading-relaxed">
+                    竞价栏约占总宽 {Math.round(AUCTION_WIDTH_RATIOS[cfg.auctionWidth] * 100)}%，价格与分时共用同一纵轴；配置量字段后竞价量柱画在底部量带。
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* 效果预览 (R4): 固定样例数据渲染真组件, 配置改动即时反映 (所见即所得) */}
+          <div className="border-t border-border/40 pt-2 mt-1">
+            <div className="text-[10px] text-muted mb-1.5">效果预览（示例数据，配置改动即时反映）</div>
+            <div className="rounded bg-base border border-border/60 flex items-center justify-center overflow-hidden">
+              <MiniIntraday
+                rows={PREVIEW_ROWS}
+                prevClose={10}
+                width={Math.min(cfg.width, 260)}
+                height={cfg.height}
+                volume={cfg.volume || forced}
+                auctionWidth={cfg.auctionWidth}
+                auction={previewAuction}
+              />
+            </div>
+          </div>
+
           {col.intradayConfig && (
             <div className="flex justify-end pt-1">
               <button onClick={() => resetIntradayConfig(col.id)} className="text-[10px] text-muted hover:text-foreground transition-colors">

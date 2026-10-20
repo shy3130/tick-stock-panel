@@ -19,6 +19,7 @@ import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { useStrategyPool } from '@/lib/useStrategyPool'
 import { StrategyCard, CardSize, loadCardSize, cardWrapCls } from '@/components/screener/StrategyCard'
 import { ScreenerTable } from '@/components/screener/ScreenerTable'
+import type { MiniIntradayYMode } from '@/components/stock-table/MiniIntraday'
 import { ScreenerFilter as ScreenerFilterType, defaultFilter, filterActive, countActiveFilters, applyFilter, FilterPanel } from '@/components/screener/ScreenerFilter'
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
 import { DefaultStrategyParamsDialog } from '@/components/screener/DefaultStrategyParamsDialog'
@@ -29,6 +30,7 @@ import { CompositeStrategyDialog } from '@/components/screener/CompositeStrategy
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
+import { useAuctionConfig, useAuctionSeries } from '@/lib/intraday-auction'
 import {
   SCREENER_BUILTIN_COLUMNS,
   SCREENER_COLUMN_GROUPS,
@@ -82,6 +84,16 @@ export function Screener() {
     setIntradayChartVisible(v => {
       const next = !v
       storage.screenerIntraday.set(next)
+      return next
+    })
+  }, [])
+  // 分时纵轴模式: adaptive=实际价格区间, limit=按涨跌停带 (持久化)
+  const [intradayYMode, setIntradayYMode] = useState<MiniIntradayYMode>(() =>
+    storage.screenerIntradayYMode.get('adaptive') === 'limit' ? 'limit' : 'adaptive')
+  const toggleIntradayYMode = useCallback(() => {
+    setIntradayYMode(v => {
+      const next: MiniIntradayYMode = v === 'adaptive' ? 'limit' : 'adaptive'
+      storage.screenerIntradayYMode.set(next)
       return next
     })
   }, [])
@@ -650,6 +662,11 @@ export function Screener() {
     placeholderData: prev => prev,
   })
   const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
+
+  // 分时列集合竞价叠加: 左侧窄栏价格/匹配量/未匹配量 (按 asOf 取同日分区)
+  const auctionCfg = useAuctionConfig(columns)
+  const auctionSymbols = useMemo(() => displayRows.map((r: any) => r.symbol as string), [displayRows])
+  const auctionData = useAuctionSeries(auctionCfg, auctionSymbols, asOf)
 
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
@@ -1233,11 +1250,15 @@ export function Screener() {
                     intradayAutoRefresh={intradayRefreshEnabled && realtimeRunning}
                     onRefreshIntraday={() => minuteBatch.refetch()}
                     intradayRefreshing={minuteBatch.isFetching}
+                    intradayYMode={intradayYMode}
+                    onToggleIntradayYMode={toggleIntradayYMode}
+                    assetType={assetType}
                     strategyTagsExpanded={strategyTagsExpanded}
                     onToggleStrategyTags={toggleStrategyTags}
                     sort={sort}
                     onSortToggle={toggle}
                     extSeriesData={extSeriesData}
+                    auctionData={auctionData}
                   />
                 </>
               )}

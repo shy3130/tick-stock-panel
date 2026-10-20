@@ -79,6 +79,12 @@ export const storage = {
   /** 策略结果列表分时图显示状态 */
   screenerIntraday:     kv<boolean>('screener_showIntraday'),
 
+  /** 自选列表分时纵轴模式: adaptive | limit */
+  watchlistIntradayYMode: kv<string>('watchlist_intradayYMode'),
+
+  /** 策略结果列表分时纵轴模式: adaptive | limit */
+  screenerIntradayYMode:  kv<string>('screener_intradayYMode'),
+
   /** 策略结果列表"策略"列标签展开状态 (false=默认收起: 每行首个+计数, 行内可单独展开) */
   screenerStrategyTags: kv<boolean>('screener_strategyTagsExpanded'),
 

@@ -14,7 +14,8 @@ import { getSignals, signalCls } from '@/lib/stock-table'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
-import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
+import { MiniIntraday, type MiniIntradayYMode, type MiniIntradayAuctionSeries } from '@/components/stock-table/MiniIntraday'
+import { boardLimitRate } from '@/lib/price-limit'
 import { StockDataTable, type SortState } from '@/components/stock-table/StockDataTable'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import {
@@ -53,6 +54,12 @@ interface ScreenerTableProps {
   onRefreshIntraday?: () => void
   /** 分时数据正在刷新中 (按钮 loading 态) */
   intradayRefreshing?: boolean
+  /** 分时纵轴模式: adaptive=实际价格区间, limit=按涨跌停带 */
+  intradayYMode?: MiniIntradayYMode
+  /** 表头切换分时纵轴模式 */
+  onToggleIntradayYMode?: () => void
+  /** 当前列表资产类型 (ETF 无统一涨跌停规则, limit 模式退化为自适应) */
+  assetType?: 'stock' | 'etf'
   /** 策略列标签全表展开状态 (false=默认收起: 每行仅显示首个策略+计数) */
   strategyTagsExpanded?: boolean
   /** 表头策略列图标: 切换全表展开/收起 */
@@ -64,6 +71,8 @@ interface ScreenerTableProps {
   activeSymbol?: string | null
   /** 日内多盘扩展列迷你图序列: "configId.field" → symbol → [HH:MM:SS, value][] */
   extSeriesData?: Record<string, Record<string, [string, number][]>>
+  /** 分时列集合竞价叠加数据: symbol → 竞价价格/匹配量/未匹配量点列 */
+  auctionData?: Record<string, MiniIntradayAuctionSeries>
 }
 
 /** 渲染标签数组（含 maxTags 折叠/展开、横竖排列）。策略列与 ext 列共用。
@@ -167,8 +176,9 @@ export function ScreenerTable({
   dailyKChartVisible = true, onToggleDailyKChart,
   minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
   intradayAutoRefresh = false, onRefreshIntraday, intradayRefreshing = false,
+  intradayYMode = 'adaptive', onToggleIntradayYMode, assetType = 'stock',
   strategyTagsExpanded = false, onToggleStrategyTags,
-  sort, onSortToggle, activeSymbol, extSeriesData = {},
+  sort, onSortToggle, activeSymbol, extSeriesData = {}, auctionData = {},
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
@@ -392,7 +402,18 @@ export function ScreenerTable({
           >
             <div className="flex items-center justify-center">
               {intradayChartVisible
-                ? <MiniIntraday rows={rows} prevClose={r.prev_close} changePct={r.change_pct} width={iw - 4} height={ih} />
+                ? <MiniIntraday
+                    rows={rows}
+                    prevClose={r.prev_close}
+                    changePct={r.change_pct}
+                    width={iw - 4}
+                    height={ih}
+                    yMode={intradayYMode}
+                    limitRate={assetType === 'etf' ? null : boardLimitRate(r.symbol)}
+                    auction={auctionData[r.symbol] ?? null}
+                    volume={intradayResolved.volume}
+                    auctionWidth={intradayResolved.auctionWidth}
+                  />
                 : <span className="text-[10px] text-muted">分时</span>}
             </div>
           </td>
@@ -479,6 +500,22 @@ export function ScreenerTable({
               {/* 自动轮询中: 显示旋转图标提示正在实时刷新 */}
               {intradayChartVisible && intradayAutoRefresh && (
                 <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+              )}
+              {/* 纵轴模式切换: 自适应区间 ⇄ 涨跌停带 */}
+              {intradayChartVisible && onToggleIntradayYMode && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); onToggleIntradayYMode() }}
+                  className={`inline-flex items-center justify-center h-5 px-1 rounded text-[10px] whitespace-nowrap transition-colors ${
+                    intradayYMode === 'limit'
+                      ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                      : 'text-muted hover:text-foreground hover:bg-elevated'
+                  }`}
+                  title={intradayYMode === 'limit' ? '纵轴按涨跌停显示 (点击切回自适应)' : '纵轴自适应 (点击按涨跌停显示)'}
+                  aria-label={intradayYMode === 'limit' ? '纵轴按涨跌停' : '纵轴自适应'}
+                >
+                  {intradayYMode === 'limit' ? '涨跌停' : '自适应'}
+                </button>
               )}
             </span>
           )
