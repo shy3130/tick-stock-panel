@@ -170,6 +170,12 @@ export function Screener() {
   // 卡片首屏只读取轻量摘要；明细在点击策略或“全部”时按需加载。
   // 摘要只覆盖日线缓存; 分钟策略命中数来自手动单跑。
   // run_all 渐进式返回后后台仍在算 → 轮询摘要, 算完的策略逐个点亮。
+  //
+  // 后端会用当前实时行情覆盖结果里的价格类字段 (close/change_pct 等), 所以
+  // 交易时段内需要定期重取, 否则列表一直停在首次加载那一刻的涨跌幅, 与详情
+  // 弹窗的实时价对不上。摘要没有价格字段, 仍只在 run_all 未完成时轮询。
+  const quoteStatus = useQuoteStatus()
+  const inTradingSession = quoteStatus.data?.is_trading_hours !== false
   const summaryQuery = useQuery({
     queryKey: QK.screenerCachedSummary,
     queryFn: api.screenerCachedSummary,
@@ -181,6 +187,8 @@ export function Screener() {
     queryKey: QK.screenerCached(asOf, extColumnsParam),
     queryFn: () => api.screenerCached(extColumnsParam || undefined),
     enabled: assetType === 'stock' && tfFilter !== '1m' && showAll,
+    // 交易时段跟随行情轮询; 收盘后价格不再变, 降为 60s 仅兜底数据修正
+    refetchInterval: inTradingSession ? 6_000 : 60_000,
   })
 
   const singleCachedQuery = useQuery({
@@ -191,6 +199,8 @@ export function Screener() {
       && !showAll
       && !!activeStrategy
       && summaryQuery.data?.results[activeStrategy]?.as_of === asOf,
+    // 与 fullCachedQuery 同口径: 列表与详情共享同一份实时覆盖后的价格
+    refetchInterval: inTradingSession ? 6_000 : 60_000,
   })
 
   const dataStatus = useDataStatus({ staleTime: 0 })
@@ -578,7 +588,6 @@ export function Screener() {
   //  - 刷新: minute_intraday_refresh 偏好开启时按用户设定间隔轮询; 否则仅首次加载,
   //    用户可点表头刷新按钮手动更新
   const minuteBatchCap = caps.data?.capabilities?.['kline.minute.batch']?.batch ?? 100
-  const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
   const intradayRefreshEnabled = prefs?.minute_intraday_refresh ?? false
   const intradayRefreshInterval = prefs?.minute_intraday_refresh_interval ?? 6
