@@ -117,6 +117,51 @@ free_port() {
   fi
   ok "端口 $port 已释放"
 }
+# 按本仓库 venv 的绝对路径识别整组后端进程。
+# uvicorn --reload 的监听 socket 由 reloader 父进程创建并传给 server 子进程:
+# 只 kill 监听者会让父进程立刻重生一个新子进程, 旧实例根本没退出 —— 每次重启
+# 就多叠一套常驻 1GB+ 的后端。这里把父、子一起结束。
+# 只处理同一端口的实例: 换端口再起一个 (如临时开 8000 调试) 不该被顺手杀掉。
+kill_repo_backends() {
+  local pattern="$BACKEND_DIR/.venv/bin/python -m uvicorn app.main:app"
+  local pids others=""
+  pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  local to_kill=""
+  local pid cmd
+  for pid in $pids; do
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null || true)
+    if [[ "$cmd" == *"--port $BACKEND_PORT"* ]]; then
+      to_kill="$to_kill $pid"
+    else
+      others="$others $pid"
+    fi
+  done
+  if [ -n "$others" ]; then
+    warn "检测到其他端口上的本项目后端实例 (PID:$others), 未处理。"
+    warn "如需一并结束: kill$others"
+  fi
+  if [ -z "$to_kill" ]; then
+    return 0
+  fi
+  warn "结束本项目同端口后端实例 PID:$(echo "$to_kill" | xargs)"
+  echo "$to_kill" | xargs kill 2>/dev/null || true
+  sleep 1
+  local left
+  left=$(echo "$to_kill" | xargs -n1 sh -c 'kill -0 "$0" 2>/dev/null && echo "$0"' || true)
+  if [ -n "$left" ]; then
+    echo "$left" | xargs kill -9 2>/dev/null || true
+    sleep 1
+  fi
+  return 0
+}
+
+# 先按仓库路径结束整组后端, 再查端口:
+# 反过来的话 free_port 会先杀掉监听者 (reload 的子进程), 父进程随即重生一个,
+# 端口检查看到的又是新进程。
+kill_repo_backends
 free_port backend  "$BACKEND_PORT"
 free_port frontend "$FRONTEND_PORT"
 
@@ -142,12 +187,22 @@ fi
 # ===== 4. 启动 + 日志前缀 =====
 PIDS=()
 
+# 结束整棵子树: 只 kill 子 shell 自己会把 uvicorn/vite 留在原地变成孤儿
+# (实测存在存活数天的残留 vite)。递归先杀后代再杀父进程。
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   echo
   info "关闭服务..."
   for pid in "${PIDS[@]:-}"; do
     if [ -n "$pid" ]; then
-      kill "$pid" 2>/dev/null || true
+      kill_tree "$pid"
     fi
   done
   # 等子进程退出,避免孤儿
