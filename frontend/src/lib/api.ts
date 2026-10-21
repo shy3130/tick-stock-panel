@@ -2149,6 +2149,8 @@ export interface Preferences {
   review_schedule: { enabled: boolean; hour: number; minute: number }
   review_push_channels: string[]
   review_push_mode?: 'auto' | 'manual'
+  /** 用户自定义复盘系统提示词；空串 = 使用内置默认模板 */
+  market_recap_system_prompt?: string
   sse_refresh_pages: Record<string, boolean>
   strategy_monitor_enabled: boolean
   strategy_monitor_ids: string[]
@@ -2692,6 +2694,15 @@ export const api = {
     request<{ review_push_channels: string[]; review_push_mode: 'auto' | 'manual' }>('/api/settings/preferences/review-push', {
       method: 'PUT',
       body: JSON.stringify({ channels, mode: mode ?? null }),
+    }),
+  /** 复盘系统提示词: 自定义值 + 内置默认全文(按需拉取, 供「填入默认模板」) */
+  getMarketRecapPrompt: () =>
+    request<{ custom: string; default: string; customized: boolean }>('/api/settings/preferences/market-recap-prompt'),
+  /** 保存自定义复盘系统提示词; 空串 = 恢复内置默认模板 */
+  updateMarketRecapPrompt: (prompt: string) =>
+    request<{ custom: string; customized: boolean }>('/api/settings/preferences/market-recap-prompt', {
+      method: 'PUT',
+      body: JSON.stringify({ prompt }),
     }),
   updateDepthPollingInterval: (interval: number) =>
     request<{ depth_polling_interval: number }>('/api/settings/preferences/depth-polling-interval', {

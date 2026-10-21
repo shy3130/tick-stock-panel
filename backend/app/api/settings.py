@@ -699,6 +699,7 @@ def get_preferences() -> dict:
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
         "review_push_mode": preferences.get_review_push_mode(),
+        "market_recap_system_prompt": preferences.get_market_recap_system_prompt(),
         **preferences.get_mining_schedule(),
     }
 
@@ -2142,6 +2143,35 @@ def update_review_push(req: ReviewPushIn) -> dict:
     if req.mode is not None:
         mode = preferences.set_review_push_mode(req.mode)
     return {"review_push_channels": saved, "review_push_mode": mode}
+
+
+class MarketRecapPromptIn(BaseModel):
+    prompt: str  # 自定义系统提示词全文; 空串 = 恢复内置默认模板
+
+
+@router.get("/preferences/market-recap-prompt")
+def get_market_recap_prompt() -> dict:
+    """复盘系统提示词: 自定义值 + 内置默认全文。
+
+    默认全文单独按需拉取 (约 2.4k 字符), 不塞进 GET /preferences 大 dict。
+    """
+    from app.services import preferences
+    from app.services.market_recap import _SYSTEM_PROMPT
+
+    custom = preferences.get_market_recap_system_prompt()
+    return {"custom": custom, "default": _SYSTEM_PROMPT, "customized": bool(custom)}
+
+
+@router.put("/preferences/market-recap-prompt")
+def update_market_recap_prompt(req: MarketRecapPromptIn) -> dict:
+    """保存自定义复盘系统提示词; 空串恢复默认模板。超长返回 400。"""
+    from app.services import preferences
+
+    try:
+        saved = preferences.set_market_recap_system_prompt(req.prompt)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"custom": saved, "customized": bool(saved)}
 
 
 # ================================================================

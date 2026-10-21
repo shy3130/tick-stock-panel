@@ -162,6 +162,30 @@ export function ReviewPage() {
     onError: () => { /* request() 已 toast */ },
   })
 
+  // ===== 自定义复盘提示词 =====
+  // 折叠区展开时才拉取(自定义值 + 默认全文); 草稿 null=未编辑, 跟随服务端值
+  const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const promptQuery = useQuery({
+    queryKey: ['market-recap-prompt'],
+    queryFn: api.getMarketRecapPrompt,
+    enabled: showPromptEditor,
+    staleTime: 30_000,
+  })
+  const [promptDraft, setPromptDraft] = useState<string | null>(null)
+  useEffect(() => { setPromptDraft(null) }, [promptQuery.data])
+  const promptCustomized = !!promptQuery.data?.customized
+  const promptText = promptDraft ?? promptQuery.data?.custom ?? ''
+  const promptMut = useMutation({
+    mutationFn: (prompt: string) => api.updateMarketRecapPrompt(prompt),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: ['market-recap-prompt'] })
+      setPromptDraft(null)
+      toast(vars.trim() ? '已保存复盘提示词' : '已恢复默认提示词', 'success')
+    },
+    onError: () => { /* request() 已 toast */ },
+  })
+
   // 自动滚动到报告底部(streaming 时)
   useEffect(() => {
     if (phase === 'streaming') {
@@ -581,6 +605,72 @@ export function ReviewPage() {
                     </Link>
                   )}
                 </p>
+              </div>
+
+              {/* 自定义复盘提示词(折叠区, 展开/保存/恢复默认/填入默认模板) */}
+              <div className="mt-3 rounded-btn bg-elevated/40 px-3 py-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowPromptEditor(v => !v)}
+                  className="flex w-full items-center justify-between"
+                >
+                  <span className="flex items-center gap-1.5 text-xs text-foreground">
+                    <Wand2 className="h-3.5 w-3.5 text-accent" />
+                    自定义复盘提示词
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className={cn('text-[9px]', promptCustomized ? 'text-accent' : 'text-muted/70')}>
+                      {promptCustomized ? '已自定义' : '默认模板'}
+                    </span>
+                    {showPromptEditor
+                      ? <ChevronUp className="h-3.5 w-3.5 text-muted" />
+                      : <ChevronDown className="h-3.5 w-3.5 text-muted" />}
+                  </span>
+                </button>
+
+                {showPromptEditor && (
+                  <div className="mt-2.5">
+                    <textarea
+                      value={promptText}
+                      onChange={e => setPromptDraft(e.target.value)}
+                      spellCheck={false}
+                      placeholder="留空使用内置默认提示词;也可点下方「填入默认模板」后在其基础上修改"
+                      className="h-44 w-full resize-y rounded-btn bg-base border border-border p-2.5 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-muted/60 focus:border-accent/50"
+                    />
+                    <div className="mt-1.5 flex items-center justify-between">
+                      <span className="text-[9px] text-muted/70">
+                        {promptText.length.toLocaleString()} / 32,000 字符
+                        {promptCustomized && ' · 自定义后不再跟随版本默认模板更新'}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={promptQuery.isLoading || !promptQuery.data}
+                          onClick={() => setPromptDraft(promptQuery.data?.default ?? '')}
+                          className="rounded-btn bg-base px-2 py-1 text-[10px] text-secondary border border-border/60 transition-colors hover:text-foreground disabled:opacity-50"
+                        >
+                          填入默认模板
+                        </button>
+                        <button
+                          type="button"
+                          disabled={promptMut.isPending || !promptCustomized}
+                          onClick={() => promptMut.mutate('')}
+                          className="rounded-btn bg-base px-2 py-1 text-[10px] text-secondary border border-border/60 transition-colors hover:text-foreground disabled:opacity-50"
+                        >
+                          恢复默认
+                        </button>
+                        <button
+                          type="button"
+                          disabled={promptMut.isPending || promptQuery.isLoading}
+                          onClick={() => promptMut.mutate(promptText)}
+                          className="rounded-btn bg-accent px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
+                        >
+                          {promptMut.isPending ? '保存中…' : '保存'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {!draft.enabled && (

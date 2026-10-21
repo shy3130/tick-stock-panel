@@ -653,6 +653,37 @@ def set_review_schedule(enabled: bool, hour: int, minute: int) -> dict:
     return {"enabled": bool(enabled), "hour": h, "minute": m}
 
 
+# 复盘系统提示词长度上限: 默认模板约 2.4k 字符, 留足自定义余量同时防止误存超长文本
+MARKET_RECAP_PROMPT_MAX_CHARS = 32_000
+
+
+def get_market_recap_system_prompt() -> str:
+    """用户自定义的复盘系统提示词。空串 = 未自定义 (market_recap 回退内置默认模板)。"""
+    v = load().get("market_recap_system_prompt")
+    return v.strip() if isinstance(v, str) else ""
+
+
+def set_market_recap_system_prompt(text: str | None) -> str:
+    """保存自定义复盘系统提示词。空串/None = 恢复默认模板 (删除该键)。
+
+    超过 MARKET_RECAP_PROMPT_MAX_CHARS 字符时抛 ValueError, 由 API 层转 400。
+    """
+    cleaned = text.strip() if isinstance(text, str) else ""
+    if not cleaned:
+        with _SAVE_LOCK:
+            current = load()
+            current.pop("market_recap_system_prompt", None)
+            atomic_write_text(_path(), json.dumps(current, indent=2, ensure_ascii=False))
+            _invalidate_cache()
+        return ""
+    if len(cleaned) > MARKET_RECAP_PROMPT_MAX_CHARS:
+        raise ValueError(
+            f"复盘提示词过长 ({len(cleaned)} > {MARKET_RECAP_PROMPT_MAX_CHARS} 字符)"
+        )
+    save({"market_recap_system_prompt": cleaned})
+    return cleaned
+
+
 MINING_BUDGET_PROFILES = frozenset({"balanced", "strict"})
 
 

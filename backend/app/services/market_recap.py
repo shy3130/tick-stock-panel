@@ -93,6 +93,18 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线研究经验的市场�
 现在请基于下方数据进行复盘。"""
 
 
+def effective_system_prompt() -> str:
+    """实际下发给 LLM 的系统提示词: 用户自定义优先, 空/未配置回退内置默认模板。
+
+    读取走 preferences 的 mtime 缓存, 每次复盘调用一次, 开销可忽略。
+    自定义值是保存时刻的快照 —— 后续版本升级默认模板不会自动同步到已自定义用户
+    (设置页 UI 有提示); 脏值由 setter 层拦截, 这里只做空值回退双保险。
+    """
+    from app.services import preferences
+
+    return preferences.get_market_recap_system_prompt() or _SYSTEM_PROMPT
+
+
 # ================================================================
 # 用户消息构建(精简切片,控制 token)
 # ================================================================
@@ -330,7 +342,7 @@ async def recap_market_stream(
         got_content = False
         async for delta in stream_ai_text(
             [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": effective_system_prompt()},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.5,
