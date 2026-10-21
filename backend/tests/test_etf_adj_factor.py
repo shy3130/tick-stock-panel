@@ -79,6 +79,9 @@ def test_etf_incremental_daily_reapplies_adj_to_history(tmp_path, monkeypatch):
         "sync_daily_batch",
         lambda *a, **k: _bar(NEW, NEW_RAW),
     )
+    # 钉死日K路由为 tickflow: 本测试专测 TickFlow 分支, 不得被本机 preferences.json
+    # 里配置的自定义日K源影响 (#502 后指数/ETF 同步路由跟随该偏好)。
+    monkeypatch.setattr(index_sync.preferences, "get_daily_data_provider", lambda: "tickflow")
     monkeypatch.setattr(index_sync.preferences, "get_index_daily_batch_size", lambda: 50)
 
     written = index_sync.sync_and_persist_etf_daily(
