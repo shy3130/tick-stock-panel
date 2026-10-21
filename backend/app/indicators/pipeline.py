@@ -1846,6 +1846,11 @@ def _run_pipeline_impl(data_dir: Path | None = None,
 
         # 全量模式: 日期覆盖校验 → 按日期分块流式合并 → 逐分区原子替换
         if not symbols and staging_files:
+            daily_dates = {
+                p.name.removeprefix("date=")
+                for p in daily_dir.glob("date=*")
+                if p.is_dir()
+            }
             existing_dates = {
                 p.name.removeprefix("date=")
                 for p in base.glob("date=*")
@@ -1859,7 +1864,19 @@ def _run_pipeline_impl(data_dir: Path | None = None,
                 ds.isoformat() if hasattr(ds, "isoformat") else str(ds)
                 for ds in unique_dates
             }
-            missing_dates = existing_dates - rebuilt_dates
+            # 孤儿分区 = enriched 有而日K已无 (清空日K重拉/手动删目录等历史操作残留):
+            # 重建以日K为源, 永远不可能覆盖它们; 若仍按「必须覆盖全部分区」校验,
+            # 「发布被中断 → 强制全量重建」会与孤儿分区互相锁死, 同步永久失败。
+            # 合并落盘只重写重建范围内的分区、不删旧目录, 孤儿保留原地 — 告警放行,
+            # 覆盖校验只针对日K中仍存在的日期 (防重建读漏日K的真实保护场景不变)。
+            orphan_dates = existing_dates - daily_dates
+            if orphan_dates:
+                sample = ", ".join(sorted(orphan_dates)[:5])
+                logger.warning(
+                    "enriched 存在 %d 个日K已不存在的孤儿分区(保留不动): %s",
+                    len(orphan_dates), sample,
+                )
+            missing_dates = (existing_dates & daily_dates) - rebuilt_dates
             if missing_dates:
                 sample = ", ".join(sorted(missing_dates)[:5])
                 raise RuntimeError(f"全量重建结果缺少已有日期分区,拒绝覆盖: {sample}")

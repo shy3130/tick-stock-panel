@@ -34,6 +34,17 @@ def _write_existing(data_dir, ds: str, close: float) -> None:
     }).write_parquet(out)
 
 
+def _write_daily_empty(data_dir, ds: str) -> None:
+    """0 行日K分区: 目录在 (glob 可见) 但重建读不到任何行 — 构造「重建读漏」场景。"""
+    out = data_dir / "kline_daily" / f"date={ds}" / "part.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(schema={
+        "symbol": pl.String, "date": pl.Date,
+        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64,
+        "close": pl.Float64, "volume": pl.Float64, "amount": pl.Float64,
+    }).write_parquet(out)
+
+
 def _fake_compute_enriched(raw: pl.DataFrame, **_kwargs) -> pl.DataFrame:
     return raw.with_columns(
         pl.col("close").alias("raw_close"),
@@ -65,8 +76,37 @@ def test_full_rebuild_overwrites_existing_partitions_without_deleting_base(tmp_p
     )["close"].to_list() == [15.0]
 
 
-def test_full_rebuild_rejects_missing_existing_dates_before_writing(tmp_path, monkeypatch):
+def test_full_rebuild_tolerates_orphan_partitions_absent_from_daily(tmp_path, monkeypatch):
+    """孤儿分区 (enriched 有、日K已无): 重建告警放行, 孤儿分区原地保留不被删。
+
+    现网案例: 用户清空日K重拉 (滑动一年窗口) 后, enriched 仍留着窗口外的旧分区;
+    旧的「必须覆盖全部分区」校验会让强制全量重建永久失败 (拒绝覆盖: 2025-10-13..)。
+    """
+    _write_daily(tmp_path, "2026-07-14", 14.0)
     _write_daily(tmp_path, "2026-07-15", 15.0)
+    _write_existing(tmp_path, "2026-07-13", 13.0)  # 孤儿: 日K已无此日期
+    _write_existing(tmp_path, "2026-07-15", 1.0)
+    monkeypatch.setattr(pipeline, "compute_enriched", _fake_compute_enriched)
+
+    written = pipeline.run_pipeline(data_dir=tmp_path)
+
+    assert written == 2
+    # 孤儿分区原样保留 (合并只重写重建范围内的分区, 不删旧目录)
+    assert pl.read_parquet(
+        tmp_path / "kline_daily_enriched" / "date=2026-07-13" / "part.parquet"
+    )["close"].to_list() == [13.0]
+    assert pl.read_parquet(
+        tmp_path / "kline_daily_enriched" / "date=2026-07-15" / "part.parquet"
+    )["close"].to_list() == [15.0]
+
+
+def test_full_rebuild_rejects_missing_existing_dates_before_writing(tmp_path, monkeypatch):
+    """真实保护场景不回退: 日K里仍存在、enriched 已有的日期, 重建结果缺了 → 拒绝。
+
+    用 0 行日K分区构造「重建读漏」: 目录在 (校验的日K日期集可见) 但暂存无该日行,
+    若放行会拿缺日的重建结果覆盖全量数据。"""
+    _write_daily(tmp_path, "2026-07-15", 15.0)
+    _write_daily_empty(tmp_path, "2026-07-14")  # 日K在, 但重建读不到任何行
     _write_existing(tmp_path, "2026-07-14", 14.0)
     _write_existing(tmp_path, "2026-07-15", 1.0)
     monkeypatch.setattr(pipeline, "compute_enriched", _fake_compute_enriched)
