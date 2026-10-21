@@ -38,15 +38,10 @@ jobs:
     outputs:
       matrix: ${{ steps.filter.outputs.matrix }}
       ver: ${{ steps.filter.outputs.ver }}
-      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - name: 检出代码
-        # 版本一致性校验读 frontend/package.json; 生成更新说明需要 tag 区间内的
-        # git log, 故全量检出并带 tag (浅检出拿不到上一版本区间)
+        # 仅为校验版本一致性 (读 frontend/package.json), 浅检出足够
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
 
       - id: filter
         run: |
@@ -86,97 +81,11 @@ jobs:
                       break
               else:
                   raise SystemExit(f'未知产物后缀: {name}')
-              print('matrix=' + json.dumps({'include': selected}))
-              with open('$GITHUB_OUTPUT', 'a') as f:
-                  f.write('matrix=' + json.dumps({'include': selected}) + '\n')
-                  f.write('ver=' + ver + '\n')
-              "
-
-      # 生成「本次更新」说明 (发布页正文), 两级: AI 总结 → 约定式提交归类兜底。
-      # 设计约束: 总结要精简 —— 每条一句话; 兜底同样一行一条 (提交主题本身即
-      # 一句话), 保证发布页任何情况下 (无 key / API 失败) 都有更新说明。
-      - id: notes
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          REQ_VER: ${{ github.event.inputs.version }}
-        run: |
-          set -e
-          # 上一版本 tag: 版本倒序里第一个不等于本次输入的 tag (重发同版本也成立)
-          PREV_TAG=$(git tag --sort=-v:refname | awk -v cur="$REQ_VER" '$0 != cur' | head -1)
-          if [ -n "$PREV_TAG" ]; then
-            LOG=$(git log --no-merges --pretty=format:'%s' "$PREV_TAG"..HEAD)
-          else
-            LOG=$(git log --no-merges -20 --pretty=format:'%s')
-          fi
-          export LOG
-
-          NOTES=""
-          if [ -n "$GLM_API_KEY" ]; then
-            # AI 总结 (glm-4-flash, bigmodel 兼容端点): 每条一句话、合并同类、
-            # 用户视角。任何失败静默 → 走兜底, 不阻塞发版。
-            BODY=$(LOG="$LOG" python3 - <<'PY'
-          import json, os
-          print(json.dumps({
-              "model": "glm-4-flash",
-              "temperature": 0.3,
-              "messages": [
-                  {"role": "system", "content": (
-                      "你是发版说明撰稿人。根据提交清单写面向用户的中文更新说明。"
-                      "要求: 每条一句话且精简(30字内); 只写用户可感知的变化; "
-                      "合并同类提交; 最多6条; 直接输出 markdown 无序列表"
-                      "(- 开头, 每行一条), 不要标题、代码块或任何解释。")},
-                  {"role": "user", "content": "提交清单:\n" + os.environ["LOG"]},
-              ],
-          }, ensure_ascii=False))
-          PY
-          )
-            NOTES=$(curl -sS --max-time 60 https://open.bigmodel.cn/api/paas/v4/chat/completions \
-              -H "Authorization: Bearer $GLM_API_KEY" \
-              -H 'Content-Type: application/json' \
-              -d "$BODY" \
-              | python3 -c 'import json,sys
-          try:
-              d = json.load(sys.stdin)
-              print(d["choices"][0]["message"]["content"].strip())
-          except Exception:
-              pass' || true)
-            # 剥掉模型偶发的 ```markdown 围栏与空行; 结果为空则交给兜底
-            NOTES=$(printf '%s\n' "$NOTES" \
-              | sed -e 's/^```[a-zA-Z]*$//' -e '/^```$/d' -e '/^[[:space:]]*$/d')
-          fi
-
-          if [ -z "$NOTES" ]; then
-            # 兜底: 约定式提交归类 — 剔除噪声类型(chore/ci/build/test/docs)与
-            # 版本号提交, 其余每条=提交主题(一句话); fix→修复 feat→新增
-            NOTES=$(LOG="$LOG" python3 - <<'PY'
-          import os, re
-          lines = [l.strip() for l in os.environ.get("LOG", "").splitlines() if l.strip()]
-          ver_bump = re.compile(r"^chore\s*:\s*v?\d+(\.\d+)+", re.I)
-          noise = re.compile(r"^(chore|ci|build|test|docs)(\([^)]*\))?!?:", re.I)
-          conv = re.compile(r"^(\w+)(\([^)]*\))?!?:\s*(.+)$")
-          groups = {"修复": [], "新增": [], "其他": []}
-          for l in lines:
-              if ver_bump.match(l) or noise.match(l):
-                  continue
-              m = conv.match(l)
-              if not m:
-                  continue
-              typ, msg = m.group(1).lower(), m.group(3)
-              kind = "新增" if typ.startswith("feat") else "修复" if typ.startswith(("fix", "perf")) else "其他"
-              groups[kind].append(msg if kind != "其他" else f"{typ}: {msg}")
-          out = [f"- {m}" for kind in ("修复", "新增", "其他") for m in groups[kind]]
-          print("\n".join(out) if out else "- 常规维护与稳定性优化")
-          PY
-          )
-          fi
-
-          {
-            echo 'notes<<NOTES_EOF'
-            printf '%s\n' "$NOTES"
-            echo 'NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
-          echo "---- 更新说明预览 ----"
-          printf '%s\n' "$NOTES"
+          print('matrix=' + json.dumps({'include': selected}))
+          with open('$GITHUB_OUTPUT', 'a') as f:
+              f.write('matrix=' + json.dumps({'include': selected}) + '\n')
+              f.write('ver=' + ver + '\n')
+          "
 
   # 第二步: 各平台并行构建
   build:
@@ -334,10 +243,6 @@ jobs:
           generate_release_notes: true   # 自动从 commit 生成 changelog
           body: |
             ## 桌面客户端 ${{ github.event.inputs.version }}
-
-            ### 🔧 本次更新
-
-            ${{ needs.prepare.outputs.notes }}
 
             ### ⬇️ 下载
 
