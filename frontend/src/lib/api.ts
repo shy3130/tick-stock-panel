@@ -3491,6 +3491,39 @@ export const api = {
   extPagesDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/ext-pages/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // ===== 源码导入: .tsx → 后端 esbuild 编译+契约适配 → 标准页面插件 =====
+  // 编译可能耗时数秒 (全依赖自包含打包), 走计算型超时; 仅源码/桌面部署可用 (409)
+  extPagesImportSource: (file: File, id?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (id) fd.append('id', id)
+    return request<RuntimePagePack>('/api/ext-pages/import-source', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
+    })
+  },
+
+  extPagesImportFromProject: (namespace: string) =>
+    request<RuntimePagePack>('/api/ext-pages/import-source/from-project', {
+      method: 'POST',
+      body: JSON.stringify({ namespace }),
+      timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
+    }),
+
+  extPagesSourceNamespaces: () =>
+    request<string[]>('/api/ext-pages/import-source/namespaces'),
+
+  // ===== 页面管理 — 源码扩展页删除 =====
+  // 物理删除 frontend/src/custom/<ns>/; 后端先备份 zip 到 data/backups/pages/ 再删,
+  // 返回备份文件名。仅源码部署可用 (Docker/桌面产物部署后端 409)。
+  pageAdminDeleteSourceExtension: (namespace: string) =>
+    request<{ deleted: string; backup: string }>(`/api/pages-admin/source-extensions/${encodeURIComponent(namespace)}`, { method: 'DELETE' }),
+
+  // 备份下载走浏览器原生下载 (同源 /api, dev 由 Vite 代理), 存到用户下载文件夹
+  pageAdminBackupUrl: (filename: string) =>
+    `/api/pages-admin/backups/${encodeURIComponent(filename)}`,
+
   analysisMenu: (id: string) =>
     request<AnalysisMenu>(`/api/analysis-menus/${encodeURIComponent(id)}`),
 
@@ -4595,7 +4628,9 @@ export interface AnalysisMenu {
   label: string
   icon: string
   data_source: string
-  template: 'dimension_rank' | 'ranking' | 'table'
+  template: 'dimension_rank' | 'ranking' | 'table' | 'url'
+  /** url 嵌入型模板: 内嵌的 http(s) 地址 (仅 template='url' 有值) */
+  url?: string | null
   dimension_field?: string | null
   rank_field?: string | null
   group_columns: AnalysisColumn[]

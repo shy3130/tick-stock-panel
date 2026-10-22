@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.services.fs_utils import atomic_write_text
 
 router = APIRouter(prefix="/api/analysis-menus", tags=["analysis-menus"])
+
+# url 嵌入型页面可指向的地址上限, 与前端 dashboard/layout.ts sanitizeExtUrl 同限
+_MAX_EMBED_URL_LEN = 500
 
 
 class AnalysisColumn(BaseModel):
@@ -31,12 +34,30 @@ class DefaultSort(BaseModel):
     order: Literal["asc", "desc"] = "desc"
 
 
+def _validate_template_binding(model: BaseModel) -> None:
+    """template 与 data_source / url 的绑定校验, AnalysisMenu 与 Upsert 共用。
+
+    - url 嵌入型: 只需合法 http(s) 地址, 不绑扩展数据源;
+    - 数据型三种模板: data_source 仍必填非空 (保持既有不变量, 旧数据不受影响)。
+    """
+    url = getattr(model, "url", None)
+    if model.template == "url":  # type: ignore[attr-defined]
+        if not url or not str(url).startswith(("http://", "https://")):
+            raise ValueError("url 模板必须提供 http(s) 地址")
+        if len(str(url)) > _MAX_EMBED_URL_LEN:
+            raise ValueError(f"url 长度不得超过 {_MAX_EMBED_URL_LEN}")
+    elif not getattr(model, "data_source", ""):
+        raise ValueError(f"{model.template} 模板必须配置扩展数据源")
+    return model  # mode="after" 校验器的返回值会替换模型, 必须回传
+
+
 class AnalysisMenu(BaseModel):
     id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
     label: str = Field(..., min_length=1, max_length=64)
     icon: str = "chart"
-    data_source: str = Field(..., min_length=1)
-    template: Literal["dimension_rank", "ranking", "table"] = "dimension_rank"
+    data_source: str = ""
+    template: Literal["dimension_rank", "ranking", "table", "url"] = "dimension_rank"
+    url: str | None = None
     dimension_field: str | None = None
     rank_field: str | None = None
     group_columns: list[AnalysisColumn] = Field(default_factory=list)
@@ -48,12 +69,15 @@ class AnalysisMenu(BaseModel):
     updated_at: str | None = None
     builtin: bool = False
 
+    _binding = model_validator(mode="after")(_validate_template_binding)
+
 
 class UpsertAnalysisMenu(BaseModel):
     label: str = Field(..., min_length=1, max_length=64)
     icon: str = "chart"
-    data_source: str = Field(..., min_length=1)
-    template: Literal["dimension_rank", "ranking", "table"] = "dimension_rank"
+    data_source: str = ""
+    template: Literal["dimension_rank", "ranking", "table", "url"] = "dimension_rank"
+    url: str | None = None
     dimension_field: str | None = None
     rank_field: str | None = None
     group_columns: list[AnalysisColumn] = Field(default_factory=list)
@@ -61,6 +85,8 @@ class UpsertAnalysisMenu(BaseModel):
     default_sort: DefaultSort | None = None
     visible: bool = True
     order: int = 0
+
+    _binding = model_validator(mode="after")(_validate_template_binding)
 
 
 class ReorderMenusReq(BaseModel):

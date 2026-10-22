@@ -80,6 +80,7 @@ export const QK = {
   analysisMenus:        ['analysis-menus'] as const,
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
   extPages:             ['ext-pages'] as const,
+  extPagesSourceNamespaces: ['ext-pages', 'source-namespaces'] as const,
 
   // Kline
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>

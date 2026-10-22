@@ -9,7 +9,7 @@
  */
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Package, Trash2, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Package, Trash2, Upload, AlertTriangle, CheckCircle2, FileCode, FolderDown } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
@@ -33,6 +33,11 @@ export function SettingsPagePacksPanel() {
   const [idInput, setIdInput] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [busyImport, setBusyImport] = useState(false)
+  const [importNs, setImportNs] = useState('')
+  const importFileRef = useRef<HTMLInputElement>(null)
+  // 本项目可导入的源码扩展清单; Docker/产物部署返回空数组 (无前端源码树)
+  const sourceNs = useQuery({ queryKey: QK.extPagesSourceNamespaces, queryFn: api.extPagesSourceNamespaces })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: QK.extPages })
   const enabledMut = useMutation({
@@ -44,6 +49,22 @@ export function SettingsPagePacksPanel() {
     onSuccess: invalidate,
   })
 
+  /** 试载刚入库的产物并回填 manifest; 校验失败抛错 (调用方负责 toast)。 */
+  async function trialLoadAndRegister(id: string): Promise<void> {
+    let label = '', path = '', error = ''
+    try {
+      const m = await import(/* @vite-ignore */ `${runtimeBundleUrl(id)}?trial=${Date.now()}`)
+      const ext = packToExtension(m.default)
+      label = ext.navigation?.[0]?.label ?? id
+      path = ext.routes?.[0]?.path ?? ''
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+    await api.extPagesPutManifest(id, { label, path, error })
+    await invalidate()
+    if (error) throw new Error(error)
+  }
+
   async function handleUpload() {
     const file = fileRef.current?.files?.[0]
     const id = idInput.trim()
@@ -53,21 +74,44 @@ export function SettingsPagePacksPanel() {
     try {
       await api.extPagesUpload(id, file)
       // 试载: 直接 import 刚上传的产物, 契约校验失败则停用并回填错误
-      let label = '', path = '', error = ''
-      try {
-        const m = await import(/* @vite-ignore */ `${runtimeBundleUrl(id)}?trial=${Date.now()}`)
-        const ext = packToExtension(m.default)
-        label = ext.navigation?.[0]?.label ?? id
-        path = ext.routes?.[0]?.path ?? ''
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e)
-      }
-      await api.extPagesPutManifest(id, { label, path, error })
-      await invalidate()
-      if (error) toast(`页面插件校验失败: ${error}`, 'error')
-      else { toast('页面插件已启用, 刷新页面后生效', 'success'); setIdInput(''); if (fileRef.current) fileRef.current.value = '' }
+      await trialLoadAndRegister(id)
+      toast('页面插件已启用, 刷新页面后生效', 'success')
+      setIdInput('')
+      if (fileRef.current) fileRef.current.value = ''
+    } catch (e) {
+      toast(`页面插件校验失败: ${e instanceof Error ? e.message : e}`, 'error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleImportFile() {
+    const file = importFileRef.current?.files?.[0]
+    if (!file) { toast('请选择源码文件 (.tsx)', 'error'); return }
+    setBusyImport(true)
+    try {
+      const meta = await api.extPagesImportSource(file)
+      await trialLoadAndRegister(meta.id)
+      toast(`已导入并启用 ${meta.id}, 刷新页面后生效`, 'success')
+      if (importFileRef.current) importFileRef.current.value = ''
+    } catch (e) {
+      toast(`源码导入失败: ${e instanceof Error ? e.message : e}`, 'error')
+    } finally {
+      setBusyImport(false)
+    }
+  }
+
+  async function handleImportFromProject() {
+    if (!importNs) { toast('请选择要导入的源码扩展', 'error'); return }
+    setBusyImport(true)
+    try {
+      const meta = await api.extPagesImportFromProject(importNs)
+      await trialLoadAndRegister(meta.id)
+      toast(`已导入并启用 ${meta.id}, 刷新页面后生效`, 'success')
+    } catch (e) {
+      toast(`源码导入失败: ${e instanceof Error ? e.message : e}`, 'error')
+    } finally {
+      setBusyImport(false)
     }
   }
 
@@ -115,6 +159,58 @@ export function SettingsPagePacksPanel() {
             <Upload className="h-3.5 w-3.5" />
             {busy ? '上传并校验中…' : '上传并校验'}
           </button>
+        </div>
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5">
+        <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">导入源码</div>
+        <h3 className="mt-2 text-lg font-semibold tracking-tight text-foreground">.tsx 源码一键导入, 自动编译挂载</h3>
+        <p className="mt-2 max-w-3xl text-xs leading-5 text-secondary">
+          上传源码扩展文件 (.tsx) 或从本项目 <span className="font-mono text-accent">frontend/src/custom/</span> 直接选择,
+          后端用项目自带的 esbuild 自动编译并适配契约, 免重新构建。产物为标准页面插件, 与上方上传的包同一管理。
+          边界: 源码里注册的插槽(slot)会被跳过; 页面内路由参数读到空值; 仅源码/桌面部署可发起导入。
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input ref={importFileRef} type="file" accept=".tsx" className="hidden" />
+          <button
+            type="button"
+            onClick={() => importFileRef.current?.click()}
+            className="inline-flex h-9 items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 text-xs text-secondary hover:bg-elevated/80 hover:text-foreground transition-colors"
+          >
+            <FileCode className="h-3.5 w-3.5" />
+            {importFileRef.current?.files?.[0]?.name ?? '选择 .tsx 源文件'}
+          </button>
+          <button
+            type="button"
+            disabled={busyImport}
+            onClick={handleImportFile}
+            className="inline-flex h-9 items-center gap-1.5 rounded-btn bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {busyImport ? '编译导入中…' : '编译并导入'}
+          </button>
+          {(sourceNs.data?.length ?? 0) > 0 && (
+            <>
+              <span className="ml-2 text-[11px] text-muted">或从本项目导入:</span>
+              <select
+                value={importNs}
+                onChange={e => setImportNs(e.target.value)}
+                className="h-9 rounded-btn border border-border bg-base px-2 text-xs text-foreground"
+              >
+                <option value="">选择扩展…</option>
+                {sourceNs.data!.map(ns => <option key={ns} value={ns}>{ns}</option>)}
+              </select>
+              <button
+                type="button"
+                disabled={busyImport || !importNs}
+                onClick={handleImportFromProject}
+                className="inline-flex h-9 items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 text-xs text-secondary hover:bg-elevated/80 hover:text-foreground disabled:opacity-50 transition-colors"
+              >
+                <FolderDown className="h-3.5 w-3.5" />
+                导入
+              </button>
+            </>
+          )}
         </div>
       </section>
 
