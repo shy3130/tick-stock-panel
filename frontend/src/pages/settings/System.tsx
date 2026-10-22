@@ -16,7 +16,7 @@ import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
 import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
 import {
-  listZhVoices, previewVoice, activateVoice, getCurrentVoiceURI,
+  listZhVoices, previewVoice, activateVoice,
 } from '@/lib/voiceBroadcast'
 import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, getPageZoom, setPageZoom } from '@/lib/pageZoom'
@@ -55,13 +55,10 @@ export function SettingsSystemPanel() {
     try { return localStorage.getItem('voice_broadcast_enabled') === '1' } catch { return false }
   })
   const [voices, setVoices] = useState(listZhVoices())
-  // 用户手选值 (空=走默认偏好 Google 中国大陆)
+  // 下拉值: 用户手选的 voiceURI (空=默认偏好)。回显只用这一份, 不再动态解析默认
+  // 语音当 value —— 否则手选 X 后「默认偏好」的 value 也变成 X, 选中项被吞掉。
   const [voiceConfigured, setVoiceConfigured] = useState(() => {
     try { return localStorage.getItem('voice_broadcast_voice') || '' } catch { return '' }
-  })
-  // 下拉回显值: 用户手选优先, 否则显示当前解析到的语音
-  const [voiceURI, setVoiceURI] = useState(() => {
-    try { return localStorage.getItem('voice_broadcast_voice') || getCurrentVoiceURI() } catch { return getCurrentVoiceURI() }
   })
   const [voiceRate, setVoiceRate] = useState(() => {
     try {
@@ -74,8 +71,6 @@ export function SettingsSystemPanel() {
   useEffect(() => {
     const h = () => {
       setVoices(listZhVoices())
-      // 用户未手选时, 跟随默认偏好 (Google CN 到货后自动同步回显)
-      if (!voiceConfigured) setVoiceURI(getCurrentVoiceURI())
     }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.addEventListener('voiceschanged', h)
@@ -85,7 +80,7 @@ export function SettingsSystemPanel() {
     return () => {
       if ('speechSynthesis' in window) window.speechSynthesis.removeEventListener('voiceschanged', h)
     }
-  }, [voiceConfigured])
+  }, [])
 
   const save = useCallback(async (cfg: Record<string, unknown>) => {
     setSaving(true)
@@ -245,7 +240,7 @@ export function SettingsSystemPanel() {
           </div>
           <div className="flex items-center gap-1.5">
             <select
-              value={voiceURI}
+              value={voiceConfigured}
               disabled={!toastEnabled || !voiceEnabled}
               onChange={(e) => {
                 const v = e.target.value
@@ -253,21 +248,18 @@ export function SettingsSystemPanel() {
                   // 手选某一语音包
                   localStorage.setItem('voice_broadcast_voice', v)
                   setVoiceConfigured(v)
-                  setVoiceURI(v)
                 } else {
-                  // 选"默认偏好": 清空手选, 走 Google 中国大陆偏好
+                  // 选"默认偏好"(固定空值): 清空手选, 走 Google 中国大陆偏好
                   localStorage.removeItem('voice_broadcast_voice')
                   setVoiceConfigured('')
-                  setVoiceURI(getCurrentVoiceURI())
                 }
               }}
               className="w-32 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
             >
-              <option value={getCurrentVoiceURI()}>默认偏好</option>
-              {voices
-                .filter(v => v.voiceURI !== getCurrentVoiceURI())
-                .map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>)
-              }
+              <option value="">默认偏好</option>
+              {voices.map(v => (
+                <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>
+              ))}
             </select>
             <button
               onClick={() => previewVoice()}
