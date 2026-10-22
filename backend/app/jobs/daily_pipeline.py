@@ -637,7 +637,13 @@ def run_now(
     minute_on = preferences.get_minute_sync_enabled()
     minute_days = preferences.get_minute_sync_days()
     written_minute = 0
-    if minute_on and capset.has(Cap.KLINE_MINUTE_BATCH):
+    # 门控口径与 api/kline._minute_allowed 一致: TickFlow 需 KLINE_MINUTE_BATCH
+    # 能力; 自定义源声明 minute 数据集即放行 (resolver 异常按降级 TickFlow 处理)。
+    _, minute_fallback, _minute_resolve_err = kline_sync._resolve_minute_provider(
+        preferences.get_minute_data_provider()
+    )
+    minute_allowed = (not minute_fallback) or capset.has(Cap.KLINE_MINUTE_BATCH)
+    if minute_on and minute_allowed:
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
@@ -658,7 +664,7 @@ def run_now(
     else:
         skipped.append("sync_minute")
         if minute_on:
-            logger.info("sync_minute skipped: no KLINE_MINUTE_BATCH capability")
+            logger.info("sync_minute skipped: minute provider has no capability/dataset")
         else:
             logger.info("sync_minute skipped: user disabled")
 
