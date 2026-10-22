@@ -37,8 +37,10 @@ def test_daily_batch_groups_index_symbols(repo, monkeypatch):
     req = type("R", (), {"app": type("A", (), {"state": state})()})()
 
     out = kline_api.get_daily_batch(req, {"symbols": ["600000.SH", "000001.SH"], "days": 12})
-    assert calls["stock_batch"] == [["600000.SH"]]
-    assert calls["index"] == ["000001.SH"]
+    # 本 fixture 每只只回 1 行 (< days), 停牌回补会对不足额标的追加更宽窗口的读取;
+    # 分流断言只看首次调用 (股票走批量、指数走逐只)。
+    assert calls["stock_batch"][0] == ["600000.SH"]
+    assert calls["index"][0] == "000001.SH"
     assert "000001.SH" in out["data"]
 
 

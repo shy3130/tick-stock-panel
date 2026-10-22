@@ -626,6 +626,8 @@ def get_daily_batch(request: Request, body: dict):
     """批量获取多只股票最近 N 天日K (OHLCV)。
 
     用于自选列表迷你蜡烛图等场景，只返回基础列，不返回全部 enriched 指标。
+    按交易日语义取「最近 N 根」: 停牌/断档股在窗口内凑不满时向更早窗口回补,
+    跳过停牌空档取复牌前的 K, 而不是把迷你K截成只剩复牌后几根。
     """
     symbols = body.get("symbols", [])
     days = body.get("days", 12)
@@ -646,44 +648,63 @@ def get_daily_batch(request: Request, body: dict):
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
 
-    # 按资产类型分组: stock 走批量缓存; etf/index 逐只查独立存储 (数量少, 成本可忽略)
-    stock_symbols: list[str] = []
-    etf_symbols: list[str] = []
-    index_symbols: list[str] = []
-    for s in symbols:
-        t = repo.resolve_asset_type(s)
-        if t == "etf":
-            etf_symbols.append(s)
-        elif t == "index":
-            index_symbols.append(s)
-        else:
-            stock_symbols.append(s)
+    # 资产类型解析一次, 回补轮次复用: stock 走批量缓存; etf/index 逐只查独立存储
+    # (数量少, 成本可忽略)
+    sym_type = {s: repo.resolve_asset_type(s) for s in symbols}
 
-    frames: list[pl.DataFrame] = []
-    if stock_symbols:
-        df_stock = repo.get_daily_batch(stock_symbols, start, end, columns=cols)
-        if not df_stock.is_empty():
-            frames.append(df_stock)
-    for sym in etf_symbols:
-        sub = repo.get_etf_daily(sym, start, end, columns=cols)
-        if not sub.is_empty():
-            frames.append(sub)
-    for sym in index_symbols:
-        sub = repo.get_index_daily(sym, start, end, columns=cols)
-        if not sub.is_empty():
-            frames.append(sub)
+    def _read_range(syms: list[str], s) -> pl.DataFrame:
+        stock_syms = [x for x in syms if sym_type[x] not in ("etf", "index")]
+        frames: list[pl.DataFrame] = []
+        if stock_syms:
+            df_stock = repo.get_daily_batch(stock_syms, s, end, columns=cols)
+            if not df_stock.is_empty():
+                frames.append(df_stock)
+        for x in syms:
+            if sym_type[x] == "etf":
+                sub = repo.get_etf_daily(x, s, end, columns=cols)
+                if not sub.is_empty():
+                    frames.append(sub)
+            elif sym_type[x] == "index":
+                sub = repo.get_index_daily(x, s, end, columns=cols)
+                if not sub.is_empty():
+                    frames.append(sub)
+        if not frames:
+            return pl.DataFrame()
+        return pl.concat(frames, how="diagonal_relaxed")
 
-    if not frames:
-        return {"data": {}}
-    df = pl.concat(frames, how="diagonal_relaxed")
+    def _tail_bars(df: pl.DataFrame) -> dict[str, list[dict]]:
+        # 按 symbol 分组, 每只取最近 N 条。
+        # partition_by 一次切分, 避免 N 只自选时对同一批数据做 N 次全帧过滤。
+        out: dict[str, list[dict]] = {}
+        if df.is_empty():
+            return out
+        for part in df.partition_by("symbol", maintain_order=True):
+            sub = part.sort("date").tail(days)
+            if not sub.is_empty():
+                out[sub["symbol"][0]] = sub.to_dicts()
+        return out
 
-    # 按 symbol 分组, 每只取最近 N 条。
-    # partition_by 一次切分, 避免 N 只自选时对同一批数据做 N 次全帧过滤。
-    result: dict[str, list[dict]] = {}
-    for part in df.partition_by("symbol", maintain_order=True):
-        sub = part.sort("date").tail(days)
-        if not sub.is_empty():
-            result[sub["symbol"][0]] = sub.to_dicts()
+    result = _tail_bars(_read_range(list(symbols), start))
+
+    # 停牌回补: 首段窗口是「自然日×2 ≈ 交易日」启发式, 默认窗口内每个交易日都有行情;
+    # 停牌股在窗口内交易日不足, tail(days) 只封顶不回补, 迷你K会只剩复牌后几根。
+    # 只对凑不满 days 根的股票 (含整窗无数据的长期停牌股) 分轮向更早窗口重取:
+    # 第一轮 +120 自然日通常落在 repo 的 enriched 300 天内存缓存内 (近零成本),
+    # 第二轮 +480 自然日 (约回看一年) 兜更长停牌, 兜不着的极端停牌按可得分量返回。
+    backlog: set[str] = {s for s, rows in result.items() if len(rows) < days}
+    backlog |= {s for s in symbols if s not in result}
+    for pad in (120, 480):
+        if not backlog:
+            break
+        wider = _tail_bars(_read_range(sorted(backlog), start - timedelta(days=pad)))
+        still: set[str] = set()
+        for sym in backlog:
+            rows = wider.get(sym)
+            if rows:  # 宽窗读到的必然 ⊇ 窄窗行, 直接覆盖
+                result[sym] = rows
+            if not rows or len(rows) < days:
+                still.add(sym)
+        backlog = still
 
     # 日K批量同为大响应端点 (千只自选 MB 级), 与分时各自独立压缩开关
     return _gzip_payload(request, {"data": result}, pref_key="daily_batch_compress")
