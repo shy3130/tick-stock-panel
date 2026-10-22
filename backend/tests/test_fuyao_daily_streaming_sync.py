@@ -50,6 +50,30 @@ def _route_fuyao(monkeypatch, provider):
     monkeypatch.setattr(custom, "get_provider", lambda name: provider)
 
 
+def test_sync_promotes_staged_files_without_reading_them_back(monkeypatch, repo):
+    provider = _StreamingProvider([
+        _daily("000001.SZ", date(2020, 1, 2)),
+        _daily("000002.SZ", date(2020, 1, 2)),
+    ])
+    _route_fuyao(monkeypatch, provider)
+    monkeypatch.setattr(
+        kline_sync.pl,
+        "scan_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应读回临时文件")),
+    )
+
+    written = kline_sync.sync_and_persist_daily_batch(
+        ["000001.SZ", "000002.SZ"], repo, object(),
+        start_date=datetime(2020, 1, 1), end_date=datetime(2020, 1, 2),
+    )
+
+    assert written == 2
+    parts = sorted((repo.store.data_dir / "kline_daily" / "date=2020-01-02").glob("*.parquet"))
+    assert len(parts) == 2
+    stored = pl.concat([pl.read_parquet(part) for part in parts])
+    assert set(stored["symbol"].to_list()) == {"000001.SZ", "000002.SZ"}
+
+
 def test_sync_persists_streamed_fuyao_chunks_only_after_fetch(monkeypatch, repo):
     provider = _StreamingProvider([
         _daily("000001.SZ", date(2020, 1, 2)),
@@ -64,11 +88,47 @@ def test_sync_persists_streamed_fuyao_chunks_only_after_fetch(monkeypatch, repo)
 
     assert written == 2
     assert provider.get_daily_called is False
-    stored = pl.read_parquet(
-        repo.store.data_dir / "kline_daily" / "date=2020-01-02" / "part.parquet"
-    )
+    parts = sorted((repo.store.data_dir / "kline_daily" / "date=2020-01-02").glob("*.parquet"))
+    stored = pl.concat([pl.read_parquet(part) for part in parts])
     assert set(stored["symbol"].to_list()) == {"000001.SZ", "000002.SZ"}
     assert not (repo.store.data_dir / ".daily_sync_staging").exists()
+
+
+def test_sync_merges_after_direct_promotion_without_duplicate_rows(monkeypatch, repo):
+    provider = _StreamingProvider([_daily("000001.SZ", date(2020, 1, 2))])
+    _route_fuyao(monkeypatch, provider)
+    kline_sync.sync_and_persist_daily_batch(
+        ["000001.SZ"], repo, object(),
+        start_date=datetime(2020, 1, 1), end_date=datetime(2020, 1, 2),
+    )
+    kline_sync.sync_and_persist_daily_batch(
+        ["000001.SZ"], repo, object(),
+        start_date=datetime(2020, 1, 1), end_date=datetime(2020, 1, 2),
+    )
+
+    files = sorted((repo.store.data_dir / "kline_daily" / "date=2020-01-02").glob("*.parquet"))
+    stored = pl.concat([pl.read_parquet(file) for file in files])
+    assert stored.unique(subset=["symbol", "date"]).height == 1
+    assert stored.height == 1
+
+
+def test_sync_merges_into_existing_daily_partition(monkeypatch, repo):
+    target = repo.store.data_dir / "kline_daily" / "date=2020-01-02"
+    target.mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": ["000001.SZ"], "date": [date(2020, 1, 2)], "close": [9.0],
+    }).write_parquet(target / "part.parquet")
+    provider = _StreamingProvider([_daily("000002.SZ", date(2020, 1, 2))])
+    _route_fuyao(monkeypatch, provider)
+
+    written = kline_sync.sync_and_persist_daily_batch(
+        ["000002.SZ"], repo, object(),
+        start_date=datetime(2020, 1, 1), end_date=datetime(2020, 1, 2),
+    )
+
+    assert written == 1
+    stored = pl.read_parquet(target / "part.parquet")
+    assert set(stored["symbol"].to_list()) == {"000001.SZ", "000002.SZ"}
 
 
 def test_sync_discards_staging_when_streaming_fails(monkeypatch, repo):
