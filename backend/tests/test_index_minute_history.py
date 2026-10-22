@@ -113,6 +113,25 @@ def test_cache_ttl_and_provider_switch(context, monkeypatch):
     assert fetch.call_count == 3
 
 
+def test_unavailable_custom_source_does_not_poison_tickflow_cache(context, monkeypatch):
+    request, fetch = context
+    day = date(2026, 9, 11)
+    fetch.side_effect = [pl.DataFrame(), pl.DataFrame({
+        "datetime": [datetime(2026, 9, 11, 9, 35)], "close": [3000.0],
+    })]
+    monkeypatch.setattr(indices.preferences, "load", lambda: {"minute_data_provider": "missing_src"})
+    monkeypatch.setattr(indices.preferences, "get_minute_data_provider", lambda: "tickflow")
+
+    first = indices.get_index_minute(request, symbol="000001.SH", trade_date=day)
+    assert first["source"] == "none"
+    monkeypatch.setattr(indices.preferences, "load", lambda: {"minute_data_provider": "tickflow"})
+    second = indices.get_index_minute(request, symbol="000001.SH", trade_date=day)
+
+    assert second["source"] == "live"
+    assert fetch.call_count == 2
+    assert len(indices._index_minute_cache) == 2
+
+
 def test_cache_separates_dates_and_symbols_and_stays_bounded(context, monkeypatch):
     request, fetch = context
     monkeypatch.setattr(indices, "_INDEX_MINUTE_CACHE_MAX", 2)

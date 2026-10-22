@@ -165,6 +165,7 @@ def test_free_tier_skips_tickflow_minute_fallback(monkeypatch, live):
 
 def test_custom_minute_source_remains_available_without_tickflow_capability(monkeypatch):
     provider = MagicMock()
+    provider.config.datasets = {"minute": object()}
     provider.get_minute.return_value = _minute_rows(1)
     monkeypatch.setattr("app.services.preferences.get_minute_data_provider", lambda: "custom")
     monkeypatch.setattr(
@@ -187,6 +188,7 @@ def test_custom_minute_source_remains_available_without_tickflow_capability(monk
 
 def test_failed_custom_source_does_not_fall_back_to_unsupported_tickflow(monkeypatch):
     provider = MagicMock()
+    provider.config.datasets = {"minute": object()}
     provider.get_minute.side_effect = RuntimeError("custom source unavailable")
     monkeypatch.setattr("app.services.preferences.get_minute_data_provider", lambda: "custom")
     monkeypatch.setattr(
