@@ -30,6 +30,8 @@ data/data_sources/*.yaml
 
 Dev 模式下，默认位置是项目根目录的 `data/`；Docker 部署中，项目的 `data/` 会挂载为容器内的 `/app/data`。可通过 `DATA_DIR` 覆盖。
 
+Docker 里 URL 填 `127.0.0.1` 指的是容器自身：数据源服务跑在宿主机时，应改用 `host.docker.internal`（Linux `docker run` 需加 `--add-host=host.docker.internal:host-gateway` 才能解析，compose 已内置该映射；也可直接用宿主机内网 IP，如 `172.17.0.1`）。
+
 修改 YAML 后可在「设置 -> 数据源」点击「重新加载」,或调用:
 
 ```bash
