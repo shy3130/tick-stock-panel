@@ -29,8 +29,12 @@
   同用桶中心。右侧量带画分钟成交量柱 (按分钟涨跌红绿, 分桶防亚像素);
   分钟量柱仅 volume 开启时出现, 竞价量柱不受 volume 开关控制
 - 只配价格无量字段且 volume 关 (或量数据缺失) 时, 保持全幅价格渲染 (与无竞价逐像素一致)
+
+React.memo: rows 引用由上游收敛 (Watchlist 的 minuteData 出口 reuseUnchangedSeries,
+见 lib/series-identity) — 实时行情 tick 中价格未动的行跳过整棵 SVG 重渲染。
+调用方传 rows 时必须用共享空数组常量 (EMPTY_ROWS), 不要 `?? []` 新建引用。
 */
-import { useId } from 'react'
+import { memo, useId } from 'react'
 import type { MinuteKlineRow } from '@/lib/api'
 import { AUCTION_WIDTH_RATIOS, type AuctionBarWidth } from '@/lib/list-columns'
 
@@ -212,7 +216,7 @@ function AuctionOnly({ rows, prevClose, match, unmatched, width, height }: {
   )
 }
 
-export function MiniIntraday({ rows, prevClose, changePct, width = 100, height = 56, yMode = 'adaptive', limitRate = null, auction = null, volume = false, auctionWidth = 'standard' }: {
+export const MiniIntraday = memo(function MiniIntraday({ rows, prevClose, changePct, width = 100, height = 56, yMode = 'adaptive', limitRate = null, auction = null, volume = false, auctionWidth = 'standard' }: {
   rows: MinuteKlineRow[]
   /** 昨收价 (前收), 用于基准线。无则用 close/changePct 反算 */
   prevClose?: number | null
@@ -508,4 +512,4 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
       />
     </svg>
   )
-}
+})

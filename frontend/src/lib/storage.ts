@@ -48,9 +48,13 @@ export const storage = {
 
   /** 自选列表列配置 */
   watchlistColumns:     kv<unknown[]>('watchlist_columns'),
+  /** 自选列表「默认方案」快照 — 恢复默认时回到这份, 而非内置默认 */
+  watchlistColumnsBaseline: kv<unknown[] | null>('watchlist_columns_baseline'),
 
   /** 个股日K信息条指标配置 */
   stockInfoBarFields:   kv<unknown[]>('stock_info_bar_fields'),
+  /** 信息条指标「默认方案」快照 */
+  stockInfoBarFieldsBaseline: kv<unknown[] | null>('stock_info_bar_fields_baseline'),
 
   /** 个股日K成交量对比设置 */
   stockVolumeCompare:   kv<{ enabled: boolean; days: number }>('stock_volume_compare'),
@@ -63,6 +67,8 @@ export const storage = {
 
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
+  /** 策略结果列表「默认方案」快照 */
+  screenerResultColumnsBaseline: kv<unknown[] | null>('screener_result_columns_baseline'),
 
   /** 自选列表视图模式 table | card (分组卡片为临时模式, 不持久化) */
   watchlistView:        kv<string>('watchlist_view'),

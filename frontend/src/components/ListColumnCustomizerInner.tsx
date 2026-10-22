@@ -17,14 +17,15 @@ import {
   useSortable, verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { X, GripVertical, Plus, ChevronDown, ChevronRight, Database, Settings2, Search, Eye, EyeOff } from 'lucide-react'
+import { X, GripVertical, Plus, ChevronDown, ChevronRight, Database, Settings2, Search } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useQuery } from '@tanstack/react-query'
 import { QK } from '@/lib/queryKeys'
-import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig, AuctionBarWidth } from '@/lib/list-columns'
-import { resolveCandleConfig, resolveIntradayConfig, hasAuctionVolumeField, isAuctionActive, AUCTION_WIDTH_RATIOS } from '@/lib/list-columns'
+import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig, AuctionBarWidth, ChartLinkConfig } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig, hasAuctionVolumeField, isAuctionActive, AUCTION_WIDTH_RATIOS, resolveChartLink, LINK_HEIGHT_BOUNDS, restoreColumnsFromBaseline } from '@/lib/list-columns'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
-import type { MinuteKlineRow } from '@/lib/api'
+import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
+import type { MinuteKlineRow, KlineRow } from '@/lib/api'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 export interface ListColumnCustomizerProps {
@@ -48,6 +49,15 @@ export interface ListColumnCustomizerProps {
    * 策略/自选页背后是 DOM 表格，blur 开销可忽略，保持默认。
    */
   disableBackdropBlur?: boolean
+  /**
+   * 「默认方案」快照的读写接口 (可选)。传入后头部出现「保存为默认方案」按钮,
+   * 且「恢复默认」回到这份快照 (未保存过时回退内置默认)。
+   * 不传则只提供内置默认恢复 (兼容旧调用方)。
+   */
+  baselineStore?: {
+    get: () => ColumnConfig[] | null
+    set: (cols: ColumnConfig[]) => void
+  }
 }
 
 /** 判断扩展数据字段类型是否为数字(int/float/double/number/decimal 等)。
@@ -130,6 +140,22 @@ const PREVIEW_AUCTION = {
   match: [['09:15:00', 120], ['09:25:00', 480]] as [string, number][],
   unmatched: [['09:15:00', 260], ['09:25:00', -180]] as [string, number][],
 }
+/** 日k列「效果预览」固定样例数据 (零网络依赖): 12 根日 K, 涨跌交替、
+ *  成交量有高有低 — 配置面板据此即时反映宽高与量带效果 */
+const PREVIEW_KLINES: KlineRow[] = [
+  { date: '2026-09-24', open: 9.78, high: 9.86, low: 9.74, close: 9.84, volume: 2100 },
+  { date: '2026-09-25', open: 9.85, high: 9.98, low: 9.82, close: 9.95, volume: 3500 },
+  { date: '2026-09-26', open: 9.96, high: 10.04, low: 9.90, close: 9.92, volume: 1800 },
+  { date: '2026-09-29', open: 9.90, high: 9.96, low: 9.80, close: 9.83, volume: 2600 },
+  { date: '2026-09-30', open: 9.82, high: 9.88, low: 9.76, close: 9.86, volume: 1400 },
+  { date: '2026-10-08', open: 9.88, high: 10.10, low: 9.86, close: 10.06, volume: 5200 },
+  { date: '2026-10-09', open: 10.08, high: 10.18, low: 10.02, close: 10.14, volume: 4300 },
+  { date: '2026-10-12', open: 10.15, high: 10.16, low: 10.01, close: 10.05, volume: 3100 },
+  { date: '2026-10-13', open: 10.04, high: 10.08, low: 9.94, close: 9.97, volume: 2400 },
+  { date: '2026-10-14', open: 9.96, high: 10.02, low: 9.92, close: 10.00, volume: 1900 },
+  { date: '2026-10-15', open: 10.00, high: 10.12, low: 9.99, close: 10.10, volume: 4600 },
+  { date: '2026-10-16', open: 10.11, high: 10.22, low: 10.06, close: 10.18, volume: 5800 },
+]
 
 function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel, extConfig, candleConfig: candlePanel, intradayConfig: intradayPanel, strategiesConfig, showStandaloneToggle, onToggleStandalone }: {
   col: ColumnConfig
@@ -152,19 +178,25 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
   const isIntraday = col.source.type === 'builtin' && col.source.key === 'intraday'
   const isStrategies = col.source.type === 'builtin' && col.source.key === 'strategies'
   const hasConfig = isExt || isCandle || isIntraday || isStrategies
+  const label = isExt
+    ? `${col.label}（${extTableLabel}）`
+    : col.label
 
   return (
     <>
       <div
         ref={setNodeRef}
+        data-col-row={col.id}
         style={{
           transform: CSS.Transform.toString(transform),
           transition,
           opacity: isDragging ? 0.5 : 1,
           zIndex: isDragging ? 10 : undefined,
         }}
-        className={`flex items-center gap-2 px-2 py-1.5 rounded group ${
-          isDragging ? 'bg-elevated shadow-lg' : 'hover:bg-elevated/50'
+        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg group border ${
+          isDragging ? 'bg-elevated shadow-lg border-transparent'
+            : configOpen ? 'bg-accent/8 border-accent/30'
+              : 'border-transparent hover:bg-elevated/50'
         }`}
       >
         <span
@@ -174,11 +206,14 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
         >
           <GripVertical className="h-3.5 w-3.5" />
         </span>
-        <span className="flex-1 text-xs text-foreground truncate">
-          {isExt && col.source.type === 'ext'
-            ? `${col.label}（${extTableLabel}）`
-            : col.label}
-        </span>
+        <button
+          onClick={() => hasConfig && onConfig(configOpen ? null : col.id)}
+          disabled={!hasConfig}
+          className={`flex-1 min-w-0 text-left ${hasConfig ? 'cursor-pointer' : 'cursor-default'}`}
+          title={hasConfig ? '点击配置' : undefined}
+        >
+          <span className="block text-xs text-foreground truncate">{label}</span>
+        </button>
         {showStandaloneToggle && (
           <button
             onClick={() => onToggleStandalone?.(col.id)}
@@ -195,21 +230,23 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
         {hasConfig && (
           <button
             onClick={() => onConfig(configOpen ? null : col.id)}
-            className={`transition-all ${configOpen ? 'text-accent' : 'opacity-0 group-hover:opacity-100 text-muted hover:text-accent'}`}
-            title="配置"
+            className={`shrink-0 p-1 rounded transition-colors ${configOpen ? 'text-accent bg-accent/10' : 'text-muted hover:text-accent hover:bg-elevated'}`}
+            title={configOpen ? '收起配置' : '配置'}
           >
-            <Settings2 className="h-3 w-3" />
+            <Settings2 className="h-3.5 w-3.5" />
           </button>
         )}
         <button
           onClick={() => onRemove(col.id)}
-          className="opacity-0 group-hover:opacity-100 text-muted hover:text-danger transition-all shrink-0"
-          title="隐藏"
+          className="shrink-0 p-1 rounded text-muted hover:text-danger hover:bg-elevated transition-colors"
+          title="移出列表"
         >
-          <EyeOff className="h-3 w-3" />
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {hasConfig && configOpen && (isExt ? extConfig() : isCandle ? candlePanel() : isIntraday ? intradayPanel() : strategiesConfig())}
+      {hasConfig && configOpen && (
+        <div className="mb-1">{isExt ? extConfig() : isCandle ? candlePanel() : isIntraday ? intradayPanel() : strategiesConfig()}</div>
+      )}
     </>
   )
 }
@@ -227,6 +264,7 @@ export function ListColumnCustomizerInner({
   showExtColumns = true,
   showStandaloneToggle = false,
   disableBackdropBlur = false,
+  baselineStore,
 }: ListColumnCustomizerProps) {
   const extSchema = useQuery({
     queryKey: QK.extDataSchemaAll,
@@ -252,6 +290,11 @@ export function ListColumnCustomizerInner({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [configOpenId, setConfigOpenId] = useState<string | null>(null)
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
+  /** 「保存为默认方案」成功时刻 — 只用于给按钮一个短暂的成功反馈 */
+  const [baselineSavedAt, setBaselineSavedAt] = useState<number | null>(null)
+  /** 恢复默认的二次确认弹窗 */
+  const [confirmReset, setConfirmReset] = useState(false)
+  const hasBaseline = !!baselineStore?.get()
 
   const colById = useMemo(() => new Map(columns.map(c => [c.id, c])), [columns])
   const keyToId = useMemo(() => {
@@ -351,6 +394,40 @@ export function ListColumnCustomizerInner({
     }))
   }, [])
 
+  /** 恢复默认: 优先回到用户保存的「默认方案」快照; 没保存过才回退内置默认。
+   *  快照恢复规则见 restoreColumnsFromBaseline (纯函数, 已单测)。 */
+  const resetAllColumns = useCallback(() => {
+    const prev = columnsRef.current
+    setConfigOpenId(null)
+
+    const restored = restoreColumnsFromBaseline(prev, baselineStore?.get() ?? null)
+    if (restored) {
+      onChangeRef.current(restored)
+      return
+    }
+
+    // 无快照: 内置列回到 groups 声明的默认显隐, 清空所有列级配置
+    const defaultVisible = new Set<string>()
+    for (const g of groups) for (const k of g.keys) {
+      const id = keyToId.get(k)
+      if (id) defaultVisible.add(id)
+    }
+    const next = prev.map(c => {
+      const { candleConfig, intradayConfig, extDisplay, standalone, ...rest } = c
+      if (c.pinned) return c
+      if (c.source.type === 'ext') return { ...rest, visible: false }
+      return { ...rest, visible: defaultVisible.has(c.id) }
+    })
+    onChangeRef.current(next)
+  }, [groups, keyToId, baselineStore])
+
+  /** 把当前列配置存为新的「默认方案」快照 */
+  const saveAsBaseline = useCallback(() => {
+    if (!baselineStore) return
+    baselineStore.set(columnsRef.current.filter(c => !c.pinned))
+    setBaselineSavedAt(Date.now())
+  }, [baselineStore])
+
   const updateCandleConfig = useCallback((colId: string, patch: Partial<CandleColumnConfig>) => {
     const cols = columnsRef.current
     onChangeRef.current(cols.map(c => {
@@ -376,10 +453,24 @@ export function ListColumnCustomizerInner({
     }))
   }, [])
 
+  // 联动配置写入: 只 map 分时一列 (link 的唯一宿主), 一次 onChange; 不改 visible
+  const updateChartLink = useCallback((patch: Partial<ChartLinkConfig>) => {
+    const cols = columnsRef.current
+    onChangeRef.current(cols.map(c => {
+      if (!(c.source.type === 'builtin' && c.source.key === 'intraday')) return c
+      return { ...c, intradayConfig: { ...c.intradayConfig, link: { ...c.intradayConfig?.link, ...patch } } }
+    }))
+  }, [])
+
   const resetIntradayConfig = useCallback((colId: string) => {
     const cols = columnsRef.current
     onChangeRef.current(cols.map(c => {
       if (c.id !== colId) return c
+      // 保留 link: 联动是配对级意图, 重置分时自身字段不应静默改变日k渲染。
+      // 仅剩 {link} 时 intradayConfig 仍为真值, 「恢复默认」按钮继续显示且幂等
+      // (与既有空对象保留行为一致); 彻底取消联动走共享块的高度联动开关。
+      const link = c.intradayConfig?.link
+      if (link) return { ...c, intradayConfig: { link } }
       const { intradayConfig, ...rest } = c
       return rest
     }))
@@ -719,33 +810,116 @@ export function ListColumnCustomizerInner({
     </motion.div>
   )
 
+  // 日k / 分时 高度联动共享块: 在两个面板各渲染一次, 状态同读 resolveChartLink(columns)、
+  // 同写分时一列的 intradayConfig.link —— 单一副本, 两面板不可能显示不一致。
+  // host 决定开启联动时的种子高度取哪个面板列的当前高度 (不静默改另一列)。
+  // 只管高度: 量带各列自管 (开关在哪个面板就管哪个图), 不做跨列共享开关。
+  const renderLinkControls = (host: 'candle' | 'intraday') => {
+    const link = resolveChartLink(columns)
+    const candleCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle')
+    const intradayCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday')
+    const candleRes = resolveCandleConfig(candleCol?.candleConfig, link)
+    const intradayRes = resolveIntradayConfig(intradayCol?.intradayConfig, link)
+    const linkOn = link?.linkHeight === true
+    const seedHeight = host === 'candle' ? candleRes.enabledHeight : intradayRes.height
+    // 统一高度显示值: link.height 为有限数时钳制显示; 脏值回退种子 (提交后恢复统一)
+    const unifiedHeight = typeof link?.height === 'number' && Number.isFinite(link.height)
+      ? Math.min(LINK_HEIGHT_BOUNDS.max, Math.max(LINK_HEIGHT_BOUNDS.min, link.height))
+      : seedHeight
+
+    const toggleCls = (on: boolean) => `relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${
+      on ? 'bg-accent' : 'bg-elevated'
+    }`
+    const knobCls = (on: boolean) => `inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+      on ? 'translate-x-[14px]' : 'translate-x-0.5'
+    }`
+
+    return (
+      <>
+        <div className="border-t border-border/40 pt-2 mt-1 text-[10px] text-muted">
+          {host === 'candle' ? '与分时联动' : '与日k联动'}
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] text-muted">统一高度</div>
+          <button
+            type="button"
+            onClick={() => updateChartLink(linkOn ? { linkHeight: false } : { linkHeight: true, height: seedHeight })}
+            className={toggleCls(linkOn)}
+            aria-pressed={linkOn}
+            aria-label="统一日k与分时的展开高度"
+          >
+            <span className={knobCls(linkOn)} />
+          </button>
+        </div>
+        {linkOn ? (
+          <>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-secondary w-16 shrink-0">统一高度</span>
+              <RangeNumberInput
+                value={unifiedHeight}
+                min={LINK_HEIGHT_BOUNDS.min} max={LINK_HEIGHT_BOUNDS.max}
+                onCommit={v => updateChartLink({ height: v })}
+                className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
+              />
+            </label>
+            <div className="text-[10px] text-muted leading-relaxed">
+              两列共用展开高度；宽度与收起高度仍在各自列设置。
+            </div>
+          </>
+        ) : (
+          <div className="text-[10px] text-muted leading-relaxed">
+            当前 日k {candleRes.enabledHeight} · 分时 {intradayRes.height}，开启后统一。
+          </div>
+        )}
+        {host === 'candle' && !intradayCol?.visible && (
+          <div className="text-[10px] text-muted leading-relaxed">分时列当前未显示，联动配置仍会保存。</div>
+        )}
+        {host === 'intraday' && !candleCol?.visible && (
+          <div className="text-[10px] text-muted leading-relaxed">日k列当前未显示，联动配置仍会保存。</div>
+        )}
+      </>
+    )
+  }
+
   const renderCandleConfig = (col: ColumnConfig) => {
-    const cfg = resolveCandleConfig(col.candleConfig)
+    // resolved 值必须传入 link: 「开启高度」显示 / 预览高度 / 联动 off 态提示都
+    // 需要 link 生效后的值 (漏传会显示旧高度而非联动高度)
+    const link = resolveChartLink(columns)
+    const linkOn = link?.linkHeight === true
+    const cfg = resolveCandleConfig(col.candleConfig, link)
     // 数值输入: onChange 存原始值(不钳制, 允许自由输入), onBlur 钳制边界
     const numInput = (
-      field: keyof CandleColumnConfig,
+      field: 'enabledWidth' | 'enabledHeight' | 'disabledWidth' | 'disabledHeight' | 'days',
       label: string,
-    ) => (
-      <label key={field} className="flex items-center gap-2 text-xs">
-        <span className="text-secondary w-16 shrink-0">{label}</span>
-        <input
-          type="number"
-          value={col.candleConfig?.[field] ?? cfg[field]}
-          onChange={e => {
-            const raw = e.target.value
-            // 空字符串 → 存 undefined (回退到默认值显示); 否则存原始数字 (不钳制)
-            updateCandleConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<CandleColumnConfig>)
-          }}
-          onBlur={e => {
-            const raw = e.target.value
-            // 失焦时钳制: 过大取上限、过小取最小值
-            const merged = resolveCandleConfig({ ...col.candleConfig, [field]: raw === '' ? undefined : Number(raw) })
-            updateCandleConfig(col.id, { [field]: merged[field] } as Partial<CandleColumnConfig>)
-          }}
-          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
-        />
-      </label>
-    )
+    ) => {
+      // 高度联动开启时「开启高度」只读 (由联动统一设置, 旧值未删, 关闭即还原)
+      const locked = field === 'enabledHeight' && linkOn
+      return (
+        <label key={field} className="flex items-center gap-2 text-xs">
+          <span className="text-secondary w-16 shrink-0">{label}</span>
+          <input
+            type="number"
+            value={locked ? cfg.enabledHeight : col.candleConfig?.[field] ?? cfg[field]}
+            readOnly={locked}
+            title={locked ? '由联动统一设置' : undefined}
+            onChange={e => {
+              if (locked) return // 只读态不提交: 显示值是联动高度, 写入会覆盖旧 enabledHeight
+              const raw = e.target.value
+              // 空字符串 → 存 undefined (回退到默认值显示); 否则存原始数字 (不钳制)
+              updateCandleConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<CandleColumnConfig>)
+            }}
+            onBlur={e => {
+              if (locked) return // 只读 input 失焦仍触发 blur: 不跳过会把联动高度写进旧字段, 关闭联动后无法无损还原
+              const raw = e.target.value
+              // 失焦时钳制: 过大取上限、过小取最小值
+              const merged = resolveCandleConfig({ ...col.candleConfig, [field]: raw === '' ? undefined : Number(raw) }, link)
+              updateCandleConfig(col.id, { [field]: merged[field] } as Partial<CandleColumnConfig>)
+            }}
+            className={`flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums${locked ? ' opacity-60' : ''}`}
+          />
+        </label>
+      )
+    }
     return (
       <motion.div
         initial={{ height: 0, opacity: 0 }}
@@ -763,6 +937,35 @@ export function ListColumnCustomizerInner({
           <div className="text-[10px] text-muted leading-relaxed pt-0.5">
             宽度 40–300 / 高度 32–200 / 天数 1–60，越界自动钳制到边界
           </div>
+          {renderLinkControls('candle')}
+          {/* 成交量副图: 本列自管 (与分时各自独立) */}
+          <div className="border-t border-border/40 pt-2 mt-1 flex items-center justify-between">
+            <div className="text-[10px] text-muted">成交量副图</div>
+            <button
+              type="button"
+              onClick={() => updateCandleConfig(col.id, { volume: !cfg.volume })}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${cfg.volume ? 'bg-accent' : 'bg-elevated'}`}
+              aria-pressed={cfg.volume}
+              aria-label="显示成交量副图"
+            >
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${cfg.volume ? 'translate-x-[14px]' : 'translate-x-0.5'}`} />
+            </button>
+          </div>
+          <div className="text-[10px] text-muted leading-relaxed">
+            开启后在价格区下方显示成交量柱；分时副图在分时列单独设置。
+          </div>
+          {/* 效果预览: 固定样例 K, 宽高与量带即时反映 (阈值与列表同源: 带宽 ≥3px 即画) */}
+          <div className="border-t border-border/40 pt-2 mt-1">
+            <div className="text-[10px] text-muted mb-1.5">效果预览（示例日K，配置改动即时反映）</div>
+            <div className="rounded bg-base border border-border/60 flex items-center justify-center overflow-hidden">
+              <MiniCandlestick
+                rows={PREVIEW_KLINES}
+                width={Math.min(cfg.enabledWidth, 260)}
+                height={cfg.enabledHeight}
+                volume={cfg.volume}
+              />
+            </div>
+          </div>
           {col.candleConfig && (
             <div className="flex justify-end pt-1">
               <button onClick={() => resetCandleConfig(col.id)} className="text-[10px] text-muted hover:text-foreground transition-colors">
@@ -776,37 +979,48 @@ export function ListColumnCustomizerInner({
   }
 
   const renderIntradayConfig = (col: ColumnConfig) => {
-    const cfg = resolveIntradayConfig(col.intradayConfig)
+    // 传 link 让高度/量带显示联动生效值 (link 宿主就是本列, 同一副本)
+    const link = resolveChartLink(columns)
+    const linkOn = link?.linkHeight === true
+    const cfg = resolveIntradayConfig(col.intradayConfig, link)
     const numInput = (
       field: 'width' | 'height',
       label: string,
-    ) => (
-      <label key={field} className="flex items-center gap-2 text-xs">
-        <span className="text-secondary w-16 shrink-0">{label}</span>
-        <input
-          type="number"
-          value={col.intradayConfig?.[field] ?? cfg[field]}
-          onChange={e => {
-            const raw = e.target.value
-            updateIntradayConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<IntradayColumnConfig>)
-          }}
-          onBlur={e => {
-            const raw = e.target.value
-            const merged = resolveIntradayConfig({ ...col.intradayConfig, [field]: raw === '' ? undefined : Number(raw) })
-            updateIntradayConfig(col.id, { [field]: merged[field] } as Partial<IntradayColumnConfig>)
-          }}
-          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
-        />
-      </label>
-    )
+    ) => {
+      // 高度联动开启时「高度」只读 (由联动统一设置, 旧值未删, 关闭即还原)
+      const locked = field === 'height' && linkOn
+      return (
+        <label key={field} className="flex items-center gap-2 text-xs">
+          <span className="text-secondary w-16 shrink-0">{label}</span>
+          <input
+            type="number"
+            value={locked ? cfg.height : col.intradayConfig?.[field] ?? cfg[field]}
+            readOnly={locked}
+            title={locked ? '由联动统一设置' : undefined}
+            onChange={e => {
+              if (locked) return // 只读态不提交: 显示值是联动高度, 写入会覆盖旧 height
+              const raw = e.target.value
+              updateIntradayConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<IntradayColumnConfig>)
+            }}
+            onBlur={e => {
+              if (locked) return // 只读 input 失焦仍触发 blur: 不跳过会把联动高度写进旧字段, 关闭联动后无法无损还原
+              const raw = e.target.value
+              const merged = resolveIntradayConfig({ ...col.intradayConfig, [field]: raw === '' ? undefined : Number(raw) }, link)
+              updateIntradayConfig(col.id, { [field]: merged[field] } as Partial<IntradayColumnConfig>)
+            }}
+            className={`flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums${locked ? ' opacity-60' : ''}`}
+          />
+        </label>
+      )
+    }
 
     // 竞价叠加: 仅「时序 + 配置了时间列」的表可选 (竞价是日内多盘序列,
     // 每日截面表没有时间轴, 无法画轨迹)。
     const auction = col.intradayConfig?.auction
     const updateAuction = (patch: Partial<NonNullable<IntradayColumnConfig['auction']>>) =>
       updateIntradayConfig(col.id, { auction: { ...auction, ...patch } })
-    // R2 强制联动: 竞价已配量字段 → 副图开关置灰、显示态视为开 (仅影响 UI,
-    // 渲染侧竞价量柱本就不受 volume 开关控制, 存储值不回写)
+    // R2 强制联动: 竞价已配量字段 → 量带本身恒显示 (渲染侧竞价量柱本就不受
+    // volume 开关控制)。开关只控制分钟量柱, 保持可用; forced 用于开关提示与预览
     const forced = hasAuctionVolumeField(auction)
     const multiTables = extTables.filter(t => (t as { time_field?: string | null }).time_field != null)
     const auctionTable = multiTables.find(t => t.id === auction?.configId)
@@ -843,6 +1057,26 @@ export function ListColumnCustomizerInner({
         }
       : null
 
+    // 一键添加竞价数据列 (已配字段的 chip): 复用 addExtColumn — 去重(已存在则切换
+    // 显示)、插入位置、时序表默认迷你图都现成。叠加窄栏看形态, 数据列扫全场/排序。
+    const fieldMeta = new Map((auctionTable?.columns ?? []).map(c => [c.name, c]))
+    const auctionDataCols = ([
+      ['priceField', '价格'],
+      ['matchField', '匹配量'],
+      ['unmatchedField', '未匹配量'],
+    ] as const).flatMap(([key, name]) => {
+      const field = auction?.[key]
+      if (!field || !auction?.configId) return []
+      const meta = fieldMeta.get(field) as { label?: string; dtype?: string; type?: string } | undefined
+      const colId = `ext:${auction.configId}:${field}`
+      return [{
+        key, name, field, colId,
+        label: meta?.label || field,
+        type: meta?.dtype ?? meta?.type,
+        added: columns.some(c => c.id === colId && c.visible),
+      }]
+    })
+
     return (
       <motion.div
         initial={{ height: 0, opacity: 0 }}
@@ -857,29 +1091,25 @@ export function ListColumnCustomizerInner({
           <div className="text-[10px] text-muted leading-relaxed pt-0.5">
             宽度 60–300 / 高度 32–200，越界自动钳制到边界
           </div>
+          {renderLinkControls('intraday')}
 
-          {/* 成交量副图 (R1): 分钟量柱独立开关; 竞价配了量字段时强制开启 (R2) */}
+          {/* 成交量副图: 本列自管 (与日k各自独立)。R2: 竞价配了量字段时量带本身
+              恒显示 — 开关只控制分钟量柱, 不禁用 */}
           <div className="border-t border-border/40 pt-2 mt-1 flex items-center justify-between">
             <div className="text-[10px] text-muted">成交量副图</div>
             <button
               type="button"
-              disabled={forced}
               onClick={() => updateIntradayConfig(col.id, { volume: !cfg.volume })}
-              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                cfg.volume || forced ? 'bg-accent' : 'bg-elevated'
-              }`}
-              aria-pressed={cfg.volume || forced}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${cfg.volume ? 'bg-accent' : 'bg-elevated'}`}
+              aria-pressed={cfg.volume}
               aria-label="显示成交量副图"
             >
-              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                cfg.volume || forced ? 'translate-x-[14px]' : 'translate-x-0.5'
-              }`} />
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${cfg.volume ? 'translate-x-[14px]' : 'translate-x-0.5'}`} />
             </button>
           </div>
           <div className="text-[10px] text-muted leading-relaxed">
-            {forced
-              ? '竞价量柱画在量带内，已配量字段时副图强制开启；清除匹配量/未匹配量字段后可关闭。'
-              : '开启后在价格区下方显示分钟成交量柱（量带有数据时显示）；关闭且无竞价量时保持整幅价格。'}
+            开启后在价格区下方显示分钟成交量柱；日k量带在日k列单独设置。
+            {forced && ' 已配竞价量字段时量带始终显示（竞价量柱不受此开关影响）。'}
           </div>
 
           <div className="border-t border-border/40 pt-2 mt-1 flex items-center justify-between">
@@ -947,6 +1177,33 @@ export function ListColumnCustomizerInner({
                   <div className="text-[10px] text-muted leading-relaxed">
                     竞价栏约占总宽 {Math.round(AUCTION_WIDTH_RATIOS[cfg.auctionWidth] * 100)}%，价格与分时共用同一纵轴；配置量字段后竞价量柱画在底部量带。
                   </div>
+                  {/* 竞价数据列: 一键把已配字段加为独立可排序列 (chip 态=列已显示,
+                      再点隐藏; 复用 addExtColumn 的去重与插入逻辑) */}
+                  {auctionDataCols.length > 0 && (
+                    <div className="border-t border-border/40 pt-2 mt-1">
+                      <div className="text-[10px] text-muted mb-1.5">竞价数据列（可排序，取末盘值）</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {auctionDataCols.map(c => (
+                          <button
+                            key={c.key}
+                            type="button"
+                            onClick={() => addExtColumn(auction!.configId!, c.field, c.label, c.type)}
+                            className={`px-2 py-1 rounded border text-[10px] transition-colors cursor-pointer ${
+                              c.added
+                                ? 'bg-accent/15 border-accent/40 text-accent'
+                                : 'bg-elevated border-border text-secondary hover:text-foreground'
+                            }`}
+                            aria-pressed={c.added}
+                          >
+                            {c.added ? `✓ ${c.name}列` : `＋ ${c.name}列`}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="text-[10px] text-muted leading-relaxed mt-1">
+                        窄栏叠加看竞价形态与价格对比；数据列可排序、可拖到任意位置，适合盘前扫全市场。再次点击显示/隐藏该列。
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -1035,7 +1292,7 @@ export function ListColumnCustomizerInner({
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
@@ -1043,63 +1300,49 @@ export function ListColumnCustomizerInner({
             {...backdrop}
           />
           <motion.div
-            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-            className="relative w-[360px] max-w-[90vw] h-full bg-base border-l border-border shadow-2xl flex flex-col"
+            initial={{ scale: 0.97, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.97, opacity: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="relative w-[900px] max-w-[94vw] max-h-[min(720px,82vh)] bg-base border border-border rounded-card shadow-2xl flex flex-col overflow-hidden"
           >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-medium text-foreground">{title}</h3>
-              <button onClick={onClose} className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="px-3 pt-3 pb-1">
-              <div className="relative">
+            {/* 头部: 标题 + 全局搜索 + 已选计数 + 关闭 */}
+            <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border shrink-0">
+              <h3 className="text-sm font-medium text-foreground shrink-0">{title}</h3>
+              <div className="relative flex-1 max-w-[300px]">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="搜索列名..."
+                  placeholder="搜索列名 / 扩展字段…"
                   className="w-full h-8 pl-8 pr-3 rounded-lg bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 transition-colors"
                 />
               </div>
+              <span className="ml-auto text-[10px] text-muted tabular-nums shrink-0">已选 {activeCols.length} 列</span>
+              {baselineStore && (
+                <button
+                  onClick={saveAsBaseline}
+                  className="shrink-0 h-7 px-2.5 rounded-btn bg-elevated border border-border text-[11px] text-secondary hover:text-foreground hover:border-accent/50 transition-colors"
+                  title="把当前列配置存为默认方案；之后「恢复默认」回到这份设置"
+                >
+                  {baselineSavedAt && Date.now() - baselineSavedAt < 2000 ? '✓ 已保存' : '保存为默认方案'}
+                </button>
+              )}
+              <button onClick={onClose} className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors shrink-0">
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-              {activeCols.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-1.5 px-1 py-1.5">
-                    <Eye className="h-3 w-3 text-accent/70" />
-                    <span className="text-[10px] font-semibold text-accent/80 uppercase tracking-wider">已启用</span>
-                    <span className="text-[10px] text-muted">{activeCols.length} 列 · 拖拽排序</span>
-                  </div>
-                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                    <SortableContext items={activeCols.map(c => c.id)} strategy={verticalListSortingStrategy}>
-                      {activeCols.map(col => (
-                        <SortableActiveCol
-                          key={col.id}
-                          col={col}
-                          onRemove={hideColumn}
-                          onConfig={setConfigOpenId}
-                          configOpen={configOpenId === col.id}
-                          extTableLabel={col.source.type === 'ext' ? (extTableLabelMap.get(col.source.configId) || col.source.configId) : ''}
-                          extConfig={() => renderExtConfig(col)}
-                          candleConfig={() => renderCandleConfig(col)}
-                          intradayConfig={() => renderIntradayConfig(col)}
-                          strategiesConfig={() => renderStrategiesConfig(col)}
-                          showStandaloneToggle={showStandaloneToggle}
-                          onToggleStandalone={toggleStandalone}
-                        />
-                      ))}
-                    </SortableContext>
-                  </DndContext>
+            {/* 两栏: 左=所有可选列, 右=已选择 (配置在已选行下方就地展开)。
+                弹窗高度自适应内容: min-h 下限防列少时过扁, 超过 max-h 时本行
+                收缩、两栏列表各自滚动。 */}
+            <div className="flex-1 flex min-h-[260px]">
+              {/* ── 左栏: 所有列 ── */}
+              <div className="w-[340px] shrink-0 border-r border-border flex flex-col min-h-0 bg-surface/20">
+                <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50 shrink-0">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">{builtinSectionLabel}</span>
+                  <span className="text-[10px] text-muted">勾选即加入</span>
                 </div>
-              )}
-
-              <div className="border-t border-border my-1" />
-
+                <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-1">
               <div>
                 <div className="flex items-center gap-1.5 px-1 py-1.5">
                   <Plus className="h-3 w-3 text-muted" />
@@ -1169,11 +1412,13 @@ export function ListColumnCustomizerInner({
                           >
                             {isExpanded ? <ChevronDown className="h-3 w-3 text-muted" /> : <ChevronRight className="h-3 w-3 text-muted" />}
                             <Database className="h-3 w-3 text-accent shrink-0" />
-                            <span className="text-[11px] font-medium text-secondary flex-1">{table.label}</span>
-                            <span className="text-[10px] text-muted">{table.mode === 'snapshot' ? '快照' : '时序'}</span>
-                            {activeCount > 0 && (
-                              <span className="text-[10px] text-accent font-medium">{activeCount}</span>
-                            )}
+                            <span className="text-[11px] font-medium text-secondary flex-1 truncate">{table.label}</span>
+                            <span className="text-[10px] text-muted px-1.5 py-0.5 rounded bg-elevated shrink-0">
+                              {table.mode === 'snapshot' ? '快照' : '时序'}
+                            </span>
+                            <span className="text-[10px] text-muted tabular-nums w-8 text-right shrink-0">
+                              {activeCount}/{dataFields.length}
+                            </span>
                           </button>
                           <AnimatePresence>
                             {isExpanded && (
@@ -1200,7 +1445,89 @@ export function ListColumnCustomizerInner({
                   暂无扩展数据表，可在「数据」页面创建
                 </div>
               )}
+                </div>
+              </div>
+
+              {/* ── 右栏: 已选择 (拖拽排序 + 就地配置) ── */}
+              <div className="flex-1 flex flex-col min-w-0 min-h-0">
+                <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50 shrink-0">
+                  <span className="text-[10px] font-semibold text-accent/80 uppercase tracking-wider">已选择 · 拖拽排序</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted tabular-nums">{activeCols.length} 列</span>
+                    <button
+                      onClick={() => setConfirmReset(true)}
+                      className="text-[10px] text-muted hover:text-foreground transition-colors"
+                    >
+                      恢复默认
+                    </button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-0.5">
+                  {activeCols.length === 0 && (
+                    <div className="text-xs text-muted text-center py-10">还没有选择任何列，从左侧勾选加入</div>
+                  )}
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                    <SortableContext items={activeCols.map(c => c.id)} strategy={verticalListSortingStrategy}>
+                      {activeCols.map(col => (
+                        <SortableActiveCol
+                          key={col.id}
+                          col={col}
+                          onRemove={hideColumn}
+                          onConfig={setConfigOpenId}
+                          configOpen={configOpenId === col.id}
+                          extTableLabel={col.source.type === 'ext' ? (extTableLabelMap.get(col.source.configId) || col.source.configId) : ''}
+                          extConfig={() => renderExtConfig(col)}
+                          candleConfig={() => renderCandleConfig(col)}
+                          intradayConfig={() => renderIntradayConfig(col)}
+                          strategiesConfig={() => renderStrategiesConfig(col)}
+                          showStandaloneToggle={showStandaloneToggle}
+                          onToggleStandalone={toggleStandalone}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                </div>
+              </div>
             </div>
+
+            {/* 恢复默认二次确认: 覆盖在主弹窗内 (不叠第二层遮罩), 明确说清恢复目标。
+                用条件渲染而非 AnimatePresence — 嵌套在弹窗 motion 树里时退出动画
+                不保证完成, 曾出现点取消后弹窗不关闭。 */}
+            {confirmReset && (
+              <div
+                className="absolute inset-0 z-10 flex items-center justify-center bg-black/55"
+                onClick={() => setConfirmReset(false)}
+              >
+                <div
+                  className="w-[360px] rounded-card border border-border bg-base p-4 shadow-2xl"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <h4 className="text-sm font-medium text-foreground mb-1.5">确认恢复默认？</h4>
+                  <p className="text-[11px] text-secondary leading-relaxed">
+                    {hasBaseline
+                      ? '将回到你保存的「默认方案」——列的顺序、显隐和所有列配置都会恢复成保存时的样子。'
+                      : '还没有保存过默认方案，将回到内置默认：清空所有列配置、扩展列移出列表。'}
+                  </p>
+                  <p className="text-[11px] text-warning mt-1.5">
+                    当前未保存的调整会丢失{hasBaseline ? '' : '，且无法撤销'}。
+                  </p>
+                  <div className="flex justify-end gap-2 mt-3.5">
+                    <button
+                      onClick={() => setConfirmReset(false)}
+                      className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-xs transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => { resetAllColumns(); setConfirmReset(false) }}
+                      className="px-3 py-1.5 rounded-btn bg-danger/90 text-white text-xs font-medium hover:bg-danger transition-colors"
+                    >
+                      {hasBaseline ? '恢复到默认方案' : '恢复内置默认'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         </div>
       )}

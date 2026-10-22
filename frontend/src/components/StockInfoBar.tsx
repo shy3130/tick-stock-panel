@@ -5,6 +5,7 @@ import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
+import { storage } from '@/lib/storage'
 import { buildStockExternalUrl, loadStockExternalTemplate } from '@/lib/stock-external-link'
 
 const BULL = '#C74040'
@@ -348,6 +349,10 @@ export function StockInfoBar({
         extColumnAlign="left"
         showStandaloneToggle
         disableBackdropBlur
+        baselineStore={{
+          get: () => storage.stockInfoBarFieldsBaseline.get(null) as ColumnConfig[] | null,
+          set: cols => storage.stockInfoBarFieldsBaseline.set(cols),
+        }}
       />
     </div>
   )

@@ -37,6 +37,7 @@ import {
   buildExtColumnsParam,
   loadScreenerColumnConfig,
   saveScreenerColumnConfig,
+  refreshExtColumns,
   type ColumnConfig,
 } from '@/lib/screener-columns'
 
@@ -131,6 +132,20 @@ export function Screener() {
     setColumns(next)
     saveScreenerColumnConfig(next)
   }, [])
+
+  // 扩展表 schema: 用实时字段标签刷新 ext 列显示名 (快照是添加时刻的, 编辑
+  // 字段后不跟随)。与列定制弹窗同一 query key, 共享缓存; 无 ext 列时不请求。
+  // 引用相等收敛 — 无变化时 setColumns 传原引用, 不触发重渲染。
+  const hasExtColumns = columns.some(c => c.source.type === 'ext')
+  const extSchema = useQuery({
+    queryKey: QK.extDataSchemaAll,
+    queryFn: api.extDataSchemaAll,
+    enabled: hasExtColumns,
+    staleTime: 60_000,
+  })
+  useEffect(() => {
+    setColumns(prev => refreshExtColumns(prev, extSchema.data?.items))
+  }, [extSchema.data])
 
   const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
 
@@ -1298,6 +1313,10 @@ export function Screener() {
         title="自定义策略结果列"
         builtinSectionLabel="策略内置列"
         extColumnAlign="center"
+        baselineStore={{
+          get: () => storage.screenerResultColumnsBaseline.get(null) as ColumnConfig[] | null,
+          set: cols => storage.screenerResultColumnsBaseline.set(cols),
+        }}
       />
 
       <StockPreviewDialog

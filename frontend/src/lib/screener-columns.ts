@@ -8,16 +8,18 @@ import { storage } from '@/lib/storage'
 import {
   buildExtColumnsParam,
   mergeColumns,
+  refreshExtColumns,
   serializeColumns,
   type ColumnConfig,
   type ColumnGroup,
   type ColumnSource,
   type ExtColumnDisplayConfig,
   type CandleColumnConfig,
+  type ExtTableSchemaInfo,
 } from '@/lib/list-columns'
 
-export type { ColumnConfig, ColumnGroup, ColumnSource, ExtColumnDisplayConfig, CandleColumnConfig }
-export { buildExtColumnsParam, mergeColumns, serializeColumns }
+export type { ColumnConfig, ColumnGroup, ColumnSource, ExtColumnDisplayConfig, CandleColumnConfig, ExtTableSchemaInfo }
+export { buildExtColumnsParam, mergeColumns, refreshExtColumns, serializeColumns }
 
 export const SCREENER_BUILTIN_COLUMNS: ColumnConfig[] = [
   // 固定列

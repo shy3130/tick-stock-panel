@@ -12,10 +12,11 @@ import { fmtPrice, formatExtNumber } from '@/lib/format'
 import type { ColumnConfig } from '@/lib/screener-columns'
 import { getSignals, signalCls } from '@/lib/stock-table'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
-import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig, resolveChartLink } from '@/lib/list-columns'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday, type MiniIntradayYMode, type MiniIntradayAuctionSeries } from '@/components/stock-table/MiniIntraday'
 import { boardLimitRate } from '@/lib/price-limit'
+import { EMPTY_ROWS } from '@/lib/series-identity'
 import { StockDataTable, type SortState } from '@/components/stock-table/StockDataTable'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import {
@@ -183,16 +184,20 @@ export function ScreenerTable({
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
-  // 日k列渲染尺寸（按眼睛开关取开启/收起尺寸）
+  // 日k / 分时联动配置（唯一副本存于分时列 intradayConfig.link, 隐藏列也可读）
+  const chartLink = resolveChartLink(columns)
+  // 日k列渲染尺寸（按眼睛开关取开启/收起尺寸; link 生效时展开高度/量带用联动值）
   const candleCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible)
-  const candleResolved = resolveCandleConfig(candleCol?.candleConfig)
+  const candleResolved = resolveCandleConfig(candleCol?.candleConfig, chartLink)
   const candleSize = dailyKChartVisible
     ? { width: candleResolved.enabledWidth, height: candleResolved.enabledHeight }
     : { width: candleResolved.disabledWidth, height: candleResolved.disabledHeight }
+  // 量带只在展开态传入: 收起态保持现状 (逐像素一致), candleSize 仍只含 width/height
+  const candleVolume = dailyKChartVisible && candleResolved.volume
 
   // 分时列渲染尺寸（开启用配置宽高，收起用 40×40 占位，与自选页一致）
   const intradayCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible)
-  const intradayResolved = resolveIntradayConfig(intradayCol?.intradayConfig)
+  const intradayResolved = resolveIntradayConfig(intradayCol?.intradayConfig, chartLink)
   const intradaySize = intradayChartVisible
     ? { width: intradayResolved.width, height: intradayResolved.height }
     : { width: 40, height: 40 }
@@ -376,7 +381,7 @@ export function ScreenerTable({
         )
       }
       case 'candle': {
-        const candleRows = klineData[r.symbol] ?? []
+        const candleRows = klineData[r.symbol] ?? EMPTY_ROWS
         // 锁定列宽与行高：minWidth=maxWidth 防止 kline 加载前后整列宽度跳动（闪烁）
         // padding/宽度与自选页一致（width+4 留内边距余量）
         return (
@@ -385,12 +390,12 @@ export function ScreenerTable({
             className="pl-2 pr-3 py-1.5"
             style={{ width: candleSize.width + 4, minWidth: candleSize.width + 4, maxWidth: candleSize.width + 4, height: candleSize.height }}
           >
-            <MiniCandlestick rows={candleRows} width={candleSize.width} height={candleSize.height} />
+            <MiniCandlestick rows={candleRows} width={candleSize.width} height={candleSize.height} volume={candleVolume} />
           </td>
         )
       }
       case 'intraday': {
-        const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? []
+        const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? EMPTY_ROWS
         const iw = intradaySize.width
         const ih = intradaySize.height
         // border-l 与自选页一致：当日k/分时相邻时提供视觉分隔

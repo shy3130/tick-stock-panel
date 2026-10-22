@@ -53,6 +53,8 @@ export interface CandleColumnConfig {
   disabledHeight?: number
   /** 显示最近多少个交易日的日k */
   days?: number
+  /** 日k底部量带; 默认 false。本列自管 — 与分时副图各自独立开关 */
+  volume?: boolean
 }
 
 /** 日k列配置默认值（与改造前 MiniCandlestick 硬编码值一致） */
@@ -62,7 +64,26 @@ export const DEFAULT_CANDLE_CONFIG: Required<CandleColumnConfig> = {
   disabledWidth: 40,
   disabledHeight: 40,
   days: 12,
+  volume: false,
 }
+
+/** 日k / 分时联动配置。唯一持久化位置：builtin:intraday 列的 intradayConfig.link。
+ *  缺省(undefined)时两列完全回退原有字段 → 老配置渲染逐像素不变。
+ *  link 是「配对设置」而非分时自身设置，物理寄存在分时列——不要在日k列再存
+ *  第二份镜像，会分叉。
+ *  只联动展开高度。量带曾做成共享开关 (link.volume 同时控两图)，实测归属不清:
+ *  开关长在分时面板却同时改日k, 也无法只开一图, 已改回各列自管; 存储里残留的
+ *  旧 link.volume 一律忽略 (未发布过, 无迁移负担)。 */
+export interface ChartLinkConfig {
+  /** 高度联动开关；严格 === true 才生效 */
+  linkHeight?: boolean
+  /** 联动后的展开高度 px；仅 linkHeight===true 且为有限数时生效 */
+  height?: number
+}
+
+/** 联动统一高度默认值与边界（两列高度边界 32–200 的交集） */
+export const DEFAULT_LINK_HEIGHT = 80
+export const LINK_HEIGHT_BOUNDS = { min: 32, max: 200 } as const
 
 /** 集合竞价叠加配置（分时列专用）。
  *
@@ -109,6 +130,8 @@ export interface IntradayColumnConfig {
   volume?: boolean
   /** 左侧集合竞价叠加 */
   auction?: IntradayAuctionConfig
+  /** 与日k联动 —— 唯一副本 (见 ChartLinkConfig 注释) */
+  link?: ChartLinkConfig
 }
 
 /** 分时列配置默认值（宽高；竞价叠加为可选扩展） */
@@ -133,14 +156,40 @@ export interface ResolvedIntradayConfig {
   auctionWidth: AuctionBarWidth
 }
 
-export function resolveIntradayConfig(cfg: IntradayColumnConfig | undefined): ResolvedIntradayConfig {
+/** 从列数组提取联动配置的唯一读入口（渲染与配置面板共用同一份）。
+ *  不筛 visible —— 隐藏分时列的 link 也要能读（写侧也不改 visible）。
+ *  分时列被删除 (不再存在于 columns) 时返回 undefined，两列各自回退旧值。 */
+export function resolveChartLink(columns: ColumnConfig[]): ChartLinkConfig | undefined {
+  const col = columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday')
+  return col?.intradayConfig?.link
+}
+
+/** 联动高度归一: linkHeight 严格 === true 且 height 为有限数才生效 (脏值回退 null,
+ *  不擅自给默认 80 —— 调用方回退各列旧高度)。两个 resolve 共用同一式。 */
+function resolveLinkHeight(link: ChartLinkConfig | undefined): number | null {
+  return link?.linkHeight === true && Number.isFinite(link.height)
+    ? clampNum(link.height, LINK_HEIGHT_BOUNDS, DEFAULT_LINK_HEIGHT)
+    : null
+}
+
+/**
+ * 解析分时列配置。
+ *
+ * link 取值: `link ?? cfg.link`。分时列是 link 的唯一宿主，因此「调用方未传」
+ * 与「传入的 link 恰好为 undefined」得到同一结果 —— 都回退到 cfg.link。
+ * 想按「无联动」解析时传 `{}`（空对象 = linkHeight 未开）。
+ * link 只影响 height; volume 是本列自管字段, 不参与联动。
+ */
+export function resolveIntradayConfig(cfg: IntradayColumnConfig | undefined, link?: ChartLinkConfig): ResolvedIntradayConfig {
   const c = cfg ?? {}
+  const effectiveLink = link ?? c.link
   const auctionWidth = AUCTION_WIDTH_RATIOS[c.auction?.width as AuctionBarWidth] != null
     ? c.auction!.width as AuctionBarWidth
     : DEFAULT_AUCTION_WIDTH
+  const linkH = resolveLinkHeight(effectiveLink)
   return {
     width:  clampNum(c.width,  INTRADAY_BOUNDS.width,  DEFAULT_INTRADAY_CONFIG.width),
-    height: clampNum(c.height, INTRADAY_BOUNDS.height, DEFAULT_INTRADAY_CONFIG.height),
+    height: linkH ?? clampNum(c.height, INTRADAY_BOUNDS.height, DEFAULT_INTRADAY_CONFIG.height),
     volume: c.volume === true,
     auction: c.auction,
     auctionWidth,
@@ -172,18 +221,33 @@ function clampNum(v: unknown, bounds: { min: number; max: number }, fallback: nu
   return Math.min(bounds.max, Math.max(bounds.min, n))
 }
 
+/** resolveCandleConfig 的返回形态（与 ResolvedIntradayConfig 同构的显式接口）。 */
+export interface ResolvedCandleConfig {
+  enabledWidth: number
+  enabledHeight: number
+  disabledWidth: number
+  disabledHeight: number
+  days: number
+  /** c.volume === true 归一 (本列自管, 与日k独立) */
+  volume: boolean
+}
+
 /**
  * 合并用户配置与默认值，并对越界数值做钳制（过大取上限，过小取最小值）。
  * 返回字段齐全的配置，调用方可直接解构使用。
+ * link 生效规则与 resolveIntradayConfig 同式（见 resolveLinkHeight）；
+ * 只联动展开高度，宽度、收起高度与量带 (volume 本列自管) 不参与。
  */
-export function resolveCandleConfig(cfg: CandleColumnConfig | undefined): Required<CandleColumnConfig> {
+export function resolveCandleConfig(cfg: CandleColumnConfig | undefined, link?: ChartLinkConfig): ResolvedCandleConfig {
   const c = cfg ?? {}
+  const linkH = resolveLinkHeight(link)
   return {
     enabledWidth:   clampNum(c.enabledWidth,    CANDLE_BOUNDS.enabledWidth,    DEFAULT_CANDLE_CONFIG.enabledWidth),
-    enabledHeight:  clampNum(c.enabledHeight,   CANDLE_BOUNDS.enabledHeight,   DEFAULT_CANDLE_CONFIG.enabledHeight),
-    disabledWidth:  clampNum(c.disabledWidth,   CANDLE_BOUNDS.disabledWidth,   DEFAULT_CANDLE_CONFIG.disabledWidth),
-    disabledHeight: clampNum(c.disabledHeight,  CANDLE_BOUNDS.disabledHeight,  DEFAULT_CANDLE_CONFIG.disabledHeight),
-    days:           clampNum(c.days,            CANDLE_BOUNDS.days,            DEFAULT_CANDLE_CONFIG.days),
+    enabledHeight:  linkH ?? clampNum(c.enabledHeight, CANDLE_BOUNDS.enabledHeight, DEFAULT_CANDLE_CONFIG.enabledHeight),
+    disabledWidth:  clampNum(c.disabledWidth,    CANDLE_BOUNDS.disabledWidth,   DEFAULT_CANDLE_CONFIG.disabledWidth),
+    disabledHeight: clampNum(c.disabledHeight,   CANDLE_BOUNDS.disabledHeight,  DEFAULT_CANDLE_CONFIG.disabledHeight),
+    days:           clampNum(c.days,             CANDLE_BOUNDS.days,            DEFAULT_CANDLE_CONFIG.days),
+    volume:         c.volume === true,
   }
 }
 
@@ -284,6 +348,81 @@ export function mergeColumns(
   }
 
   return result
+}
+
+/** 扩展表 schema 的最小结构 (api.extDataSchemaAll items 的结构子集, 供刷新用) */
+export interface ExtTableSchemaInfo {
+  id: string
+  columns?: readonly { name: string; label?: string; dtype?: string; type?: string }[]
+}
+
+/** 用实时扩展表 schema 刷新 ext 列的显示名/字段类型。
+ *
+ *  ext 列的 label 是「添加那一刻的快照」(存于本地列配置), 在扩展数据里编辑
+ *  字段标签后快照不会自己变 — 表头会一直显示旧名。这里按 configId+fieldName
+ *  从实时 schema 重刷 label / source.fieldLabel / source.fieldType, 与「添加
+ *  列」菜单同源; 字段已不存在于 schema 时保持原样 (字段名重命名/删除导致的
+ *  死列属另一问题, 不在本函数职责内)。
+ *  无任何变化时返回原数组引用 — 调用方以引用相等收敛, 不触发多余重渲染。 */
+export function refreshExtColumns(
+  columns: ColumnConfig[],
+  extTables: readonly ExtTableSchemaInfo[] | null | undefined,
+): ColumnConfig[] {
+  if (!extTables || extTables.length === 0) return columns
+  const tableMap = new Map(extTables.map(t => [t.id, t]))
+  let changed = false
+  const next = columns.map(col => {
+    if (col.source?.type !== 'ext') return col
+    const src = col.source as { type: 'ext'; configId: string; fieldName: string; fieldLabel?: string; fieldType?: string }
+    const table = tableMap.get(src.configId)
+    const field = table?.columns?.find(f => f.name === src.fieldName)
+    if (!field) return col
+    const label = field.label || src.fieldName
+    const fieldType = field.dtype ?? field.type
+    if (src.fieldLabel === label && src.fieldType === fieldType && col.label === label) return col
+    changed = true
+    return { ...col, label, source: { ...src, fieldLabel: label, fieldType } }
+  })
+  return changed ? next : columns
+}
+
+/** 按「默认方案」快照恢复列配置 (纯函数, 供 resetAllColumns 与测试共用)。
+ *
+ *  规则:
+ *  - 快照里有的列: 恢复它的显隐与全部列级配置 (candleConfig/intradayConfig/
+ *    extDisplay/standalone), 并按快照顺序排列; pinned 列始终在前且不受快照影响。
+ *  - 快照里没有的列 (保存快照之后才新增的内置列/扩展字段): visible=false 且清空
+ *    配置 —— 不擅自打开用户没见过的新列。
+ *  - 快照为空/null: 返回 null, 调用方回退内置默认逻辑。
+ */
+export function restoreColumnsFromBaseline(
+  current: ColumnConfig[],
+  snapshot: ColumnConfig[] | null | undefined,
+): ColumnConfig[] | null {
+  if (!snapshot || snapshot.length === 0) return null
+  const snapById = new Map(snapshot.map(c => [c.id, c]))
+  const restored = current.map(c => {
+    if (c.pinned) return c
+    const { candleConfig, intradayConfig, extDisplay, standalone, ...rest } = c
+    const saved = snapById.get(c.id)
+    if (!saved) return { ...rest, visible: false }
+    return {
+      ...rest,
+      visible: saved.visible !== false,
+      ...(saved.candleConfig ? { candleConfig: saved.candleConfig } : {}),
+      ...(saved.intradayConfig ? { intradayConfig: saved.intradayConfig } : {}),
+      ...(saved.extDisplay ? { extDisplay: saved.extDisplay } : {}),
+      ...(saved.standalone ? { standalone: saved.standalone } : {}),
+    }
+  })
+  const order = new Map(snapshot.map((c, i) => [c.id, i]))
+  const pinned = restored.filter(c => c.pinned)
+  const rest = restored.filter(c => !c.pinned).sort((a, b) => {
+    const ai = order.has(a.id) ? order.get(a.id)! : Number.MAX_SAFE_INTEGER
+    const bi = order.has(b.id) ? order.get(b.id)! : Number.MAX_SAFE_INTEGER
+    return ai - bi
+  })
+  return [...pinned, ...rest]
 }
 
 /** 从列配置中提取 ext 列参数，用于后端 enriched 接口。

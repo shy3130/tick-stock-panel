@@ -114,6 +114,17 @@ export function getSortValue(r: any, col: ColumnConfig): any {
     case 'added_at':      return r.added_at ? cnDateTimeFromUtc(r.added_at) : null
     case 'pct_since_added': return r.pct_since_added
     case 'score':         return r.score
+    // 财务列: 之前缺 case, 导致这 10 列点击表头无法排序 (恒为 null 排最后)
+    case 'eps':           return r.eps
+    case 'bps':           return r.bps
+    case 'roe':           return r.roe
+    case 'pe_ttm':        return r.pe_ttm
+    case 'pb':            return r.pb
+    case 'gross_margin':  return r.gross_margin
+    case 'net_margin':    return r.net_margin
+    case 'revenue_yoy':   return r.revenue_yoy
+    case 'net_income_yoy':return r.net_income_yoy
+    case 'debt_ratio':    return r.debt_ratio
     default: return null
   }
 }

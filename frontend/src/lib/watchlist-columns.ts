@@ -10,15 +10,18 @@ import {
   buildExtColumnsParam as buildExtColumnsParamBase,
   createExtColumn as createExtColumnBase,
   mergeColumns as mergeColumnsBase,
+  refreshExtColumns,
   serializeColumns as serializeColumnsBase,
   type ColumnConfig,
   type ColumnGroup,
   type ColumnSource,
   type ExtColumnDisplayConfig,
   type CandleColumnConfig,
+  type ExtTableSchemaInfo,
 } from '@/lib/list-columns'
 
-export type { ColumnConfig, ColumnGroup, ColumnSource, ExtColumnDisplayConfig, CandleColumnConfig }
+export type { ColumnConfig, ColumnGroup, ColumnSource, ExtColumnDisplayConfig, CandleColumnConfig, ExtTableSchemaInfo }
+export { refreshExtColumns }
 
 // ===== 内置列注册表（与当前硬编码一一对应） =====
 
@@ -71,7 +74,7 @@ export const BUILTIN_COLUMNS: ColumnConfig[] = [
   { id: 'builtin:momentum_10d', source: { type: 'builtin', key: 'momentum_10d' }, label: '10D 动量', visible: false, align: 'center' },
   { id: 'builtin:momentum_20d', source: { type: 'builtin', key: 'momentum_20d' }, label: '20D 动量', visible: false, align: 'center' },
   { id: 'builtin:momentum_30d', source: { type: 'builtin', key: 'momentum_30d' }, label: '30D 动量', visible: false, align: 'center' },
-  { id: 'builtin:momentum_60d', source: { type: 'builtin', key: 'momentum' }, label: '60D 动量', visible: true, align: 'center' },
+  { id: 'builtin:momentum_60d', source: { type: 'builtin', key: 'momentum_60d' }, label: '60D 动量', visible: true, align: 'center' },
   // 连板
   { id: 'builtin:limit_ups', source: { type: 'builtin', key: 'limit_ups' }, label: '连板', visible: true, align: 'center' },
   { id: 'builtin:limit_downs', source: { type: 'builtin', key: 'limit_downs' }, label: '连跌', visible: false, align: 'center' },
