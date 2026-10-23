@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+import app.desktop as desktop
 from app.config import settings
 from app.desktop import (
     _failed_html,
@@ -94,3 +95,32 @@ def test_precheck_mining_lock_detects_conflict(data_dir):
     assert "结束残留的 python" in reason
     holder.release()
     assert _precheck_mining_lock() is None
+
+
+# ---------- main() 预检冲突路径 ----------
+
+def test_main_releases_lock_when_failure_window_crashes(
+    tmp_path, monkeypatch, caplog
+):
+    """预检冲突 + 失败页窗口自身崩溃 (如缺 webview 依赖): 异常不得裸穿 main()。
+
+    该路径在 main() 的 try/finally 之外, 不兜底会导致 console=False 闪退无反馈、
+    .desktop.lock 跳过释放。断言: 记录异常日志、单实例锁仍释放、退出码 1。
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: "冲突原因")
+
+    def _boom(_html_text):
+        raise RuntimeError("webview unavailable")
+
+    monkeypatch.setattr(desktop, "_open_static_window", _boom)
+
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="app.desktop"):
+        assert desktop.main() == 1
+
+    assert "启动失败页窗口打开失败" in caplog.text
+    assert not (tmp_path / ".desktop.lock").exists()

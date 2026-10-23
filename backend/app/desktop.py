@@ -300,6 +300,11 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
         log_level="info",
         access_log=False,    # 桌面版不需要访问日志
         loop="auto",
+        # log_config=None: uvicorn 默认给 uvicorn.* 挂独立 console handler 且
+        # propagate=False, windowed 模式下 stderr 已被守护替换, lifespan 启动
+        # 失败的 "Application startup failed" 永远到不了 desktop.log (失败页
+        # 承诺的排查入口)。置 None 让 uvicorn 日志走 root 的 FileHandler 落盘。
+        log_config=None,
     )
     server = uvicorn.Server(config)
 
@@ -416,7 +421,13 @@ def main() -> int:
     conflict = _precheck_mining_lock()
     if conflict is not None:
         logger.error("启动预检: %s", conflict.replace("\n", " "))
-        _open_static_window(_failed_html(conflict))
+        try:
+            _open_static_window(_failed_html(conflict))
+        except Exception:
+            # 失败页自身也打不开 (如缺 webview 依赖) 时不能让异常裸穿 main():
+            # console=False 下进程闪退无反馈, 且本路径在 try/finally 之外,
+            # 单实例锁会跳过释放
+            logger.exception("启动失败页窗口打开失败")
         _release_single_instance()
         return 1
 

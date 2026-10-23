@@ -57,7 +57,7 @@ from app.extensions.loader import (
 )
 from app.jobs import daily_pipeline
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
-from app.services.mining_process_lock import MiningProcessLock
+from app.services.mining_process_lock import MiningProcessLock, MiningProcessLockError
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
@@ -493,7 +493,13 @@ async def _application_lifespan(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     mining_process_lock = MiningProcessLock(settings.data_dir)
-    mining_process_lock.acquire()
+    try:
+        mining_process_lock.acquire()
+    except MiningProcessLockError:
+        # uvicorn 吞掉 lifespan 异常只留一行 startup failed; 桌面版失败页指向
+        # data/desktop.log, 先把真因 (含 traceback) 落盘, 不依赖 uvicorn 的日志行为
+        logger.error("挖掘锁被其他后端实例占用, lifespan 启动失败", exc_info=True)
+        raise
     try:
         async with _application_lifespan(app):
             yield

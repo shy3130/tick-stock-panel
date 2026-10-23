@@ -81,3 +81,36 @@ def test_lifespan_releases_lock_when_application_shutdown_raises(monkeypatch) ->
         asyncio.run(exercise())
 
     assert events == ["acquired", "released"]
+
+
+def test_lifespan_logs_true_cause_when_lock_held(monkeypatch, caplog) -> None:
+    """抢锁失败: 先落 ERROR 日志 (桌面版失败页指向 desktop.log 的排查依据) 再上抛。
+
+    uvicorn 会吞掉 lifespan 异常只留一行笼统的 startup failed, 真因必须由
+    app 自己先写日志, 否则用户按失败页指引打开 desktop.log 查无对证。
+    """
+    from app.services.mining_process_lock import MiningProcessLockError
+
+    class LockStub:
+        def __init__(self, data_dir) -> None:
+            del data_dir
+
+        def acquire(self) -> None:
+            raise MiningProcessLockError("another process owns mining")
+
+        def release(self) -> None:
+            raise AssertionError("acquire 失败后不应调用 release")
+
+    monkeypatch.setattr(main_module, "MiningProcessLock", LockStub)
+
+    async def exercise() -> None:
+        async with main_module.lifespan(SimpleNamespace()):
+            pass
+
+    with (
+        caplog.at_level("ERROR", logger="app.main"),
+        pytest.raises(MiningProcessLockError),
+    ):
+        asyncio.run(exercise())
+
+    assert "挖掘锁" in caplog.text
