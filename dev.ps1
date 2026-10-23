@@ -242,7 +242,7 @@ $BackendErrLog  = Join-Path $LogDir 'backend.err.log'
 $FrontendOutLog = Join-Path $LogDir 'frontend.out.log'
 $FrontendErrLog = Join-Path $LogDir 'frontend.err.log'
 
-# 每次启动重置本会话日志 (后端自身的 data/backend.log 已有轮转, 这里只放转发副本)
+# 每次启动重置本会话日志 (后端自身的 data\logs\backend.log 已有轮转, 这里只放转发副本)
 foreach ($f in @($BackendOutLog, $BackendErrLog, $FrontendOutLog, $FrontendErrLog)) {
     Remove-Item $f -Force -ErrorAction SilentlyContinue
 }

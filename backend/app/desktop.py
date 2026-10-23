@@ -55,7 +55,7 @@ def _failed_html(reason: str | None = None) -> str:
 </style></head><body><div class="box">
   <h1>{title}</h1>
   {body}
-  <p>反复失败时查看日志：data\\desktop.log</p>
+  <p>反复失败时查看日志：data\\logs\\desktop.log</p>
 </div></body></html>"""
 
 
@@ -178,34 +178,17 @@ def _guard_streams() -> None:
 
 
 def _setup_logging() -> None:
-    """配置日志落盘到 data/desktop.log。
+    """配置日志落盘到 data/logs/desktop.log (10MB×5 切割)。
 
     背景: spec 里 console=False (桌面应用不弹黑窗), 导致 logging 默认输出的
     stderr 被吞掉 —— 启动期任何异常用户都看不到, 表现为「双击一闪退出、查无日志」。
-    这里追加一个 FileHandler, 让日志同时落到 data_dir/desktop.log, 事后可查。
-
-    时序注意: data_dir 在 import app.config 时路径已可用, 但目录此刻可能不存在
-    (frozen 首次运行), 必须先 mkdir, 否则 FileHandler 打开文件会抛 FileNotFoundError。
-    不用第二次 basicConfig (它「首次调用才生效」), 改用 addHandler 追加。
+    这里经共享的 attach_rotating_log 追加轮转文件 handler, 事后可查; 桌面版
+    长期挂机, 不切割的追加日志会无限增长 (用户反馈的磁盘隐患)。
+    旧版的 data/desktop.log 由 attach_rotating_log 一次性迁入 data/logs/。
     """
-    try:
-        from app.config import settings
+    from app.logfile import attach_rotating_log
 
-        log_dir = settings.data_dir
-        log_dir.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(
-            log_dir / "desktop.log",
-            mode="a",            # 追加, 保留历史 (排查时往往需要对比多次启动)
-            encoding="utf-8",
-            errors="replace",    # 容错: 对齐 __init__.py 的 stderr 重配, 避免中文/emoji 触发 UnicodeEncodeError
-        )
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
-        logging.getLogger().addHandler(handler)
-    except Exception as e:  # noqa: BLE001
-        # 日志落盘失败不阻断启动 (开发模式 data_dir 可能不可写)
-        logger.warning("日志文件初始化失败, 仅输出到 stderr: %s", e)
+    attach_rotating_log("desktop.log", max_mb=10, backup_count=5)
 
 
 def _show_crash(title: str, text: str) -> None:
@@ -447,7 +430,7 @@ def main() -> int:
         # ready 由后端线程 finally 置位 → 线程已退出时立刻返回, 不等满超时
         if not _wait_for_server(port, timeout=60.0, done_event=ready):
             reason = (
-                "后端进程已提前退出，详情见 data\\desktop.log"
+                "后端进程已提前退出，详情见 data\\logs\\desktop.log"
                 if ready.is_set() else None
             )
             logger.error("后端未就绪 (reason=%s), 桌面版退出", reason)

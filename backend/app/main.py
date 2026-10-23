@@ -71,25 +71,13 @@ logger = logging.getLogger(__name__)
 
 # 追加文件日志: uvicorn (含 --reload 开发模式) 默认只有 StreamHandler, 同步/管道等
 # 运行时日志仅出现在 dev 终端, 关掉或滚屏后即丢失, 排查「同步后日志没落」时无处可查。
-# 落盘到 data/backend.log 与桌面版 (desktop.py:_setup_logging → desktop.log) 行为对齐,
-# 事后可查。桌面版 (frozen) 已由 desktop.py 写 desktop.log, 此处跳过避免重复落盘。
-# RotatingFileHandler 防止长期运行/频繁 reload 导致文件无限增长。
+# 落盘到 data/logs/backend.log 与桌面版 (desktop.py:_setup_logging → logs/desktop.log)
+# 行为对齐, 事后可查。桌面版 (frozen) 已由 desktop.py 写 desktop.log, 此处跳过避免
+# 重复落盘; 大小切割与旧位置迁移见 app/logfile.py。
 if not getattr(sys, "frozen", False):
-    try:
-        from logging.handlers import RotatingFileHandler
+    from app.logfile import attach_rotating_log
 
-        _log_path = settings.data_dir / "backend.log"
-        _log_path.parent.mkdir(parents=True, exist_ok=True)
-        _file_handler = RotatingFileHandler(
-            _log_path, maxBytes=10 * 1024 * 1024, backupCount=3,
-            mode="a", encoding="utf-8", errors="replace",
-        )
-        _file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
-        logging.getLogger().addHandler(_file_handler)
-    except Exception as _e:  # noqa: BLE001
-        logger.warning("文件日志初始化失败, 仅输出到终端: %s", _e)
+    attach_rotating_log("backend.log", max_mb=10, backup_count=3)
 
 
 @asynccontextmanager
