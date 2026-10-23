@@ -917,6 +917,11 @@ def get_minute_batch(request: Request, body: dict):
             _pull("etf", [s for s in stale_last if s in etf_set], inc_start)
 
     # 合并: 有增量/回填的 symbol = 本地 + 拉取 upsert; 仅拉到的 (missing) 直接进结果
+    # 补拉落空兜底 (truncated): 本地已有部分K但本轮补拉失败/为空 (上游断网窗口) 时,
+    # 返回本地已落盘的行 — 图冻结在最后落盘时刻, 而不是整只从结果里消失
+    # (2026-10-23 实测: 断网 40 分钟, 分时列全部退化为只剩竞价栏)。
+    # truncated 标记这些 symbol 是残缺快照, 前端可据此提示; 严格只回本地行, 不外推。
+    truncated: set[str] = set()
     for sym, sub in local_parts.items():
         live = live_map.get(sym)
         if live is not None:
@@ -926,6 +931,9 @@ def get_minute_batch(request: Request, body: dict):
                 .sort("datetime")
             )
             result[sym] = merged.to_dicts()
+        elif sym not in result and not sub.is_empty():
+            result[sym] = sub.to_dicts()
+            truncated.add(sym)
     for sym, live in live_map.items():
         if sym not in result:
             result[sym] = live.to_dicts()
@@ -937,14 +945,19 @@ def get_minute_batch(request: Request, body: dict):
             for sym, rows in result.items()
         }
         result = {sym: rows for sym, rows in result.items() if rows}
+    # since 过滤后已无行的 symbol 不再标记 truncated (标记与 data 键一致)
+    truncated &= result.keys()
 
+    payload = {
+        "data": result,
+        "full_minute_local": full_minute_healthy,
+        "incremental": since_dt is not None,
+    }
+    if truncated:
+        payload["truncated"] = sorted(truncated)
     return _gzip_payload(
         request,
-        {
-            "data": result,
-            "full_minute_local": full_minute_healthy,
-            "incremental": since_dt is not None,
-        },
+        payload,
         pref_key="minute_batch_compress",
     )
 
