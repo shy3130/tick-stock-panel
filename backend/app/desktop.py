@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import html
 import logging
 import os
 import socket
@@ -29,6 +30,33 @@ logger = logging.getLogger(__name__)
 _APP_NAME = "TSP"
 _BASE_PORT = 3018
 _PORT_PROBE_RANGE = 50  # 从 3018 起最多试 50 个端口
+
+
+def _failed_html(reason: str | None = None) -> str:
+    """启动失败/超时的整页提示 (后端没起来时窗口也要能说明白)。
+
+    reason=None → 沿用「启动超时」原文案; 传 reason → 换成具体失败原因,
+    文案里的换行按 <br> 渲染, 用户照指引操作即可自助解决。
+    """
+    if reason is None:
+        title = "TSP 启动超时"
+        body = "<p>后端未在预期时间内就绪，请关闭窗口后重新打开。</p>"
+    else:
+        title = "TSP 启动失败"
+        body = f"<p>{html.escape(reason).replace(chr(10), '<br>')}</p>"
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<style>
+  html,body{{margin:0;height:100%;background:#0d1117;color:#c9d1d9;
+    font-family:"Microsoft YaHei",system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center}}
+  .box{{text-align:center;max-width:460px}}
+  h1{{font-size:18px;font-weight:500;margin:0 0 12px;color:#f85149}}
+  p{{font-size:13px;color:#8b949e;margin:0 0 6px;line-height:1.7}}
+</style></head><body><div class="box">
+  <h1>{title}</h1>
+  {body}
+  <p>反复失败时查看日志：data\\desktop.log</p>
+</div></body></html>"""
 
 
 def _ensure_data_dir_writable() -> None:
@@ -48,6 +76,37 @@ def _ensure_data_dir_writable() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error("数据目录不可写, 桌面版无法运行: %s (%s)", data_root, e)
         raise
+
+
+def _precheck_mining_lock() -> str | None:
+    """启动前预检挖掘锁。返回 None = 可启动; 返回 str = 冲突原因 (给失败页)。
+
+    app.main 的 lifespan 第一件事就是抢 data_dir/.mining_process_lock,
+    被别的后端实例 (panel 模式、隧道后端或残留进程) 占住时 lifespan 直接
+    抛 MiningProcessLockError, uvicorn 吞掉后主线程只能等满超时报笼统的
+    "启动失败"。这里用同一把锁试抢一下, 提前把冲突翻译成用户可操作的指引。
+    试抢成功立即释放, 真正的持有仍由 lifespan 负责。
+    """
+    from app.config import settings
+    from app.services.mining_process_lock import (
+        MiningProcessLock,
+        MiningProcessLockError,
+    )
+
+    lock = MiningProcessLock(settings.data_dir)
+    try:
+        lock.acquire()
+    except MiningProcessLockError:
+        return (
+            "检测到另一个后端实例正在占用数据目录\n"
+            "(panel 模式、云隧道或残留进程)\n"
+            "请先停止它再打开桌面版：\n"
+            "1. 在任务管理器结束残留的 python / uvicorn 进程\n"
+            "2. 或重启电脑\n"
+            "完成后重新打开本应用"
+        )
+    lock.release()
+    return None
 
 
 def _acquire_single_instance() -> bool:
@@ -260,10 +319,16 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
         ready_event.set()
 
 
-def _wait_for_server(port: int, timeout: float = 60.0) -> bool:
+def _wait_for_server(
+    port: int, timeout: float = 60.0, done_event: threading.Event | None = None
+) -> bool:
     """轮询 health 接口直到后端就绪或超时。
 
     比 monkey-patch uvicorn 内部方法更健壮, 不依赖版本内部实现。
+
+    done_event 置位表示后端线程已退出 (lifespan 失败被 uvicorn 吞掉时不向
+    调用方抛异常, 只表现为 server.run() 正常返回) —— 此时不可能出现就绪,
+    立即返回 False, 不再傻等满 timeout 把「启动失败」伪装成「超时」。
     """
     import urllib.request
     import urllib.error
@@ -271,6 +336,8 @@ def _wait_for_server(port: int, timeout: float = 60.0) -> bool:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if done_event is not None and done_event.is_set():
+            return False
         try:
             with urllib.request.urlopen(url, timeout=2) as r:
                 if r.status == 200:
@@ -296,6 +363,22 @@ def _open_window(url: str) -> None:
     )
     # pywebview 会阻塞主线程直到窗口关闭
     webview.start(debug=False)
+
+
+def _open_static_window(html_text: str) -> None:
+    """只弹一个静态内容窗口 (预检失败等场景: 后端根本没起, 无需等待切换)。"""
+    import webview  # type: ignore[import-not-found]
+
+    window = webview.create_window(
+        _APP_NAME,
+        html=html_text,
+        width=560,
+        height=360,
+        confirm_close=False,
+    )
+    # 启动器以 SW_HIDE 隐藏控制台, Windows 会把隐藏标志传给进程第一个窗口
+    # (即本窗口), 故 GUI 循环就绪后显式 show (同 _open_window 的就绪处理)
+    webview.start(lambda: window.show(), debug=False)
 
 
 def main() -> int:
@@ -328,6 +411,15 @@ def main() -> int:
     if not _acquire_single_instance():
         return 0
 
+    # 挖掘锁预检: 被其他后端实例占住时 lifespan 必败, 提前秒显失败页并给出
+    # 操作指引, 而不是让用户对着超时后的笼统"启动失败"猜 (见 _precheck_mining_lock)
+    conflict = _precheck_mining_lock()
+    if conflict is not None:
+        logger.error("启动预检: %s", conflict.replace("\n", " "))
+        _open_static_window(_failed_html(conflict))
+        _release_single_instance()
+        return 1
+
     try:
         port = _find_free_port(_BASE_PORT)
         logger.info("桌面版后端将监听 127.0.0.1:%d", port)
@@ -340,10 +432,15 @@ def main() -> int:
         )
         server_thread.start()
 
-        # 轮询 health 接口等后端就绪 (含 lifespan 初始化, 最多 60s)
-        if not _wait_for_server(port, timeout=60.0):
-            logger.error("后端启动超时, 桌面版退出")
-            _release_single_instance()
+        # 轮询 health 接口等后端就绪 (含 lifespan 初始化, 最多 60s);
+        # ready 由后端线程 finally 置位 → 线程已退出时立刻返回, 不等满超时
+        if not _wait_for_server(port, timeout=60.0, done_event=ready):
+            reason = (
+                "后端进程已提前退出，详情见 data\\desktop.log"
+                if ready.is_set() else None
+            )
+            logger.error("后端未就绪 (reason=%s), 桌面版退出", reason)
+            _open_static_window(_failed_html(reason))
             return 1
 
         url = f"http://127.0.0.1:{port}"
