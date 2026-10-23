@@ -1969,7 +1969,7 @@ wheels = [
 
 [[package]]
 name = "pytesseract"
-version = "0.3.14"
+version = "0.3.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
@@ -2522,7 +2522,7 @@ all = [
 
 [[package]]
 name = "tickflow-stock-panel-backend"
-version = "0.3.13"
+version = "0.3.14"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
