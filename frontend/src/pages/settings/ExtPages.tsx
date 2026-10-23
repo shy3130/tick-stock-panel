@@ -165,13 +165,22 @@ export function SettingsExtPagesPanel() {
               也可以直接填网址创建 URL 嵌入页；要导入 .tsx 源码页面请到「页面插件」区块的「导入源码」。
             </p>
           </div>
-          <button
-            onClick={() => { resetForm(); setShowForm(true) }}
-            className="inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新建页面
-          </button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              onClick={() => { resetForm(); setTemplate('url'); setShowForm(true) }}
+              className="inline-flex items-center justify-center gap-1.5 rounded-btn border border-border px-3 py-1.5 text-xs font-medium text-secondary hover:border-accent/60 hover:text-accent transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              新建 URL 页
+            </button>
+            <button
+              onClick={() => { resetForm(); setShowForm(true) }}
+              className="inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新建页面
+            </button>
+          </div>
         </div>
       </section>
 
