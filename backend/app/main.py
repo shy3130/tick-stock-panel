@@ -152,6 +152,15 @@ async def _application_lifespan(app: FastAPI):
     # instruments/index/ETF 仍同步 (毫秒级)。应用立即 ready, 指标算完后自动替换。
     repo.refresh_cache(background=True)
 
+    # 拼音搜索缓存后台预热: 标的搜索的分页实现会全量遍历拼音命中,
+    # 提前填充 lru_cache, 避免首个纯字母查询一次性计算全市场名称卡顿。
+    # 此处 instruments 已同步加载完毕, 预热可立即进行; 失败静默不影响功能。
+    import threading
+
+    threading.Thread(
+        target=kline.warm_pinyin_cache, args=(repo,), daemon=True, name="pinyin-warmup",
+    ).start()
+
     # 自定义数据源配置(可选): 失败只记录错误, 不影响 TickFlow 基准路径。
     try:
         from app.data_providers import custom as custom_sources

@@ -396,6 +396,9 @@ class KlineRepository:
         self._etf_live_agg_cache: pl.DataFrame | None = None
         self._etf_live_agg_cache_date: date | None = None
         self._etf_instruments_cache: pl.DataFrame | None = None
+        # instruments 缓存代数: 每次重建/清空 +1。搜索分页用它检测翻页中途的
+        # 缓存换代 (行序可能变化), 前端发现跨页版本不一致时重置 pages 重拉。
+        self._instruments_version = 0
         # symbol 集合 memo (随对应 instruments 缓存失效): 供每请求资产分流用
         self._index_symbol_set_cache: set[str] | None = None
         self._etf_symbol_set_cache: set[str] | None = None
@@ -575,6 +578,12 @@ class KlineRepository:
         self._name_map_cache = None
         self._index_enriched_cache = None
         self._index_enriched_cache_date = None
+        self._instruments_version += 1
+
+    @property
+    def instruments_version(self) -> int:
+        """instruments 缓存代数 (stock/index/etf 任一重建或清空时 +1)。"""
+        return self._instruments_version
 
     def _refresh_enriched(self) -> bool:
         """刷新 enriched 内存缓存。返回 True 表示因数据换代被丢弃、可重试。
@@ -1180,6 +1189,7 @@ class KlineRepository:
             if not df.is_empty():
                 self._instruments_cache = df
                 self._name_map_cache = None
+                self._instruments_version += 1
                 logger.info("instruments 缓存已加载: %d 只", len(df))
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments 缓存刷新失败: %s", e)
@@ -1192,6 +1202,7 @@ class KlineRepository:
                 self._index_instruments_cache = df
                 self._index_symbol_set_cache = None
                 self._name_map_cache = None
+                self._instruments_version += 1
                 logger.info("index instruments 缓存已加载: %d 只", len(df))
         except Exception as e:  # noqa: BLE001
             logger.debug("index instruments 缓存刷新跳过: %s", e)
@@ -1218,6 +1229,7 @@ class KlineRepository:
             self._etf_instruments_cache = df_all
             self._etf_symbol_set_cache = None
             self._name_map_cache = None
+            self._instruments_version += 1
             logger.info("ETF instruments 缓存已加载: %d 只", len(df_all))
 
     def get_enriched_latest(self) -> tuple[pl.DataFrame, date | None]:

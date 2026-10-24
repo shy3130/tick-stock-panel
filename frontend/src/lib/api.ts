@@ -2831,9 +2831,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, date, ...(preferLocal ? { prefer_local: true } : {}), ...(since ? { since } : {}) }),
     }),
-  instrumentSearch: (q: string, limit = 20, assetTypes?: string) =>
-    request<{ results: { symbol: string; name: string; code: string; asset_type?: string }[] }>(
-      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}`,
+  /** 模糊搜索标的。opts 仅分页场景使用 (offset 游标 + balance 类型均衡交织);
+   *  旧调用方不传 opts, 行为与分页前一致 (首页 limit 条)。 */
+  instrumentSearch: (
+    q: string,
+    limit = 20,
+    assetTypes?: string,
+    opts?: { offset?: number; balance?: boolean },
+  ) =>
+    request<{
+      results: { symbol: string; name: string; code: string; asset_type?: string }[]
+      has_more?: boolean
+      next_offset?: number | null
+      instruments_version?: number | null
+    }>(
+      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}${opts?.offset != null ? `&offset=${opts.offset}` : ''}${opts?.balance ? '&balance=true' : ''}`,
     ),
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */

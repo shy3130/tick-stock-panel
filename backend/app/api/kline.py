@@ -7,9 +7,13 @@ import logging
 import math
 from datetime import date, timedelta
 from functools import lru_cache
+from itertools import zip_longest
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    import polars as pl
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -144,20 +148,109 @@ def _match_pinyin(name: str, keyword: str) -> bool:
     return any(k.startswith(keyword) for k in _name_pinyin_keys(name))
 
 
+def warm_pinyin_cache(repo) -> None:
+    """遍历 instruments 名称预填拼音 lru_cache, 消除首个纯字母搜索的冷启动卡顿。
+
+    由 lifespan 后台线程调用; 幂等、失败静默 (预热是优化, 不影响功能)。
+    lru_cache(maxsize=8192) 容量大于全市场名称总数 (~7k)。
+    """
+    for asset in ("stock", "etf", "index"):
+        try:
+            df = repo.get_instruments_asset(asset)
+        except Exception:  # noqa: BLE001
+            continue
+        if df.is_empty() or "name" not in df.columns:
+            continue
+        for name in df["name"].to_list():
+            if name:
+                _name_pinyin_keys(name)
+
+
+def _match_tier_frames(
+    df: pl.DataFrame,
+    keyword: str,
+    is_pinyin_query: bool,
+    *,
+    limit: int | None = None,
+) -> pl.DataFrame:
+    """单个 instruments 帧的三层分层匹配, 返回完整有序候选 (不截断)。
+
+    层序: ①code/symbol 前缀 → ②拼音首字母前缀 (仅纯字母 keyword) → ③包含匹配;
+    层内保持 df 行序, 跨层按 symbol 去重。调用方对结果做 slice(offset, limit)。
+
+    limit: 仅需要前 limit 条时传入 —— 前缀命中数 ≥ limit 时提前返回完整
+    prefix_hits, 跳过拼音/包含层的全量构造 (slice(0, limit) 与 has_more
+    语义均不变: 前 limit 条全来自前缀层, 总数下限就是前缀命中数)。
+    交织或翻页 (offset>0) 需要完整三层序列时传 None。
+
+    与分页前旧实现 (每层就地 head(remaining)) 的 slice(0, limit) 逐条等价:
+    拼音命中数不足剩余配额时拼音全量入列、seen 集合相同; 达到配额时旧实现
+    remaining 归零、包含层直接跳过, 旧结果中本就不含包含层行。
+    """
+    import polars as pl
+
+    prefix_mask = (
+        pl.col("code").str.starts_with(keyword)
+        | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
+    )
+    contains_mask = (
+        pl.col("code").str.contains(keyword, literal=True)
+        | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True)
+        | pl.col("name").str.contains(keyword, literal=True)
+    )
+    prefix_hits = df.filter(prefix_mask)
+    if limit is not None and prefix_hits.height >= limit:
+        # 前缀命中已铺满本页: 拼音/包含层不可能出现在前 limit 条内。
+        # 返回完整 prefix_hits (不 head) —— 截断会让 has_more 基于失真总数算错
+        return prefix_hits
+    seen: list[str] = prefix_hits["symbol"].to_list()
+    tiers = [prefix_hits]
+
+    if is_pinyin_query:
+        candidates = df.filter(~pl.col("symbol").is_in(seen))
+        pinyin_syms = [
+            row["symbol"]
+            for row in candidates.iter_rows(named=True)
+            if _match_pinyin(row["name"], keyword)
+        ]
+        if pinyin_syms:
+            # is_in 过滤保持 df 原行序, 与旧实现 iter_rows 遍历序一致
+            tiers.append(df.filter(pl.col("symbol").is_in(pinyin_syms)))
+            seen.extend(pinyin_syms)
+
+    contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(seen))
+    if contain_hits.height:
+        tiers.append(contain_hits)
+
+    tiers = [t for t in tiers if t.height]
+    return pl.concat(tiers, how="vertical") if tiers else df.head(0)
+
+
 @router.get("/instruments/search")
 def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
     asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
+    offset: int = Query(0, ge=0, description="分页游标: 跳过前 offset 条有序候选"),
+    balance: bool = Query(False, description="多类型时按类型 round-robin 均衡交织 (翻页搜索用)"),
 ):
     """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
 
     默认只搜股票, 保持既有调用方行为不变; 自选等场景传 asset_types=stock,etf
     可一并搜出 ETF, 结果附带 asset_type 字段供前端区分。
+
+    匹配结果先构造三层全序 (前缀 → 拼音 → 包含, 层内保持行序), 再在序列上
+    slice(offset, limit); offset=0 的第一页与分页前的旧实现逐条等价。
+    balance=false (默认) 把各类型 concat 后统一分层 (层优先于类型);
+    balance=true 时每类型独立分层后 round-robin 交织, 避免宽泛关键词下
+    股票占满首页挤出 ETF/指数。每次翻页独立重算, 无服务端游标状态;
+    instruments_version 是 instruments 缓存代数, 供前端检测翻页中途的
+    缓存换代 (行序漂移) 并重拉。
     """
+    empty = {"results": [], "has_more": False, "next_offset": None}
     if not q.strip():
-        return {"results": []}
+        return {**empty, "instruments_version": None}
 
     repo = request.app.state.repo
     import polars as pl
@@ -175,58 +268,40 @@ def search_instruments(
             (pl.col("code").cast(pl.Utf8) if "code" in df_t.columns else pl.lit("")).alias("code"),
             pl.lit(t).alias("asset_type"),
         ]).select(["symbol", "name", "code", "asset_type"]))
+    version = getattr(repo, "instruments_version", None)
     if not parts:
-        return {"results": []}
-    df = pl.concat(parts, how="vertical")
+        return {**empty, "instruments_version": version}
 
     keyword = q.strip().upper()
     is_pinyin_query = keyword.isalpha() and keyword.isascii()
 
-    # code/symbol 前缀优先，再 name 包含匹配
-    prefix_mask = (
-        pl.col("code").str.starts_with(keyword)
-        | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
-    )
-    contains_mask = (
-        pl.col("code").str.contains(keyword, literal=True)
-        | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True)
-        | pl.col("name").str.contains(keyword, literal=True)
-    )
-
-    # 分层匹配: ① code/symbol 前缀 → ② 拼音首字母前缀(纯字母输入) → ③ 包含匹配
-    prefix_hits = df.filter(prefix_mask).head(limit)
-    if prefix_hits.height >= limit:
-        matched = prefix_hits
+    if balance and len(parts) > 1:
+        # 类型优先 round-robin 交织: stock0,etf0,index0,stock1,…; 耗尽类型跳过
+        per_type_rows = [
+            _match_tier_frames(part, keyword, is_pinyin_query).to_dicts() for part in parts
+        ]
+        sentinel = object()
+        rows = [
+            row
+            for group in zip_longest(*per_type_rows, fillvalue=sentinel)
+            for row in group
+            if row is not sentinel
+        ]
     else:
-        collected = [prefix_hits] if prefix_hits.height else []
-        seen = set(prefix_hits["symbol"].to_list()) if prefix_hits.height else set()
-        remaining = limit - prefix_hits.height
+        df = pl.concat(parts, how="vertical") if len(parts) > 1 else parts[0]
+        # 首页可带 limit 早退: 前缀命中铺满时跳过拼音/包含层; 翻页需全量序列
+        rows = _match_tier_frames(
+            df, keyword, is_pinyin_query, limit=limit if offset == 0 else None,
+        ).to_dicts()
 
-        # ② 拼音首字母前缀: 仅纯字母输入触发 (如 payh → 平安银行); 中文/代码输入零开销跳过
-        if is_pinyin_query and remaining > 0:
-            pinyin_rows = []
-            for row in df.filter(~pl.col("symbol").is_in(seen)).iter_rows(named=True):
-                if _match_pinyin(row["name"], keyword):
-                    pinyin_rows.append(row)
-                    if len(pinyin_rows) >= remaining:
-                        break
-            if pinyin_rows:
-                collected.append(pl.DataFrame(pinyin_rows))
-                seen.update(r["symbol"] for r in pinyin_rows)
-                remaining -= len(pinyin_rows)
-
-        # ③ 包含匹配补充
-        if remaining > 0:
-            contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(seen)).head(remaining)
-            if contain_hits.height:
-                collected.append(contain_hits)
-
-        matched = (
-            pl.concat(collected, how="vertical") if len(collected) > 1
-            else (collected[0] if collected else df.head(0))
-        )
-    rows = matched.select(["symbol", "name", "code", "asset_type"]).to_dicts()
-    return {"results": rows}
+    page = rows[offset : offset + limit]
+    has_more = offset + limit < len(rows)
+    return {
+        "results": page,
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+        "instruments_version": version,
+    }
 
 
 @router.post("/instruments/names")
