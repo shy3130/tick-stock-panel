@@ -1,0 +1,46 @@
+name: DCO
+
+# 贡献来源声明检查: PR 的每个提交必须带 Signed-off-by 尾注
+# (见 CONTRIBUTING.md §14)。只检查 PR 事件, 不阻塞 main 上的直接提交
+# (维护者自己的提交在本地用 git commit -s 签署)。
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要完整历史才能取 PR 的全部提交
+
+      - name: 检查 Signed-off-by
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          # 逐提交检查尾注; merge commit 由 GitHub 生成, 跳过
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            parents=$(git rev-list --parents -n 1 "$sha" | wc -w)
+            if [ "$parents" -gt 2 ]; then continue; fi
+            if ! git log -1 --format='%B' "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::提交 $sha 缺少 Signed-off-by 尾注 — 请用 git commit -s 签署 (见 CONTRIBUTING.md §14)"
+              git log -1 --format='  %h %s' "$sha"
+              missing=1
+            fi
+          done < <(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "修复方式: git rebase --signoff $BASE_SHA 后强推分支"
+            exit 1
+          fi
+          echo "所有提交均已签署 DCO"
