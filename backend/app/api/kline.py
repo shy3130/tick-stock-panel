@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
 
+# 批量端点 (daily-batch / minute-batch) 单次 symbols 上限: 千只级自选整表直发
+# 会在服务端构造百万行级的 Python dict 峰值 (内存暴涨主因之一)。前端已按
+# 视口/分块收敛请求; 此上限挡住旧客户端与异常调用的一次性全量请求。
+_MAX_BATCH_SYMBOLS = 400
+
 
 def _json_safe(obj):
     """把 nan/inf 换成 None, 保证 JSON 合法。
@@ -632,6 +637,13 @@ def get_daily_batch(request: Request, body: dict):
     days = body.get("days", 12)
     if not symbols:
         return {"data": {}}
+    if len(symbols) > _MAX_BATCH_SYMBOLS:
+        # 大自选整表直发会构造千只级响应 (百万行 dict 峰值); 前端已按视口/分块
+        # 收敛, 上限挡住旧客户端或异常调用的一次性全量请求
+        raise HTTPException(
+            status_code=400,
+            detail=f"symbols 单次上限 {_MAX_BATCH_SYMBOLS} 只, 请分批请求",
+        )
     days = max(5, min(60, days))
 
     repo = request.app.state.repo
@@ -744,6 +756,12 @@ def get_minute_batch(request: Request, body: dict):
     prefer_local = bool(body.get("prefer_local", False))
     if not symbols:
         return {"data": {}}
+    if len(symbols) > _MAX_BATCH_SYMBOLS:
+        # 同 daily-batch: 前端分块/视口化后单请求远低于此, 上限只挡异常规模
+        raise HTTPException(
+            status_code=400,
+            detail=f"symbols 单次上限 {_MAX_BATCH_SYMBOLS} 只, 请分批请求",
+        )
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities

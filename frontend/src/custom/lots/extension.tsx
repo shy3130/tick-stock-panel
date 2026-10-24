@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { ArrowUpRight, CalendarClock, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { api, type Lot } from '@/lib/api'
+import { fetchDailyBatchChunked } from '@/lib/klineBatchChunked'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
@@ -77,7 +78,8 @@ export function Lots() {
 
   const dailyQuery = useQuery({
     queryKey: QK.lotsKline(allSymbols.join(',')),
-    queryFn: () => api.klineDailyBatch(allSymbols, 5),
+    // 后端单次 symbols 上限 400, 分块拉取合并 (响应形状不变)
+    queryFn: () => fetchDailyBatchChunked(allSymbols, 5),
     enabled: allSymbols.length > 0,
     staleTime: 60000,
   })

@@ -6,6 +6,7 @@ import { getQueryConfig } from './useQueryConfig'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
+import { createEnrichedThrottler } from './enrichedInvalidateThrottle'
 import type { KlineDailyResponse, StrategyAlertEvent } from './api'
 
 // ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
@@ -81,6 +82,8 @@ export function useQuoteStream(
   const retryRef = useRef<ReturnType<typeof setTimeout>>()
   const pagesRef = useRef(sseRefreshPages)
   pagesRef.current = sseRefreshPages
+  // watchlist-enriched 单独节流 5s: SSE 每秒到达, 该前缀整表重拉代价最大
+  const enrichedThrottlerRef = useRef(createEnrichedThrottler())
 
   const handleAlerts = useCallback((alerts: StrategyAlertEvent[]) => {
     // depth 系统接管通知: 单独处理, 不走 strategy 回调
@@ -113,6 +116,26 @@ export function useQuoteStream(
     // 连续失败计数 (用于指数退避 + 到阈值弹一次 toast)
     let failCount = 0
     let toastFired = false
+
+    // 分组 invalidation: watchlist-enriched 走 5s 节流 (整表 N 行×64 字段重拉,
+    // 大自选时每秒一拍代价最大), 其余前缀立即。节流 leading 立即 + trailing 兜底。
+    const invalidatePrefixes = (prefixes: readonly string[]) => {
+      const immediate = prefixes.filter(p => p !== 'watchlist-enriched')
+      if (immediate.length) {
+        qc.invalidateQueries({
+          predicate: query =>
+            immediate.some(prefix => String(query.queryKey[0]).startsWith(prefix)),
+        })
+      }
+      if (prefixes.includes('watchlist-enriched')) {
+        enrichedThrottlerRef.current.fire(() => {
+          qc.invalidateQueries({
+            predicate: query =>
+              String(query.queryKey[0]).startsWith('watchlist-enriched'),
+          })
+        })
+      }
+    }
 
     const connect = () => {
       _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
@@ -147,20 +170,10 @@ export function useQuoteStream(
             }
             return pages[p] !== false
           })
-          qc.invalidateQueries({
-            predicate: (query) =>
-              activePrefixes.some(
-                (prefix) => String(query.queryKey[0]).startsWith(prefix),
-              ),
-          })
+          invalidatePrefixes(activePrefixes)
         } else {
           // 无配置时全部刷新 (向后兼容)
-          qc.invalidateQueries({
-            predicate: (query) =>
-              SSE_INVALIDATE_PREFIXES.some(
-                (prefix) => String(query.queryKey[0]).startsWith(prefix),
-              ),
-          })
+          invalidatePrefixes(SSE_INVALIDATE_PREFIXES)
         }
         // 焦点股票日K增量刷新: 只取内存中的当日行并合并缓存尾部。
         if (_focusSymbol) {
@@ -247,6 +260,7 @@ export function useQuoteStream(
 
     return () => {
       clearTimeout(retryRef.current)
+      enrichedThrottlerRef.current.cancel()
       if (esRef.current) {
         esRef.current.close()
         esRef.current = null

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X, SlidersHorizontal } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
+import { fetchDailyBatchChunked } from '@/lib/klineBatchChunked'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
@@ -584,7 +585,8 @@ export function Screener() {
   const resultSymbolsKey = dailyKSymbols.join(',')
   const klineBatch = useQuery({
     queryKey: QK.screenerKlineBatch(`${resultSymbolsKey}|${candleDays}`),
-    queryFn: () => api.klineDailyBatch(dailyKSymbols, candleDays),
+    // 后端单次 symbols 上限 400, 千级行结果按 300/块分块拉取合并
+    queryFn: () => fetchDailyBatchChunked(dailyKSymbols, candleDays),
     enabled: dailyKVisible && dailyKSymbols.length > 0,
     staleTime: 5 * 60_000,
     placeholderData: previousData => previousData,
@@ -633,12 +635,12 @@ export function Screener() {
     () => [...new Set(intradaySymbols)].sort(),
     [intradaySymbols],
   )
-  const intradaySymbolsKey = intradayRequestSymbols.join(',')
 
   const minuteBatch = useQuery({
-    queryKey: QK.minuteBatch(intradaySymbolsKey),
+    queryKey: QK.minuteBatch(),
     // 增量轮询: 读缓存以最后一根为 since 只拉新增, 本地合并为完整序列
-    queryFn: () => fetchMinuteBatchIncremental(qc, QK.minuteBatch(intradaySymbolsKey), intradayRequestSymbols, fullMinuteHealthy),
+    // (缓存 key 与自选页共享, 按 symbol 合并; 请求集已被截断到 batch 上限内)
+    queryFn: () => fetchMinuteBatchIncremental(qc, intradayRequestSymbols, fullMinuteHealthy),
     enabled: intradayVisible && intradayRequestSymbols.length > 0,
     staleTime: 10_000,
     placeholderData: previousData => previousData,

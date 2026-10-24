@@ -5,7 +5,7 @@
  * 不内置任何业务逻辑：单元格内容（含 symbol 列交互、操作列、ext 列）由调用方通过
  * renderCell / renderExtraCol 注入。这样两个页面的特有交互得以保留，同时表头能力一致。
  */
-import { cloneElement, isValidElement, useRef, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import type { ColumnConfig } from '@/lib/list-columns'
 import { UNSORTABLE_KEYS } from '@/lib/stock-table'
@@ -38,6 +38,12 @@ export interface StockDataTableProps {
   extraHeader?: ReactNode
   /** 自定义表头单元格内容覆盖（如日k眼睛按钮）。返回 undefined 则用 col.label */
   renderHeaderContent?: (col: ColumnConfig) => ReactNode | undefined
+  /**
+   * 虚拟化视口行变化上报 (可见 + overscan 缓冲), 供父级收敛按需数据请求
+   * (如分时列分钟批量只拉视口集合)。非虚拟化视图 (行数 ≤ 阈值) 上报 null。
+   * 回调请保持引用稳定 (useCallback), rows 引用每次渲染都可能变化。
+   */
+  onVisibleRowsChange?: (rows: any[] | null) => void
   /** 外层容器 className */
   className?: string
 }
@@ -61,6 +67,7 @@ export function StockDataTable({
   renderExtraCol,
   extraHeader,
   renderHeaderContent,
+  onVisibleRowsChange,
   className = 'rounded-card border border-border overflow-x-auto',
 }: StockDataTableProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -85,6 +92,17 @@ export function StockDataTable({
     ? totalSize - (lastVirtualRow.end - scrollMargin)
     : totalSize
   const columnCount = visibleColumns.length + (renderExtraCol || extraHeader ? 1 : 0)
+
+  // 视口上报: 虚拟行首尾 index 变化或 rows 引用变化时重算。切片结果相同 →
+  // 父级 setState(相同字符串/引用稳定的 key) 不触发重渲染, 无循环风险。
+  useEffect(() => {
+    if (!onVisibleRowsChange) return
+    if (!virtualized || !firstVirtualRow || !lastVirtualRow) {
+      onVisibleRowsChange(null)
+      return
+    }
+    onVisibleRowsChange(rows.slice(firstVirtualRow.index, lastVirtualRow.index + 1))
+  }, [firstVirtualRow?.index, lastVirtualRow?.index, rows, onVisibleRowsChange, virtualized])
 
   const isColSortable = (col: ColumnConfig): boolean => {
     // 排序能力由调用方是否提供 onSortToggle 决定；sort 是否为 null 只影响当前指示器

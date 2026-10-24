@@ -443,7 +443,9 @@ export function Layout() {
     staleTime: 60_000,
   })
   const { data: navEnriched } = useQuery({
-    queryKey: QK.watchlistEnriched(undefined),
+    // 无参 → key 归一为 ['watchlist-enriched', ''], 与自选页 (无 ext 列时) 共享缓存,
+    // 消除侧栏与自选页各拉一份整表的双份内存
+    queryKey: QK.watchlistEnriched(),
     queryFn: () => api.watchlistEnriched(),
     enabled: navGroupPctVisible,
     staleTime: 60_000,
