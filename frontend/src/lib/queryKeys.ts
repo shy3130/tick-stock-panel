@@ -75,6 +75,8 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  /** 分钟数据缺口体检 (发现本地分区中不完整的 标的×交易日) */
+  minuteGaps:           ['minute-gaps'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,

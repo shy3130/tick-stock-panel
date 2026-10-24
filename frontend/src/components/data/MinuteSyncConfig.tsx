@@ -4,6 +4,7 @@ import { Loader2, Trash2, Download, Calendar } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { MissingCapChip } from '@/lib/capability-labels'
+import { MinuteGapPanel } from '@/components/data/MinuteGapPanel'
 
 // hasCap: 分钟K能力当前是否可用 (路由矩阵判定, 生效源含插件/自定义源)
 export function MinuteSyncConfig({ hasCap, onJobStart }: { hasCap: boolean; onJobStart?: (jobId: string) => void }) {
@@ -186,6 +187,17 @@ export function MinuteSyncConfig({ hasCap, onJobStart }: { hasCap: boolean; onJo
           A股标的 · 前复权价格 · 从本地最早数据向前叠加 ·{' '}
           均按上方「分段大小」分段拉取、每段即落盘
         </div>
+      </div>
+
+      {/* 区块 D: 缺口体检 (发现本地分区中不完整的 标的×交易日) */}
+      <div className="space-y-2 border-t border-border/40 pt-2.5">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-foreground">数据体检</span>
+          <span className="rounded bg-warning/10 px-1 py-px text-[10px] text-warning/90">
+            找出残缺的交易日照
+          </span>
+        </div>
+        <MinuteGapPanel />
       </div>
 
       {/* 区块 C: 清空 (危险操作, 独立分隔) */}

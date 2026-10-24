@@ -1194,7 +1194,27 @@ def get_minute(
             pref_key="minute_batch_compress",
         )
 
-    # 本地不完整或无数据 → 从当前有效分钟源实时拉取
+    # 历史日期本地有数据但不完整: 优先返回已有行, 不再丢弃去问一个给不出
+    # 历史分钟的源。历史上这里把 171 根当「无数据」→ 补拉历史日期恒为空 →
+    # 前端白屏, 用户看到「同步完成却显示不出来」。
+    # 当日盘中不适用: 盘中本地落后于实时源是常态, 仍应走下方补拉 (见
+    # test_minute_lunch_break_still_pulls_when_morning_incomplete)。
+    if not df.is_empty() and trade_date != cn_today():
+        return _gzip_payload(
+            request,
+            {
+                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": df.to_dicts(),
+                "source": "local_partial",
+                "expected": expected, "actual": len(df),
+                "asset_type": asset_type,
+                "price_limit": price_limit,
+                "prev_close": prev_close,
+            },
+            pref_key="minute_batch_compress",
+        )
+
+    # 本地无数据 (或当日盘中数据落后) → 从当前有效分钟源实时拉取
     live_df = kline_sync.fetch_minute_single(
         symbol, trade_date, asset_type=asset_type, capset=capset,
         raw_basis=raw_basis,
@@ -1415,6 +1435,33 @@ async def sync_minute_single(request: Request, body: dict):
     _refresh_single_view(repo, "kline_minute")
 
     return {"status": "ok", "symbol": symbol, "rows": written}
+
+
+@router.get("/minute-gaps")
+def get_minute_gaps(
+    request: Request,
+    symbols: str | None = Query(None, description="逗号分隔, 只看这些标的"),
+    dates: str | None = Query(None, description="逗号分隔 YYYY-MM-DD, 只看这些交易日"),
+    limit: int = Query(500, ge=1, le=2000, description="最多返回的缺口行数"),
+):
+    """分钟数据缺口体检: 列出本地分区中分钟 K 不完整的 (标的, 交易日)。
+
+    只做**发现**, 不做补齐 —— 上游分钟源通常只提供最近 N 天, 超出窗口的历史
+    缺口补不回来, 盲目补拉会白等且返回空。前端据此展示残缺清单并标注
+    「可补 / 超出源窗口」, 避免用户误以为「同步完成 = 数据完整」。
+    """
+    from app.services.minute_gaps import scan_minute_gaps
+
+    repo = request.app.state.repo
+    now = cn_now()
+    return scan_minute_gaps(
+        repo.store.data_dir / "kline_minute",
+        today=cn_today(),
+        now_hm=(now.hour, now.minute),
+        symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
+        dates=[d.strip() for d in dates.split(",") if d.strip()] if dates else None,
+        limit=limit,
+    )
 
 
 @router.post("/minute-migrate")

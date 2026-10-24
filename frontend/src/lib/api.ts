@@ -262,6 +262,18 @@ export interface MinuteKlineSession {
   rows: MinuteKlineRow[]
 }
 
+/** 分钟数据缺口体检的一行: 某标的某交易日分钟 K 不完整 */
+export interface MinuteGapRow {
+  symbol: string
+  date: string
+  actual_bars: number
+  expected_bars: number
+  missing_bars: number
+  /** 现有数据的首/末分钟 (HH:MM), 用于显示"仅到 13:49" */
+  first_time: string | null
+  last_time: string | null
+}
+
 export interface PriceLimitInfo {
   rate: number
   limit_up: number | null
@@ -2531,6 +2543,26 @@ export const api = {
       next_round_at?: number | null
       last_error?: string | null
     }>('/api/settings/minute-refresh/status'),
+
+  /** 分钟数据缺口体检: 列出本地分区中分钟 K 不完整的 (标的, 交易日)。
+   *  只发现不补齐 — 超出上游历史窗口的缺口补不回来, 前端据此标注。 */
+  minuteGaps: (params?: { symbols?: string[]; dates?: string[]; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.symbols?.length) q.set('symbols', params.symbols.join(','))
+    if (params?.dates?.length) q.set('dates', params.dates.join(','))
+    if (params?.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return request<{
+      status: string
+      scanned_dates: number
+      scanned_symbols: number
+      complete_dates: string[]
+      gaps: MinuteGapRow[]
+      summary_by_date: { date: string; gap_symbols: number; missing_bars: number; expected_bars: number }[]
+      truncated: boolean
+      limit?: number
+    }>(`/api/kline/minute-gaps${qs ? `?${qs}` : ''}`)
+  },
   updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
     request<{
       pipeline_pull_a_share: boolean
@@ -2817,7 +2849,11 @@ export const api = {
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
       date: string | null
       rows: MinuteKlineRow[]
-      source?: 'local' | 'live' | 'none'
+      /** local=完整; local_partial=本地有但不完整(见 expected/actual); live=源实时; none=无数据 */
+      source?: 'local' | 'local_partial' | 'live' | 'none'
+      /** local_partial 时: 该交易日应有根数 / 实有根数 */
+      expected?: number
+      actual?: number
       asset_type?: 'stock' | 'etf' | 'index'
       price_limit?: PriceLimitInfo | null
       prev_close?: number | null
