@@ -16,10 +16,9 @@ services:
     env_file:
       - .env
     environment:
-      # 强制固定为容器内绝对路径, 防止 .env 里的 DATA_DIR=./data(开发模式用)
-      # 被 env_file 原样传入容器后按错误的相对路径解析, 写到未挂载卷的目录,
-      # 导致每次 up --build 重建容器都丢数据。environment 优先级高于 env_file,
-      # 无论 .env 怎么写这里都以容器路径为准。
+      # 强制固定为容器内绝对路径。相对 DATA_DIR=./data 会按应用根解析为
+      # /app/data（与下方挂载一致）；这里仍覆盖 env_file，避免 .env 写成绝对
+      # 路径 /data 时写到未挂载卷。environment 优先级高于 env_file。
       - DATA_DIR=/app/data
       # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
       - CODEX_DOCKER_HOST=host.docker.internal

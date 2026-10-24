@@ -654,9 +654,18 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
 
   const reload = useMutation({
     mutationFn: api.reloadDataSources,
-    onSuccess: () => {
+    onSuccess: (data) => {
       invalidateSources()
-      toast('配置已重新加载', 'success')
+      const found = data.found ?? 0
+      const skipped = data.skipped ?? 0
+      const dir = data.config_dir || ''
+      if (found === 0) {
+        toast(`未找到自定义数据源配置，扫描目录：${dir}`, 'error')
+      } else if (skipped > 0) {
+        toast(`已加载 ${data.loaded ?? 0} 个，跳过 ${skipped} 个。目录：${dir}`, 'error')
+      } else {
+        toast(`已重新加载 ${found} 个配置`, 'success')
+      }
     },
   })
 
@@ -740,9 +749,16 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
             <h2 className="text-sm font-medium text-foreground">数据源</h2>
             <span
               className="text-[10px] text-muted/40 font-mono truncate hidden lg:inline max-w-[480px]"
-              title={sources.data?.config_dir}
+              title={
+                sources.data
+                  ? `${sources.data.config_dir}（找到 ${sources.data.found ?? 0}，跳过 ${sources.data.skipped ?? 0}）`
+                  : undefined
+              }
             >
               {sources.data?.config_dir}
+              {typeof sources.data?.found === 'number'
+                ? ` · 找到 ${sources.data.found} · 跳过 ${sources.data.skipped ?? 0}`
+                : ''}
             </span>
           </div>
           <button

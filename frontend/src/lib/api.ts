@@ -2039,6 +2039,9 @@ export interface DataSourcesResponse {
   custom: DataSourceItem[]
   errors: DataSourceLoadError[]
   config_dir: string
+  found: number
+  loaded: number
+  skipped: number
 }
 
 export interface DataSourceTestResult {

@@ -156,7 +156,14 @@ async def _application_lifespan(app: FastAPI):
     try:
         from app.data_providers import custom as custom_sources
         custom_sources.load_all()
-        logger.info("custom data sources loaded: %d", len(custom_sources.list_sources()))
+        summary = custom_sources.scan_summary()
+        logger.info(
+            "custom data sources loaded: %d (dir=%s found=%d skipped=%d)",
+            summary["loaded"],
+            summary["config_dir"],
+            summary["found"],
+            summary["skipped"],
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("custom data sources init failed: %s", e)
 
