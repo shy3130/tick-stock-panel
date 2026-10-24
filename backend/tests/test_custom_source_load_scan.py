@@ -80,6 +80,32 @@ def test_load_all_counts_loaded_and_skipped_files(tmp_path: Path, isolated_loade
     assert [item["name"] for item in loader.list_sources()] == ["ok_source"]
 
 
+def test_scan_failure_keeps_previous_sources_and_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_loader,
+) -> None:
+    ready = tmp_path / "ready"
+    ready.mkdir()
+    (ready / "ok.yaml").write_text(_OK_YAML, encoding="utf-8")
+    loader.load_all(ready)
+    previous = loader.scan_summary()
+
+    blocked = tmp_path / "blocked"
+    real_mkdir = Path.mkdir
+
+    def mkdir(self: Path, *args, **kwargs):
+        if self == blocked:
+            raise PermissionError("denied")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with pytest.raises(PermissionError):
+        loader.load_all(blocked)
+    assert loader.scan_summary() == previous
+    assert [item["name"] for item in loader.list_sources()] == ["ok_source"]
+
+
 def test_reload_returns_scan_directory_and_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

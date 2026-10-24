@@ -61,33 +61,39 @@ def scan_summary() -> dict:
 def load_all(path: Path | None = None) -> None:
     """Load all custom provider YAML files into process memory."""
     global _PROVIDERS, _LOAD_ERRORS, _SCAN_SUMMARY
-    for provider in _PROVIDERS.values():
-        provider.close()
-    _PROVIDERS = {}
-    _LOAD_ERRORS = []
-
     base = path or data_sources_dir()
+    # 先扫完再替换。mkdir/glob 失败时保留上一轮已加载的源和计数，
+    # 避免「源已清空、摘要仍是旧的或显示找到 0 个」。
     base.mkdir(parents=True, exist_ok=True)
     files = sorted([*base.glob("*.yaml"), *base.glob("*.yml")])
     loaded = 0
     skipped = 0
+    new_providers: dict[str, GenericHTTPProvider] = {}
+    new_errors: list[dict] = []
     for file in files:
         try:
             config = load_config(file)
             provider = GenericHTTPProvider(config)
             errors = provider.validate()
             if errors:
-                _LOAD_ERRORS.append({"path": str(file), "name": config.name, "errors": errors})
+                new_errors.append({"path": str(file), "name": config.name, "errors": errors})
                 provider.close()
                 skipped += 1
                 continue
-            _PROVIDERS[config.name] = provider
+            replaced = new_providers.get(config.name)
+            if replaced is not None:
+                replaced.close()
+            new_providers[config.name] = provider
             loaded += 1
         except Exception as e:  # noqa: BLE001
             logger.warning("custom data source load failed %s: %s", file, e)
-            _LOAD_ERRORS.append({"path": str(file), "errors": [str(e)]})
+            new_errors.append({"path": str(file), "errors": [str(e)]})
             skipped += 1
 
+    for provider in _PROVIDERS.values():
+        provider.close()
+    _PROVIDERS = new_providers
+    _LOAD_ERRORS = new_errors
     _SCAN_SUMMARY = {
         "config_dir": str(base),
         "found": len(files),
@@ -96,12 +102,7 @@ def load_all(path: Path | None = None) -> None:
     }
     if not files:
         # 空目录是合法状态（多数用户不用自定义源），但必须打出实际路径。
-        # 挂载到 /data 而不是 /app/data 时，这里是唯一能看出扫错目录的线索。
-        logger.info(
-            "custom data sources: no yaml in %s "
-            "(Docker 数据目录是 /app/data，挂载 -v ./data:/app/data，不要挂到 /data)",
-            base,
-        )
+        logger.info("custom data sources: no yaml in %s", base)
 
     # 内置可选插件 (plugins/ 目录)。与用户 YAML 源独立, 缺依赖只记状态不报错。
     _load_builtin_plugins()

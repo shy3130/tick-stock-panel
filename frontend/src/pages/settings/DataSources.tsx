@@ -659,14 +659,13 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
       const found = data.found ?? 0
       const skipped = data.skipped ?? 0
       const dir = data.config_dir || ''
-      if (found === 0) {
-        toast(`未找到自定义数据源配置，扫描目录：${dir}`, 'error')
-      } else if (skipped > 0) {
+      if (skipped > 0) {
         toast(`已加载 ${data.loaded ?? 0} 个，跳过 ${skipped} 个。目录：${dir}`, 'error')
       } else {
-        toast(`已重新加载 ${found} 个配置`, 'success')
+        toast(`已重新加载：扫描 ${dir}，找到 ${found} 个配置`, 'success')
       }
     },
+    onError: (e: Error) => toast(`重新加载失败：${e.message}`, 'error'),
   })
 
   const remove = useMutation({

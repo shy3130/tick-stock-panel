@@ -66,10 +66,10 @@ def project_root_from_config_file(config_file: Path) -> Path:
     是 app 包的上一级。
     """
     app_pkg = Path(config_file).resolve().parent
-    container = app_pkg.parent
-    if container.name == "backend":
-        return container.parent
-    return container
+    package_parent = app_pkg.parent
+    if package_parent.name == "backend":
+        return package_parent.parent
+    return package_parent
 
 
 def _resource_root() -> Path:
