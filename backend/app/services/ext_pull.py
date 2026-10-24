@@ -252,6 +252,8 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
     服务端忽略日期参数返回当日数据时会静默把当日值写进历史分区,
     造成整个时序口径错乱 —— 此处 fail-closed 拒绝 (实测确实有忽略
     ?date= 的接口)。date 字段缺省的接口不做校验。
+
+    仅在 pull.date_param 已配置时调用 (见 _assert_rows_date_if_dated)。
     """
     want = day.isoformat()
     for r in rows[:20]:
@@ -265,6 +267,17 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
                 f"接口返回的日期 {str(raw)[:10]!r} 与请求日期 {want} 不一致 "
                 "(接口可能不支持日期参数), 已拒绝写入该分区"
             )
+
+
+def _assert_rows_date_if_dated(pull: PullConfig, rows: list[dict], day: date) -> None:
+    """仅对「按日查询」接口做响应日期一致性校验 (pull.date_param 已配置)。
+
+    未配置 date_param 的接口只有当日快照, 响应日期本就可能落后于请求日期
+    (周末/节假日/数据源 T+1), 校验会把正常快照误判成「接口忽略日期参数」
+    而整表拒写。该契约的目的是防历史分区被当日值污染, 对快照接口无意义。
+    """
+    if pull.date_param:
+        _assert_rows_date(rows, day)
 
 
 async def _request_json(
@@ -388,7 +401,7 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
     # 校验可关联标的的字段：直接 symbol/code，或配置里声明的映射源列。
     # 市场级表 (market_level, 行=全市场一条, 无标的列) 跳过该校验。
     if config.market_level:
-        _assert_rows_date(rows, target_date)
+        _assert_rows_date_if_dated(pull, rows, target_date)
         return rows
     row_keys = set(rows[0]) if rows else set()
     mapped_cols = {
@@ -399,7 +412,7 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
     if rows and not ({"symbol", "code"} & row_keys or mapped_cols & row_keys):
         raise ValueError("数据行中缺少 symbol/code 字段，请配置字段映射或标的映射")
 
-    _assert_rows_date(rows, target_date)
+    _assert_rows_date_if_dated(pull, rows, target_date)
     return rows
 
 

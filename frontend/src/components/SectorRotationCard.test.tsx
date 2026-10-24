@@ -204,3 +204,36 @@ it('heatmap 模式: 领涨格子亮琥珀描边+辉光, 格间细缝, 中性中�
   // 图例条: 轨迹语义以真实色块表达
   expect(host.textContent).toContain('领涨轨迹')
 })
+
+// ===== 资金流下拉: schema 类型名口径 =====
+
+it('资金流下拉收录 Parquet 真实类型名 (DOUBLE/BIGINT/DECIMAL) 的数值列', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const { api } = await import('@/lib/api')
+  vi.mocked(api.extDataSchemaAll).mockResolvedValueOnce({
+    items: [{
+      id: 'ext_flow', label: '资金流', mode: 'timeseries', time_field: null,
+      columns: [
+        { name: 'symbol', type: 'VARCHAR', label: '标的代码' },
+        // 后端 schema 端点返回的是 Parquet 真实类型, 不是配置里的 float/int 简写
+        { name: 'net', type: 'DOUBLE', label: '主力净流入' },
+        { name: 'rank', type: 'BIGINT', label: '排名' },
+        { name: 'ratio', type: 'DECIMAL(18,4)', label: '净占比' },
+        { name: 'note', type: 'VARCHAR', label: '备注' },
+      ],
+    }],
+  } as any)
+  await renderCard()
+  // 资金流下拉在「更多」折叠区里, 先展开
+  const moreBtn = Array.from(host.querySelectorAll('button'))
+    .find(b => (b.textContent || '').includes('更多'))
+  await act(async () => { (moreBtn as HTMLButtonElement).click() })
+  const select = host.querySelector('select[aria-label="资金流扩展列"]')
+  expect(select).toBeTruthy()
+  const values = Array.from(select!.querySelectorAll('option')).map(o => (o as HTMLOptionElement).value)
+  expect(values).toContain('ext_flow.net')
+  expect(values).toContain('ext_flow.rank')
+  expect(values).toContain('ext_flow.ratio')
+  expect(values).not.toContain('ext_flow.symbol')
+  expect(values).not.toContain('ext_flow.note')
+})

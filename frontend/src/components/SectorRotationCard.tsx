@@ -41,7 +41,11 @@ function parseSectorSource(raw: string | null): SectorSource {
   if (raw === 'custom' || raw === 'score' || raw === 'pct' || raw === 'rank_change' || raw === 'momentum' || raw === 'flow') return raw
   return 'score' // 未设置过 / 旧默认值 'auto' → 默认综合分 (显式选择过的值已持久化, 不受影响)
 }
-const NUMERIC_TYPES = new Set(['float', 'int', 'number', 'double', 'long'])
+// 扩展表 schema 的类型名可能是配置里的简写 (float/int), 也可能是 Parquet 的
+// 真实类型 (DOUBLE/BIGINT/DECIMAL(18,4))。两种口径都要认, 否则会漏掉整数列。
+const NUMERIC_TYPE_PATTERN =
+  /^(float|int|number|double|long|real|decimal|numeric|hugeint|ubigint|bigint|u?smallint|u?tinyint|u?integer)/
+const isNumericColumnType = (type: unknown) => NUMERIC_TYPE_PATTERN.test(String(type ?? '').toLowerCase())
 // 强度图与展示图跨实例联动分组 (x 轴指针同步)
 const CHART_CONNECT_GROUP = 'sector-rotation-card'
 
@@ -311,7 +315,7 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
     const options: { value: string; label: string }[] = []
     for (const item of schemaQuery.data?.items ?? []) {
       for (const column of item.columns ?? []) {
-        if (!NUMERIC_TYPES.has(String(column.type).toLowerCase())) continue
+        if (!isNumericColumnType(column.type)) continue
         options.push({
           value: `${item.id}.${column.name}`,
           label: `${item.label || item.id} · ${column.label || column.name}`,
