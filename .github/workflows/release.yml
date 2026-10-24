@@ -18,7 +18,7 @@ on:
       version:
         description: '版本号 (如 v0.1.33, 用作 Release tag 和标题; 必须与 frontend/package.json 的 version 一致, 否则流水线直接失败)'
         required: true
-        default: 'v0.3.14'
+        default: 'v0.3.15'
       platforms:
         description: '要构建的平台 (逗号分隔: windows,macos,linux)'
         required: true
