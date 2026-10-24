@@ -28,7 +28,9 @@
 data/data_sources/*.yaml
 ```
 
-Dev 模式下，默认位置是项目根目录的 `data/`；Docker 部署中，项目的 `data/` 会挂载为容器内的 `/app/data`。可通过 `DATA_DIR` 覆盖。
+Dev 模式下，默认位置是项目根目录的 `data/data_sources/`。Docker 部署中，宿主机 `./data` 挂载为容器内的 `/app/data`，自定义源目录是 `/app/data/data_sources`。不要把卷挂到 `/data`。
+
+`DATA_DIR` 可以覆盖数据目录。相对路径按应用根解析：开发时是仓库根，Docker 镜像里是 `/app`（因此 `DATA_DIR=./data` 在容器内是 `/app/data`）。设置页「重新加载」的响应包含 `config_dir`、`found`、`loaded`、`skipped`；目录里没有 YAML 时，后端会打出实际扫描路径。
 
 Docker 里 URL 填 `127.0.0.1` 指的是容器自身：数据源服务跑在宿主机时，应改用 `host.docker.internal`（Linux `docker run` 需加 `--add-host=host.docker.internal:host-gateway` 才能解析，compose 已内置该映射；也可直接用宿主机内网 IP，如 `172.17.0.1`）。
 
@@ -320,7 +322,7 @@ cp docs/examples/custom-data-source/mock_source.yaml data/data_sources/mock_sour
 
 | 现象 | 处理 |
 | --- | --- |
-| 列表里没有 custom 源 | 检查 YAML 是否放在 `data/data_sources/` 并点击重新加载 |
+| 列表里没有 custom 源 | 确认 YAML 在 `data/data_sources/`（Docker 容器内是 `/app/data/data_sources`，不是 `/data/data_sources`），看重新加载提示里的扫描目录和找到/跳过数量 |
 | errors 提示 missing mapped fields | `field_map` 没映射到必填内部字段 |
 | 试拉 rows 为 0 | 检查 `response_path` 是否指向数组 |
 | 日期列全为空 | 检查 `parse_date` 的格式是否和返回值一致 |

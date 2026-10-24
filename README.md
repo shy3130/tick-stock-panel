@@ -427,6 +427,7 @@ docker run -d --name tsp -p 3018:3018 -v ${PWD}/data:/app/data ghcr.io/shy3130/t
 本项目每次推送都由 GitHub Actions 自动构建多架构镜像并发布到 GHCR,拿来即用:
 
 - 需要配置时:从 [.env.example](./.env.example) 复制出 `.env`,命令里加 `--env-file .env`。
+- 自定义数据源 YAML 放在宿主机 `./data/data_sources/`。容器内数据目录是 `/app/data`（自定义源目录 `/app/data/data_sources`）。不要把数据卷挂到 `/data`。`.env` 里的 `DATA_DIR=./data` 按应用根解析，镜像里就是 `/app/data`。
 - Linux `docker run` 部署:容器内要通过 `host.docker.internal` 访问宿主机服务(如自定义数据源)时,命令需加 `--add-host=host.docker.internal:host-gateway`;升级重建容器时务必保留 `-v ${PWD}/data:/app/data` 挂载并提前备份 `data/`,否则容器层数据会随旧容器静默丢失(详见 [docs/deployment.md](./docs/deployment.md))。
 - 跑自己改过的代码:fork 后到仓库 **Actions** 页启用 workflow(fork 默认禁用),构建出的 `ghcr.io/<你的用户名>/tick-stock-panel` 用法相同。
 - 想用 compose 编排(挂载 `.env` / `tiers.yaml`):参考 [docker-compose.yml](./docker-compose.yml),把 `build:` 段换成 `image: ghcr.io/shy3130/tick-stock-panel:latest`。
