@@ -700,6 +700,9 @@ def get_preferences() -> dict:
         "review_push_channels": preferences.get_review_push_channels(),
         "review_push_mode": preferences.get_review_push_mode(),
         "market_recap_system_prompt": preferences.get_market_recap_system_prompt(),
+        # 界面偏好 (通知弹窗/声效/语音播报/外链模板/界面缩放): 历史只存 localStorage,
+        # 桌面版端口变化后 origin 改变导致读取不到 — 后端保存权威副本, 前端启动时回填。
+        "ui_prefs": preferences.get_ui_prefs(),
         **preferences.get_mining_schedule(),
     }
 
@@ -1056,6 +1059,27 @@ def get_screener_result_columns() -> dict:
     from app.services import preferences
     cols = preferences.get_screener_result_columns()
     return {"columns": cols}
+
+
+class UiPrefsIn(BaseModel):
+    """界面偏好增量更新; 值为 null = 删除该项 (回前端默认)。"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+@router.put("/preferences/ui-prefs")
+def update_ui_prefs(req: UiPrefsIn) -> dict:
+    """保存界面偏好 (通知弹窗/声效/语音播报/外链模板/界面缩放)。
+
+    键集合由 services.preferences 的白名单约束 (未知键忽略); 用 extra=allow 的
+    透传模型而非逐字段声明, 新增一项只需前后端各加一个键, 不产生两处易漂移的清单。
+    """
+    from app.services import preferences
+    try:
+        saved = preferences.set_ui_prefs(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ui_prefs": saved}
 
 
 @router.put("/preferences/screener-result-columns")

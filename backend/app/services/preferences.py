@@ -1228,3 +1228,57 @@ def set_dashboard_layout(value: dict | None) -> dict | None:
         raise ValueError("布局数据过大 (>64KB)")
     save({"dashboard_layout": blob})
     return blob
+
+
+# ---------------------------------------------------------------------------
+# 界面偏好 (UI prefs) — 原先只存浏览器 localStorage 的设置
+# ---------------------------------------------------------------------------
+
+# 这些键历史上只存 localStorage: 浏览器按 origin (协议+主机+端口) 隔离存储,
+# 桌面版端口从 3018 起递增, 换端口后旧值全部读不到, 表现为「设置保存了重开又变回去」。
+# 改存 preferences.json 并与 localStorage 双向同步: 后端是权威副本 (跨端口/多端一致),
+# localStorage 保留为同步读取的本地缓存 (通知/语音/缩放等在非 React 路径即时读取)。
+_UI_PREFS_KEYS = (
+    "alert_toast_enabled",
+    "alert_toast_max",
+    "alert_sound_enabled",
+    "alert_sound",
+    "voice_broadcast_enabled",
+    "voice_broadcast_voice",
+    "voice_broadcast_rate",
+    "stock_external_template",
+    "page_zoom",
+)
+_UI_PREFS_MAX_JSON = 16 * 1024
+
+
+def get_ui_prefs() -> dict:
+    """返回界面偏好 (只含用户显式设置过的键; 未涉及的键不出现, 前端用自身默认值)。"""
+    raw = load().get("ui_prefs")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: raw[k] for k in _UI_PREFS_KEYS if k in raw}
+
+
+def set_ui_prefs(updates: dict) -> dict:
+    """合并保存界面偏好; 未知键忽略, 只接受 JSON 标量。
+
+    白名单 + 类型护栏: 该 blob 由前端自由读写, 不让它成为写任意结构的入口。
+    值为 None 表示删除该项 (回前端默认)。
+    """
+    if not isinstance(updates, dict):
+        raise ValueError("ui_prefs 需为对象")
+    current = get_ui_prefs()
+    for key, value in updates.items():
+        if key not in _UI_PREFS_KEYS:
+            continue
+        if value is None:
+            current.pop(key, None)
+        elif isinstance(value, (bool, int, float, str)):
+            current[key] = value
+        else:
+            raise ValueError(f"ui_prefs.{key} 只接受标量")
+    if len(json.dumps(current, ensure_ascii=False)) > _UI_PREFS_MAX_JSON:
+        raise ValueError("ui_prefs 数据过大 (>16KB)")
+    save({"ui_prefs": current})
+    return current

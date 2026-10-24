@@ -8,6 +8,7 @@
  * 模板留空 = 关闭外链。
  */
 import { storage } from '@/lib/storage'
+import { setUiPref } from '@/lib/uiPrefs'
 
 /** 形状守卫: 只放行 6位数字 + 沪深北后缀 的 symbol (信息条场景下即股票) */
 const STOCK_SYMBOL_RE = /^(\d{6})\.(SH|SZ|BJ)$/
@@ -18,7 +19,8 @@ export function loadStockExternalTemplate(): string {
 }
 
 export function saveStockExternalTemplate(tpl: string): void {
-  storage.stockExternalTemplate.set(tpl.trim())
+  // 经 setUiPref 双写: localStorage 供同步读取, 后端副本保证换端口/换机器后仍能恢复
+  setUiPref('stock_external_template', JSON.stringify(tpl.trim()))
 }
 
 export function buildStockExternalUrl(template: string, symbol: string): string | null {

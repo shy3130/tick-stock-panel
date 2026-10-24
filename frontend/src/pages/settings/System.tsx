@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
 import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
+import { setUiPref } from '@/lib/uiPrefs'
 import {
   listZhVoices, previewVoice, activateVoice,
 } from '@/lib/voiceBroadcast'
@@ -137,7 +138,7 @@ export function SettingsSystemPanel() {
           checked={toastEnabled}
           disabled={saving}
           onChange={(v) => {
-            localStorage.setItem('alert_toast_enabled', v ? '1' : '0')
+            setUiPref('alert_toast_enabled', v ? '1' : '0')
             setToastEnabled(v)
             refreshAlertToastConfig()
           }}
@@ -153,7 +154,7 @@ export function SettingsSystemPanel() {
             disabled={!toastEnabled}
             onChange={(e) => {
               const v = Number(e.target.value)
-              localStorage.setItem('alert_toast_max', String(v))
+              setUiPref('alert_toast_max', String(v))
               setToastMax(v)
               refreshAlertToastConfig()
             }}
@@ -169,7 +170,7 @@ export function SettingsSystemPanel() {
           checked={soundEnabled}
           disabled={!toastEnabled}
           onChange={(v) => {
-            localStorage.setItem('alert_sound_enabled', v ? '1' : '0')
+            setUiPref('alert_sound_enabled', v ? '1' : '0')
             setSoundEnabled(v)
             if (v) previewSound(soundType)
           }}
@@ -189,7 +190,7 @@ export function SettingsSystemPanel() {
               disabled={!toastEnabled || !soundEnabled}
               onChange={(e) => {
                 const v = e.target.value
-                localStorage.setItem('alert_sound', v)
+                setUiPref('alert_sound', v)
                 setSoundType(v)
                 if (v !== 'none') previewSound(v)
               }}
@@ -220,7 +221,7 @@ export function SettingsSystemPanel() {
           checked={voiceEnabled}
           disabled={!toastEnabled}
           onChange={(v) => {
-            localStorage.setItem('voice_broadcast_enabled', v ? '1' : '0')
+            setUiPref('voice_broadcast_enabled', v ? '1' : '0')
             setVoiceEnabled(v)
             if (v) { activateVoice(); previewVoice() }   // 开启即激活 + 试听一句
           }}
@@ -246,11 +247,11 @@ export function SettingsSystemPanel() {
                 const v = e.target.value
                 if (v) {
                   // 手选某一语音包
-                  localStorage.setItem('voice_broadcast_voice', v)
+                  setUiPref('voice_broadcast_voice', v)
                   setVoiceConfigured(v)
                 } else {
                   // 选"默认偏好"(固定空值): 清空手选, 走 Google 中国大陆偏好
-                  localStorage.removeItem('voice_broadcast_voice')
+                  setUiPref('voice_broadcast_voice', null)
                   setVoiceConfigured('')
                 }
               }}
@@ -282,7 +283,7 @@ export function SettingsSystemPanel() {
               disabled={!toastEnabled || !voiceEnabled}
               onChange={(e) => {
                 const v = parseFloat(e.target.value)
-                localStorage.setItem('voice_broadcast_rate', String(v))
+                setUiPref('voice_broadcast_rate', String(v))
                 setVoiceRate(v)
               }}
               className="w-32 disabled:opacity-50"
