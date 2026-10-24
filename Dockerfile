@@ -88,9 +88,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     uv sync --frozen "$@" || uv sync "$@"
 
 # Backend code
-# 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
-# (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
-# 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
+# config.py 在镜像里是 /app/app/config.py，应用根是 /app。相对 DATA_DIR
+# 按这个根解析，./data 即 /app/data。STATIC_DIR 仍须显式指定：非 frozen
+# 默认是 <root>/frontend/dist，镜像里的前端产物在 /app/static。
 COPY backend/app ./app
 COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \

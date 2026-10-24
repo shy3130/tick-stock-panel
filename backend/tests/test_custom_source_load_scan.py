@@ -106,6 +106,64 @@ def test_scan_failure_keeps_previous_sources_and_summary(
     assert [item["name"] for item in loader.list_sources()] == ["ok_source"]
 
 
+def test_duplicate_name_counts_one_loaded_source(tmp_path: Path, isolated_loader) -> None:
+    (tmp_path / "a.yaml").write_text(_OK_YAML, encoding="utf-8")
+    later = _OK_YAML.replace("display_name: OK", "display_name: Later")
+    (tmp_path / "b.yaml").write_text(later, encoding="utf-8")
+    loader.load_all(tmp_path)
+
+    sources, load_errors, summary = loader.published_scan()
+    assert summary == {
+        "config_dir": str(tmp_path),
+        "found": 2,
+        "loaded": 1,
+        "skipped": 1,
+    }
+    assert [item["name"] for item in sources] == ["ok_source"]
+    assert sources[0]["display_name"] == "Later"
+    assert load_errors[0]["name"] == "ok_source"
+    assert "b.yaml" in load_errors[0]["errors"][0]
+    assert loader.list_sources() == sources
+    assert loader.scan_summary() == summary
+    from app.api.settings import list_data_sources
+
+    body = list_data_sources()
+    assert body["loaded"] == 1
+    assert body["skipped"] == 1
+    assert body["found"] == 2
+    assert body["custom"] == sources
+    assert "b.yaml" in body["errors"][0]["errors"][0]
+
+
+def test_close_failure_still_publishes_new_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_loader,
+) -> None:
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "ok.yaml").write_text(_OK_YAML, encoding="utf-8")
+    loader.load_all(first)
+    old = next(iter(loader._PROVIDERS.values()))
+
+    def fail_close() -> None:
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(old, "close", fail_close)
+    second = tmp_path / "second"
+    second.mkdir()
+    other = _OK_YAML.replace("name: ok_source", "name: other_source")
+    other = other.replace("display_name: OK", "display_name: Other")
+    (second / "other.yaml").write_text(other, encoding="utf-8")
+    loader.load_all(second)
+
+    sources, _load_errors, summary = loader.published_scan()
+    assert [item["name"] for item in sources] == ["other_source"]
+    assert summary["config_dir"] == str(second)
+    assert summary["loaded"] == 1
+    assert summary["found"] == 1
+
+
 def test_reload_returns_scan_directory_and_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

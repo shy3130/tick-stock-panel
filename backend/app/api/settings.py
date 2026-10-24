@@ -708,12 +708,12 @@ def get_preferences() -> dict:
 def list_data_sources() -> dict:
     """列出已加载的数据源 (内置 / 插件 / 用户自定义)。"""
     from app.data_providers import custom as custom_sources
-    summary = custom_sources.scan_summary()
+    custom, load_errors, summary = custom_sources.published_scan()
     return {
         "builtin": [{"name": "tickflow", "display_name": "TickFlow", "datasets": ["daily", "adj_factor", "realtime", "minute"]}],
         "plugins": custom_sources.list_plugins(),
-        "custom": custom_sources.list_sources(),
-        "errors": custom_sources.errors(),
+        "custom": custom,
+        "errors": load_errors,
         "config_dir": summary["config_dir"],
         "found": summary["found"],
         "loaded": summary["loaded"],

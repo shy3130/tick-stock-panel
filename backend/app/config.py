@@ -13,7 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 此时:
 #   - 只读资源 (tiers.yaml / 前端 dist) 放在 _MEIPASS 内
 #   - 可写用户数据 (data_dir) 放在可执行文件旁的用户目录
-# 非 frozen 模式 (开发/Docker): 保持原有 __file__ 推导, 行为完全不变。
+# 非 frozen 模式 (开发/Docker): 应用根由 project_root_from_config_file 推导。
+# 开发布局 <repo>/backend/app → 仓库根；镜像把包放在 /app/app → 应用根 /app。
+# 再固定向上一级会在容器里落到文件系统根 /，相对 DATA_DIR=./data 就变成 /data。
 _IS_FROZEN = getattr(sys, "frozen", False)
 
 
