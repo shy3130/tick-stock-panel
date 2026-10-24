@@ -32,19 +32,28 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out
 }
 
-export function lastBarTs(data: MinuteBatchData, symbols?: string[]): string | null {
-  // 直接取"最旧最后一根"的原始 datetime 字符串 (与服务端行同格式, 同为北京墙钟):
-  // 不做任何 Date/ISO 转换 — toISOString 会变成带 Z 的 UTC, 服务端 naive 比较
-  // 会 TypeError, 且换算差 8 小时。固定格式字符串的字典序即时间序。
-  const scope = symbols ? new Set(symbols) : null
-  let min: string | null = null
-  for (const [sym, rows] of Object.entries(data)) {
-    if (scope && !scope.has(sym)) continue
-    const last = rows[rows.length - 1]
-    if (!last) continue
-    if (min === null || last.datetime < min) min = last.datetime
+/**
+ * 逐 symbol 的 since (symbol → 最后已缓存 bar 时间)。
+ *
+ * 整块共用「最旧末根」是错的: 块里混有未缓存的新 symbol 时 (滚动进新区段、
+ * 手动刷新、新增自选), 新 symbol 会被 since 裁到只剩 1 根, 永远凑不满 2 根
+ * → 分时图空白且点刷新也没用。逐 symbol 精确化后, 已缓存者仍只拉新增,
+ * 未缓存者不带 since 拉全天。
+ *
+ * 另加自愈: 缓存序列不足 MIN_CACHED_BARS 根时同样视为未缓存 (不带 since)。
+ * 否则历史遗留的「1 根残序列」会因 since 恒为最后一根而永久卡死 — 每轮只
+ * 补 1 根、永远画不出分时, 手动刷新也无法恢复。
+ */
+export const MIN_CACHED_BARS = 2
+
+function sinceBySymbol(data: MinuteBatchData, symbols: string[]): (sym: string) => string | undefined {
+  const lastOf = new Map<string, string>()
+  for (const sym of symbols) {
+    const rows = data[sym]
+    if (!rows || rows.length < MIN_CACHED_BARS) continue   // 残序列 → 全量重取
+    lastOf.set(sym, rows[rows.length - 1].datetime)
   }
-  return min
+  return (sym: string) => lastOf.get(sym)
 }
 
 export function mergeInto(base: MinuteBatchData, patch: MinuteBatchData): MinuteBatchData {
@@ -107,10 +116,21 @@ export async function fetchMinuteBatchIncremental(
   const cacheKey = QK.minuteBatch()
   const prev = qc.getQueryData<{ data: MinuteBatchData }>(cacheKey)?.data
   let data: MinuteBatchData = prev ?? {}
+  const sinceOf = sinceBySymbol(data, symbols)
   for (const part of chunk(symbols, MINUTE_BATCH_CHUNK)) {
-    const since = prev ? lastBarTs(prev, part) ?? undefined : undefined
-    const resp = await api.klineMinuteBatch(part, undefined, preferLocal, since)
-    data = mergeInto(data, resp.data ?? {})
+    // 按 since 分组: 端点单请求只收一个 since, 而块的 symbols 可能混合
+    // 「已缓存(有 since)」与「新增(无 since)」。混发会把新 symbol 裁成 1 根。
+    const groups = new Map<string | undefined, string[]>()
+    for (const sym of part) {
+      const s = sinceOf(sym)
+      const list = groups.get(s)
+      if (list) list.push(sym)
+      else groups.set(s, [sym])
+    }
+    for (const [since, group] of groups) {
+      const resp = await api.klineMinuteBatch(group, undefined, preferLocal, since)
+      data = mergeInto(data, resp.data ?? {})
+    }
   }
   for (const sym of symbols) _lastTouch.set(sym, (_touchSeq += 1))
   return { data: pruneMinuteCache(data, symbols, _lastTouch, MINUTE_CACHE_MAX_SYMBOLS) }
