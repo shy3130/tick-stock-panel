@@ -343,6 +343,78 @@ function FactorTable({ result }: { result: MiningResult }) {
   )
 }
 
+/** 挖掘锁占用横幅: 撞锁降级时展示持有者线索, 满足陈旧判定可强制释放。 */
+function MiningLockBanner() {
+  const queryClient = useQueryClient()
+  const lockQuery = useQuery({
+    queryKey: QK.miningLock,
+    queryFn: api.miningLockStatus,
+    staleTime: 10_000,
+    // 被他人持有时轮询等待恢复; 空闲/自己持有则不轮询
+    refetchInterval: query =>
+      query.state.data?.held && !query.state.data.mine ? 15_000 : false,
+  })
+  const release = useMutation({
+    mutationFn: api.miningForceReleaseLock,
+    onSuccess: () => {
+      toast('已终止持有者并由当前后端接管挖掘锁', 'success')
+      void queryClient.invalidateQueries({ queryKey: QK.miningLock })
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  })
+  const data = lockQuery.data
+  if (!data?.held || data.mine) return null
+  const holder = data.holder
+  const idleMin = data.store_idle_seconds != null
+    ? Math.max(1, Math.round(data.store_idle_seconds / 60))
+    : null
+  return (
+    <div className="mb-3 rounded-card border border-warning/40 bg-warning/10 px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-start gap-2 text-xs">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div>
+            <div className="font-medium text-foreground">挖掘锁被其他进程占用 — 挖掘暂不可用</div>
+            <div className="mt-0.5 text-[11px] leading-4 text-secondary">
+              {holder ? (
+                <>
+                  持有者 pid {holder.pid}
+                  {holder.role ? ` · ${holder.role === 'worker' ? '挖掘 worker 进程' : '后端实例'}` : ''}
+                  {idleMin != null ? ` · 挖掘存储已静默约 ${idleMin} 分钟` : ''}
+                  {data.force_releasable
+                    ? ' — 满足陈旧判定, 可强制释放'
+                    : ` — 不可强制释放: ${data.reason}`}
+                </>
+              ) : (
+                '锁文件为旧格式, 无法定位持有进程 — 请手动结束后端残留进程后重启面板'
+              )}
+            </div>
+          </div>
+        </div>
+        {data.force_releasable && (
+          <button
+            type="button"
+            disabled={release.isPending}
+            onClick={() => {
+              if (window.confirm(
+                `确定终止持有挖掘锁的进程 (pid ${holder?.pid}) 并由当前后端接管?\n\n` +
+                '仅当该进程没有进行中的挖掘、且挖掘存储长期无写入时才会允许此操作。\n' +
+                '若它是你正在使用的另一个面板实例, 请改到那边正常退出。',
+              )) release.mutate()
+            }}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-btn border border-warning/60 bg-warning/20 px-3 text-xs font-medium text-foreground hover:bg-warning/30 disabled:opacity-50"
+          >
+            {release.isPending
+              ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              : <Square className="h-3.5 w-3.5" />}
+            强制停止并接管
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function MiningWorkbench() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -668,6 +740,8 @@ export function MiningWorkbench() {
   }
 
   return (
+    <>
+    <MiningLockBanner />
     <div className="grid min-h-[calc(100vh-9rem)] grid-cols-1 overflow-hidden rounded-card border border-border bg-surface xl:grid-cols-[20rem_minmax(0,1fr)]">
       <aside className="border-b border-border bg-base/25 xl:max-h-[calc(100vh-9rem)] xl:overflow-y-auto xl:border-b-0 xl:border-r">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -893,5 +967,6 @@ export function MiningWorkbench() {
         </div>
       )}
     </div>
+    </>
   )
 }

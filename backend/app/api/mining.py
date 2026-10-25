@@ -154,6 +154,44 @@ class MiningAutoStartRequest(BaseModel):
         return self
 
 
+def _require_mining_lock(request: Request) -> None:
+    """降级模式 (撞锁启动) 下拒绝一切挖掘启动入口, 指引到挖掘页锁状态卡。"""
+    if not getattr(request.app.state, "mining_lock_acquired", True):
+        raise HTTPException(
+            status_code=409,
+            detail="挖掘锁被其他进程占用, 当前后端以降级模式运行 — "
+            "请在挖掘页查看锁状态并强制释放后重试",
+        )
+
+
+@router.get("/lock")
+def get_lock_status(request: Request) -> dict[str, Any]:
+    """挖掘锁诊断: 持有者线索 + 是否允许强制释放 (fail-closed 判定)。"""
+    from app.services.mining_lock_admin import lock_status
+
+    return lock_status(request.app.state.repo.store.data_dir)
+
+
+@router.post("/lock/force-release")
+def force_release_lock(request: Request) -> dict[str, Any]:
+    """终止陈旧锁持有者并由当前后端接管; 不满足陈旧判定时返回拒绝原因。"""
+    from app.services.mining_lock_admin import (
+        MiningLockAdminError,
+        force_release,
+    )
+
+    lock = getattr(request.app.state, "mining_process_lock", None)
+    if lock is None:
+        raise HTTPException(status_code=409, detail="挖掘锁状态不可用")
+    try:
+        result = force_release(request.app.state.repo.store.data_dir, lock)
+    except MiningLockAdminError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # 接管成功后同步降级标志, 挖掘入口立即恢复可用
+    request.app.state.mining_lock_acquired = True
+    return result
+
+
 @router.get("/availability")
 def get_availability(
     request: Request,
@@ -200,6 +238,7 @@ def list_runs(
 
 @router.post("/runs")
 def start_run(payload: MiningStartRequest, request: Request) -> dict[str, Any]:
+    _require_mining_lock(request)
     manager = _manager(request)
     worker_request = payload.model_dump(mode="json", exclude={"force"})
     try:
@@ -279,6 +318,7 @@ def start_auto_run(payload: MiningAutoStartRequest, request: Request) -> dict[st
     筛选结果随请求持久化 (request.auto_screening), 供结果页展示达标因子清单与
     失败原因分布; 无达标因子时返回 started=false 而不是报错。
     """
+    _require_mining_lock(request)
     from app.services.auto_mining import screen_all_factors
 
     manager = _manager(request)

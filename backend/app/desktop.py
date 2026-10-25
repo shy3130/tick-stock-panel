@@ -79,13 +79,12 @@ def _ensure_data_dir_writable() -> None:
 
 
 def _precheck_mining_lock() -> str | None:
-    """启动前预检挖掘锁。返回 None = 可启动; 返回 str = 冲突原因 (给失败页)。
+    """启动前预检挖掘锁。返回 None = 无冲突; 返回 str = 冲突原因 (仅日志)。
 
-    app.main 的 lifespan 第一件事就是抢 data_dir/.mining_process_lock,
-    被别的后端实例 (panel 模式、隧道后端或残留进程) 占住时 lifespan 直接
-    抛 MiningProcessLockError, uvicorn 吞掉后主线程只能等满超时报笼统的
-    "启动失败"。这里用同一把锁试抢一下, 提前把冲突翻译成用户可操作的指引。
-    试抢成功立即释放, 真正的持有仍由 lifespan 负责。
+    app.main 的 lifespan 会抢 data_dir/.mining_process_lock; 被别的后端
+    实例 (panel 模式、隧道后端或残留进程) 占住时, 现在 lifespan 只降级
+    (挖掘入口 409, 面板可用, 挖掘页提供强制释放), 这里提前留一条日志
+    方便排查。试抢成功立即释放, 真正的持有仍由 lifespan 负责。
     """
     from app.config import settings
     from app.services.mining_process_lock import (
@@ -399,20 +398,12 @@ def main() -> int:
     if not _acquire_single_instance():
         return 0
 
-    # 挖掘锁预检: 被其他后端实例占住时 lifespan 必败, 提前秒显失败页并给出
-    # 操作指引, 而不是让用户对着超时后的笼统"启动失败"猜 (见 _precheck_mining_lock)
+    # 挖掘锁预检: 撞锁只降级不再拦截启动 — lifespan 会以降级模式起面板
+    # (挖掘入口 409), 用户可在挖掘页查看持有者并强制释放陈旧持有者;
+    # 这里只提前留一条日志方便排查。
     conflict = _precheck_mining_lock()
     if conflict is not None:
-        logger.error("启动预检: %s", conflict.replace("\n", " "))
-        try:
-            _open_static_window(_failed_html(conflict))
-        except Exception:
-            # 失败页自身也打不开 (如缺 webview 依赖) 时不能让异常裸穿 main():
-            # console=False 下进程闪退无反馈, 且本路径在 try/finally 之外,
-            # 单实例锁会跳过释放
-            logger.exception("启动失败页窗口打开失败")
-        _release_single_instance()
-        return 1
+        logger.warning("启动预检: %s", conflict.replace("\n", " "))
 
     try:
         port = _find_free_port(_BASE_PORT)

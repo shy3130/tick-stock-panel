@@ -99,28 +99,38 @@ def test_precheck_mining_lock_detects_conflict(data_dir):
 
 # ---------- main() 预检冲突路径 ----------
 
-def test_main_releases_lock_when_failure_window_crashes(
+def test_main_proceeds_when_mining_lock_precheck_conflicts(
     tmp_path, monkeypatch, caplog
 ):
-    """预检冲突 + 失败页窗口自身崩溃 (如缺 webview 依赖): 异常不得裸穿 main()。
+    """预检撞锁只降级: 留 WARNING 日志并继续启动, 不再提前退出失败页。
 
-    该路径在 main() 的 try/finally 之外, 不兜底会导致 console=False 闪退无反馈、
-    .desktop.lock 跳过释放。断言: 记录异常日志、单实例锁仍释放、退出码 1。
+    lifespan 会以降级模式起面板 (挖掘入口 409, 挖掘页提供强制释放),
+    桌面版必须照常开窗, 否则用户没有入口处理锁冲突。
     """
+    import logging
+
     monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
     monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
-    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: "冲突原因")
+    monkeypatch.setattr(
+        desktop, "_precheck_mining_lock", lambda: "另一个后端实例正在占用数据目录"
+    )
+    monkeypatch.setattr(desktop, "_find_free_port", lambda base: 59998)
+    monkeypatch.setattr(
+        desktop, "_wait_for_server",
+        lambda port, timeout, done_event: True,
+    )
+    opened = []
+    monkeypatch.setattr(desktop, "_open_window", lambda url: opened.append(url))
 
-    def _boom(_html_text):
-        raise RuntimeError("webview unavailable")
+    def _fake_uvmicorn(port, ready):
+        ready.set()
 
-    monkeypatch.setattr(desktop, "_open_static_window", _boom)
+    monkeypatch.setattr(desktop, "_run_uvmicorn", _fake_uvmicorn)
 
-    import logging
+    with caplog.at_level(logging.WARNING, logger="app.desktop"):
+        assert desktop.main() == 0
 
-    with caplog.at_level(logging.ERROR, logger="app.desktop"):
-        assert desktop.main() == 1
-
-    assert "启动失败页窗口打开失败" in caplog.text
+    assert opened and opened[0].startswith("http://127.0.0.1:")
+    assert "启动预检" in caplog.text
     assert not (tmp_path / ".desktop.lock").exists()

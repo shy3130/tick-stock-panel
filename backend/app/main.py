@@ -500,18 +500,27 @@ async def _application_lifespan(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     mining_process_lock = MiningProcessLock(settings.data_dir)
+    lock_acquired = True
     try:
         mining_process_lock.acquire()
     except MiningProcessLockError:
-        # uvicorn 吞掉 lifespan 异常只留一行 startup failed; 桌面版失败页指向
-        # data/desktop.log, 先把真因 (含 traceback) 落盘, 不依赖 uvicorn 的日志行为
-        logger.error("挖掘锁被其他后端实例占用, lifespan 启动失败", exc_info=True)
-        raise
+        # 撞锁不再让整个后端起不来 (典型: 旧实例挂死在 shutdown 持锁不放):
+        # 面板以降级模式启动 — 挖掘启动入口返回 409, 用户可在挖掘页查看
+        # 持有者并 (满足陈旧判定时) 强制释放, 之后自动恢复。
+        lock_acquired = False
+        logger.warning(
+            "挖掘锁被其他进程占用, 面板以降级模式启动 (挖掘功能暂不可用; "
+            "可在挖掘页查看锁状态并强制释放)"
+        )
+    app.state.mining_process_lock = mining_process_lock
+    app.state.mining_lock_acquired = lock_acquired
     try:
         async with _application_lifespan(app):
             yield
     finally:
-        mining_process_lock.release()
+        # 用 lock.acquired 而非启动时的 flag: 强制释放接管后同样要在退出时释放
+        if mining_process_lock.acquired:
+            mining_process_lock.release()
 
 
 app = FastAPI(

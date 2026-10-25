@@ -18,7 +18,13 @@ def run_scheduled_lab(app_state: Any) -> dict[str, Any]:
 
     results: dict[str, Any] = {"mining": None, "guardian": None}
     try:
-        results["mining"] = run_weekly_mining(app_state)
+        if not getattr(app_state, "mining_lock_acquired", True):
+            # 降级模式 (挖掘锁被其他进程占用): 跳过周度挖掘而不是报错,
+            # 守护复验不受影响
+            logger.warning("scheduled lab mining skipped: mining lock unavailable")
+            results["mining"] = {"skipped": "mining lock unavailable"}
+        else:
+            results["mining"] = run_weekly_mining(app_state)
     except Exception:
         logger.exception("scheduled lab mining enqueue failed")
     try:
