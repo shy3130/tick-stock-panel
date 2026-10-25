@@ -58,6 +58,10 @@ class _FakeClient:
 
 
 async def _round_end(monkeypatch: pytest.MonkeyPatch, chunks: list[ChatCompletionChunk]) -> dict[str, Any]:
+    # 本文件测的是 OpenAI chat 协议的流式解析 (chunks → tool_calls 累积/拆分)。
+    # 必须固定协议: 否则运行环境若配成 responses 协议, stream_openai_round 会走
+    # ai_responses 分支并真的打到线上 API, 断言全部落空 (外部依赖污染单测)。
+    monkeypatch.setattr(streaming, "is_responses_protocol", lambda: False)
     monkeypatch.setattr(streaming, "_client", lambda timeout: _FakeClient(chunks))
     monkeypatch.setattr(streaming, "current_ai_model", lambda: "gemini-3.8-flash")
     monkeypatch.setattr(streaming, "_build_kwargs", lambda temperature: {})
@@ -181,6 +185,8 @@ async def test_tool_loop_sends_thought_signature_back(monkeypatch: pytest.Monkey
         return {"ok": True, "result": {}}
 
     monkeypatch.setattr(ai_provider, "is_codex_cli_provider", lambda provider=None: False)
+    # 同样固定协议: 本用例校验 OpenAI chat 路径把 extra_content 回填进 assistant 消息
+    monkeypatch.setattr(ai_provider, "is_responses_protocol", lambda: False)
     monkeypatch.setattr(ai_provider, "_check_input_budget", lambda messages, *, max_tokens: None)
     monkeypatch.setattr(ai_provider, "_run_openai_message_once", fake_once)
 

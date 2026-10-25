@@ -638,7 +638,14 @@ def _set_meta_string_field(block: str, field: str, value: str) -> str:
 
 
 def _insert_meta_field(block: str, field: str, value_repr: str) -> str:
-    """在 META 字典末尾(闭合 `}` 之前)插入一个字段。value_repr 已是 Python 源码。"""
+    """在 META 字典末尾(闭合 `}` 之前)插入一个字段。value_repr 已是 Python 源码。
+
+    闭合 `}` 有两种写法, 两种都要认:
+      - 独占一行 (`    }`): 直接插在它前面;
+      - 跟在最后一个键的行尾 (`"params": []}`): 必须先把这一行拆成
+        「内容,」+「新字段」+「}」, 否则新字段会落出字典之外, 生成非法代码
+        (AST 报 unexpected indent)。AI 生成的策略常写这种内联多行形式。
+    """
     lines = block.splitlines(keepends=True)
     key_indent = None
     for line in lines:
@@ -646,15 +653,34 @@ def _insert_meta_field(block: str, field: str, value_repr: str) -> str:
         if m:
             key_indent = m.group(1)
             break
+    # META = { 所在行的缩进: 拆出闭合 `}` 时用它对齐字典结束位置
+    stmt_indent = re.match(r"^(\s*)", lines[0] if lines else "")
+    stmt_prefix = stmt_indent.group(1) if stmt_indent else ""
     if key_indent is None:
-        first_indent = re.match(r"^(\s*)", lines[0] if lines else "")
-        key_indent = (first_indent.group(1) if first_indent else "") + "    "
+        key_indent = stmt_prefix + "    "
 
-    insert_at = len(lines)
+    # 定位最后一个非空行: 它要么是 `}`, 要么以 `}` 结尾
+    last = None
     for i in range(len(lines) - 1, -1, -1):
-        if lines[i].lstrip().startswith("}"):
-            insert_at = i
+        if lines[i].strip():
+            last = i
             break
+    insert_at = len(lines)
+    if last is not None:
+        body = lines[last].rstrip("\r\n")
+        if body.lstrip().startswith("}"):
+            insert_at = last
+        else:
+            brace = body.rfind("}")
+            if brace >= 0:
+                content = body[:brace].rstrip()
+                if content and not content.endswith((",", "{")):
+                    content += ","
+                lines[last] = content + "\n"
+                lines.insert(last + 1, f'{key_indent}"{field}": {value_repr},\n')
+                lines.insert(last + 2, f"{stmt_prefix}}}\n")
+                return "".join(lines)
+
     for i in range(insert_at - 1, -1, -1):
         if not lines[i].strip():
             continue
@@ -791,13 +817,31 @@ def _restore_strategy_file(path: Path, previous_code: str | None) -> None:
 
 
 def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legacy_ai_path: bool = False) -> dict:
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+    result = save_strategy_code_core(req, engine, data_dir, legacy_ai_path=legacy_ai_path)
+    _invalidate_strategy_runtime(request)
+    return result
+
+
+def save_strategy_code_core(
+    req: StrategyCodeSaveRequest,
+    engine: StrategyEngine,
+    data_dir: Path,
+    *,
+    legacy_ai_path: bool = False,
+) -> dict:
+    """策略落盘 + 校验的**唯一**实现 (API 端点与 AI 助手工具共用)。
+
+    校验链: ID 前缀 → 目标目录 → 安全校验与 META 语义 → 写盘 → engine.reload()
+    核对能加载且来源正确 → 引用的自定义信号必须已定义。任何一步失败都回滚文件,
+    不留下半截状态。调用方负责清缓存 (端点走 _invalidate_strategy_runtime)。
+    """
     sid = _validate_strategy_id(req.strategy_id)
     if legacy_ai_path:
         if not (sid.startswith("ai_") or sid.startswith("custom_")):
             raise ValueError("策略 ID 必须以 ai_ 或 custom_ 开头")
 
-    engine = _get_engine(request)
-    data_dir = _data_dir(request)
     existing: StrategyDef | None = None
     try:
         existing = engine.get(sid)
@@ -863,8 +907,6 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
         _restore_strategy_file(path, previous_code)
         engine.reload()
         raise ValueError(f"策略保存失败: {e}") from e
-
-    _invalidate_strategy_runtime(request)
 
     return {
         "ok": True,

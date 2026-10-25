@@ -271,3 +271,61 @@ print("draft")
 """
 
     assert AIStrategyGenerator._extract_code_block(content) == RAW_CODE.strip()
+
+
+# ── META 闭合 `}` 写在最后一键行尾 (内联多行) ─────────────────
+#
+# AI 生成的策略常把 META 写成多行但闭合括号跟在最后一个键后面:
+#   META = {"id": ..., "name": ...,
+#           "params": []}
+# 旧实现只找「独占一行的 }」, 找不到就把新字段追加到整个 block 末尾,
+# 于是 research_only 落到字典外面, 生成 `unexpected indent` 的非法代码。
+
+INLINE_CLOSE_CODE = '''"""模型返回的策略"""
+import polars as pl
+
+META = {"id": "ai_wrong", "name": "English", "description": "d",
+        "tags": [], "asset_types": ["stock"], "timeframes": ["1d"],
+        "basic_filter": {}, "params": []}
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    return df
+'''
+
+
+def test_insert_meta_field_handles_inline_closing_brace():
+    """闭合 `}` 在末键行尾时, 新字段必须still 插进字典内。"""
+    import ast
+
+    out = _normalize_strategy_meta(INLINE_CLOSE_CODE, "ai_fixed", "中文名")
+    ast.parse(out)  # 语法必须合法
+    meta = AIStrategyGenerator._extract_meta(out)
+    assert meta.get("id") == "ai_fixed"
+    assert meta.get("name") == "中文名"
+
+
+def test_set_meta_bool_field_handles_inline_closing_brace():
+    """research_only 注入走的是另一条改写路径, 同样要合法。"""
+    import ast
+
+    from app.api.strategy import _set_meta_bool_field
+
+    out = _set_meta_bool_field(INLINE_CLOSE_CODE, "research_only", True)
+    ast.parse(out)
+    meta = AIStrategyGenerator._extract_meta(out)
+    assert meta.get("research_only") is True
+
+
+def test_inline_meta_full_save_path_is_valid_python():
+    """走完整规范化 + 布尔注入的组合, 模拟 AI 保存策略的真实链路。"""
+    import ast
+
+    from app.api.strategy import _set_meta_bool_field
+
+    step1 = _normalize_strategy_meta(INLINE_CLOSE_CODE, "ai_combo", "组合名")
+    step2 = _set_meta_bool_field(step1, "research_only", True)
+    ast.parse(step2)
+    meta = AIStrategyGenerator._extract_meta(step2)
+    assert meta.get("id") == "ai_combo"
+    assert meta.get("research_only") is True

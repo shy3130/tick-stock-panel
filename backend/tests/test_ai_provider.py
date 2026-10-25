@@ -390,6 +390,9 @@ def test_check_input_budget_passes_within_window(monkeypatch):
 async def test_generate_ai_text_clamps_max_tokens_to_config_cap(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(ai_provider, "is_codex_cli_provider", lambda: False)
+    # 固定 OpenAI chat 协议: 否则环境配成 responses 时会走 ai_responses 分支,
+    # mock 的 _run_openai_once 不被调用, 测试真的打到线上 API。
+    monkeypatch.setattr(ai_provider, "is_responses_protocol", lambda: False)
     monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 3000)
     monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 64000)
 
@@ -410,6 +413,7 @@ async def test_generate_ai_text_default_cap_and_none_passthrough(monkeypatch):
     """默认 3000 且被钳制; 显式 None 贯穿为不限制。"""
     captured: dict = {}
     monkeypatch.setattr(ai_provider, "is_codex_cli_provider", lambda: False)
+    monkeypatch.setattr(ai_provider, "is_responses_protocol", lambda: False)
     monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 4000)
     monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 64000)
 

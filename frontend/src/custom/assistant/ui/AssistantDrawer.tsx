@@ -1,8 +1,9 @@
 /**
- * AI 助手面板 — 非模态, 从页面最右缘滑入(right: 0), 默认 720px 宽,
+ * AI 助手面板 — 从页面最右缘滑入(right: 0), 默认 720px 宽,
  * 左缘拖拽可调宽并持久化到 localStorage。
  *
- * 非模态是核心体验决策: 用户边看行情边问, 页面主体不遮挡、不解锁滚动。
+ * 打开时默认在页面主体上盖一层毛玻璃遮罩, 点击遮罩关闭助手 (聚焦提问);
+ * 抽屉标题栏「助手设置」可关闭遮罩, 恢复非模态体验 (边看行情边问)。
  * 拖拽调宽沿用仓库 60fps 手法: 拖动期间直接改 DOM style.width, 松手才
  * 提交 React state + 持久化。视觉全部走设计令牌; 动画用全站统一缓动。
  */
@@ -21,6 +22,7 @@ import {
   Puzzle,
   SendHorizontal,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Star,
@@ -28,7 +30,11 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/cn'
+import { api } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
+import { usePreferences } from '@/lib/useSharedQueries'
 import { DEEPSEEK_FALLBACK_RANGE, discountRangeLabel, useSponsorModelItems } from '@/lib/sponsor-discount'
 import {
   fetchAssistantStatus,
@@ -82,11 +88,15 @@ function clampWidth(width: number): number {
 
 export function AssistantDrawer() {
   const { open, sending, sessions, activeId } = useAssistantStore()
+  const { data: prefs } = usePreferences()
   const active = sessions.find(s => s.id === activeId) ?? null
   const messages = active?.messages ?? []
+  // 毛玻璃遮罩默认开启; 偏好未加载完成前按默认渲染, 避免开合闪变。
+  const maskEnabled = prefs?.assistant_mask_enabled ?? true
 
   return createPortal(
     <AnimatePresence>
+      {open && maskEnabled && <DrawerBackdrop key="assistant-backdrop" />}
       {open && (
         <DrawerPanel key="assistant-drawer" sending={sending} messages={messages} />
       )}
@@ -97,6 +107,22 @@ export function AssistantDrawer() {
 }
 
 type DrawerMessages = ReturnType<typeof useAssistantStore>['sessions'][number]['messages']
+
+/** 毛玻璃遮罩: 盖住页面主体, 点击任意处关闭助手。
+ *  与抽屉同 portal (随界面缩放), z 序低于抽屉一级 (z-[59] < z-[60])。 */
+function DrawerBackdrop() {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.26, ease: EASE_SMOOTH }}
+      onClick={closeAssistant}
+      className="fixed inset-0 z-[59] bg-black/40 backdrop-blur-sm"
+      aria-hidden="true"
+    />
+  )
+}
 
 function DrawerPanel({
   sending,
@@ -252,6 +278,7 @@ function DrawerHeader({
   sending: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
     <div className="relative flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
@@ -268,17 +295,119 @@ function DrawerHeader({
       <RhPromoBanner />
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <div className="relative">
-          <IconButton title="历史会话" onClick={() => setMenuOpen(v => !v)} disabled={sending}>
+          <IconButton title="助手设置" onClick={() => { setSettingsOpen(v => !v); setMenuOpen(false) }} disabled={sending}>
+            <SlidersHorizontal className="h-4 w-4" />
+          </IconButton>
+          {settingsOpen && <AssistantSettingsMenu onDone={() => setSettingsOpen(false)} />}
+        </div>
+        <div className="relative">
+          <IconButton title="历史会话" onClick={() => { setMenuOpen(v => !v); setSettingsOpen(false) }} disabled={sending}>
             <History className="h-4 w-4" />
           </IconButton>
           {menuOpen && <SessionMenu sessions={sessions} activeId={activeId} onDone={() => setMenuOpen(false)} />}
         </div>
-        <IconButton title="新对话" onClick={() => { newSession(); setMenuOpen(false) }} disabled={sending}>
+        <IconButton title="新对话" onClick={() => { newSession(); setMenuOpen(false); setSettingsOpen(false) }} disabled={sending}>
           <Plus className="h-4 w-4" />
         </IconButton>
         <IconButton title="关闭 (Esc)" onClick={closeAssistant}>
           <X className="h-4 w-4" />
         </IconButton>
+      </div>
+    </div>
+  )
+}
+
+/** 助手设置: 毛玻璃遮罩 + 动作工具免确认开关。
+ *
+ * 毛玻璃遮罩默认开启: 打开时页面盖遮罩, 点击遮罩关闭助手; 关闭后恢复
+ * 非模态 (边看行情边问)。免确认打开后 create_signal_strategy /
+ * create_strategy / run_backtest / add_to_watchlist / sync_data 不再逐次
+ * 弹确认卡, 直接执行。偏好存后端 preferences, 与设置页同源。
+ */
+function AssistantSettingsMenu({ onDone }: { onDone: () => void }) {
+  const prefs = usePreferences()
+  const qc = useQueryClient()
+  const enabled = prefs.data?.assistant_auto_approve_actions ?? false
+  const save = useMutation({
+    mutationFn: (next: boolean) => api.updateAssistantAutoApprove(next),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QK.preferences }) },
+  })
+  const maskEnabled = prefs.data?.assistant_mask_enabled ?? true
+  const saveMask = useMutation({
+    mutationFn: (next: boolean) => api.updateAssistantMask(next),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QK.preferences }) },
+  })
+
+  return (
+    <div className="absolute right-0 top-9 z-20 w-72 rounded-card border border-border bg-surface p-3 shadow-xl">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-foreground">动作工具免确认</div>
+          <div className="mt-1 text-[11px] leading-relaxed text-muted">
+            打开后创建信号/策略、回测、加自选、数据补全不再逐次弹确认卡, 直接执行。
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="动作工具免确认"
+          disabled={save.isPending}
+          onClick={() => save.mutate(!enabled)}
+          className={cn(
+            'relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 disabled:opacity-50',
+            enabled ? 'bg-accent' : 'bg-border',
+          )}
+        >
+          <span
+            className={cn(
+              'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform duration-200',
+              enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
+            )}
+          />
+        </button>
+      </div>
+      {enabled && (
+        <div className="mt-2 rounded-btn bg-warning/10 px-2 py-1.5 text-[10px] leading-relaxed text-warning">
+          已开启: 助手会不经确认直接写入。轮次检查点仍然有效 (防止单轮无限调用)。
+        </div>
+      )}
+      <div className="mt-3 flex items-start justify-between gap-2 border-t border-border/50 pt-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-foreground">毛玻璃遮罩</div>
+          <div className="mt-1 text-[11px] leading-relaxed text-muted">
+            打开时页面盖毛玻璃遮罩, 点击遮罩处关闭助手; 关闭后非模态, 可边看行情边问。
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={maskEnabled}
+          aria-label="毛玻璃遮罩"
+          disabled={saveMask.isPending}
+          onClick={() => saveMask.mutate(!maskEnabled)}
+          className={cn(
+            'relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 disabled:opacity-50',
+            maskEnabled ? 'bg-accent' : 'bg-border',
+          )}
+        >
+          <span
+            className={cn(
+              'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform duration-200',
+              maskEnabled ? 'translate-x-[18px]' : 'translate-x-0.5',
+            )}
+          />
+        </button>
+      </div>
+      <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2">
+        <span className="text-[10px] text-muted">更多 AI 配置在设置页</span>
+        <button
+          type="button"
+          onClick={onDone}
+          className="cursor-pointer rounded-btn px-2 py-0.5 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        >
+          关闭
+        </button>
       </div>
     </div>
   )
@@ -562,17 +691,24 @@ function InputArea({ sending, blocked }: { sending: boolean; blocked: boolean })
   }
 
   return (
-    <div className="shrink-0 border-t border-border bg-surface px-4 pb-3 pt-2.5">
-      <div className="flex items-end gap-2 rounded-card border border-border bg-base focus-within:border-accent/50">
+    <div className="shrink-0 border-t border-border/60 bg-surface px-4 pb-3 pt-3">
+      <div
+        className={cn(
+          'flex items-end gap-1.5 rounded-card border bg-base/60 p-1.5',
+          'transition-[border-color,background-color,box-shadow] duration-200 ease-smooth',
+          'focus-within:border-accent/50 focus-within:bg-base focus-within:ring-[3px] focus-within:ring-accent/10',
+          blocked ? 'border-warning/30' : 'border-border',
+        )}
+      >
         <textarea
           ref={textareaRef}
           value={text}
           rows={1}
           disabled={blocked}
-          placeholder={blocked ? '请先在设置页配置 AI' : '提问, Enter 发送 / Shift+Enter 换行'}
+          placeholder={blocked ? '请先在设置页配置 AI' : '问点什么…'}
           onChange={e => { setText(e.target.value); autoGrow() }}
           onKeyDown={onKeyDown}
-          className="max-h-36 min-h-[38px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted disabled:cursor-not-allowed"
+          className="max-h-36 min-h-[40px] flex-1 resize-none rounded-btn bg-transparent px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted/80 disabled:cursor-not-allowed"
         />
         {sending ? (
           <button
@@ -580,9 +716,9 @@ function InputArea({ sending, blocked }: { sending: boolean; blocked: boolean })
             onClick={stopSending}
             title="停止生成"
             aria-label="停止生成"
-            className="mr-1.5 mb-1.5 flex h-8 w-8 cursor-pointer items-center justify-center rounded-btn bg-elevated text-secondary transition-colors duration-150 ease-smooth hover:text-foreground"
+            className="mr-0.5 mb-0.5 flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border bg-elevated text-secondary transition-all duration-150 ease-smooth hover:border-danger/40 hover:text-danger active:scale-95"
           >
-            <Square className="h-3.5 w-3.5 fill-current" />
+            <Square className="h-3 w-3 fill-current" />
           </button>
         ) : (
           <button
@@ -591,14 +727,25 @@ function InputArea({ sending, blocked }: { sending: boolean; blocked: boolean })
             disabled={!canSend}
             title="发送"
             aria-label="发送"
-            className="mr-1.5 mb-1.5 flex h-8 w-8 cursor-pointer items-center justify-center rounded-btn bg-accent text-white transition-all duration-150 ease-smooth hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
+            className={cn(
+              'mr-0.5 mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all duration-150 ease-smooth active:scale-95',
+              canSend
+                ? 'cursor-pointer bg-accent text-white shadow-sm hover:bg-accent/90'
+                // 空输入时退为幽灵态而非褪色实心块, 视觉重心不被锁死在右下角
+                : 'cursor-default bg-elevated/60 text-muted',
+            )}
           >
             <SendHorizontal className="h-4 w-4" />
           </button>
         )}
       </div>
-      <div className="mt-1.5 px-1 text-[10px] text-muted">
-        ⌘K / Ctrl+K 呼出 · 左缘可拖拽调宽 · 回答基于本地数据, 不构成投资建议
+      <div className="mt-2 flex items-center justify-between gap-2 px-1">
+        <p className="text-[10px] leading-relaxed text-muted">
+          回答基于本地数据, 不构成投资建议
+        </p>
+        <span className="shrink-0 text-[10px] text-muted/70">
+          Enter 发送 · ⌘K 呼出 · 左缘拖拽调宽
+        </span>
       </div>
     </div>
   )

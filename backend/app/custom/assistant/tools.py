@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import re
 import uuid
@@ -690,23 +691,80 @@ def _get_factor_values(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         raise ValueError("factor 不能为空, 可先用 list_factors 查看可用因子 id。")
     top = _clamp(args.get("top"), 5, 50, 30)
     descending = str(args.get("direction") or "desc") != "asc"
+    # 次新股过滤: 上市不足 N 个自然日的标的历史序列太短, 递推类指标 (RSI/MACD/均线)
+    # 会给 0 或极端值, 直接按值排序会把整个榜单挤成新股 —— 用户要的是「全市场 RSI 最低」,
+    # 不是「刚上市还没数据」。默认 60 天; 传 0 可关闭过滤。
+    min_listed_days = _clamp(args.get("min_listed_days"), 0, 3650, 60)
     df, as_of = repo.get_enriched_latest()
     if df is None or df.is_empty():
         raise ValueError("本地暂无行情数据, 无法读取因子值。")
     if factor not in df.columns:
         raise ValueError(f"因子 {factor} 不在物化列中, 请先用 list_factors 确认因子 id。")
     keep = [c for c in ("symbol", factor, "change_pct") if c in df.columns]
-    sub = (
-        df.select(keep)
-        .drop_nulls(subset=[factor])
-        .sort(factor, descending=descending)
-        .head(top)
-    )
+    sub = df.select(keep).drop_nulls(subset=[factor])
+    excluded_new = 0
+    if min_listed_days > 0:
+        listing = _listing_dates(repo)
+        if listing:
+            cutoff = as_of - timedelta(days=min_listed_days) if isinstance(as_of, date) else None
+            if cutoff is not None:
+                too_new = {s for s, d in listing.items() if d is not None and d > cutoff}
+                if too_new:
+                    before = sub.height
+                    sub = sub.filter(~pl.col("symbol").is_in(list(too_new)))
+                    excluded_new = before - sub.height
+    sub = sub.sort(factor, descending=descending).head(top)
     names = repo.get_name_map(sub["symbol"].to_list()) if sub.height else {}
     rows = _rows(sub, top)
     for row in rows:
         row.setdefault("name", names.get(row.get("symbol"), ""))
-    return {"factor": factor, "as_of": _clean_value(as_of), "count": len(rows), "rows": rows}
+    out: dict[str, Any] = {
+        "factor": factor, "as_of": _clean_value(as_of),
+        "count": len(rows), "rows": rows,
+    }
+    if excluded_new > 0:
+        out["excluded_new_listings"] = excluded_new
+        out["note"] = (
+            f"已排除 {excluded_new} 只上市不足 {min_listed_days} 天的次新股 "
+            "(历史序列不足会让递推指标失真, 例如新股 RSI 恒为 0)。"
+            "要包含它们请传 min_listed_days=0。"
+        )
+    return out
+
+
+def _listing_dates(repo: Any) -> dict[str, date]:
+    """symbol → 上市日期 (来自 instruments 维表); 读不到时返回空 dict。
+
+    repo 是 KlineRepository, 拿 instruments 要么走它的缓存要么直读 parquet。
+    这里只做一次轻量读, 失败不影响主流程 (过滤退化为不过滤)。
+    """
+    try:
+        data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
+        if data_dir is None:
+            return {}
+        path = Path(data_dir) / "instruments" / "instruments.parquet"
+        if not path.exists():
+            return {}
+        df = pl.read_parquet(path, columns=["symbol", "listing_date"])
+        out: dict[str, date] = {}
+        for row in df.drop_nulls(subset=["listing_date"]).iter_rows(named=True):
+            val = row.get("listing_date")
+            parsed: date | None = None
+            if isinstance(val, datetime):
+                parsed = val.date()
+            elif isinstance(val, date):
+                parsed = val
+            elif isinstance(val, str) and len(val) >= 10:
+                try:
+                    parsed = date.fromisoformat(val[:10])
+                except ValueError:
+                    parsed = None
+            if parsed is not None:
+                out[str(row["symbol"])] = parsed
+        return out
+    except Exception:  # noqa: BLE001 — 维表不可读时退化为不过滤
+        return {}
+
 
 
 # ----------------------------------------------------------------
@@ -732,6 +790,19 @@ _SIGNAL_FIELD_HINT = (
     "vol_ma5/vol_ma10/vol_ratio_5d/high_60d/low_60d/momentum_5d-60d/"
     "annual_vol_20d/consecutive_limit_ups; 右值数字直接写, 字段引用写 'field:字段名'"
 )
+
+# 写操作工具: 结果里补统一的 action_ok / action 字段。
+# 历史上分别返回 created / added / started, 模型要逐工具记住哪个字段代表"已生效";
+# 统一后只需认 action_ok (原字段保留, 不破坏既有消费方)。
+ACTION_RESULT_TOOLS: frozenset[str] = frozenset({
+    "create_signal_strategy",
+    "create_strategy",
+    "add_to_watchlist",
+    "sync_data",
+})
+
+# 策略源码上限: 正常策略 200~400 行, 60KB 足够; 防止模型一次灌入超大文本
+_MAX_STRATEGY_CODE_CHARS = 60_000
 
 
 def _create_signal_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -783,6 +854,98 @@ def _create_signal_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str,
         "created": True,
         "signal": {"id": sig["id"], "name": name, "kind": kind, "conditions": conditions},
         "note": "已写入信号库并默认启用, 可在「信号库」页面查看/编辑/删除; 创建成功后可让用户在策略里引用。",
+    }
+
+
+def _strategy_guide_text() -> str:
+    """读取策略编写规范 (内置精简指南)。
+
+    助手没有文件读取工具, 让模型「去读 prompts/xxx.md」是够不着的指令 ——
+    它只会凭印象编格式, 然后被保存校验拒掉。这里把规范作为工具返回值直接给它。
+    """
+    prompts = Path(__file__).resolve().parents[2] / "strategy" / "prompts"
+    for name in ("strategy-guide-compact.md", "strategy-example.md"):
+        p = prompts / name
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8")
+            except OSError:
+                continue
+    return ""
+
+
+def _create_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """把完整 Python 策略代码落盘为 ai_ 草稿。
+
+    复用 api/strategy.py 的 save_strategy_code_core —— 与「策略页保存」同一条
+    校验链 (安全校验 / META 语义 / engine 加载核对 / 自定义信号存在性), 失败
+    自动回滚。本工具不自己写文件, 也不放宽任何校验。
+    新建策略固定为 research_only 草稿态, 需用户在策略页显式发布后才进入公开列表。
+
+    args.show_guide=true 时只返回编写规范 (不落盘): 助手没有读文件工具, 模型
+    必须先拿到 META 字段与信号函数契约, 再写代码, 否则必然被校验拒。
+    """
+    if args.get("show_guide"):
+        guide = _strategy_guide_text()
+        if not guide:
+            raise ValueError("策略编写规范文件缺失, 无法生成策略。")
+        return {
+            "guide": guide,
+            "next": "请严格按此规范编写完整策略文件, 再调用 create_strategy(不带 show_guide) 保存。",
+        }
+
+    from app.api.strategy import StrategyCodeSaveRequest, save_strategy_code_core
+
+    if ctx.data_dir is None or ctx.engine is None:
+        raise ValueError("数据目录或策略引擎未就绪。")
+
+    code = str(args.get("code") or "").strip()
+    if not code:
+        raise ValueError("code 不能为空, 需提供完整策略 Python 源码 (含 META 字典)。")
+    if len(code) > _MAX_STRATEGY_CODE_CHARS:
+        raise ValueError(f"策略代码过长 ({len(code)} 字符), 上限 {_MAX_STRATEGY_CODE_CHARS}。")
+    name = str(args.get("name") or "").strip()
+    if not name:
+        raise ValueError("name 不能为空 (策略中文名)。")
+    description = str(args.get("description") or "").strip()
+
+    # strategy_id 由助手生成: 不会覆盖用户已有文件, 也避免模型造出非法 id
+    sid = f"ai_{uuid.uuid4().hex[:10]}"
+    save_req = StrategyCodeSaveRequest(
+        code=code,
+        strategy_id=sid,
+        target_source="ai",
+        mode="create",
+        name=name,
+        description=description,
+    )
+    try:
+        saved = save_strategy_code_core(save_req, ctx.engine, ctx.data_dir)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    # 与端点一致: 落盘后清策略缓存 + 让监控引擎重载规则状态
+    from app.services import strategy_cache
+
+    strategy_cache.clear_cache(ctx.data_dir)
+    if ctx.repo is not None and hasattr(ctx.repo, "clear_cache"):
+        # 清缓存失败不影响已成功的落盘
+        with contextlib.suppress(Exception):
+            ctx.repo.clear_cache()
+
+    return {
+        "created": True,
+        "strategy_id": saved["strategy_id"],
+        "name": name,
+        "source": saved.get("source"),
+        "research_only": bool(saved.get("research_only", True)),
+        "path": saved.get("path"),
+        "params": [p.get("id") for p in (saved.get("meta", {}).get("params") or []) if isinstance(p, dict)],
+        "note": (
+            "已保存为 AI 策略草稿 (research_only), 不会进入公开列表、也不会被监控使用。"
+            "请让用户到「策略」页确认并点「发布」后才正式生效; "
+            "回测验证可用 run_backtest (需策略已发布或传入该 id)。"
+        ),
     }
 
 
@@ -1187,6 +1350,7 @@ _LOCAL_TOOLS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "run_strategy": _run_strategy,
     "get_factor_values": _get_factor_values,
     "create_signal_strategy": _create_signal_strategy,
+    "create_strategy": _create_strategy,
     "add_to_watchlist": _add_to_watchlist,
     "check_data_coverage": _check_data_coverage,
     "list_ext_tables": _list_ext_tables,
@@ -1312,17 +1476,24 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
         ),
         _schema(
             "get_factor_values",
-            "查询某因子在最新交易日的全市场取值排名(Top N), 附股票名称与今日涨跌幅。factor 用因子 id, 可先用 list_factors 查询。",
+            "查询某因子在最新交易日的全市场取值排名(Top N), 附股票名称与今日涨跌幅。factor 用因子 id, 可先用 list_factors 查询。"
+            "默认已排除上市不足 60 天的次新股 (历史不足会让 RSI/MACD 等递推指标失真, 新股 RSI 恒为 0, "
+            "不过滤会把整个榜单挤成新股); 返回值里的 excluded_new_listings 说明排除了多少只。",
             {
                 "factor": {"type": "string", "description": "因子 id"},
                 "top": {"type": "integer", "description": "返回前 N 名 (5-50, 默认 30)"},
                 "direction": {"type": "string", "enum": ["desc", "asc"], "description": "排序方向, 默认 desc(从大到小)"},
+                "min_listed_days": {
+                    "type": "integer",
+                    "description": "排除上市不足 N 个自然日的次新股 (默认 60, 传 0 关闭过滤)",
+                },
             },
             ["factor"],
         ),
         _schema(
             "create_signal_strategy",
-            "在信号库创建一个自定义信号(动作工具, 须用户在确认卡上确认后才执行)。"
+            "在**信号库**创建一个自定义信号 (动作工具, 须确认后执行)。"
+            "只写一条声明式条件条目, **不创建策略** —— 用户要「策略」时必须用 create_strategy。"
             "把交易思路翻译成声明式条件: 白名单字段 + 比较运算符, 多条件之间为 AND。"
             "字段如 close/open/high/low/volume/change_pct/turnover_rate/ma5/ma10/ma20/ma60/"
             "macd_dif/macd_dea/macd_hist/boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/"
@@ -1349,6 +1520,25 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
             ["name", "kind", "conditions"],
+        ),
+        _schema(
+            "create_strategy",
+            "创建 AI 策略 (动作工具)。两步用法, 必须按顺序: "
+            "① 先调用 create_strategy(show_guide=true) 获取策略编写规范 "
+            "(META 字段/信号函数契约/示例代码), 不要跳过这步凭印象写; "
+            "② 严格按规范写出完整策略 Python 源码后, 调用 create_strategy(name, description, code) 保存。"
+            "适用于声明式信号表达不了的复杂逻辑 (多因子评分、自定义列、跨日时序)。"
+            "简单思路优先用 create_signal_strategy。保存后为 research_only 草稿态, 需用户在策略页发布才生效。",
+            {
+                "show_guide": {
+                    "type": "boolean",
+                    "description": "true = 只返回策略编写规范, 不保存 (第一步必用)",
+                },
+                "name": {"type": "string", "description": "策略中文名, 简洁 (如 强势反包)"},
+                "description": {"type": "string", "description": "一句话说明策略选股逻辑"},
+                "code": {"type": "string", "description": "完整策略 Python 源码 (含 META 字典), 上限 60000 字符"},
+            },
+            [],
         ),
         _schema(
             "add_to_watchlist",
@@ -1422,6 +1612,9 @@ async def execute_assistant_tool(name: str, args: dict[str, Any], ctx: ToolConte
     """统一执行入口: 本地工具(to_thread 防阻塞) → 核心工具目录回退。
 
     契约与核心 tool_catalog.execute_tool 一致: {"ok": bool, "result"|"error"}。
+    写工具的结果再补一个 action_ok / action 标记: 各工具历史上分别返回
+    created / added / started, 模型要逐工具记住哪个字段表示"已生效"。统一补
+    action_ok 后, 模型只需认一个字段 (原字段保留, 不破坏既有消费方)。
     """
     handler = _LOCAL_TOOLS.get(name)
     if handler is not None:
@@ -1431,7 +1624,7 @@ async def execute_assistant_tool(name: str, args: dict[str, Any], ctx: ToolConte
                 result = await handler(dict(args or {}), ctx)
             else:
                 result = await asyncio.to_thread(handler, dict(args or {}), ctx)
-            return {"ok": True, "result": result}
+            return {"ok": True, "result": _mark_action_result(name, args, result)}
         except Exception as exc:  # 工具失败按契约回填给模型, 不打断对话流
             return {"ok": False, "error": str(exc) or exc.__class__.__name__}
     return await tool_catalog.execute_tool(
@@ -1440,6 +1633,24 @@ async def execute_assistant_tool(name: str, args: dict[str, Any], ctx: ToolConte
         engine=ctx.engine,
         data_dir=str(ctx.data_dir) if ctx.data_dir else None,
     )
+
+
+def _mark_action_result(name: str, args: dict[str, Any] | None, result: Any) -> Any:
+    """给写操作结果补统一的 action_ok / action 字段 (幂等, 不改原字段)。
+
+    只读调用不标记: create_strategy(show_guide=true) 只返回编写规范、不落盘,
+    标成 action_ok 会让模型以为策略已创建。
+    """
+    if not isinstance(result, dict) or name not in ACTION_RESULT_TOOLS:
+        return result
+    if "action_ok" in result:
+        return result
+    if name == "create_strategy" and (args or {}).get("show_guide"):
+        return result
+    marked = dict(result)
+    marked["action"] = name
+    marked["action_ok"] = True
+    return marked
 
 
 def summarize_tool_result(name: str, payload: dict[str, Any]) -> str:

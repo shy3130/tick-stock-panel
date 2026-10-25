@@ -209,7 +209,15 @@ async def chat_stream(
 
         # 动作工具确认闸门: 先发确认卡事件并挂起, 用户点确认后才真正执行。
         # 拒绝/超时按工具错误契约回填(ok=False), 模型据此改走文字建议而非重试。
-        if name in assistant_actions.ACTION_TOOLS:
+        # 用户可在助手界面打开「免确认」偏好跳过这一步 (默认关闭, 见 preferences)。
+        # 轮次检查点走的是下面独立的 rounds_confirm 分支, 不受该开关影响。
+        # 只读调用 (如 create_strategy(show_guide=true) 取编写规范) 不产生写副作用,
+        # 不弹确认卡 —— 否则一个两步的建策略流程要用户点两次。
+        if (
+            name in assistant_actions.ACTION_TOOLS
+            and not assistant_actions.is_read_only_call(name, args)
+            and not assistant_actions.auto_approve_enabled()
+        ):
             action = await assistant_actions.registry.register(call_id, name, args)
             meta = assistant_actions.ACTION_META.get(name, {"label": name, "risk": ""})
             await queue.put({
