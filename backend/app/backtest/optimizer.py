@@ -26,11 +26,9 @@ GRID_MAX_COMBINATIONS = 2000
 _MINIMIZE_OBJECTIVES = {"avg_holding_days"}
 
 # 可选优化目标 (须为 stats 中存在且数值可比的字段)。
-VALID_OBJECTIVES = {
-    "total_return", "annual_return", "sharpe", "sortino", "calmar",
-    "win_rate", "profit_factor", "max_drawdown", "mc_maxdd_p50", "mc_maxdd_p95",
-    "avg_pnl", "median_pnl", "n_trades", "avg_holding_days",
-}
+# 主目标白名单 (P4 收敛): 与 guards.PRIMARY_OBJECTIVES 同源。退化目标 (胜率/
+# 持仓天数/交易数) 交易少时可被运气推到极端, 不得作排名主目标 —— 见 docs/robust-optimizer-plan.md。
+from app.backtest.guards import PRIMARY_OBJECTIVES as VALID_OBJECTIVES  # noqa: F401
 
 
 def _candidates_for(param_id: str, spec, pmeta: dict) -> list:

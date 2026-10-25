@@ -35,7 +35,7 @@ def test_cancel_looks_up_job_by_echoed_key():
     """
     import asyncio
 
-    from app.api.backtest import _BacktestJob, _running_jobs, optimize_cancel
+    from app.api.backtest import _BacktestJob, _running_jobs, walkforward_cancel
 
     class _Req:
         def __init__(self, body):
@@ -48,17 +48,17 @@ def test_cancel_looks_up_job_by_echoed_key():
     _running_jobs[key] = job
     try:
         # 用回吐的 key 取消 → 命中并 set cancel_event
-        res = asyncio.run(optimize_cancel(_Req({"job_key": key})))
+        res = asyncio.run(walkforward_cancel(_Req({"job_key": key})))
         assert res["ok"] is True
         assert job.cancel_event.is_set()
 
         # 已完成任务再取消 → ok False
         job.done = True
-        res2 = asyncio.run(optimize_cancel(_Req({"job_key": key})))
+        res2 = asyncio.run(walkforward_cancel(_Req({"job_key": key})))
         assert res2["ok"] is False
 
         # 未知 key → ok False, 不抛异常
-        res3 = asyncio.run(optimize_cancel(_Req({"job_key": "nonexistent"})))
+        res3 = asyncio.run(walkforward_cancel(_Req({"job_key": "nonexistent"})))
         assert res3["ok"] is False
     finally:
         _running_jobs.pop(key, None)

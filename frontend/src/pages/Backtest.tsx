@@ -17,7 +17,7 @@ const MODES: Record<Tab, { title: string; subtitle: string; icon: typeof FlaskCo
   },
   robustness: {
     title: '验证',
-    subtitle: '参数敏感性与滚动样本外',
+    subtitle: '稳健参数筛选与滚动样本外检验',
     icon: ShieldCheck,
   },
 }

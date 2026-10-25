@@ -132,10 +132,11 @@ def test_all_combos_executed_once():
 
 
 def test_min_direction_objective_restores_display_sign():
-    # avg_holding_days 是 min 方向: 最小者最优, 且 best_score 必须是原始正值 (非内部取负值)
+    # 显式 direction="min": 最小者最优, 且 best_score 必须是原始正值 (非内部取负值)
+    # (P4 后退化目标不入白名单, min 方向只经显式 direction 覆盖到达)
     def score(p):
-        return _FakeResult(stats={"avg_holding_days": p["ma_proximity"] * 100})
-    out = _optimizer(score).optimize(_cfg(objective="avg_holding_days"))
+        return _FakeResult(stats={"total_return": p["ma_proximity"] * 100})
+    out = _optimizer(score).optimize(_cfg(objective="total_return", direction="min"))
     assert out["best_params"] == {"ma_proximity": 0.01}
     # min 方向: 最优 avg_holding_days = 0.01*100 = 1.0, 用户应看到 +1.0 而非 -1.0
     assert out["best_score"] == 1.0

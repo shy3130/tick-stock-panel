@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Play, Square, TrendingDown } from 'lucide-react'
+import { Play, Square, TrendingDown, GitBranch, CheckCircle2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
 import { fmtPct } from '@/lib/format'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
+import { toast } from '@/components/Toast'
 import {
   startWalkForward,
   stopWalkForward,
@@ -12,10 +13,10 @@ import {
   tryReconnectWalkForward,
   useWalkForwardTask,
 } from '@/lib/walkforwardTask'
-import { buildDefaultOverrides } from '@/lib/strategyOverrides'
+import { buildDefaultOverrides, applyStrategyParams } from '@/lib/strategyOverrides'
 import {
   INPUT_CLS,
-  OBJECTIVES,
+  PRIMARY_OBJECTIVES,
   GRID_MAX_COMBINATIONS,
   useParamSweep,
   StrategySelect,
@@ -85,6 +86,16 @@ export function StrategyWalkForward() {
   const [trainDays, setTrainDays] = useState('252')
   const [testDays, setTestDays] = useState('63')
   const [stepDays, setStepDays] = useState('63')
+  const [applying, setApplying] = useState(false)
+
+  // 折预览: 运行前实时显示折数/窗口切分 (不回测)
+  const foldPreview = useQuery({
+    queryKey: ['wf-preview', start, end, trainDays, testDays, stepDays],
+    queryFn: () => api.walkforwardPreview(start, end, Number(trainDays), Number(testDays), Number(stepDays)),
+    enabled: !!sweep.strategyId && start < end && Number(trainDays) > 0 && Number(testDays) > 0 && Number(stepDays) > 0,
+    retry: false,
+    staleTime: 30_000,
+  })
 
   useEffect(() => {
     tryReconnectWalkForward()
@@ -115,6 +126,22 @@ export function StrategyWalkForward() {
     })
   }
 
+  /** 采用最新折参数 → 策略配置 override 通道 (带来源折确认)。 */
+  const onApplyLatestFold = async () => {
+    const fold = result?.folds[result.folds.length - 1]
+    if (!fold?.best_params || !sweep.selected || applying) return
+    if (!window.confirm(`将第 ${fold.index + 1} 折训练参数应用到策略「${sweep.selected.name}」?\n来源折测试期: ${fold.test_start} ~ ${fold.test_end}\n(写入策略配置, 可在策略页查看/还原)`)) return
+    setApplying(true)
+    try {
+      await applyStrategyParams(sweep.selected, fold.best_params)
+      toast('已应用到策略配置 (策略页可还原)', 'success')
+    } catch (e) {
+      toast(`应用失败 · ${String((e as Error)?.message || e)}`, 'error')
+    } finally {
+      setApplying(false)
+    }
+  }
+
   const result = task?.result
   const progress = task?.progress
   const summary = result?.summary
@@ -137,7 +164,7 @@ export function StrategyWalkForward() {
         <div>
           <label className="mb-1.5 block text-xs font-medium text-secondary">优化目标</label>
           <select value={objective} onChange={e => setObjective(e.target.value)} className={INPUT_CLS}>
-            {OBJECTIVES.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            {PRIMARY_OBJECTIVES.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
         </div>
 
@@ -168,6 +195,26 @@ export function StrategyWalkForward() {
           </div>
         </div>
 
+        {foldPreview.data && foldPreview.data.folds.length > 0 && (
+          <div className="rounded-input border border-border/60 bg-elevated/30 p-2">
+            <div className="mb-1 text-[11px] font-medium text-secondary">折预览 (共 {foldPreview.data.n_folds} 折)</div>
+            <div className="max-h-28 space-y-0.5 overflow-y-auto">
+              {foldPreview.data.folds.map(f => (
+                <div key={f.index} className="flex justify-between text-[10px] text-muted">
+                  <span>#{f.index + 1} 训 {f.train_start}~{f.train_end}</span>
+                  <span>测 {f.test_start}~{f.test_end}</span>
+                </div>
+              ))}
+            </div>
+            {(foldPreview.data.warnings ?? []).map(w => (
+              <div key={w} className="mt-1 text-[10px] text-amber-400">{w}</div>
+            ))}
+          </div>
+        )}
+        {foldPreview.error && (
+          <div className="text-[11px] text-red-400">折切分无效: {(foldPreview.error as Error)?.message ?? '请检查区间与窗口参数'}</div>
+        )}
+
         <div>
           <label className="mb-1.5 block text-xs font-medium text-secondary">模式</label>
           <select value={mode} onChange={e => setMode(e.target.value as any)} className={INPUT_CLS}>
@@ -186,7 +233,7 @@ export function StrategyWalkForward() {
           </button>
         ) : (
           <button onClick={onRun} disabled={!canRun} className="inline-flex w-full items-center justify-center gap-1.5 rounded-btn bg-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed">
-            <Play className="h-3.5 w-3.5" /> 开始步进优化
+            <Play className="h-3.5 w-3.5" /> 开始滚动样本外检验
           </button>
         )}
       </div>
@@ -210,7 +257,7 @@ export function StrategyWalkForward() {
 
         {!result && !task?.isPending && (
           <EmptyState
-            title="步进优化"
+            title="滚动样本外检验"
             hint="每折在训练区间网格优化选最优参数，再在紧邻的测试区间做样本外(OOS)验证。样本内漂亮、样本外崩溃即过拟合。"
           />
         )}
@@ -240,6 +287,44 @@ export function StrategyWalkForward() {
 
             {/* OOS 拼接净值曲线 (walk-forward 核心产出) */}
             <OosEquityChart curve={summary.oos_equity_curve} />
+
+            {/* 参数漂移轨迹: 各折最优参数逐参数序列 + 收敛徽章 */}
+            <ParamDrift folds={result.folds} />
+
+            {/* 采用最新折参数: 滚动检验的标准实践 — 最后一折训练参数上实盘 */}
+            {result.folds.length > 0 && result.folds[result.folds.length - 1].best_params && (
+              <div className="flex items-center justify-between gap-3 rounded-card border border-border/60 bg-elevated/30 p-3">
+                <div className="min-w-0 text-[11px] text-secondary">
+                  <div className="font-medium text-foreground">采用最新折参数</div>
+                  <div className="mt-0.5 truncate">
+                    第 {result.folds[result.folds.length - 1].index + 1} 折 (测试期 {result.folds[result.folds.length - 1].test_start} ~ {result.folds[result.folds.length - 1].test_end}) 训练所得:
+                    {' '}{Object.entries(result.folds[result.folds.length - 1].best_params!).map(([k, v]) => `${k}=${String(v)}`).join(', ')}
+                  </div>
+                </div>
+                <button
+                  onClick={() => onApplyLatestFold()}
+                  disabled={applying}
+                  className="shrink-0 inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {applying ? '应用中…' : '应用到策略'}
+                </button>
+              </div>
+            )}
+
+            {/* 跳过折透明展示: 无效折不进聚合但不静默消失 */}
+            {result.skipped?.length > 0 && (
+              <div className="rounded-card border border-border/60 p-3">
+                <div className="mb-1.5 text-xs font-medium text-secondary">跳过的折 ({result.skipped.length})</div>
+                <div className="max-h-32 space-y-0.5 overflow-y-auto">
+                  {result.skipped.map((s, i) => (
+                    <div key={i} className="flex justify-between gap-2 text-[10px] text-muted">
+                      <span>#{s.index + 1} 测试 {s.test_start}~{s.test_end}</span>
+                      <span className="text-amber-400/80">{s.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 每折表 */}
             <div className="overflow-x-auto">
@@ -289,6 +374,39 @@ export function StrategyWalkForward() {
             )}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+
+/** 参数漂移轨迹: 各折 best_params 逐参数序列 (如 ma_fast: 5→5→8→10) + 收敛徽章。
+ *  与稳健优化的"各段冠军收敛度"同一诊断的滚动版: 各折最优值稳定 → 参数可信;
+ *  逐折大幅摆动 → 策略对参数敏感, 任何单折"最优"都别全信。 */
+function ParamDrift({ folds }: { folds: { index: number; best_params: Record<string, any> | null }[] }) {
+  const withParams = folds.filter(f => f.best_params)
+  if (withParams.length < 2) return null
+  const keys = Object.keys(withParams[0].best_params!)
+  if (!keys.length) return null
+  return (
+    <div className="rounded-card border border-border/60 p-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-secondary">
+        <GitBranch className="h-3.5 w-3.5" /> 参数漂移轨迹 (逐折最优值)
+      </div>
+      <div className="space-y-1">
+        {keys.map(k => {
+          const seq = withParams.map(f => String(f.best_params![k]))
+          const stable = seq.every(v => v === seq[0])
+          return (
+            <div key={k} className="flex items-center gap-2 text-[11px]">
+              <span className="w-32 shrink-0 truncate text-muted" title={k}>{k}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground">{seq.join(' → ')}</span>
+              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${stable ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' : 'border-amber-500/40 bg-amber-500/10 text-amber-400'}`}>
+                {stable ? '稳定' : '漂移'}
+              </span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

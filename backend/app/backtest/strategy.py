@@ -309,8 +309,8 @@ class StrategyDependencyResolver:
         order_by = strategy.meta.get("order_by")
         if order_by and order_by != "score":
             required_features.add(str(order_by))
-        # 叠加条件字段并入矩阵列: enriched 分区里的列 (基础指标/ext_*) 才能进
-        # 回测矩阵 fields, 供入场掩码 intersect 时按 (时间, 标的) 评估。
+        # 叠加条件字段并入矩阵列: 基础指标列来自 enriched 分区; ext_* 时序数值列
+        # 由引擎在矩阵加载后按 (日期, 标的) 对齐注入, 供入场掩码按 (时间, 标的) 评估。
         overlay_fields = _overlay_numeric_fields(overrides)
 
         base_columns = _resolve_base_columns(required_features | set(_EXECUTION_COLUMNS))
@@ -665,7 +665,9 @@ class BacktestResultPolicy:
     @classmethod
     def optimizer_trial(cls, objective: str) -> BacktestResultPolicy:
         return cls(
-            required_stats=frozenset({str(objective)}),
+            # n_trades 恒保留: 引擎侧本就产出的计数 (include_trades 只裁交易列表),
+            # 优化器交易数门槛 (guards.trades_ok) 依赖它, 缺席会被 fail-closed 误杀。
+            required_stats=frozenset({str(objective), "n_trades"}),
             include_monte_carlo=str(objective).startswith("mc_maxdd_"),
             include_curves=False,
             include_trades=False,
@@ -1593,13 +1595,17 @@ class StrategyBacktestService:
                 )
                 if overlay_err is not None:
                     return _err(overlay_err)
+                # np.where 产物可写, 须恢复只读不变量 (SignalMatrix 校验会拒)。
+                # 该路径此前被"扩展字段不可用"挡在更早阶段, 普通列叠加同样会触发。
+                overlay_entry = np.where(
+                    overlay_mask[start_id:stop_id],
+                    sim_signal_matrix.entry,
+                    0,
+                ).astype(sim_signal_matrix.entry.dtype)
+                overlay_entry.flags.writeable = False
                 sim_signal_matrix = replace(
                     sim_signal_matrix,
-                    entry=np.where(
-                        overlay_mask[start_id:stop_id],
-                        sim_signal_matrix.entry,
-                        0,
-                    ).astype(sim_signal_matrix.entry.dtype),
+                    entry=overlay_entry,
                 )
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
             if not sim_signal_matrix.entry.any():

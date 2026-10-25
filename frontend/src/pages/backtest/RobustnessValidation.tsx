@@ -12,8 +12,8 @@ export function RobustnessValidation() {
       <div className="flex shrink-0 items-center border-b border-border/70 px-1 pb-2">
         <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5">
           {([
-            ['sensitivity', '参数优化', SlidersHorizontal],
-            ['walkforward', '步进优化', Waypoints],
+            ['sensitivity', '稳健优化', SlidersHorizontal],
+            ['walkforward', '滚动样本外检验', Waypoints],
           ] as const).map(([value, label, Icon]) => (
             <button
               key={value}

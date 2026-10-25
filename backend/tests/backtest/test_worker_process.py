@@ -168,44 +168,6 @@ def test_spawn_worker_returns_compact_result_and_memory_metrics(tmp_path):
     assert worker["parent_rss_after_worker_exit_bytes"] > 0
 
 
-def test_spawn_optimizer_reuses_one_matrix_and_exits(tmp_path):
-    start = date(2024, 1, 1)
-    data_dir = tmp_path / "data"
-    _write_worker_strategy(data_dir)
-    _write_market_data(data_dir, start)
-    config = OptimizeConfig(
-        strategy_id="worker_always_entry",
-        symbols=["600000.SH"],
-        start=start,
-        end=start + timedelta(days=2),
-        param_grid={"gate": [1, 2]},
-        objective="total_return",
-        max_workers=4,
-        overrides={"basic_filter": {"enabled": False}},
-        backtest_kwargs={
-            "matching": "close_t",
-            "fees_pct": 0,
-            "slippage_bps": 0,
-            "max_positions": 1,
-        },
-    )
-
-    result = run_worker_task(make_worker_task("optimize", data_dir, config))
-
-    assert result["n_completed"] == 2
-    assert result["effective_workers"] == 1
-    assert result["shared_market_data"] is True
-    assert result["shared_market_data_bytes"] > 0
-    assert result["best_backtest"]["equity_curve"]
-    assert result["best_backtest"]["trades"]
-    assert "mc_maxdd_p50" in result["best_backtest"]["stats"]
-    assert result["matrix_compute_cache"]["released"] is True
-    assert result["performance"]["trial_peak_rss_bytes"] > 0
-    assert result["performance"]["best_backtest_peak_rss_bytes"] > 0
-    assert result["performance"]["trials_per_second"] > 0
-    assert result["worker"]["worker_exitcode"] == 0
-
-
 def test_spawn_walkforward_reuses_shared_matrix_across_folds(tmp_path):
     start = date(2024, 1, 1)
     data_dir = tmp_path / "data"
@@ -221,6 +183,8 @@ def test_spawn_walkforward_reuses_shared_matrix_across_folds(tmp_path):
         train_days=2,
         test_days=1,
         step_days=2,
+        # 1 天 OOS 段只产生 ~1 笔交易: 本测试验证矩阵复用, 显式关闭交易数门槛
+        min_trades_oos=0,
         overrides={"basic_filter": {"enabled": False}},
         backtest_kwargs={
             "matching": "close_t",
@@ -527,6 +491,7 @@ def test_spawn_walkforward_skips_folds_before_available_matrix_data(tmp_path):
         train_days=2,
         test_days=1,
         step_days=2,
+        min_trades_oos=0,  # 同上: 1 天 OOS 段交易数天然不足, 本测试关注数据缺口跳折
         overrides={"basic_filter": {"enabled": False}},
         backtest_kwargs={
             "matching": "close_t",
@@ -666,3 +631,56 @@ def test_mining_fails_with_guidance_when_generation_keeps_drifting(
             progress_cb=None,
             cancel_check=None,
         )
+
+
+def test_spawn_robust_optimize_runs_k_segments_in_worker(tmp_path):
+    """robust_optimize 任务类型端到端: 编解码 (date→ISO→date) + K 段回测 + 矩阵复用。"""
+    from app.backtest.robust_optimizer import RobustOptimizeConfig
+
+    start = date(2024, 1, 1)
+    data_dir = tmp_path / "data"
+    _write_worker_strategy(data_dir)
+    _write_market_data(data_dir, start, days=32)  # 32 天切 2 段 (每段 ≥14 天)
+    config = RobustOptimizeConfig(
+        strategy_id="worker_always_entry",
+        symbols=["600000.SH"],
+        start=start,
+        end=start + timedelta(days=31),
+        param_grid={"gate": [1, 2]},
+        objective="total_return",
+        k_segments=2,
+        min_trades_total=2,
+        overrides={"basic_filter": {"enabled": False}},
+        backtest_kwargs={
+            "matching": "close_t",
+            "fees_pct": 0,
+            "slippage_bps": 0,
+            "max_positions": 1,
+        },
+    )
+
+    result = run_worker_task(make_worker_task("robust_optimize", data_dir, config))
+
+    assert result["n_combinations"] == 2
+    assert result["n_completed"] == 2
+    assert result["k_segments"] == 2
+    assert len(result["windows"]) == 2
+    assert result["windows"][0]["start"] == "2024-01-01"
+    assert result["windows"][-1]["end"] == "2024-02-01"
+    assert result["best_params"] in ({"gate": 1}, {"gate": 2})
+    # 每组带 2 段明细与稳健分组成
+    top = result["results"][0]
+    assert top["rank"] == 1
+    assert len(top["segments"]) == 2
+    assert top["score"] is not None and top["median"] is not None
+    # 冠军收敛诊断随结果返回
+    assert result["convergence"]["k"] == 2
+    assert result["convergence"]["label"] in ("unanimous", "majority", "scattered")
+    # 阶段二全窗 IS 细化: 合格组 (2) 各跑一次全窗, 带退化字段; 高原判据随结果返回
+    assert result["stage2"]["top_n"] == 20
+    assert result["stage2"]["evaluated"] == 2
+    qualified = [r for r in result["results"] if not r.get("error") and not r.get("disqualified")]
+    assert all("is_full" in r for r in qualified)
+    assert result["plateau"] is not None
+    assert result["plateau"]["label"] in ("plateau", "slope", "peak", "isolated")
+    assert result["worker"]["worker_exitcode"] == 0

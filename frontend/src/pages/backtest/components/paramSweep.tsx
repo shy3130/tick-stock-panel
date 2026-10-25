@@ -21,6 +21,12 @@ export const OBJECTIVES: { id: string; label: string }[] = [
   { id: 'avg_holding_days', label: '平均持仓天数' },
 ]
 
+// 稳健优化主目标白名单 (对齐后端 guards.PRIMARY_OBJECTIVES): 交易数少时会退化的
+// 指标 (胜率/持仓天数) 只作展示列, 不得作稳健排名主目标。
+export const PRIMARY_OBJECTIVES: { id: string; label: string }[] = OBJECTIVES.filter(
+  o => !['win_rate', 'avg_holding_days'].includes(o.id),
+)
+
 export const GRID_MAX_COMBINATIONS = 2000
 
 export interface Sweep {

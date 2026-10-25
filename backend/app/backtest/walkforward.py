@@ -14,6 +14,8 @@ from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from app.backtest.guards import trades_ok
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +135,7 @@ class WalkForwardConfig:
     test_days: int = 63
     step_days: int = 63
     direction: str | None = None
+    min_trades_oos: int = 10            # 每折 OOS 段最小交易数 (<=0 关闭)
     max_workers: int = 4
     base_params: dict = field(default_factory=dict)
     overrides: dict | None = None
@@ -323,6 +326,17 @@ class WalkForwardService:
             # OOS 失败 (含 cancelled) -> 跳过, 不把空/0 收益混入复利曲线
             if oos_res.error:
                 skipped.append({**base, "best_params": best_params, "reason": f"OOS 回测失败: {oos_res.error}"})
+                if progress_cb is not None:
+                    progress_cb({"type": "walkforward_progress", "done": done, "total": n_total, "fold": f.index})
+                continue
+
+            # 交易数门槛 (共享护栏): 少数几笔的 OOS 段统计意义不足, 混入复利曲线
+            # 会被运气主导 —— 标记无效折跳过, 与数据缺口折同一透明处理。
+            if not trades_ok(oos_res.stats, cfg.min_trades_oos):
+                skipped.append({
+                    **base, "best_params": best_params,
+                    "reason": f"OOS 交易数不足 ({oos_res.stats.get('n_trades') or 0} < {cfg.min_trades_oos})",
+                })
                 if progress_cb is not None:
                     progress_cb({"type": "walkforward_progress", "done": done, "total": n_total, "fold": f.index})
                 continue

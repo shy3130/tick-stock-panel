@@ -101,13 +101,13 @@ def _decode_backtest_config(payload: dict[str, Any]):
     return StrategyBacktestConfig(**values)
 
 
-def _decode_optimize_config(payload: dict[str, Any]):
-    from app.backtest.optimizer import OptimizeConfig
+def _decode_robust_config(payload: dict[str, Any]):
+    from app.backtest.robust_optimizer import RobustOptimizeConfig
 
     values = dict(payload)
     values["start"] = date.fromisoformat(values["start"])
     values["end"] = date.fromisoformat(values["end"])
-    return OptimizeConfig(**values)
+    return RobustOptimizeConfig(**values)
 
 
 def _decode_walkforward_config(payload: dict[str, Any]):
@@ -126,19 +126,10 @@ def encode_backtest_config(config) -> dict[str, Any]:
     return payload
 
 
-def encode_optimize_config(config) -> dict[str, Any]:
-    payload = asdict(config)
-    payload["start"] = config.start.isoformat()
-    payload["end"] = config.end.isoformat()
-    return payload
-
-
 def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
     if kind == "backtest":
         encoded = encode_backtest_config(config)
-    elif kind == "optimize":
-        encoded = encode_optimize_config(config)
-    elif kind == "walkforward":
+    elif kind in ("walkforward", "robust_optimize"):
         encoded = asdict(config)
         encoded["start"] = config.start.isoformat()
         encoded["end"] = config.end.isoformat()
@@ -215,15 +206,12 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         if kind == "backtest":
             config = _decode_backtest_config(task["config"])
             result = asdict(service.run(config, _progress, cancel_event))
-        elif kind == "optimize":
-            config = _decode_optimize_config(task["config"])
-            optimizer = StrategyOptimizer(service, strategy_engine)
-            result = optimizer.optimize(
-                config,
-                _progress,
-                cancel_event,
-                rss_sampler=sampler,
-            )
+        elif kind == "robust_optimize":
+            from app.backtest.robust_optimizer import RobustOptimizeService
+
+            config = _decode_robust_config(task["config"])
+            robust = RobustOptimizeService(service, strategy_engine)
+            result = robust.robust_optimize(config, _progress, cancel_event)
         elif kind == "walkforward":
             from app.backtest.walkforward import WalkForwardService
 

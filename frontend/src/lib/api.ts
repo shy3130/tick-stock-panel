@@ -2122,6 +2122,13 @@ export interface ApiTokenRecord {
   revoked: boolean
 }
 
+/** 声效语音包 (用户上传的自定义提示音) */
+export interface SoundPack {
+  name: string
+  size: number
+  ext: string
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -2817,6 +2824,25 @@ export const api = {
     request<{ minute_batch_symbols: number }>('/api/settings/preferences/minute-batch-symbols', {
       method: 'PUT',
       body: JSON.stringify({ size }),
+    }),
+
+  // 声效语音包 (自定义提示音, data/sound_packs)
+  listSoundPacks: () =>
+    request<{ packs: SoundPack[] }>('/api/settings/sound-packs'),
+
+  uploadSoundPack: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<{ status: string; pack: SoundPack }>('/api/settings/sound-packs', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 30_000,
+    })
+  },
+
+  deleteSoundPack: (name: string) =>
+    request<{ status: string }>(`/api/settings/sound-packs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     }),
 
   // 自选列表列配置
@@ -4065,6 +4091,21 @@ export const api = {
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string }> }>(
       '/api/strategies/run-all',
       { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null }) },
+    ),
+
+  /** 稳健优化折预览: 运行前查看 K 段验证窗切分与告警 (不回测)。 */
+  robustOptimizePreview: (start: string, end: string, kSegments: number) =>
+    request<{ k_segments: number; windows: { start: string; end: string; days: number }[]; warnings: string[] }>(
+      `/api/backtest/optimize-robust/preview?${new URLSearchParams({ start, end, k_segments: String(kSegments) })}`,
+    ),
+
+  /** 滚动样本外检验折预览: 运行前查看折数/窗口切分与告警 (不回测)。 */
+  walkforwardPreview: (start: string, end: string, trainDays: number, testDays: number, stepDays: number) =>
+    request<{ n_folds: number; folds: { index: number; train_start: string; train_end: string; test_start: string; test_end: string }[]; warnings: string[] }>(
+      `/api/backtest/walkforward/preview?${new URLSearchParams({
+        start, end,
+        train_days: String(trainDays), test_days: String(testDays), step_days: String(stepDays),
+      })}`,
     ),
 
   strategySaveConfig: (strategyId: string, overrides: Record<string, any>) =>

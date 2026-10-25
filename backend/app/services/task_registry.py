@@ -23,7 +23,7 @@ from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-TASK_KINDS = frozenset({"backtest", "mining", "optimizer", "walkforward"})
+TASK_KINDS = frozenset({"backtest", "mining", "walkforward", "robust_optimizer"})
 TASK_STATUSES = frozenset({"running", "done", "error"})
 MAX_ITEMS = 20
 ORPHAN_RUNNING_SECONDS = 24 * 3600

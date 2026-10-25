@@ -2,64 +2,100 @@ import { useSyncExternalStore } from 'react'
 import { fetchRunningTask, reportTaskFinished, reportTaskRunning } from './taskRegistry'
 
 /**
- * 参数优化任务管理 (SSE 模式 + 重连)。镜像 backtestTask, 结果为排名 dict。
+ * 稳健优化任务管理 (SSE + 重连 + 跨设备接回)。镜像 optimizerTask, 端点为
+ * /optimize-robust/stream, 结果为 K 段稳健分排名 (设计: docs/robust-optimizer-plan.md)。
  */
 
-export interface OptimizeProgress {
-  type: string
+export interface RobustProgress {
+  type: string   // robust_optimizer_prepare | robust_optimizer_progress | robust_optimizer_stage2
   done: number
   total: number
-  best_score: number | null
-  shared_matrix_bytes?: number
-  elapsed_ms?: number
+  best_score?: number | null
+  prepare_ms?: number
 }
 
-export interface OptimizeResultRow {
-  params: Record<string, any>
+export interface RobustSegmentStat {
+  start: string
+  end: string
   objective_raw: number | null
-  stats?: Record<string, any>
-  rank: number
-  error?: string
+  n_trades: number | null
+  total_return?: number | null
+  sharpe?: number | null
+  max_drawdown?: number | null
 }
 
-export interface OptimizeResult {
+export interface RobustResultRow {
+  params: Record<string, any>
+  rank: number
+  score: number | null
+  median: number | null
+  worst: number | null
+  spread: number | null
+  oos_values: (number | null)[]
+  segments: RobustSegmentStat[]
+  trades_total: number | null
+  disqualified?: boolean
+  disqualify_reason?: string | null
+  error?: string | null
+  /** 阶段二全窗 IS 细化 (仅 Top-N 行有) */
+  is_full?: { objective_raw?: number | null; score_norm?: number | null; n_trades?: number | null; total_return?: number | null; error?: string }
+  degradation?: number
+  degradation_pct?: number | null
+}
+
+export interface RobustConvergence {
+  label: 'unanimous' | 'majority' | 'scattered' | 'no_data'
+  champions: { segment: number; params: Record<string, any>; objective_raw: number }[]
+  max_count: number
+  k: number
+}
+
+export interface RobustPlateau {
+  label: 'plateau' | 'slope' | 'peak' | 'isolated'
+  ratio: number | null
+  tolerance: number | null
+  n_valid: number
+  neighbors: { params: Record<string, any>; score: number | null; decay?: number; disqualified?: boolean; error?: string | null }[]
+}
+
+export interface RobustResult {
   objective: string
   direction: string
+  k_segments: number
+  windows: { start: string; end: string }[]
   n_combinations: number
   n_completed: number
+  min_trades_total: number
   best_params: Record<string, any> | null
   best_score: number | null
-  results: OptimizeResultRow[]
-  requested_max_workers: number
-  effective_workers: number
-  shared_market_data: boolean
-  shared_market_data_bytes: number
-  prepare_ms: number
-  best_backtest?: Record<string, any> | null
-  matrix_compute_cache?: Record<string, any>
-  timing_ms?: Record<string, number>
-  performance?: Record<string, any>
-  worker?: Record<string, any>
+  convergence: RobustConvergence
+  plateau: RobustPlateau | null
+  stage2: { top_n: number; evaluated: number }
+  cancelled: boolean
   elapsed_ms: number
+  results: RobustResultRow[]
 }
 
-export interface OptimizerTask {
+export interface RobustTask {
   id: number
   isPending: boolean
-  result: OptimizeResult | null
-  progress: OptimizeProgress | null
+  result: RobustResult | null
+  progress: RobustProgress | null
   error: string | null
 }
 
-export interface StartOptimizeParams {
+export interface StartRobustParams {
   strategy_id: string
   param_grid: Record<string, any>
   objective: string
   direction?: string
+  k_segments?: number
+  min_trades_total?: number
+  stage2_top_n?: number
   max_workers?: number
   matrix_cache_max_mb?: number
-  params?: Record<string, any> | null       // 未扫描参数固定为用户当前值
-  overrides?: Record<string, any> | null     // 策略当前的 basic_filter/信号/风控覆盖
+  params?: Record<string, any> | null
+  overrides?: Record<string, any> | null
   symbols?: string[] | null
   start?: string | null
   end?: string | null
@@ -76,22 +112,20 @@ export interface StartOptimizeParams {
   holding_days?: number
 }
 
-let current: OptimizerTask | null = null
+let current: RobustTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
 let eventSource: EventSource | null = null
 let currentJobKey: string | null = null
-let cancelRequested = false      // stop 在拿到 job_key 前被点 -> 收到 job 事件立即补发 cancel
-let reconnectAttempts = 0        // 无 data 断线的连续重连计数, 超上限放弃
+let cancelRequested = false
+let reconnectAttempts = 0
 const MAX_RECONNECT = 5
 
-const RECONNECT_KEY = 'optimizer_reconnect'
-const JOB_KEY_KEY = 'optimizer_job_key'
+const RECONNECT_KEY = 'robust_optimizer_reconnect'
+const JOB_KEY_KEY = 'robust_optimizer_job_key'
 
-// 跨设备接回: 启动上报注册表, 终态关闭; 重连/SSE/cancel 逻辑零改动。
-const TASK_KIND = 'optimizer' as const
+const TASK_KIND = 'robust_optimizer' as const
 
-/** 终态: 关闭注册表项并清本地重连/取消键。 */
 function finishTaskRegistry() {
   const qs = localStorage.getItem(RECONNECT_KEY)
   if (qs) reportTaskFinished(TASK_KIND, { qs })
@@ -127,7 +161,6 @@ function connectSSE(url: string): void {
   const es = new EventSource(url)
   eventSource = es
 
-  // 首事件: 后端回吐 job_key, 存下供 cancel 直接引用 (无需前端重算)
   es.addEventListener('job', (e: MessageEvent) => {
     reconnectAttempts = 0
     try {
@@ -135,7 +168,6 @@ function connectSSE(url: string): void {
       if (key) {
         currentJobKey = key
         localStorage.setItem(JOB_KEY_KEY, key)
-        // 竞态修复: stop 在拿到 key 前被点过 -> 现在补发 cancel 真正停后端任务, 再收尾关闭。
         if (cancelRequested) {
           postCancel(key)
           es.close()
@@ -151,7 +183,7 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     reconnectAttempts = 0
     try {
-      const prog = JSON.parse(e.data) as OptimizeProgress
+      const prog = JSON.parse(e.data) as RobustProgress
       current = { ...current, progress: prog }
       emit()
     } catch { /* ignore */ }
@@ -160,7 +192,7 @@ function connectSSE(url: string): void {
   es.addEventListener('done', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
-      const result = JSON.parse(e.data) as OptimizeResult
+      const result = JSON.parse(e.data) as RobustResult
       current = { ...current, isPending: false, result, error: null }
       emit()
     } catch {
@@ -177,11 +209,11 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     if (e.data) {
       try {
-        const msg = JSON.parse(e.data)?.message ?? '优化出错'
+        const msg = JSON.parse(e.data)?.message ?? '稳健优化出错'
         current = { ...current, isPending: false, error: msg }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: '优化出错' }
+        current = { ...current, isPending: false, error: '稳健优化出错' }
         emit()
       }
       es.close()
@@ -190,13 +222,11 @@ function connectSSE(url: string): void {
       finishTaskRegistry()
       return
     }
-    // 无 data: 连接异常断开。EventSource 会自动重连, 但设上限避免网络长断时无限 pending。
     if (current?.id === id) {
       reconnectAttempts += 1
       if (reconnectAttempts > MAX_RECONNECT) {
         es.close()
         eventSource = null
-        // 清 localStorage: 否则刷新页面 tryReconnect 会重连到这个已放弃的任务。
         finishTaskRegistry()
         current = { ...current, isPending: false, error: '连接中断, 重连多次失败' }
         emit()
@@ -205,16 +235,15 @@ function connectSSE(url: string): void {
   })
 }
 
-/** 调后端 cancel (按回吐的 job_key)。 */
 function postCancel(jobKey: string): void {
-  fetch('/api/backtest/optimize/cancel', {
+  fetch('/api/backtest/optimize-robust/cancel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_key: jobKey }),
   }).catch(() => {})
 }
 
-export function startOptimize(params: StartOptimizeParams): void {
+export function startRobust(params: StartRobustParams): void {
   if (eventSource) {
     eventSource.close()
     eventSource = null
@@ -232,6 +261,9 @@ export function startOptimize(params: StartOptimizeParams): void {
     param_grid: JSON.stringify(params.param_grid),
     objective: params.objective,
     direction: params.direction,
+    k_segments: params.k_segments,
+    min_trades_total: params.min_trades_total,
+    stage2_top_n: params.stage2_top_n,
     max_workers: params.max_workers,
     matrix_cache_max_mb: params.matrix_cache_max_mb,
     params: params.params ? JSON.stringify(params.params) : undefined,
@@ -254,13 +286,10 @@ export function startOptimize(params: StartOptimizeParams): void {
 
   localStorage.setItem(RECONNECT_KEY, qs)
   reportTaskRunning(TASK_KIND, { qs }, params.strategy_id)
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`/api/backtest/optimize-robust/stream?${qs}`)
 }
 
-export function stopOptimize(): void {
-  // 竞态: 若刚点开始还没收到 job 事件, job_key 尚未到手。标记 cancelRequested ——
-  // 有 key 则立即取消并关闭; 无 key 则保持 SSE 打开, 等 job 事件到达时补发 cancel 再关
-  // (关闭 SSE 不会停后端 daemon 线程, 必须真正 POST cancel)。5s 兜底防 job 事件永不来。
+export function stopRobust(): void {
   cancelRequested = true
   const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
   if (jobKey) {
@@ -269,8 +298,6 @@ export function stopOptimize(): void {
     currentJobKey = null
     finishTaskRegistry()
   } else if (eventSource) {
-    // 保持连接等 job 事件; 兜底: 5s 后仍没 key 就强关并清 localStorage,
-    // 避免刷新重连到未取消任务。(若期间 job 到达, handler 已清并置 null, 下面条件不成立跳过)
     const es = eventSource
     setTimeout(() => {
       if (es === eventSource) {
@@ -285,22 +312,21 @@ export function stopOptimize(): void {
   }
 }
 
-export function clearOptimize(): void {
+export function clearRobust(): void {
   current = null
   emit()
 }
 
-/** 换设备接回: 本地无键时从服务端注册表找 running 任务, 回填本地键并走原有重连。 */
 async function adoptFromServer() {
-  if (current && !current.error && !current.result) return // 本机已有活动任务
+  if (current && !current.error && !current.result) return
   const task = await fetchRunningTask(TASK_KIND)
   const qs = typeof task?.payload?.qs === 'string' ? task.payload.qs : ''
   if (!qs || localStorage.getItem(RECONNECT_KEY)) return
   localStorage.setItem(RECONNECT_KEY, qs)
-  tryReconnectOptimize()
+  tryReconnectRobust()
 }
 
-export function tryReconnectOptimize(): boolean {
+export function tryReconnectRobust(): boolean {
   const qs = localStorage.getItem(RECONNECT_KEY)
   if (!qs) {
     void adoptFromServer()
@@ -309,10 +335,10 @@ export function tryReconnectOptimize(): boolean {
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`/api/backtest/optimize-robust/stream?${qs}`)
   return true
 }
 
-export function useOptimizerTask(): OptimizerTask | null {
+export function useRobustTask(): RobustTask | null {
   return useSyncExternalStore(subscribe, () => current, () => null)
 }
