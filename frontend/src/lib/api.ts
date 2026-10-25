@@ -2361,6 +2361,114 @@ export interface UpgradeGuardStatus {
   pending_report?: UpgradeGuardReport | null
 }
 
+// ===== 策略守护 (发布后持续复验) =====
+export interface GuardianConfig {
+  guardian_schedule_enabled: boolean
+  guardian_watch_pct: number
+  guardian_retire_pct: number
+  guardian_k_max: number
+  lab_mined_slot_limit: number
+}
+
+export interface GuardianRun {
+  run_id: string
+  status: string
+  request: Record<string, any>
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  progress: { done?: number; total?: number; strategy_id?: string; verdict?: string } | null
+}
+
+export interface GuardianProfile {
+  strategy_id: string
+  name: string | null
+  status: 'pending' | 'healthy' | 'watch' | 'retired'
+  status_reason: string | null
+  status_since: string | null
+  baseline: {
+    kind: 'mining_gate' | 'trailing_reference' | null
+    data_as_of: string | null
+    objective: string | null
+    score: number | null
+    n_trades: number | null
+    max_drawdown: number | null
+  }
+  checks_count: number
+  consecutive_watch: number
+  alert: boolean
+  last_check: {
+    checked_at: string | null
+    verdict: 'healthy' | 'watch' | 'retired' | null
+    skipped: boolean
+    reason: string | null
+    error: string | null
+    degradation_pct: number | null
+    objective: string | null
+    window_start: string | null
+    window_end: string | null
+    k: number | null
+    reasons: string[]
+  } | null
+  updated_at: string | null
+}
+
+export interface GuardianCombinationSuggestion {
+  a: string
+  b: string
+  corr: number
+  common_days: number
+}
+
+export interface GuardianCombinations {
+  schema_version?: number
+  generated_at?: string
+  window_start?: string
+  window_end?: string
+  pairs_evaluated?: number
+  suggestions: GuardianCombinationSuggestion[]
+}
+
+export interface GuardianOverview {
+  items: GuardianProfile[]
+  config: GuardianConfig
+  active_run: GuardianRun | null
+  combinations: GuardianCombinations | null
+}
+
+export interface LabReport {
+  generated_at: string
+  mining: {
+    last_run: {
+      run_id: string
+      status: string
+      created_at: string | null
+      finished_at: string | null
+      algorithm_version?: string | null
+      confidence?: string | null
+      candidate_count?: number | null
+      valid_fold_count?: number | null
+      refinement?: Record<string, any> | null
+      trials_used?: number | null
+    } | null
+  }
+  guardian: {
+    profiles: number
+    by_status: Record<string, number>
+    alerts: number
+    last_run: { run_id: string; status: string; created_at: string | null; finished_at: string | null } | null
+  }
+  combinations: { generated_at?: string | null; suggestions: GuardianCombinationSuggestion[] }
+  slots: {
+    active_mined: number
+    active_mined_ids: string[]
+    limit: number
+    full: boolean
+  }
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -4107,6 +4215,55 @@ export const api = {
         train_days: String(trainDays), test_days: String(testDays), step_days: String(stepDays),
       })}`,
     ),
+
+  // ── 策略守护 (发布后持续复验) ──────────────────────────────
+  guardianOverview: () =>
+    request<GuardianOverview>('/api/backtest/guardian/overview'),
+
+  guardianAdopt: (strategyId: string, objective: string) =>
+    request<{ ok: boolean; strategy_id: string; run_id: string }>(
+      `/api/backtest/guardian/${encodeURIComponent(strategyId)}/adopt`,
+      { method: 'POST', body: JSON.stringify({ objective }) },
+    ),
+
+  guardianDrop: (strategyId: string) =>
+    request<{ ok: boolean; strategy_id: string }>(
+      `/api/backtest/guardian/${encodeURIComponent(strategyId)}/drop`,
+      { method: 'POST' },
+    ),
+
+  guardianRerun: (strategyId: string) =>
+    request<{ ok: boolean; strategy_id: string; run_id: string }>(
+      `/api/backtest/guardian/${encodeURIComponent(strategyId)}/rerun`,
+      { method: 'POST' },
+    ),
+
+  guardianRunAll: () =>
+    request<{ ok: boolean; run_id: string }>('/api/backtest/guardian/run', { method: 'POST' }),
+
+  guardianRuns: (limit = 20) =>
+    request<{ items: GuardianRun[] }>(`/api/backtest/guardian/runs?limit=${limit}`),
+
+  guardianConfig: () => request<GuardianConfig>('/api/backtest/guardian/config'),
+
+  guardianPatchConfig: (
+    patch: Partial<Pick<GuardianConfig, 'guardian_schedule_enabled' | 'guardian_watch_pct' | 'guardian_retire_pct' | 'guardian_k_max' | 'lab_mined_slot_limit'>>,
+  ) =>
+    request<GuardianConfig>('/api/backtest/guardian/config', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  guardianScanCombinations: () =>
+    request<{ ok: boolean; run_id: string }>('/api/backtest/guardian/combinations/scan', { method: 'POST' }),
+
+  guardianCreateCombination: (a: string, b: string) =>
+    request<{ ok: boolean; strategy_id: string; created: boolean }>('/api/backtest/guardian/combinations/create', {
+      method: 'POST',
+      body: JSON.stringify({ a, b }),
+    }),
+
+  labReport: () => request<LabReport>('/api/backtest/lab/report'),
 
   strategySaveConfig: (strategyId: string, overrides: Record<string, any>) =>
     request<{ ok: boolean }>('/api/strategies/config', {

@@ -26,7 +26,7 @@ from app.services.regime_builder import load_regime_history, regime_path
 logger = logging.getLogger(__name__)
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-MINING_ALGORITHM_VERSION = "mining-v2"
+MINING_ALGORITHM_VERSION = "mining-v3"
 FINGERPRINT_VERSION = "weekly-mining-data-v2"
 _PROFILES = frozenset({"balanced", "strict"})
 _CLAIM_LOCK = threading.Lock()

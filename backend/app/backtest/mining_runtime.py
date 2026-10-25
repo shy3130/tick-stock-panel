@@ -1,6 +1,7 @@
 """Production mining runtime executed only inside a spawned worker."""
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
@@ -37,12 +38,14 @@ from app.backtest.mining import (
     MiningResult,
     MiningService,
     benchmark_candidate,
+    compute_candidate_signature,
     compute_rank_correlation,
     generate_nested_folds,
     required_outer_folds,
     required_trading_bars,
     validation_config_for_profile,
 )
+from app.backtest.robust_optimizer import robust_score
 from app.backtest.strategy import (
     BacktestResultPolicy,
     ResolvedFeaturePlan,
@@ -87,6 +90,15 @@ _REGIME_FILTERS: dict[str, dict[str, list[str]]] = {
 # 与发布未完成时的等待秒数; 超过后以带指引的错误终止运行。
 _SNAPSHOT_MAX_ATTEMPTS = 3
 _SNAPSHOT_PUBLISH_WAIT_SECONDS = 5.0
+
+# ── P2b 冠军权重精调 (docs/auto-strategy-lab-plan.md §4.2) ──────────────
+# 评分是截面百分位映射, 权重整体正缩放不改变排名 → 只搜比率: 固定首个因子 1.0,
+# 其余在档位网格上取值。矩阵复用挖掘 run 的超集矩阵, 每个变体只是纯模拟成本。
+_WEIGHT_RUNGS: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
+_REFINE_TOP_N = 1            # 只精调最终冠军
+_REFINE_MAX_VARIANTS = 64    # 4^(n-1), n≤4
+_REFINE_MAX_TRIALS = 96      # 精调总回测预算 (与 MiningBudget.max_trials 同量级)
+_REFINE_DEGRADATION_LIMIT = 0.2  # stage2 全窗退化超过 20% 放弃精调结果
 
 
 class MiningRuntimeCancelledError(RuntimeError):
@@ -618,7 +630,7 @@ def run_mining_runtime(
     start_phase()
     artifact_started = time.perf_counter()
     emit({"phase": "artifacts", "label": "写入研究结果", "done": 0, "total": 4})
-    artifact_frames = _build_artifacts(
+    artifact_frames, refinement_summary = _build_artifacts(
         panel,
         request,
         result,
@@ -671,6 +683,7 @@ def run_mining_runtime(
         "data_as_of": request.end.isoformat(),
         "algorithm_version": MINING_ALGORITHM_VERSION,
         "methodology_version": FACTOR_METHODOLOGY_VERSION,
+        "refinement": refinement_summary,
         "proxy_trials_used": result.proxy_trials_used,
         "trials_used": result.trials_used + max(0, evaluator.backtest_count - result.trials_used),
         "panel_rows": panel.height,
@@ -1014,7 +1027,7 @@ def _build_artifacts(
     metric_provider: TrainingMetricProvider,
     evaluator: MatcherCandidateEvaluator,
     cancel_check: CancelCheck | None,
-) -> dict[str, pl.DataFrame]:
+) -> tuple[dict[str, pl.DataFrame], dict[str, Any] | None]:
     nested = generate_nested_folds(_date_labels(panel), request.mining_request.validation)
     last_train = _panel_for_dates(panel, nested[-1].outer.train_labels)
     if "_target_date" in last_train.columns:
@@ -1172,6 +1185,18 @@ def _build_artifacts(
         overall_rows,
         limit=request.max_finalists,
     ) + [benchmark_by_id[cid] for cid in sorted(benchmark_by_id)]
+    refined_rows, refinement_summary = _refine_champion_weights(
+        panel,
+        request,
+        result,
+        ranked_candidates,
+        evaluator,
+        nested,
+        cancel_check,
+    )
+    refined_after: dict[str, list[dict[str, Any]]] = {}
+    if refined_rows and refinement_summary is not None:
+        refined_after[refinement_summary["candidate_signature"]] = refined_rows
     for candidate in ranked_candidates:
         rows = [row for row in overall_rows if row["candidate_signature"] == candidate.candidate_id]
         successful = [row for row in rows if not row["skipped"]]
@@ -1200,9 +1225,10 @@ def _build_artifacts(
                 separators=(",", ":"),
             ),
             "regime_state": "overall",
-            "score": _mean_or_none(sharpes),
+            "score": _robust_or_none(sharpes),
             "oos_return": _mean_or_none(returns),
             "oos_sharpe": _mean_or_none(sharpes),
+            "oos_worst_sharpe": min(sharpes) if sharpes else None,
             "oos_max_drawdown": min(drawdowns) if drawdowns else None,
             "oos_positive_fold_ratio": (
                 sum(value > 0 for value in returns) / len(returns) if returns else None
@@ -1214,10 +1240,14 @@ def _build_artifacts(
             "promoted_candidate_id": None,
             "published_strategy_id": None,
         })
+        # P2b: 原冠军行落盘后紧随其精调变体 (若产出); 冠军取自 ranked[:1], 必在循环内
+        for refined_row in refined_after.pop(candidate.candidate_id, []):
+            candidate_rows.append(refined_row)
     candidates = pl.DataFrame(candidate_rows, schema_overrides={
         "score": pl.Float64,
         "oos_return": pl.Float64,
         "oos_sharpe": pl.Float64,
+        "oos_worst_sharpe": pl.Float64,
         "oos_max_drawdown": pl.Float64,
         "oos_positive_fold_ratio": pl.Float64,
         "oos_n_trades": pl.Int64,
@@ -1230,7 +1260,7 @@ def _build_artifacts(
         "correlation": correlation_frame,
         "candidates": candidates,
         "folds": folds,
-    }
+    }, refinement_summary
 
 
 def _factor_metric(
@@ -1401,6 +1431,197 @@ def _regime_date_count(
     )
 
 
+def _refine_champion_weights(
+    panel: pl.DataFrame,
+    request: RuntimeRequest,
+    result: MiningResult,
+    ranked_candidates: Sequence[MiningCandidate],
+    evaluator: MatcherCandidateEvaluator,
+    nested: Sequence[Any],
+    cancel_check: CancelCheck | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """P2b: 对最终冠军组合做权重比率精调, 产出额外的"权重精调"候选行。
+
+    两段式: stage1 全部变体 × 各外层测试窗 (复用 run 超集矩阵) 按稳健分选优;
+    stage2 冠军变体与原权重全窗口复验, 退化超限则放弃 (宁缺毋滥)。
+    只产出新行, 不改写原始候选 — 原始结构仍在 folds 工件中留档。
+    """
+    champions = [
+        candidate
+        for candidate in ranked_candidates[:_REFINE_TOP_N]
+        if candidate.kind == "factor_rank" and len(candidate.factor_names) >= 2
+    ]
+    if not champions:
+        return [], None
+    champion = champions[0]
+    factors = list(champion.factor_names)
+    original_weights = [float(weight) for weight in champion.weights]
+    base = original_weights[0]
+    if base <= 0.0:
+        return [], None
+    original_ratios = tuple(round(weight / base, 6) for weight in original_weights)
+
+    variants: list[tuple[float, ...]] = []
+    seen = {original_ratios}
+    for combo in itertools.product(_WEIGHT_RUNGS, repeat=len(factors) - 1):
+        ratios = (1.0, *combo)
+        if ratios in seen:
+            continue
+        seen.add(ratios)
+        variants.append(ratios)
+    # 原权重(归一)始终作为对照基准参与评估
+    all_variants = [original_ratios, *variants[: _REFINE_MAX_VARIANTS - 1]]
+
+    test_label_sets = [fold.outer.test_labels for fold in nested]
+    n_trials = len(all_variants) * len(test_label_sets) + 2  # +2 = stage2 全窗两次
+    # 预算纪律 (设计 §4.2): 精调只花本 run 搜索阶段剩下的真实回测额度,
+    # 不另开上限 — 搜索已耗尽预算 (balanced 96/strict 256) 时 4 因子冠军自然跳过。
+    remaining = min(
+        _REFINE_MAX_TRIALS,
+        max(0, request.mining_request.budget.max_trials - result.trials_used),
+    )
+    if n_trials > remaining:
+        return [], None
+
+    fold_results: dict[tuple[float, ...], list[dict[str, Any] | None]] = {}
+    for ratios in all_variants:
+        _raise_if_cancelled(cancel_check)
+        definition = _weighted_definition(champion, ratios)
+        per_fold: list[dict[str, Any] | None] = []
+        for labels in test_label_sets:
+            evaluation = evaluator.evaluate_test(
+                _panel_for_dates(panel, labels), definition
+            )
+            per_fold.append(
+                None
+                if evaluation.error is not None
+                else {
+                    key: _finite_or_none(evaluation.metrics.get(key))
+                    if key != "n_trades"
+                    else evaluation.metrics.get("n_trades")
+                    for key in ("total_return", "sharpe", "max_drawdown", "n_trades")
+                }
+            )
+        fold_results[ratios] = per_fold
+
+    def _variant_robust(ratios: tuple[float, ...]) -> float:
+        scores = [
+            fold["sharpe"] if fold is not None else None
+            for fold in fold_results[ratios]
+        ]
+        value = robust_score(scores)["score"]
+        return float(value)
+
+    best_ratios = max(all_variants, key=_variant_robust)
+    if best_ratios == original_ratios:
+        return [], None
+
+    # stage2: 全窗口复验退化 (冠军变体 vs 原权重)
+    _raise_if_cancelled(cancel_check)
+    full_labels = _date_labels(panel)
+    refined_full = evaluator.evaluate_test(
+        _panel_for_dates(panel, full_labels),
+        _weighted_definition(champion, best_ratios),
+    )
+    original_full = evaluator.evaluate_test(
+        _panel_for_dates(panel, full_labels), champion.definition()
+    )
+    refined_full_sharpe = (
+        _finite_or_none(refined_full.metrics.get("sharpe"))
+        if refined_full.error is None
+        else None
+    )
+    original_full_sharpe = (
+        _finite_or_none(original_full.metrics.get("sharpe"))
+        if original_full.error is None
+        else None
+    )
+    summary: dict[str, Any] = {
+        "candidate_signature": champion.candidate_id,
+        "factor_names": factors,
+        "original_weights": original_ratios,
+        "refined_weights": best_ratios,
+        "robust_before": _variant_robust(original_ratios),
+        "robust_after": _variant_robust(best_ratios),
+        "full_window_sharpe_before": original_full_sharpe,
+        "full_window_sharpe_after": refined_full_sharpe,
+    }
+    if (
+        refined_full_sharpe is None
+        or (
+            original_full_sharpe is not None
+            and original_full_sharpe > 0
+            and refined_full_sharpe
+            < (1.0 - _REFINE_DEGRADATION_LIMIT) * original_full_sharpe
+        )
+    ):
+        summary["applied"] = False
+        summary["reason"] = "全窗口复验退化超过 20%, 放弃精调权重"
+        return [], summary
+    if refined_full_sharpe is None:
+        summary["applied"] = False
+        summary["reason"] = "精调变体全窗口回测失败"
+        return [], summary
+
+    refined_definition = _weighted_definition(champion, best_ratios)
+    refined_signature = compute_candidate_signature(refined_definition)
+    if any(candidate.candidate_id == refined_signature for candidate in ranked_candidates):
+        summary["applied"] = False
+        summary["reason"] = "精调结果与既有候选重复"
+        return [], summary
+
+    folds = fold_results[best_ratios]
+    successful = [fold for fold in folds if fold is not None]
+    returns = [fold["total_return"] for fold in successful if fold["total_return"] is not None]
+    sharpes = [fold["sharpe"] for fold in successful if fold["sharpe"] is not None]
+    drawdowns = [
+        fold["max_drawdown"] for fold in successful if fold["max_drawdown"] is not None
+    ]
+    trades = [fold["n_trades"] for fold in successful if fold["n_trades"] is not None]
+    row = {
+        "signature": refined_signature,
+        "name": _candidate_name(champion) + " · 权重精调",
+        "kind": "factor_combination",
+        "factor_names_json": json.dumps(factors, ensure_ascii=False, separators=(",", ":")),
+        "strategy_id": None,
+        "definition_json": json.dumps(
+            refined_definition,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "regime_state": "overall",
+        "score": _robust_or_none(sharpes),
+        "oos_return": _mean_or_none(returns),
+        "oos_sharpe": _mean_or_none(sharpes),
+        "oos_worst_sharpe": min(sharpes) if sharpes else None,
+        "oos_max_drawdown": min(drawdowns) if drawdowns else None,
+        "oos_positive_fold_ratio": (
+            sum(value > 0 for value in returns) / len(returns) if returns else None
+        ),
+        "oos_n_trades": sum(int(value) for value in trades) if trades else None,
+        "confidence": _confidence(request.profile),
+        "valid_folds": len(successful),
+        "skipped_folds": len(folds) - len(successful),
+        "promoted_candidate_id": None,
+        "published_strategy_id": None,
+    }
+    summary["applied"] = True
+    return [row], summary
+
+
+def _weighted_definition(
+    candidate: MiningCandidate, ratios: tuple[float, ...]
+) -> dict[str, Any]:
+    definition = candidate.definition()
+    scoring = {
+        factor: float(ratio)
+        for factor, ratio in zip(candidate.factor_names, ratios, strict=True)
+    }
+    return {**definition, "scoring": scoring}
+
+
 def _rank_artifact_candidates(
     candidates: Sequence[MiningCandidate],
     overall_rows: Sequence[Mapping[str, Any]],
@@ -1417,6 +1638,8 @@ def _candidate_artifact_rank(
     candidate: MiningCandidate,
     overall_rows: Sequence[Mapping[str, Any]],
 ) -> tuple[float, str]:
+    # mining-v3: 冠军按稳健分 (0.6×median + 0.4×worst) 排名, 单折运气不再能登顶;
+    # 均值只保留在 oos_sharpe 列作绝对门槛输入 (gate 阈值口径不变)。
     sharpes = [
         row.get("sharpe")
         for row in overall_rows
@@ -1424,11 +1647,18 @@ def _candidate_artifact_rank(
         and not row.get("skipped")
         and row.get("sharpe") is not None
     ]
-    mean_sharpe = _mean_or_none(sharpes)
+    score = _robust_or_none(sharpes)
     return (
-        -(mean_sharpe if mean_sharpe is not None else float("-inf")),
+        -(score if score is not None else float("-inf")),
         candidate.candidate_id,
     )
+
+
+def _robust_or_none(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    score = robust_score(list(values))["score"]
+    return float(score) if score == score and abs(score) != float("inf") else None
 
 
 def _candidate_name(candidate: MiningCandidate) -> str:

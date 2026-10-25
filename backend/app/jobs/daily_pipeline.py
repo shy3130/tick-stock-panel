@@ -1029,16 +1029,18 @@ def _run_tracked(fn, job_label: str) -> bool:
 
 
 def _scheduled_pipeline_task(pipeline_fn) -> None:
-    """Run weekly mining only after the tracked daily pipeline has fully succeeded."""
+    """Run the scheduled lab cycle (weekly mining + daily guardian) after pipeline success."""
     if not _run_tracked(pipeline_fn, "daily_pipeline"):
         return
     try:
-        from app.services.mining_schedule import run_weekly_mining
+        from app.services.lab_schedule import run_scheduled_lab
 
-        result = run_weekly_mining(_get_app_state())
-        logger.info("scheduled mining result: %s", result)
+        result = run_scheduled_lab(_get_app_state())
+        logger.info("scheduled lab result: %s", result)
     except Exception:
-        logger.exception("scheduled mining enqueue failed; daily pipeline remains succeeded")
+        logger.exception(
+            "scheduled lab enqueue failed; daily pipeline remains succeeded"
+        )
 
 
 # ================================================================

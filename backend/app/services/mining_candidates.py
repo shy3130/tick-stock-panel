@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -33,6 +34,8 @@ _FACTOR_IDS = frozenset(str(item["id"]) for item in FACTOR_COLUMNS)
 _FACTOR_DEFINITION_FIELDS = frozenset({"kind", "factor_names", "scoring", "directions"})
 _EXISTING_DEFINITION_FIELDS = frozenset({"kind", "strategy_id"})
 _BACKLINK_FIELDS = frozenset({"promoted_candidate_id", "published_strategy_id"})
+# mining-v3 新增列: v2 历史工件缺失时不拒读 (按产出时口径放行), 只在存在时校验类型
+_OPTIONAL_ARTIFACT_COLUMNS = frozenset({"oos_worst_sharpe"})
 _PUBLISHED_PREFIX = "mined_factor_"
 _STRATEGY_ID_PATTERN = re.compile(r"^mined_factor_[A-Za-z0-9_-]{1,49}$")
 _ARTIFACT_SCHEMA = {
@@ -46,6 +49,7 @@ _ARTIFACT_SCHEMA = {
     "score": pl.Float64,
     "oos_return": pl.Float64,
     "oos_sharpe": pl.Float64,
+    "oos_worst_sharpe": pl.Float64,
     "oos_max_drawdown": pl.Float64,
     "oos_positive_fold_ratio": pl.Float64,
     "oos_n_trades": pl.Int64,
@@ -56,6 +60,7 @@ _ARTIFACT_SCHEMA = {
     "published_strategy_id": pl.String,
 }
 _LOCK = threading.RLock()
+logger = logging.getLogger(__name__)
 
 
 class MiningCandidateService:
@@ -121,12 +126,15 @@ class MiningCandidateService:
                 sharpe=row.get("oos_sharpe"),
                 max_drawdown=row.get("oos_max_drawdown"),
                 n_trades=row.get("oos_n_trades"),
+                worst_fold_sharpe=row.get("oos_worst_sharpe"),
             )
             if not gate.qualified:
                 raise ValueError(
                     "candidate does not meet the promotion gate: "
                     + "; ".join(gate.reasons)
                 )
+            if definition["kind"] == "factor_rank":
+                self._enforce_mined_slot_limit()
             asset_type = self._asset_type(manifest)
             if definition["kind"] == "existing_strategy":
                 published_id = str(definition["strategy_id"])
@@ -179,7 +187,83 @@ class MiningCandidateService:
                     "published_strategy_id",
                     published_id,
                 )
+            self._record_guardian_baseline(published_id, run_id, signature, summary, row)
             return {"ok": True, "strategy_id": published_id}
+
+    def _enforce_mined_slot_limit(self) -> None:
+        """P3 名额上限: 活跃 mined 策略满员时不再发布新冠军 (候选留 pending 等位)。
+
+        退役/删除旧策略或调大上限 (守护页设置) 后可再发布; 0 = 不限。
+        """
+        from app.services import preferences
+
+        limit = preferences.get_guardian_schedule()["lab_mined_slot_limit"]
+        if limit <= 0:
+            return
+        active = [
+            meta.get("id")
+            for meta in self.strategy_engine.list_strategies()
+            if str(meta.get("id", "")).startswith(_PUBLISHED_PREFIX)
+        ]
+        if len(active) >= limit:
+            raise ValueError(
+                f"活跃挖掘策略名额已满 ({len(active)}/{limit}): "
+                "请退役或删除不再使用的 mined 策略, 或在守护页调大名额上限; "
+                "候选仍保留在研究候选库中等待发布"
+            )
+
+    def _record_guardian_baseline(
+        self,
+        strategy_id: str,
+        run_id: str,
+        signature: str,
+        summary: Mapping[str, Any],
+        row: Mapping[str, Any],
+    ) -> None:
+        """发布成功后落守护基线 (旁路: 失败只记日志, 不影响发布结果)。"""
+        try:
+            from app.services.guardian_store import GuardianStore
+
+            metrics = self._candidate_metrics(row)
+            raw_score = row.get("score")
+            robust_baseline = (
+                float(raw_score)
+                if raw_score is not None
+                and not isinstance(raw_score, bool)
+                and math.isfinite(float(raw_score))
+                else None
+            )
+            GuardianStore(self.data_dir).create_baseline(
+                strategy_id,
+                kind="mining_gate",
+                data_as_of=str(summary["data_as_of"]),
+                # 挖掘晋升门槛以 OOS Sharpe 为主目标, 基线目标随之固定;
+                # 手动入护的策略才可另选目标 (trailing_reference)。
+                objective="sharpe",
+                metrics={
+                    # 基线分数取稳健分 (v3 起为 score 列), 与守护复验的 robust 分同口径;
+                    # v2 历史工件无稳健分时退回均值 sharpe。
+                    "score": robust_baseline
+                    if robust_baseline is not None
+                    else metrics.get("oos_sharpe"),
+                    "n_trades": metrics.get("oos_n_trades"),
+                    "max_drawdown": metrics.get("oos_max_drawdown"),
+                    "oos_return": metrics.get("oos_return"),
+                    "oos_worst_sharpe": metrics.get("oos_worst_sharpe"),
+                    "valid_folds": metrics.get("valid_folds"),
+                    "oos_positive_fold_ratio": metrics.get("oos_positive_fold_ratio"),
+                    "confidence": metrics.get("confidence"),
+                },
+                provenance={
+                    "origin_run_id": run_id,
+                    "candidate_signature": signature,
+                    "algorithm_version": summary.get("algorithm_version"),
+                },
+            )
+        except Exception:  # noqa: BLE001 — 旁路钩子: 任何失败都不阻断发布主流程
+            logger.warning(
+                "guardian baseline recording failed for %s", strategy_id, exc_info=True
+            )
 
     def _load_candidate(
         self,
@@ -253,12 +337,13 @@ class MiningCandidateService:
             raise ValueError(
                 "mining candidates artifact exceeds its uncompressed size limit"
             )
-        missing = sorted(set(_ARTIFACT_SCHEMA) - set(schema))
+        required = set(_ARTIFACT_SCHEMA) - _OPTIONAL_ARTIFACT_COLUMNS
+        missing = sorted(required - set(schema))
         if missing:
             raise ValueError(f"mining candidates artifact schema is invalid: {missing}")
         invalid_types = [
             name for name, dtype in _ARTIFACT_SCHEMA.items()
-            if schema[name] != dtype
+            if name in schema and schema[name] != dtype
         ]
         if invalid_types:
             raise ValueError(
@@ -266,7 +351,9 @@ class MiningCandidateService:
                 f"{invalid_types}"
             )
         try:
-            return pl.read_parquet(path, columns=list(_ARTIFACT_SCHEMA))
+            return pl.read_parquet(
+                path, columns=[name for name in _ARTIFACT_SCHEMA if name in schema]
+            )
         except Exception as exc:
             raise RuntimeError("failed to read mining candidates artifact") from exc
 
@@ -446,6 +533,7 @@ class MiningCandidateService:
     def _candidate_metrics(row: Mapping[str, Any]) -> dict[str, Any]:
         fields = (
             "oos_sharpe",
+            "oos_worst_sharpe",
             "oos_return",
             "oos_max_drawdown",
             "oos_positive_fold_ratio",

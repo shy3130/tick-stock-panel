@@ -23,9 +23,11 @@ from app.api import (
     ext_pages,
     factors,
     financials,
+    guardian,
     indices,
     intraday,
     kline,
+    lab,
     lots,
     market_recap,
     mining,
@@ -131,6 +133,7 @@ async def _application_lifespan(app: FastAPI):
             logger.info("custom factors loaded: %s", len(loaded_factors))
     except Exception as exc:  # noqa: BLE001
         logger.warning("custom factors load failed: %s", exc)
+    from app.services.mining_jobs import MiningRunStore
     from app.services.mining_manager import MiningJobManager
 
     mining_manager = MiningJobManager(store.data_dir)
@@ -138,6 +141,19 @@ async def _application_lifespan(app: FastAPI):
     app.state.mining_manager = mining_manager
     if recovered_mining_runs:
         logger.warning("recovered %d interrupted mining runs", recovered_mining_runs)
+    # 策略守护复验: 复用挖掘的任务编排 (线程 + spawn 子进程 + 持久 run store),
+    # 独立 namespace 存 run 记录; 与挖掘共用 heavy 槽 (避免双份全市场矩阵)。
+    guardian_manager = MiningJobManager(
+        store.data_dir,
+        kind="guardian",
+        store=MiningRunStore(store.data_dir, namespace="guardian"),
+    )
+    recovered_guardian_runs = guardian_manager.recover_interrupted()
+    app.state.guardian_manager = guardian_manager
+    if recovered_guardian_runs:
+        logger.warning(
+            "recovered %d interrupted guardian runs", recovered_guardian_runs
+        )
     # 在接受回测请求前固定 managed generation，避免首批并发 worker 各自创建版本。
     if settings.backtest_matrix_disk_cache_enabled:
         try:
@@ -451,6 +467,9 @@ async def _application_lifespan(app: FastAPI):
         mmanager = getattr(app.state, "mining_manager", None)
         if mmanager:
             mmanager.shutdown()
+        gmanager = getattr(app.state, "guardian_manager", None)
+        if gmanager:
+            gmanager.shutdown()
         if app.state.scheduler:
             app.state.scheduler.shutdown(wait=False)
         ps = getattr(app.state, "pull_scheduler", None)
@@ -606,6 +625,8 @@ app.include_router(screener.router)
 app.include_router(backtest.router)
 app.include_router(factors.router)
 app.include_router(mining.router)
+app.include_router(guardian.router)
+app.include_router(lab.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)

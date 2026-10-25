@@ -77,6 +77,7 @@ _CONFIG_FIELDS: dict[str, frozenset[str]] = {
 _MINING_METRIC_FIELDS = frozenset(
     {
         "oos_sharpe",
+        "oos_worst_sharpe",
         "oos_return",
         "oos_max_drawdown",
         "oos_positive_fold_ratio",

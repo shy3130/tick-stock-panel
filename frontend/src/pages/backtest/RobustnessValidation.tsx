@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { SlidersHorizontal, Waypoints } from 'lucide-react'
+import { ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react'
 import { StrategyOptimizer } from './StrategyOptimizer'
 import { StrategyWalkForward } from './StrategyWalkForward'
+import { StrategyGuardian } from './StrategyGuardian'
 
-type Mode = 'sensitivity' | 'walkforward'
+type Mode = 'sensitivity' | 'walkforward' | 'guardian'
 
 export function RobustnessValidation() {
   const [mode, setMode] = useState<Mode>('sensitivity')
@@ -14,6 +15,7 @@ export function RobustnessValidation() {
           {([
             ['sensitivity', '稳健优化', SlidersHorizontal],
             ['walkforward', '滚动样本外检验', Waypoints],
+            ['guardian', '策略守护', ShieldCheck],
           ] as const).map(([value, label, Icon]) => (
             <button
               key={value}
@@ -31,7 +33,9 @@ export function RobustnessValidation() {
         </div>
       </div>
       <div className="min-h-0 flex-1">
-        {mode === 'sensitivity' ? <StrategyOptimizer /> : <StrategyWalkForward />}
+        {mode === 'sensitivity' && <StrategyOptimizer />}
+        {mode === 'walkforward' && <StrategyWalkForward />}
+        {mode === 'guardian' && <StrategyGuardian />}
       </div>
     </div>
   )

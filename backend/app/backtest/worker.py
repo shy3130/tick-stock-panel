@@ -137,6 +137,10 @@ def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
         if not isinstance(config, dict):
             raise TypeError("mining worker config must be a dict")
         encoded = dict(config)
+    elif kind == "guardian":
+        if not isinstance(config, dict):
+            raise TypeError("guardian worker config must be a dict")
+        encoded = dict(config)
     else:
         raise ValueError(f"unsupported worker task kind: {kind}")
     return {
@@ -230,6 +234,18 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
                 progress_cb=_progress,
                 cancel_check=cancel_event,
                 rss_sampler=sampler,
+            )
+        elif kind == "guardian":
+            from app.backtest.guardian_runtime import run_guardian_runtime
+
+            payload = dict(task["config"])
+            result = run_guardian_runtime(
+                {**payload.get("request", {}), "run_id": payload.get("run_id")},
+                data_dir=data_dir,
+                service=service,
+                strategy_engine=strategy_engine,
+                progress_cb=_progress,
+                cancel_check=cancel_event,
             )
         else:
             raise ValueError(f"unsupported worker task kind: {kind}")

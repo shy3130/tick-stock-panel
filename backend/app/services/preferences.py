@@ -762,6 +762,75 @@ def set_mining_schedule(enabled: bool, weekday: int, profile: str) -> dict:
     return result
 
 
+def get_guardian_schedule() -> dict:
+    """策略守护 (发布后持续复验) 配置。历史缺键时整体回退默认 (默认关闭)。"""
+    data = load()
+    enabled = data.get("guardian_schedule_enabled", False)
+    if not isinstance(enabled, bool):
+        enabled = False
+    watch = _guardian_pct(data.get("guardian_watch_pct"), 0.2)
+    retire = _guardian_pct(data.get("guardian_retire_pct"), 0.5)
+    if not 0.0 < watch < retire <= 1.0:
+        watch, retire = 0.2, 0.5
+    k_max = data.get("guardian_k_max", 4)
+    if isinstance(k_max, bool) or not isinstance(k_max, int) or not 2 <= k_max <= 4:
+        k_max = 4
+    slot_limit = data.get("lab_mined_slot_limit", 10)
+    if (
+        isinstance(slot_limit, bool)
+        or not isinstance(slot_limit, int)
+        or not 0 <= slot_limit <= 50
+    ):
+        slot_limit = 10
+    return {
+        "guardian_schedule_enabled": enabled,
+        "guardian_watch_pct": watch,
+        "guardian_retire_pct": retire,
+        "guardian_k_max": k_max,
+        "lab_mined_slot_limit": slot_limit,
+    }
+
+
+def set_guardian_schedule(
+    enabled: bool,
+    watch_pct: float,
+    retire_pct: float,
+    k_max: int,
+    lab_mined_slot_limit: int = 10,
+) -> dict:
+    """校验并一次写入守护/实验室配置整组 (阈值语义与 backtest.guardian 一致)。"""
+    from app.backtest.guardian import GuardianThresholds
+
+    thresholds = GuardianThresholds(
+        watch_pct=watch_pct, retire_pct=retire_pct, k_max=k_max
+    )
+    if (
+        isinstance(lab_mined_slot_limit, bool)
+        or not isinstance(lab_mined_slot_limit, int)
+        or not 0 <= lab_mined_slot_limit <= 50
+    ):
+        raise ValueError("lab mined slot limit must be between 0 and 50 (0 = unlimited)")
+    result = {
+        "guardian_schedule_enabled": bool(enabled),
+        "guardian_watch_pct": thresholds.watch_pct,
+        "guardian_retire_pct": thresholds.retire_pct,
+        "guardian_k_max": thresholds.k_max,
+        "lab_mined_slot_limit": lab_mined_slot_limit,
+    }
+    save(result)
+    return result
+
+
+def _guardian_pct(value, default: float) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0.0 < float(value) <= 1.0
+    ):
+        return default
+    return float(value)
+
+
 def get_review_push_channels() -> list[str]:
     """复盘推送渠道(多选) — 选定的外部工具列表, 复盘归档后逐个推送。
 

@@ -203,8 +203,14 @@ def evaluate_candidate_gate(
     sharpe: float | None,
     max_drawdown: float | None,
     n_trades: int | None,
+    worst_fold_sharpe: float | None = None,
 ) -> CandidateGateResult:
-    """Check the documented promotion thresholds against real candidate evidence."""
+    """Check the documented promotion thresholds against real candidate evidence.
+
+    worst_fold_sharpe 是 mining-v3 起的稳健维度: strict 档 (confidence=high) 要求
+    最差外层折 Sharpe > 0, 防"均值好看、某段崩溃"的组合登顶。None 表示 v2 历史
+    工件无此列 — 历史候选按其产出时的口径放行, 不追溯执行新门槛。
+    """
     reasons: list[str] = []
     if confidence == "low":
         reasons.append("exploratory results can only be saved as pending candidates")
@@ -221,6 +227,14 @@ def evaluate_candidate_gate(
         )
     if sharpe is None or sharpe < GATE_MIN_OOS_SHARPE:
         reasons.append(f"requires an OOS Sharpe of at least {GATE_MIN_OOS_SHARPE}")
+    if (
+        confidence == "high"
+        and worst_fold_sharpe is not None
+        and worst_fold_sharpe <= 0.0
+    ):
+        reasons.append(
+            f"strict profile requires a positive worst-fold Sharpe (got {worst_fold_sharpe:.3f})"
+        )
     if max_drawdown is None or max_drawdown < GATE_MAX_DRAWDOWN:
         reasons.append(
             f"requires a max drawdown no worse than {abs(GATE_MAX_DRAWDOWN):.0%}"

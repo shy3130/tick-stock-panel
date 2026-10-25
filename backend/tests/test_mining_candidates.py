@@ -677,3 +677,28 @@ def test_promote_still_allowed_for_gated_candidates(tmp_path) -> None:
     result = service.promote(run_id, signature)
 
     assert result["status"] == "pending"
+
+
+def test_publish_factor_records_guardian_baseline(tmp_path) -> None:
+    """发布成功自动落守护基线 (mining_gate), 重复发布不覆盖既有档案。"""
+    from app.services.guardian_store import GuardianStore
+
+    store, run_id, signature = _create_run(tmp_path)
+    service, _engine = _real_service(tmp_path, store)
+
+    result = service.publish(run_id, signature)
+
+    guardian = GuardianStore(tmp_path)
+    profile = guardian.get(result["strategy_id"])
+    assert profile is not None
+    assert profile["baseline"]["kind"] == "mining_gate"
+    assert profile["baseline"]["data_as_of"] == "2026-01-09"
+    assert profile["baseline"]["objective"] == "sharpe"
+    assert profile["baseline"]["metrics"]["score"] == 0.9
+    assert profile["baseline"]["metrics"]["n_trades"] == 70
+    assert profile["status"] == "pending"
+
+    # 档案上积累的复验历史在重复发布 (幂等路径) 后必须保留
+    guardian.append_check(result["strategy_id"], {"verdict": "healthy"})
+    service.publish(run_id, signature)
+    assert len(guardian.get(result["strategy_id"])["checks"]) == 1
