@@ -334,3 +334,42 @@ def test_delete_with_strategy_reference_requires_force(tmp_path, cleanup_registr
     assert forced.status_code == 200
     assert forced.json()["removed_references"] == ["strategies/my_strategy.json"]
     assert get_factor("uf_strat_ref") is None
+
+
+def test_list_factors_exposes_lifecycle_status(tmp_path, cleanup_registry):
+    """列表接口须下发完整生命周期 status (draft/active/watch/retired)。
+
+    stability 只是 status 的二元投影 (active→stable, 其余→experimental),
+    管理界面的状态列/筛选靠完整 status; 内置因子无盘上定义, status 为 null。
+    """
+    import json as _json
+    from types import SimpleNamespace
+
+    from app.factors import store as factor_store
+
+    definition = {
+        "id": "uf_status_probe", "kind": "custom", "label": "状态探针",
+        "group": "自定义", "formula": "rank(-ts_sum(change_pct, 5))",
+        "description": "", "direction": "none", "version": 1, "status": "watch",
+        "created_at": factor_store._now(), "updated_at": factor_store._now(),
+    }
+    factor_store.register_definition(definition)
+    cleanup_registry.add("uf_status_probe")
+    factor_dir = tmp_path / "user_data" / "custom_factors"
+    factor_dir.mkdir(parents=True)
+    (factor_dir / "uf_status_probe.json").write_text(
+        _json.dumps(definition, ensure_ascii=False), encoding="utf-8",
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    client = TestClient(app)
+
+    payload = client.get("/api/factors").json()
+    probe = next(item for item in payload["factors"] if item["id"] == "uf_status_probe")
+    assert probe["status"] == "watch"
+    assert probe["stability"] == "experimental"  # 二元投影保留, 向后兼容
+
+    builtin = next(item for item in payload["factors"] if item["kind"] == "base")
+    assert builtin["status"] is None

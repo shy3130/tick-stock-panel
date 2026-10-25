@@ -484,3 +484,37 @@ def test_cjk_string_field_end_to_end(data_dir):
     assert col in frame.columns
     out = custom_signals.inject(frame, custom_signals.build_expressions([sig]))
     assert out["csg_robot"].to_list() == [True]
+
+
+# ── worker 子进程注册表同步 (线上回归) ────────────────────
+
+def test_mining_worker_registry_must_include_ext_factors(data_dir):
+    """回归: 挖掘 worker 只 load_into_registry (uf_/cf_) 时注册表缺 ext 因子,
+    _decode_runtime_request 直接报 unknown mining factors (线上实测)。
+
+    worker 入口在 load_into_registry 后必须再 ensure_synced; 这里锁定两个状态
+    的 factor_columns_view 差异, 防止未来把 ensure_synced 从 worker 里删掉。
+    """
+    from app.backtest.mining_runtime import _decode_runtime_request
+    from app.factors.registry import factor_columns_view
+    from app.factors.store import load_into_registry
+
+    # 配置 id 本身带 ext_ 前缀 → 列名双前缀 (与线上报错的 id 形态一致)
+    _mk_config(data_dir, cid="ext_auction")
+    col = ext_factors.ext_column_name("ext_auction", "hot")
+    assert col == "ext_ext_auction_hot"
+
+    # 旧 worker 行为: 只加载 uf_/cf_ → 校验拒绝
+    load_into_registry(data_dir)
+    assert col not in {item["id"] for item in factor_columns_view()}
+    payload = {"run_id": "r1", "request": {"factor_names": [col]}}
+    with pytest.raises(ValueError, match="unknown mining factors"):
+        _decode_runtime_request(payload, data_dir, strategy_engine=None)
+
+    # 修复后的 worker 行为: 同步 ext 因子 → 校验放行 (后续解码错误不算失败)
+    ext_factors.ensure_synced(data_dir)
+    assert col in {item["id"] for item in factor_columns_view()}
+    try:
+        _decode_runtime_request(payload, data_dir, strategy_engine=None)
+    except ValueError as exc:
+        assert "unknown mining factors" not in str(exc)

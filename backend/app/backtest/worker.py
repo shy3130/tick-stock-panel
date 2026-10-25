@@ -197,6 +197,11 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         from app.factors.store import load_into_registry
 
         load_into_registry(data_dir)
+        # 扩展数据因子 (ext_) 与 uf_/cf_ 同理只在主进程注册; 不同步时挖掘
+        # 请求携带的 ext 因子会因注册表缺失被拒 (unknown mining factors)。
+        from app.factors.ext_factors import ensure_synced
+
+        ensure_synced(data_dir)
         strategy_engine = StrategyEngine(
             strategy_dirs=_strategy_dirs(data_dir),
             override_loader=lambda sid: strategy_config.load_override(data_dir, sid),

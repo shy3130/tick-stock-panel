@@ -78,3 +78,58 @@ def test_delete_missing_factor_returns_404(env):
     response = client.delete("/api/factors/custom/uf_not_there_at_all")
 
     assert response.status_code == 404
+
+
+# ── 引用检查按 JSON 精确匹配 (不按子串) ─────────────────────
+
+
+def test_delete_ignores_prefix_id_references(env, tmp_path):
+    """策略引用的是更长的前缀 id (uf_..._v2) 时, 不得挡住本因子的删除。
+
+    历史子串实现会把这类删除误判为「有引用」, 逼用户走危险的强删路径。
+    """
+    client, factor_path = env
+    (tmp_path / "strategies" / "s1.json").unlink()  # env 自带的精确引用, 本组用例不需要
+    (tmp_path / "strategies" / "s_prefix.json").write_text(
+        json.dumps({"id": "s_prefix", "factors": [f"{FACTOR_ID}_v2"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.delete(f"/api/factors/custom/{FACTOR_ID}")
+
+    assert response.status_code == 200
+    assert response.json()["removed_references"] == []
+    assert not factor_path.exists()
+
+
+def test_delete_counts_exact_reference_anywhere_in_json(env, tmp_path):
+    """精确引用无论出现在哪个字段 (含嵌套) 都要命中。"""
+    client, _ = env
+    (tmp_path / "strategies" / "s1.json").unlink()
+    (tmp_path / "strategies" / "s_nested.json").write_text(
+        json.dumps(
+            {"id": "s_nested", "rules": [{"factor": FACTOR_ID, "weight": 1.0}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.delete(f"/api/factors/custom/{FACTOR_ID}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["references"] == ["strategies/s_nested.json"]
+
+
+def test_delete_malformed_strategy_json_falls_back_to_substring(env, tmp_path):
+    """策略 JSON 损坏时回退子串匹配 — fail-closed, 宁可误拒不可漏放。"""
+    client, _ = env
+    (tmp_path / "strategies" / "s1.json").unlink()
+    (tmp_path / "strategies" / "s_broken.json").write_text(
+        '{"id": "s_broken", "factors": [' + FACTOR_ID,  # 截断的非法 JSON
+        encoding="utf-8",
+    )
+
+    response = client.delete(f"/api/factors/custom/{FACTOR_ID}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["references"] == ["strategies/s_broken.json"]

@@ -1,25 +1,39 @@
 """因子注册表 API — 因子库 (P1) + 公式校验/试算 (P2) + 自定义/复合因子 CRUD (P3)。"""
 from __future__ import annotations
 
-from datetime import date, timedelta
+import contextlib
+import json
+from collections.abc import Iterator
+from datetime import timedelta
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.market_time import cn_today
-
 from app.factors import store
 from app.factors.dsl import FACTOR_COLUMN, compile_formula
 from app.factors.registry import all_factors, unregister_factor
+from app.market_time import cn_today
 
 router = APIRouter(prefix="/api/factors", tags=["factors"])
 
 
 @router.get("")
-def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|etf)$")) -> dict:
-    """注册表因子列表; asset_type 过滤适用资产 (财务因子仅股票)。"""
+def list_factors(request: Request, asset_type: str | None = Query(default=None, pattern="^(stock|etf)$")) -> dict:
+    """注册表因子列表; asset_type 过滤适用资产 (财务因子仅股票)。
+
+    附带生命周期 status (draft/active/watch/retired, 仅盘上定义的自定义/复合
+    因子有): registry 的 stability 是 status 的二元投影 (active→stable, 其余
+    →experimental), 管理界面需要完整状态, 在此按 id 合并下发。
+    """
     specs = all_factors(asset_type=asset_type)
+    status_by_id: dict[str, str] = {}
+    # 数据目录不可用时退化为不带 status — 内置因子列表不因此不可用
+    with contextlib.suppress(HTTPException):
+        status_by_id = {
+            str(definition.get("id")): str(definition.get("status", "draft"))
+            for definition in store.load_all(_data_dir(request))
+        }
     return {
         "factors": [
             {
@@ -35,6 +49,7 @@ def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|e
                 "pit": spec.pit,
                 "asset_types": sorted(spec.asset_types),
                 "stability": spec.stability,
+                "status": status_by_id.get(spec.id),
                 "scale_free": spec.scale_free,
                 "dependencies": sorted(spec.dependencies),
             }
@@ -357,6 +372,33 @@ def update_custom_factor(factor_id: str, req: CustomFactorUpdateRequest, request
     return {"ok": True, "id": factor_id, "version": target["version"], "status": target["status"]}
 
 
+def _iter_json_strings(node) -> Iterator[str]:
+    """递归产出 JSON 树中的所有字符串键与值 (用于精确等值匹配)。"""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _iter_json_strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_json_strings(item)
+
+
+def _strategy_references_factor(text: str, factor_id: str) -> bool:
+    """策略 JSON 是否引用该因子 — 解析后对字符串键值精确等值匹配。
+
+    历史实现为子串包含 (`factor_id in text`), id 互为前缀时误报
+    (删 uf_a 被 uf_ab 的引用挡住), 把无害删除逼成危险的强删路径。
+    JSON 损坏时回退子串匹配 (fail-closed: 宁可误拒不可漏放)。
+    """
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return factor_id in text
+    return any(value == factor_id for value in _iter_json_strings(parsed))
+
+
 def _find_references(data_dir, factor_id: str) -> list[str]:
     """扫描策略与复合因子定义中的引用 (删除前 fail-closed 检查)。"""
     references: list[str] = []
@@ -365,10 +407,10 @@ def _find_references(data_dir, factor_id: str) -> list[str]:
         for file in strategies_dir.glob("*.json"):
             try:
                 text = file.read_text(encoding="utf-8")
-                if factor_id in text:
-                    references.append(f"strategies/{file.name}")
             except OSError:
                 continue
+            if _strategy_references_factor(text, factor_id):
+                references.append(f"strategies/{file.name}")
     for definition in store.load_all(data_dir):
         if str(definition.get("id")) == factor_id:
             continue

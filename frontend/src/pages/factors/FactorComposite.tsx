@@ -21,6 +21,7 @@ export function FactorComposite() {
   const lib = useQuery({
     queryKey: QK.factorLibrary('all'),
     queryFn: () => api.factorLibrary(),
+    staleTime: 60_000,
   })
   const save = useMutation({
     mutationFn: () => api.factorCompositeCreate({
@@ -182,7 +183,7 @@ export function FactorComposite() {
             </div>
             <div className="text-[10px] leading-relaxed text-muted">
               注册后复合因子进入注册表（因子库可见）；在策略编辑的评分配置中直接引用即可完成研究线→交易线接入。
-              「检验」页可像普通因子一样检验组合。ICIR 自动权重模式将随 metrics 历史数据积累后开放。
+              「发现」页可像普通因子一样检验组合。ICIR 自动权重模式将随 metrics 历史数据积累后开放。
             </div>
           </>
         )}

@@ -1,23 +1,42 @@
+/**
+ * 因子页 — 按任务组织的三视图: 发现 (检验+挖掘) / 创建 (公式+组合) / 因子库 (管理)。
+ *
+ * 历史 5 平级 tab (检验/因子库/编辑器/组合/挖掘) 是三种任务被摊开: 评估类散在
+ * 两处、创建类散在两处。收敛后子视图各自有分段切换, 旧 tab 参数经 LEGACY_TABS
+ * 映射继续工作 (router 的 /mining 与回测页重定向不受影响)。
+ */
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { BookmarkCheck, Combine, LibrarySquare, PenLine, Pickaxe, Sigma } from 'lucide-react'
+import { BookmarkCheck, FlaskConical, LibrarySquare, Search } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { FactorDiscovery } from './backtest/FactorDiscovery'
 import { FactorComposite } from './factors/FactorComposite'
 import { FactorEditor } from './factors/FactorEditor'
 import { FactorLibrary } from './factors/FactorLibrary'
-import { MiningWorkbench } from './backtest/MiningWorkbench'
 import { ResearchCandidatesDialog } from './backtest/ResearchCandidatesDialog'
 
-type Tab = 'inspect' | 'library' | 'editor' | 'composite' | 'mining'
+type Tab = 'discover' | 'create' | 'library'
+type CreateMode = 'editor' | 'composite'
 
-const TABS: Record<Tab, { title: string; icon: typeof Sigma }> = {
-  inspect: { title: '检验', icon: Sigma },
-  library: { title: '因子库', icon: LibrarySquare },
-  editor: { title: '编辑器', icon: PenLine },
-  composite: { title: '组合', icon: Combine },
-  mining: { title: '挖掘', icon: Pickaxe },
+const TABS: Record<Tab, { title: string; icon: typeof Search; subtitle: string }> = {
+  discover: { title: '发现', icon: Search, subtitle: '批量检验与挖掘: 哪些特征历史上与涨跌相关' },
+  create: { title: '创建', icon: FlaskConical, subtitle: '写公式定义因子, 或勾选现有因子组合' },
+  library: { title: '因子库', icon: LibrarySquare, subtitle: '因子注册表目录与生命周期管理' },
 }
+
+// 旧五 tab → 新三 tab; view/mode 让旧深链 (如 tab=mining&run=xx) 落到正确子视图
+const LEGACY_TABS: Record<string, { tab: Tab; view?: string; mode?: CreateMode }> = {
+  inspect: { tab: 'discover' },
+  mining: { tab: 'discover', view: 'mining' },
+  editor: { tab: 'create', mode: 'editor' },
+  composite: { tab: 'create', mode: 'composite' },
+  library: { tab: 'library' },
+}
+
+const CREATE_MODES: { id: CreateMode; label: string }[] = [
+  { id: 'editor', label: '公式编辑器' },
+  { id: 'composite', label: '因子组合' },
+]
 
 export function Factors() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -25,24 +44,35 @@ export function Factors() {
   const navigate = useNavigate()
 
   const requestedTab = searchParams.get('tab')
-  const activeTab: Tab = requestedTab === 'library' || requestedTab === 'editor' || requestedTab === 'composite' || requestedTab === 'mining'
-    ? requestedTab
-    : 'inspect'
-  const focusFactor = activeTab === 'inspect' ? searchParams.get('focus') ?? '' : ''
+  const legacy = requestedTab ? LEGACY_TABS[requestedTab] : undefined
+  const activeTab: Tab = requestedTab && requestedTab in TABS
+    ? requestedTab as Tab
+    : legacy?.tab ?? 'discover'
+  const requestedView = searchParams.get('view') ?? legacy?.view
+  const discoverView = requestedView === 'single' || requestedView === 'mining' ? requestedView : 'batch'
+  const requestedMode = (searchParams.get('mode') ?? legacy?.mode) as CreateMode | null
+  const createMode: CreateMode = requestedMode === 'composite' ? 'composite' : 'editor'
+  const focusFactor = activeTab === 'discover' ? searchParams.get('focus') ?? '' : ''
+  const editId = searchParams.get('edit') ?? ''
+
+  const patchParams = (patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams)
+    for (const [key, value] of Object.entries(patch)) {
+      if (value == null) next.delete(key)
+      else next.set(key, value)
+    }
+    setSearchParams(next, { replace: true })
+  }
 
   const changeTab = (tab: Tab) => {
-    const next = new URLSearchParams(searchParams)
-    next.set('tab', tab)
-    next.delete('focus') // 切 tab 清除单因子聚焦
-    next.delete('edit') // 切 tab 清除编辑器载入目标
-    setSearchParams(next, { replace: true })
+    patchParams({ tab, focus: null, edit: null, view: null, mode: null })
   }
 
   return (
     <div className="flex min-h-full flex-col bg-base xl:h-full">
       <PageHeader
         title="因子"
-        subtitle={<span className="hidden md:inline">{activeTab === 'library' ? '因子注册表目录' : activeTab === 'mining' ? '嵌套样本外因子与策略挖掘' : '因子研究与检验'}</span>}
+        subtitle={<span className="hidden md:inline">{TABS[activeTab].subtitle}</span>}
         className="shrink-0 flex-wrap gap-x-4 gap-y-2 bg-base/95 px-3 lg:flex-nowrap lg:px-5"
         right={(
           <div className="flex w-full min-w-0 items-center gap-1.5 sm:gap-2 lg:w-auto">
@@ -69,12 +99,12 @@ export function Factors() {
                       type="button"
                       onClick={() => changeTab(tab)}
                       aria-current={active ? 'page' : undefined}
-                      className={`inline-flex h-7 items-center gap-1 rounded-[5px] px-1.5 text-[11px] font-medium transition-colors sm:gap-1.5 sm:px-2.5 sm:text-xs ${active
+                      className={`inline-flex h-7 items-center gap-1 rounded-[5px] px-2.5 text-xs font-medium transition-colors ${active
                         ? 'bg-accent text-white shadow-sm'
                         : 'text-secondary hover:bg-elevated hover:text-foreground'
                       }`}
                     >
-                      <Icon className="hidden h-3.5 w-3.5 sm:block" />
+                      <Icon className="h-3.5 w-3.5" />
                       {mode.title}
                     </button>
                   )
@@ -86,28 +116,50 @@ export function Factors() {
       />
 
       <main className="min-h-0 flex-1 px-3 pb-3 pt-3 lg:px-4 lg:pb-4 xl:overflow-hidden">
-        {activeTab === 'inspect' && <FactorDiscovery focusFactor={focusFactor} />}
-        {activeTab === 'editor' && <FactorEditor key={searchParams.get('edit') ?? ''} editId={searchParams.get('edit') ?? ''} />}
-        {activeTab === 'composite' && <FactorComposite />}
-        {activeTab === 'mining' && (
-          <div className="h-full min-h-0 xl:overflow-y-auto">
-            <MiningWorkbench />
+        {activeTab === 'discover' && (
+          <FactorDiscovery focusFactor={focusFactor} initialView={discoverView} />
+        )}
+        {activeTab === 'create' && (
+          <div className="flex h-full min-h-0 flex-col gap-3">
+            <div className="flex shrink-0 items-center px-1">
+              <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5">
+                {CREATE_MODES.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => patchParams({ mode: id, edit: null })}
+                    aria-current={createMode === id ? 'true' : undefined}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-[5px] px-3 text-xs font-medium transition-colors ${createMode === id
+                      ? 'bg-accent text-white shadow-sm'
+                      : 'text-secondary hover:bg-elevated hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {createMode === 'editor' && editId && (
+                <button
+                  type="button"
+                  onClick={() => patchParams({ edit: null })}
+                  className="ml-2 inline-flex items-center gap-1 rounded-btn px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  title="退出编辑, 回到新建"
+                >
+                  ← 新建因子
+                </button>
+              )}
+            </div>
+            <div className="min-h-0 flex-1">
+              {createMode === 'editor'
+                ? <FactorEditor key={editId} editId={editId} />
+                : <FactorComposite />}
+            </div>
           </div>
         )}
         {activeTab === 'library' && (
           <FactorLibrary
-            onInspect={factorId => {
-              const next = new URLSearchParams(searchParams)
-              next.set('tab', 'inspect')
-              next.set('focus', factorId)
-              setSearchParams(next)
-            }}
-            onEdit={factorId => {
-              const next = new URLSearchParams(searchParams)
-              next.set('tab', 'editor')
-              next.set('edit', factorId)
-              setSearchParams(next)
-            }}
+            onInspect={factorId => patchParams({ tab: 'discover', view: 'batch', focus: factorId, edit: null, mode: null })}
+            onEdit={factorId => patchParams({ tab: 'create', mode: 'editor', edit: factorId, focus: null, view: null })}
           />
         )}
       </main>

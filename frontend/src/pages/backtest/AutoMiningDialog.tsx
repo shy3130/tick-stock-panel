@@ -94,9 +94,9 @@ export function AutoMiningDialog({
       start: start || null,
       end: end || null,
     })
-    toast('已提交自动挖掘：正在后台筛选因子，可离开本页，进度见「挖掘」页', 'success')
+    toast('已提交自动挖掘：正在后台筛选因子，可离开本页，进度见「发现 · 挖掘工作台」', 'success')
     onClose()
-    navigate('/factors?tab=mining')
+    navigate('/factors?tab=discover&view=mining')
   }
 
   return (
