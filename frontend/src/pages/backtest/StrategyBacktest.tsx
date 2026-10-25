@@ -1654,6 +1654,32 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     .map(([key, label]) => ({ key, label, value: Number(executionStats[key] ?? 0) }))
     .filter(item => item.value > 0)
 
+  // 策略选择区高度: 底部手柄上下拖动调整 (80–480px), 记忆到 localStorage
+  const [strategyListMaxH, setStrategyListMaxH] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem('bt_strategy_list_maxh') || '', 10)
+      return v >= 80 && v <= 480 ? v : 128
+    } catch { return 128 }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('bt_strategy_list_maxh', String(strategyListMaxH)) } catch { /* 私有模式等 */ }
+  }, [strategyListMaxH])
+  const listResize = useRef<{ startY: number; startH: number } | null>(null)
+  const onListResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    listResize.current = { startY: e.clientY, startH: strategyListMaxH }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onListResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = listResize.current
+    if (!st) return
+    setStrategyListMaxH(Math.min(480, Math.max(80, st.startH + (e.clientY - st.startY))))
+  }
+  const onListResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!listResize.current) return
+    listResize.current = null
+    e.currentTarget.releasePointerCapture(e.pointerId)
+  }
+
   return (
     <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
       {/* 配置面板 */}
@@ -1733,7 +1759,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 </button>
               ))}
             </div>
-            <div className="flex max-h-[128px] flex-wrap gap-1 overflow-y-auto p-1">
+            <div className="flex flex-wrap gap-1 overflow-y-auto p-1" style={{ maxHeight: strategyListMaxH }}>
             {strategies.isLoading && (
               <span className="text-xs text-muted px-2 py-1">加载中…</span>
             )}
@@ -1762,6 +1788,24 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 )}
               </button>
             ))}
+            </div>
+            {/* 底部拖拽手柄: 上下拉动调整策略列表高度 */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="拖动调整策略列表高度"
+              tabIndex={0}
+              onPointerDown={onListResizeStart}
+              onPointerMove={onListResizeMove}
+              onPointerUp={onListResizeEnd}
+              onPointerCancel={onListResizeEnd}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') setStrategyListMaxH(h => Math.min(480, h + 16))
+                else if (e.key === 'ArrowUp') setStrategyListMaxH(h => Math.max(80, h - 16))
+              }}
+              className="group flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-t border-border/50 bg-base/40 transition-colors hover:bg-accent/10 focus:outline-none focus-visible:bg-accent/15"
+            >
+              <span className="h-0.5 w-8 rounded-full bg-border transition-colors group-hover:bg-accent/60" />
             </div>
           </div>
         </div>
