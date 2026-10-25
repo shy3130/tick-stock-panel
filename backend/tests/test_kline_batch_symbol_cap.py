@@ -1,19 +1,32 @@
-"""批量 K 线端点 symbols 单次上限 (400): 挡住旧客户端/异常调用的一次性全量请求。
+"""批量 K 线端点 symbols 单次上限: 挡住旧客户端/异常调用的一次性全量请求。
 
 大自选 (千只级) 整表直发会在服务端构造百万行级 Python dict 峰值, 是内存暴涨
-主因之一。前端已按视口/分块收敛; 上限是后端侧的兜底防线。
+主因之一。前端已按视口/分块收敛; 上限是后端侧的兜底防线, 值现在由用户偏好
+配置 (默认 400, 见 test_kline_batch_limits_config.py), 前端分块读同一偏好。
 """
+import json
 import datetime as _dt
 
 import polars as pl
 import pytest
 from fastapi import HTTPException
 
+from app.services import preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import DataStore, KlineRepository
 
 _BJ_DATE = _dt.date(2026, 10, 23)  # 周五交易日, 钉死不随跑测试当天漂移
 _BJ_NOW = _dt.datetime(2026, 10, 23, 11, 0)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_prefs(tmp_path, monkeypatch):
+    """上限来自用户偏好: 固定到临时文件, 不读真实 preferences.json。"""
+    path = tmp_path / "preferences.json"
+    monkeypatch.setattr(preferences, "_path", lambda: path)
+    preferences._invalidate_cache()
+    yield
+    preferences._invalidate_cache()
 
 
 @pytest.fixture()
@@ -51,7 +64,7 @@ def test_daily_batch_accepts_cap_boundary(repo, monkeypatch):
     monkeypatch.setattr(repo, "resolve_asset_type", lambda s: "stock")
     req = _fake_req(repo)
     body = {"symbols": [f"{600000 + i}.SH" for i in range(400)], "days": 12}
-    out = kline_api.get_daily_batch(req, body)
+    out = json.loads(kline_api.get_daily_batch(req, body).body)
     assert out["data"] == {}
 
 
@@ -86,5 +99,5 @@ def test_minute_batch_accepts_cap_boundary(repo, monkeypatch):
 
     req = _fake_req(repo, with_minute_cap=True)
     body = {"symbols": [f"{600000 + i}.SH" for i in range(400)]}
-    out = kline_api.get_minute_batch(req, body)
+    out = json.loads(kline_api.get_minute_batch(req, body).body)
     assert out["data"] == {}

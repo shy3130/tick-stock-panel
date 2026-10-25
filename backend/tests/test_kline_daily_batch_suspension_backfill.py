@@ -3,6 +3,7 @@
 未修复行为: 首段「自然日×2」窗口内交易日不足 days 时直接欠取样
 (长期停牌股复牌当日迷你K只剩 3~4 根, 正常股 12 根)。
 """
+import json
 import datetime as _dt
 
 import polars as pl
@@ -63,14 +64,14 @@ def test_suspended_stock_backfills_across_gap(repo, monkeypatch):
     monkeypatch.setattr(repo, "resolve_asset_type", lambda s: "stock")
     monkeypatch.setattr(repo, "get_daily_batch", fake_stock_batch)
 
-    out = kline_api.get_daily_batch(
+    out = json.loads(kline_api.get_daily_batch(
         _fake_req(repo), {"symbols": [_NORMAL, _SUSPENDED], "days": 12},
-    )
+    ).body)
 
     rows = out["data"][_SUSPENDED]
     assert len(rows) == 12, "停牌股应跨过空档补满 days 根"
-    assert rows[-1]["date"] == _BJ
-    assert rows[0]["date"] < _dt.date(2026, 2, 1), "首根应来自停牌前 (回补跨过空档)"
+    assert rows[-1]["date"] == _BJ.isoformat()
+    assert rows[0]["date"] < _dt.date(2026, 2, 1).isoformat(), "首根应来自停牌前 (回补跨过空档)"
     assert len(out["data"][_NORMAL]) == 12, "正常股仍 tail 封顶"
     # 补满即停: 初始读 + 一轮回补; 回补只读欠取样的股票, 不为正常股多花一次读
     assert calls[0][0] == [_NORMAL, _SUSPENDED]
@@ -93,10 +94,10 @@ def test_stock_absent_from_window_backfills_from_older(repo, monkeypatch):
     monkeypatch.setattr(repo, "resolve_asset_type", lambda s: "stock")
     monkeypatch.setattr(repo, "get_daily_batch", fake_stock_batch)
 
-    out = kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_SUSPENDED], "days": 12})
+    out = json.loads(kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_SUSPENDED], "days": 12}).body)
     rows = out["data"].get(_SUSPENDED)
     assert rows and len(rows) == 12
-    assert rows[-1]["date"] == _dt.date(2026, 1, 24), "末端是最新可得交易日"
+    assert rows[-1]["date"] == _dt.date(2026, 1, 24).isoformat(), "末端是最新可得交易日"
     assert len(calls) == 2
 
 
@@ -116,7 +117,7 @@ def test_beyond_backfill_cap_returns_nothing_and_stops(repo, monkeypatch):
     monkeypatch.setattr(repo, "resolve_asset_type", lambda s: "stock")
     monkeypatch.setattr(repo, "get_daily_batch", fake_stock_batch)
 
-    out = kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_SUSPENDED], "days": 12})
+    out = json.loads(kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_SUSPENDED], "days": 12}).body)
     assert _SUSPENDED not in out["data"]
     assert len(calls) == 3, "初始读 + 两轮回补后必须终止"
 
@@ -141,8 +142,8 @@ def test_suspended_etf_backfills_per_symbol(repo, monkeypatch):
     monkeypatch.setattr(repo, "get_etf_daily", fake_etf_daily)
     monkeypatch.setattr(repo, "get_daily_batch", lambda *a, **k: pl.DataFrame())
 
-    out = kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_ETF], "days": 12})
+    out = json.loads(kline_api.get_daily_batch(_fake_req(repo), {"symbols": [_ETF], "days": 12}).body)
     rows = out["data"].get(_ETF)
     assert rows and len(rows) == 12
-    assert rows[0]["date"] < _dt.date(2026, 2, 1)
+    assert rows[0]["date"] < _dt.date(2026, 2, 1).isoformat()
     assert len(calls) == 2

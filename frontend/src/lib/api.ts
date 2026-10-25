@@ -1430,6 +1430,8 @@ export interface FactorLibraryItem {
   pit: boolean
   asset_types: string[]
   stability: FactorStability
+  /** 完整生命周期状态; 内置因子无盘上定义 → null (stability 是它的二元投影) */
+  status: 'draft' | 'active' | 'watch' | 'retired' | null
   scale_free: boolean
   dependencies: string[]
 }
@@ -2155,6 +2157,10 @@ export interface Preferences {
   instruments_schedule: { hour: number; minute: number }
   enriched_batch_size: number
   index_daily_batch_size: number
+  /** daily-batch 单请求标的数上限, 同时是前端分块大小 (系统设置 → 批量请求) */
+  daily_batch_symbols: number
+  /** minute-batch 单请求标的数上限, 同时是前端分块大小 */
+  minute_batch_symbols: number
   limit_ladder_monitor_enabled: boolean
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
@@ -2184,6 +2190,10 @@ export interface Preferences {
   /** 看板自定义布局; null/缺省 = 未自定义(前端内置默认布局) */
   dashboard_layout: { v: number; items: Array<{ i: string; t: string; x: number; y: number; w: number; h: number; p?: Record<string, string> }> } | null
   screener_auto_run: boolean
+  /** AI 助手动作工具是否免确认直接执行 (默认 false) */
+  assistant_auto_approve_actions: boolean
+  /** AI 助手打开时是否显示毛玻璃遮罩, 点击遮罩关闭 (默认 true) */
+  assistant_mask_enabled: boolean
   minute_intraday_refresh: boolean
   minute_intraday_refresh_interval: number
   monitor_ext_fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
@@ -2662,6 +2672,18 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     }),
+  /** AI 助手「动作工具免确认」开关 (默认关闭) */
+  updateAssistantAutoApprove: (enabled: boolean) =>
+    request<{ assistant_auto_approve_actions: boolean }>('/api/settings/preferences/assistant-auto-approve', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+  /** AI 助手「毛玻璃遮罩」开关 (默认开启) */
+  updateAssistantMask: (enabled: boolean) =>
+    request<{ assistant_mask_enabled: boolean }>('/api/settings/preferences/assistant-mask', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
   updateFeishuWebhook: (url: string, secret: string = '') =>
     request<{ feishu_webhook_url: string; feishu_webhook_secret: string }>('/api/settings/preferences/feishu-webhook', {
       method: 'PUT',
@@ -2783,6 +2805,16 @@ export const api = {
     }),
   updateIndexDailyBatchSize: (size: number) =>
     request<{ index_daily_batch_size: number }>('/api/settings/preferences/index-daily-batch-size', {
+      method: 'PUT',
+      body: JSON.stringify({ size }),
+    }),
+  updateDailyBatchSymbols: (size: number) =>
+    request<{ daily_batch_symbols: number }>('/api/settings/preferences/daily-batch-symbols', {
+      method: 'PUT',
+      body: JSON.stringify({ size }),
+    }),
+  updateMinuteBatchSymbols: (size: number) =>
+    request<{ minute_batch_symbols: number }>('/api/settings/preferences/minute-batch-symbols', {
       method: 'PUT',
       body: JSON.stringify({ size }),
     }),
@@ -3287,11 +3319,13 @@ export const api = {
     fees_pct?: number
     slippage_bps?: number
     asset_type?: 'stock' | 'etf' | 'index'
-  }) =>
+  }, signal?: AbortSignal) =>
     request<FactorBatchResult>('/api/backtest/factor/batch', {
       method: 'POST',
       timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
       body: JSON.stringify(payload),
+      // 调用方持有 signal (界面「取消」按钮) 时由其自行中止, 跳过默认超时
+      ...(signal ? { signal } : {}),
     }),
 
   miningRuns: () =>

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import {
-  MINUTE_BATCH_CHUNK,
   MINUTE_CACHE_MAX_SYMBOLS,
   fetchMinuteBatchIncremental,
   mergeInto,
   pruneMinuteCache,
 } from './minuteBatchIncremental'
+import { getMinuteBatchChunkSize, resetKlineBatchLimits, setKlineBatchLimits } from './klineBatchLimits'
 import { QK } from './queryKeys'
 import { api } from './api'
 import type { MinuteKlineRow } from './api'
@@ -22,6 +22,7 @@ const bars = (times: string[]): MinuteKlineRow[] =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetKlineBatchLimits()
 })
 
 describe('mergeInto', () => {
@@ -64,19 +65,35 @@ describe('pruneMinuteCache', () => {
 })
 
 describe('fetchMinuteBatchIncremental', () => {
-  it('按 300/块分块请求并合并, 块间 since 取自缓存对应块', async () => {
+  it('按偏好的单请求上限分块并合并, 块间 since 取自缓存对应块', async () => {
+    // 分块大小 = 后端校验的同一上限 (默认 400)。改设置后两端同步, 不会必然 400。
     const qc = new QueryClient()
-    const symbols = Array.from({ length: 651 }, (_, i) => `s${i}`)
+    const chunkSize = getMinuteBatchChunkSize()
+    const symbols = Array.from({ length: chunkSize * 2 + 51 }, (_, i) => `s${i}`)
     const mock = vi.mocked(api.klineMinuteBatch)
     mock.mockResolvedValue({ data: {}, incremental: true } as any)
 
     await fetchMinuteBatchIncremental(qc, symbols, true)
 
     expect(mock).toHaveBeenCalledTimes(3)
-    expect(mock.mock.calls[0][0]).toHaveLength(MINUTE_BATCH_CHUNK)
-    expect(mock.mock.calls[1][0]).toHaveLength(MINUTE_BATCH_CHUNK)
+    expect(mock.mock.calls[0][0]).toHaveLength(chunkSize)
+    expect(mock.mock.calls[1][0]).toHaveLength(chunkSize)
     expect(mock.mock.calls[2][0]).toHaveLength(51)
     expect(mock.mock.calls[0][2]).toBe(true)
+  })
+
+  it('偏好调小后分块立即跟随 (与后端同源, 不残留旧硬编码)', async () => {
+    const qc = new QueryClient()
+    setKlineBatchLimits({ minute: 120 })
+    const symbols = Array.from({ length: 250 }, (_, i) => `s${i}`)
+    const mock = vi.mocked(api.klineMinuteBatch)
+    mock.mockResolvedValue({ data: {}, incremental: true } as any)
+
+    await fetchMinuteBatchIncremental(qc, symbols, true)
+
+    expect(mock).toHaveBeenCalledTimes(3)
+    expect(mock.mock.calls[0][0]).toHaveLength(120)
+    expect(mock.mock.calls[2][0]).toHaveLength(10)
   })
 
   it('缓存存在时带 since, 增量合并为完整序列', async () => {

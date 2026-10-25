@@ -289,3 +289,67 @@ def test_free_tier_skips_tickflow_index_minute_fallback(monkeypatch):
     assert response.status_code == 200
     assert response.json()["source"] == "none"
     get_client.assert_not_called()
+
+
+def test_gzip_payload_fast_path_skips_deep_copy() -> None:
+    """常态 (无非有限浮点) 不做 _json_safe 整树深拷贝。
+
+    深拷贝是批量响应峰值最大的一份瞬态分配 (与原 payload 同量级),
+    常态跳过后峰值约减半; 本测试锁定"只有遇到 NaN/inf 才允许净化"的契约。
+    """
+    import gzip as gz
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from fastapi.responses import Response
+
+    req = SimpleNamespace(headers={"accept-encoding": "gzip"})
+    payload = {"pad": "x" * 1200, "rows": [{"close": 10.5}, {"close": 11.0}]}
+    with patch.object(kline, "_json_safe", side_effect=AssertionError("常态不应触发深拷贝")):
+        result = kline._gzip_payload(req, payload, pref_key="minute_batch_compress")
+    assert isinstance(result, Response)
+    data = json.loads(gz.decompress(result.body))
+    assert data["rows"] == [{"close": 10.5}, {"close": 11.0}]
+
+
+def test_gzip_payload_sanitizes_exactly_once_on_nonfinite() -> None:
+    """遇 NaN/inf 时回退净化且只净化一次 (dumps 重试不再走 _json_safe)。"""
+    import gzip as gz
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from fastapi.responses import Response
+
+    req = SimpleNamespace(headers={"accept-encoding": "gzip"})
+    payload = {"pad": "x" * 1200, "rows": [{"close": float("nan")}, {"close": 10.5}]}
+    # _json_safe 递归自调用也走模块属性, 只统计根调用 (obj is payload)
+    calls: list[int] = []
+    real = kline._json_safe
+
+    def counting(obj):
+        if obj is payload:
+            calls.append(1)
+        return real(obj)
+
+    with patch.object(kline, "_json_safe", side_effect=counting):
+        result = kline._gzip_payload(req, payload, pref_key="daily_batch_compress")
+    assert isinstance(result, Response)
+    assert calls == [1]
+    data = json.loads(gz.decompress(result.body))
+    assert data["rows"][0]["close"] is None
+    assert data["rows"][1]["close"] == 10.5
+
+
+def test_gzip_payload_tiny_nonfinite_returns_sanitized_dict() -> None:
+    """未达压缩阈值 (<1KB) 且含 NaN: 返回净化后的 dict, 不触发 Starlette 500。"""
+    import json
+    from types import SimpleNamespace
+
+    req = SimpleNamespace(headers={"accept-encoding": "gzip"})
+    payload = {"rows": [{"close": float("nan")}]}
+    result = kline._gzip_payload(req, payload, pref_key="minute_batch_compress")
+    assert isinstance(result, dict)
+    json.dumps(result, allow_nan=False)
+    assert result["rows"][0]["close"] is None

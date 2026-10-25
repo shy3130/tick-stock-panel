@@ -1,4 +1,5 @@
 """daily-batch 混合资产分组测试。"""
+import json
 import datetime as _dt
 
 import polars as pl
@@ -36,7 +37,7 @@ def test_daily_batch_groups_index_symbols(repo, monkeypatch):
     state = type("S", (), {"repo": repo})()
     req = type("R", (), {"app": type("A", (), {"state": state})()})()
 
-    out = kline_api.get_daily_batch(req, {"symbols": ["600000.SH", "000001.SH"], "days": 12})
+    out = json.loads(kline_api.get_daily_batch(req, {"symbols": ["600000.SH", "000001.SH"], "days": 12}).body)
     # 本 fixture 每只只回 1 行 (< days), 停牌回补会对不足额标的追加更宽窗口的读取;
     # 分流断言只看首次调用 (股票走批量、指数走逐只)。
     assert calls["stock_batch"][0] == ["600000.SH"]

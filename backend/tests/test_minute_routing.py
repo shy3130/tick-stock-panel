@@ -10,6 +10,7 @@ mock 范式: monkeypatch 模块属性。
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -310,7 +311,7 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
     mock_request.app.state.capabilities = mock_capset
 
     body = {"symbols": ["600519.SH", "510300.SH"], "date": "2026-01-15"}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     # sync_minute_batch 被调 2 次, asset_type 分别为 stock 和 etf
     assert sync_spy.call_count == 2
@@ -378,7 +379,7 @@ def test_minute_batch_tail_stale_pulls_incremental_and_persists(monkeypatch):
     inc = _bars("600519.SH", [datetime(2026, 1, 15, 9, 34), datetime(2026, 1, 15, 9, 35)])
     captured, writes, req = _endpoint_mocks(monkeypatch, local, sync_ret=inc)
 
-    result = kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"})
+    result = json.loads(kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"}).body)
 
     assert len(captured) == 1
     assert captured[0]["start"] == datetime(2026, 1, 15, 9, 33)   # 从最后一根本身重拉 (动态K覆盖)
@@ -386,7 +387,7 @@ def test_minute_batch_tail_stale_pulls_incremental_and_persists(monkeypatch):
     assert writes and writes[0].height == 2                        # 取到即落盘
     rows = result["data"]["600519.SH"]
     assert len(rows) == 5                                          # 3 本地 + 2 增量
-    assert rows[-1]["datetime"] == datetime(2026, 1, 15, 9, 35)
+    assert rows[-1]["datetime"] == "2026-01-15T09:35:00"
 
 
 def test_minute_batch_middle_hole_falls_back_to_full_day(monkeypatch):
@@ -411,7 +412,7 @@ def test_minute_batch_fresh_local_skips_pull(monkeypatch):
     local = _bars("600519.SH", dts)
     captured, writes, req = _endpoint_mocks(monkeypatch, local, sync_ret=pl.DataFrame())
 
-    result = kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"})
+    result = json.loads(kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"}).body)
 
     assert captured == []                                          # 零请求
     assert writes == []
@@ -428,30 +429,30 @@ def test_minute_batch_since_returns_only_new_bars(monkeypatch):
     local = _bars("600519.SH", dts)   # fresh: 不触发补拉, 直读本地后做 since 过滤
     _, _, req = _endpoint_mocks(monkeypatch, local, sync_ret=pl.DataFrame())
 
-    result = kline_api.get_minute_batch(req, {
+    result = json.loads(kline_api.get_minute_batch(req, {
         "symbols": ["600519.SH"], "date": "2026-01-15",
         "since": "2026-01-15T15:00:00",
-    })
+    }).body)
     rows = result["data"]["600519.SH"]
-    assert [r["datetime"] for r in rows] == [datetime(2026, 1, 15, 15, 0)]   # 含 since 当根
+    assert [r["datetime"] for r in rows] == ["2026-01-15T15:00:00"]   # 含 since 当根
     assert result["incremental"] is True
 
     # since 早于全部K → 全量返回; 无 since → incremental False
-    full = kline_api.get_minute_batch(req, {
+    full = json.loads(kline_api.get_minute_batch(req, {
         "symbols": ["600519.SH"], "date": "2026-01-15", "since": "2026-01-15T09:00:00",
-    })
+    }).body)
     assert len(full["data"]["600519.SH"]) == 240
-    plain = kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"})
+    plain = json.loads(kline_api.get_minute_batch(req, {"symbols": ["600519.SH"], "date": "2026-01-15"}).body)
     assert plain["incremental"] is False
     assert len(plain["data"]["600519.SH"]) == 240
 
     # 防御: 带 Z 的 UTC aware 输入 (toISOString 客户端) → 归一为北京 naive 再比,
     # 不抛 TypeError 且语义正确 (15:00 北京 = 07:00 UTC)
-    utc = kline_api.get_minute_batch(req, {
+    utc = json.loads(kline_api.get_minute_batch(req, {
         "symbols": ["600519.SH"], "date": "2026-01-15",
         "since": "2026-01-15T07:00:00Z",
-    })
-    assert [r["datetime"] for r in utc["data"]["600519.SH"]] == [datetime(2026, 1, 15, 15, 0)]
+    }).body)
+    assert [r["datetime"] for r in utc["data"]["600519.SH"]] == ["2026-01-15T15:00:00"]
 
 
 # ---------- 测试 10: sync_minute_batch 自定义源成功时调 on_segment (Issue 1) ----------
@@ -985,7 +986,7 @@ def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch):
     mock_request.app.state.minute_refresh = _healthy_svc(monkeypatch, True)
 
     body = {"symbols": ["600519.SH", "510300.SH"], "date": "2026-01-15", "prefer_local": True}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     # 股票未被补拉: sync_minute_batch 只为 ETF 调了一次
     assert sync_spy.call_count == 1
@@ -1017,7 +1018,7 @@ def test_get_minute_batch_prefer_local_unhealthy_falls_back(monkeypatch):
     mock_request.app.state.minute_refresh = _healthy_svc(monkeypatch, False)
 
     body = {"symbols": ["600519.SH"], "date": "2026-01-15", "prefer_local": True}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     assert sync_spy.call_count == 1  # 股票照常补拉
     assert sync_spy.call_args.kwargs.get("asset_type") == "stock"
@@ -1045,7 +1046,7 @@ def test_get_minute_batch_no_flag_unaffected_even_if_healthy(monkeypatch):
     mock_request.app.state.minute_refresh = _healthy_svc(monkeypatch, True)
 
     body = {"symbols": ["600519.SH"], "date": "2026-01-15"}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     assert sync_spy.call_count == 1
     assert result["full_minute_local"] is False
@@ -1091,14 +1092,14 @@ def test_get_minute_batch_leading_hole_triggers_full_day_refetch(monkeypatch):
     mock_request.app.state.minute_refresh = _healthy_svc(monkeypatch, False)
 
     body = {"symbols": ["600519.SH"], "date": "2026-01-15", "prefer_local": True}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     # 全天拉: start_time = 当日开盘窗口 (09:25), 不是"最后一根 + 1min" (11:31)
     assert sync_spy.call_count == 1
     assert sync_spy.call_args.kwargs.get("start_time") == datetime(2026, 1, 15, 9, 25)
     # 合并结果包含上午: 首根回到开盘附近, 根数覆盖全天
     rows = result["data"]["600519.SH"]
-    assert rows[0]["datetime"] == datetime(2026, 1, 15, 9, 31)
+    assert rows[0]["datetime"] == "2026-01-15T09:31:00"
     assert len(rows) >= 121
 
 
@@ -1127,7 +1128,7 @@ def test_get_minute_batch_healthy_does_not_suppress_leading_hole_refetch(monkeyp
     mock_request.app.state.minute_refresh = _healthy_svc(monkeypatch, True)
 
     body = {"symbols": ["600519.SH", "000001.SZ"], "date": "2026-01-15", "prefer_local": True}
-    result = kline_api.get_minute_batch(mock_request, body)
+    result = json.loads(kline_api.get_minute_batch(mock_request, body).body)
 
     # 洞票被全天补拉; 尾部票未被拉 (只调了一次, 只为 600519)
     assert sync_spy.call_count == 1
@@ -1136,7 +1137,7 @@ def test_get_minute_batch_healthy_does_not_suppress_leading_hole_refetch(monkeyp
     # 尾部票返回本地 100 根 (健康压制原样生效)
     assert len(result["data"]["000001.SZ"]) == 100
     # 洞票拿到全天
-    assert result["data"]["600519.SH"][0]["datetime"] == datetime(2026, 1, 15, 9, 31)
+    assert result["data"]["600519.SH"][0]["datetime"] == "2026-01-15T09:31:00"
     assert result["full_minute_local"] is True
 
 
@@ -1257,14 +1258,17 @@ def test_get_minute_batch_gzip_response_when_enabled(monkeypatch):
 
 
 def test_get_minute_batch_plain_when_disabled(monkeypatch):
-    """开关关 → 恒返回普通 dict, 不做压缩。"""
+    """开关关 → 不压缩, 返回 JSON bytes 的未压缩 Response (无 Content-Encoding)。"""
     from app.api import kline as kline_api
+    from fastapi import Response
 
     mock_request, _ = _compress_mock_env(monkeypatch, compress_on=False)
     result = kline_api.get_minute_batch(
         mock_request, {"symbols": ["600519.SH"], "date": "2026-01-15"}
     )
-    assert isinstance(result, dict) and "600519.SH" in result["data"]
+    assert isinstance(result, Response)
+    assert "content-encoding" not in result.headers
+    assert "600519.SH" in json.loads(result.body)["data"]
 
 
 def test_get_minute_batch_plain_without_accept_encoding(monkeypatch):
@@ -1275,7 +1279,11 @@ def test_get_minute_batch_plain_without_accept_encoding(monkeypatch):
     result = kline_api.get_minute_batch(
         mock_request, {"symbols": ["600519.SH"], "date": "2026-01-15"}
     )
-    assert isinstance(result, dict)
+    from fastapi import Response
+
+    assert isinstance(result, Response)
+    assert "content-encoding" not in result.headers
+    assert "600519.SH" in json.loads(result.body)["data"]
 
 
 # ---------- 测试: 日K批量传输压缩 (与分时独立开关) ----------
@@ -1326,7 +1334,11 @@ def test_daily_batch_plain_when_disabled(monkeypatch):
 
     req = _daily_mock_env(monkeypatch, compress_on=False)
     result = kline_api.get_daily_batch(req, {"symbols": ["600519.SH"], "days": 20})
-    assert isinstance(result, dict) and "600519.SH" in result["data"]
+    from fastapi import Response
+
+    assert isinstance(result, Response)
+    assert "content-encoding" not in result.headers
+    assert "600519.SH" in json.loads(result.body)["data"]
 
 
 def test_daily_batch_independent_from_minute_switch(monkeypatch):

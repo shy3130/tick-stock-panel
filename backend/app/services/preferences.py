@@ -262,6 +262,47 @@ def get_daily_batch_compress() -> bool:
     return bool(raw)
 
 
+# ===== 批量端点单请求标的数上限 (daily-batch / minute-batch) =====
+# 这两个上限是「单请求成本」的闸门, 不是业务契约: 成本 ≈ 标的数 × 每只根数
+# (日K 约 12 根, 分时约 240 根, 差 20 倍), 所以两档独立配置而非共用一个数。
+# 上限同时也是前端的单批分块大小 —— 前端读同一偏好分块, 不会发出必然被拒的
+# 请求 (此前 400/300/300 三处硬编码, 任一处不一致即全站 400)。
+def get_daily_batch_symbols() -> int:
+    """daily-batch 单请求标的数上限。默认 2000, 范围 [50, 5000]。"""
+    raw = load().get("daily_batch_symbols", 400)
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        size = 400
+    return max(50, min(5000, size))
+
+
+def set_daily_batch_symbols(size: int) -> int:
+    size = max(50, min(5000, int(size)))
+    save({"daily_batch_symbols": size})
+    return size
+
+
+def get_minute_batch_symbols() -> int:
+    """minute-batch 单请求标的数上限。默认 400, 范围 [50, 2000]。
+
+    分时每只回 ~240 根 (日K ~12 根), 同样的标的数内存/传输量高一个量级,
+    因此上限与推荐区间都比日K保守。
+    """
+    raw = load().get("minute_batch_symbols", 400)
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        size = 400
+    return max(50, min(2000, size))
+
+
+def set_minute_batch_symbols(size: int) -> int:
+    size = max(50, min(2000, int(size)))
+    save({"minute_batch_symbols": size})
+    return size
+
+
 def _allowed_data_providers() -> set[str]:
     try:
         from app.data_providers import custom as custom_sources
@@ -1042,6 +1083,38 @@ def set_webhook_default_channels(channels: list[str]) -> list[str]:
 def get_screener_auto_run() -> bool:
     """策略页进入时是否自动运行所有策略 (获取命中数)。默认开。"""
     return load().get("screener_auto_run", True)
+
+
+def get_assistant_auto_approve_actions() -> bool:
+    """AI 助手的动作工具是否免确认直接执行。默认关。
+
+    默认关是安全底线: 打开后 create_signal_strategy / run_backtest /
+    add_to_watchlist / sync_data 会不经用户点按就执行 (写信号文件、改自选、
+    触发数据补全)。存量用户不能因为升级而静默变成全自动。
+    只影响动作确认, 不影响轮次检查点 (那是防跑飞的安全阀, 见 chat_service)。
+    """
+    return bool(load().get("assistant_auto_approve_actions", False))
+
+
+def set_assistant_auto_approve_actions(enabled: bool) -> bool:
+    """保存 AI 助手免确认开关。"""
+    save({"assistant_auto_approve_actions": bool(enabled)})
+    return bool(enabled)
+
+
+def get_assistant_mask_enabled() -> bool:
+    """AI 助手打开时是否在页面主体上盖毛玻璃遮罩 (点击遮罩关闭助手)。默认开。
+
+    纯前端视觉/交互偏好, 后端只负责持久化; 关闭后恢复非模态体验
+    (页面主体可正常交互, 边看行情边问)。
+    """
+    return bool(load().get("assistant_mask_enabled", True))
+
+
+def set_assistant_mask_enabled(enabled: bool) -> bool:
+    """保存 AI 助手毛玻璃遮罩开关。"""
+    save({"assistant_mask_enabled": bool(enabled)})
+    return get_assistant_mask_enabled()
 
 
 def get_strategy_monitor_ids() -> list[str]:

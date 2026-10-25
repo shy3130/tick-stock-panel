@@ -668,6 +668,8 @@ def get_preferences() -> dict:
         "instruments_schedule": preferences.get_instruments_schedule(),
         "enriched_batch_size": preferences.get_enriched_batch_size(),
         "index_daily_batch_size": preferences.get_index_daily_batch_size(),
+        "daily_batch_symbols": preferences.get_daily_batch_symbols(),
+        "minute_batch_symbols": preferences.get_minute_batch_symbols(),
         "watchlist_columns": preferences.get_watchlist_columns(),
         "screener_result_columns": preferences.get_screener_result_columns(),
         "sse_refresh_pages": preferences.get_sse_refresh_pages(),
@@ -693,6 +695,8 @@ def get_preferences() -> dict:
         "nav_hidden": preferences.get_nav_hidden(),
         "dashboard_layout": preferences.get_dashboard_layout(),
         "screener_auto_run": preferences.get_screener_auto_run(),
+        "assistant_auto_approve_actions": preferences.get_assistant_auto_approve_actions(),
+        "assistant_mask_enabled": preferences.get_assistant_mask_enabled(),
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
         "depth_finalize_time": preferences.get_depth_finalize_time(),
@@ -1219,6 +1223,42 @@ def update_realtime_quote_scope(req: RealtimeQuoteScopePrefs) -> dict:
     from app.services import preferences
     cfg = req.model_dump(exclude_none=True)
     return preferences.set_realtime_quote_scope(cfg)
+
+
+class AssistantAutoApproveIn(BaseModel):
+    """AI 助手动作工具免确认开关。"""
+
+    enabled: bool
+
+
+@router.put("/preferences/assistant-auto-approve")
+def update_assistant_auto_approve(req: AssistantAutoApproveIn) -> dict:
+    """保存 AI 助手「动作工具免确认」开关。
+
+    打开后 create_signal_strategy / run_backtest / add_to_watchlist / sync_data
+    不再弹确认卡, 直接执行。默认关闭; 轮次检查点不受影响。
+    """
+    from app.services import preferences
+    saved = preferences.set_assistant_auto_approve_actions(req.enabled)
+    return {"assistant_auto_approve_actions": saved}
+
+
+class AssistantMaskIn(BaseModel):
+    """AI 助手毛玻璃遮罩开关。"""
+
+    enabled: bool
+
+
+@router.put("/preferences/assistant-mask")
+def update_assistant_mask(req: AssistantMaskIn) -> dict:
+    """保存 AI 助手「毛玻璃遮罩」开关 (默认开启)。
+
+    开启时助手抽屉背后覆盖毛玻璃遮罩, 点击遮罩关闭助手;
+    关闭则恢复非模态体验 (页面主体可正常交互)。纯视觉偏好, 无副作用。
+    """
+    from app.services import preferences
+    saved = preferences.set_assistant_mask_enabled(req.enabled)
+    return {"assistant_mask_enabled": saved}
 
 
 class WatchlistGroupsInNavPrefs(BaseModel):
@@ -2014,6 +2054,24 @@ def update_index_daily_batch_size(req: IndexDailyBatchSizeIn) -> dict:
     from app.services import preferences
     size = preferences.set_index_daily_batch_size(req.size)
     return {"index_daily_batch_size": size}
+
+
+class BatchSymbolsIn(BaseModel):
+    size: int
+
+
+@router.put("/preferences/daily-batch-symbols")
+def update_daily_batch_symbols(req: BatchSymbolsIn) -> dict:
+    """保存 daily-batch 单请求标的数上限 (同时是前端分块大小)。"""
+    from app.services import preferences
+    return {"daily_batch_symbols": preferences.set_daily_batch_symbols(req.size)}
+
+
+@router.put("/preferences/minute-batch-symbols")
+def update_minute_batch_symbols(req: BatchSymbolsIn) -> dict:
+    """保存 minute-batch 单请求标的数上限 (同时是前端分块大小)。"""
+    from app.services import preferences
+    return {"minute_batch_symbols": preferences.set_minute_batch_symbols(req.size)}
 
 
 # ── 五档盘口 sealed 配置 ──────────────────────────────

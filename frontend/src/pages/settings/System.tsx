@@ -4,8 +4,8 @@
  * 独立于实时监控, 放置影响整体应用行为的开关项。
  */
 import { useState, useCallback, useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown } from 'lucide-react'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import type { UpgradeGuardCategory } from '@/lib/api'
@@ -16,6 +16,12 @@ import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
 import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
 import { setUiPref } from '@/lib/uiPrefs'
+import { setKlineBatchLimits,
+  DAILY_BATCH_SYMBOLS_MIN,
+  DAILY_BATCH_SYMBOLS_MAX,
+  MINUTE_BATCH_SYMBOLS_MIN,
+  MINUTE_BATCH_SYMBOLS_MAX,
+} from '@/lib/klineBatchLimits'
 import {
   listZhVoices, previewVoice, activateVoice,
 } from '@/lib/voiceBroadcast'
@@ -92,6 +98,25 @@ export function SettingsSystemPanel() {
       setSaving(false)
     }
   }, [qc])
+
+  // 批量上限: 保存成功后把新值同步进分块助手, 并刷新偏好缓存。
+  // 已挂载页面的 query 不会立刻重跑, 但下一轮轮询/切换页面即用新分块。
+  const saveDailyBatch = useMutation({
+    mutationFn: (size: number) => api.updateDailyBatchSymbols(size),
+    onSuccess: ({ daily_batch_symbols }) => {
+      setKlineBatchLimits({ daily: daily_batch_symbols })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
+  const saveMinuteBatch = useMutation({
+    mutationFn: (size: number) => api.updateMinuteBatchSymbols(size),
+    onSuccess: ({ minute_batch_symbols }) => {
+      setKlineBatchLimits({ minute: minute_batch_symbols })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
 
   // 刷新前端缓存: 清除 react-query 缓存 + 强制重载 (绕过浏览器缓存)
   // 不动 localStorage (用户列配置/策略池等偏好保留), 也不影响后端的本地股票数据
@@ -315,6 +340,42 @@ export function SettingsSystemPanel() {
             className="w-[26rem] max-w-[60%] h-8 px-2.5 rounded-btn border border-border bg-base text-xs font-mono text-foreground focus:border-accent/50 focus:outline-none"
           />
         </div>
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Layers className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">批量请求</h3>
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-muted mb-3">
+          自选 / 选股列表的 K 线按这里的数量分批请求，单批越大请求越少、速度越快，
+          但单次内存峰值也越高。改完立即生效，无需重启。
+        </p>
+
+        <BatchSymbolsRow
+          label="日K批量上限"
+          desc="每只约 12 根 K 线，成本较低"
+          min={DAILY_BATCH_SYMBOLS_MIN}
+          max={DAILY_BATCH_SYMBOLS_MAX}
+          value={prefs?.daily_batch_symbols ?? 400}
+          saving={saveDailyBatch.isPending}
+          onSave={(size) => saveDailyBatch.mutate(size)}
+          warnAt={2000}
+          warnText="超过 2000 只时，多标签页或分时同时刷新会叠加内存峰值，可能触发浏览器卡顿或后端内存告警。"
+        />
+        <div className="h-px bg-border/60 my-1" />
+        <BatchSymbolsRow
+          label="分时批量上限"
+          desc="每只约 240 根 K 线，内存约为日K的 20 倍"
+          min={MINUTE_BATCH_SYMBOLS_MIN}
+          max={MINUTE_BATCH_SYMBOLS_MAX}
+          value={prefs?.minute_batch_symbols ?? 400}
+          saving={saveMinuteBatch.isPending}
+          onSave={(size) => saveMinuteBatch.mutate(size)}
+          warnAt={800}
+          warnText="分时数据量是日K的 20 倍：超过 800 只时单次响应可达数十 MB，建议保持默认或更低。"
+        />
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
@@ -585,6 +646,110 @@ function UpgradeGuardCard() {
 
 
 // ===== ToggleRow =====
+
+function BatchSymbolsRow({
+  label,
+  desc,
+  value,
+  min,
+  max,
+  saving,
+  onSave,
+  warnAt,
+  warnText,
+}: {
+  label: string
+  desc: string
+  value: number
+  min: number
+  max: number
+  saving: boolean
+  onSave: (size: number) => void
+  warnAt: number
+  warnText: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(String(value))
+  const [hint, setHint] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!editing) setDraft(String(value))
+  }, [value, editing])
+
+  function commit() {
+    const raw = Number.parseInt(draft, 10)
+    if (!Number.isFinite(raw)) {
+      setHint(`请输入 ${min}–${max} 之间的整数`)
+      return
+    }
+    if (raw < min) { setHint(`已按最小值 ${min} 保存`); onSave(min); setEditing(false); return }
+    if (raw > max) { setHint(`已按上限 ${max} 保存`); onSave(max); setEditing(false); return }
+    setHint(null)
+    onSave(raw)
+    setEditing(false)
+  }
+
+  const overWarn = (Number.parseInt(draft, 10) || 0) >= warnAt
+
+  return (
+    <div className="py-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm text-foreground">{label}</div>
+          <div className="text-[11px] text-muted">{desc} · 可设 {min}–{max} 只</div>
+        </div>
+        {editing ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <input
+              type="number"
+              value={draft}
+              min={min}
+              max={max}
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commit()
+                if (e.key === 'Escape') { setEditing(false); setHint(null) }
+              }}
+              className="w-24 h-8 px-2 rounded-btn border border-border bg-base text-right font-mono text-xs
+                         text-foreground tabular-nums focus:border-accent/50 focus:outline-none"
+            />
+            <button
+              onClick={commit}
+              disabled={saving}
+              className="px-2.5 py-1.5 rounded-btn text-xs bg-accent/15 text-accent
+                         hover:bg-accent/25 transition-colors disabled:opacity-50"
+            >
+              {saving ? '…' : '保存'}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setHint(null) }}
+              className="px-2 py-1.5 rounded-btn text-xs bg-elevated text-muted hover:text-foreground transition-colors"
+            >
+              取消
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            className="shrink-0 px-2.5 py-1 rounded-btn border border-border bg-surface font-mono text-xs
+                       text-foreground tabular-nums hover:border-accent/50 transition-colors"
+            title="点击修改"
+          >
+            {value} 只/批
+          </button>
+        )}
+      </div>
+      {hint && <div className="mt-1.5 text-[10px] text-warning">{hint}</div>}
+      {overWarn && editing && (
+        <div className="mt-2 rounded-btn border border-warning/20 bg-warning/10 px-3 py-1.5">
+          <span className="text-[10px] leading-relaxed text-warning">{warnText}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 function ToggleRow({
   label,

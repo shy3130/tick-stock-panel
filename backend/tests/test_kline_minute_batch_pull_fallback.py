@@ -5,6 +5,7 @@
 只剩竞价栏。修复后: 回退返回本地已落盘的行 (图冻结在最后落盘时刻), 并以
 truncated 字段标记残缺 symbol, 供前端提示。
 """
+import json
 import datetime as _dt
 
 import polars as pl
@@ -71,11 +72,11 @@ def test_pull_failure_falls_back_to_local_rows(repo, monkeypatch):
     _pin_clock(repo, monkeypatch, {_SYM: _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 30), 30)},
                pl.DataFrame(), calls)
 
-    out = kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]})
+    out = json.loads(kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]}).body)
     rows = out["data"].get(_SYM)
     assert rows, "补拉失败时本地已有K必须回退返回, 不得整只消失"
     assert len(rows) == 30
-    assert rows[-1]["datetime"] == _dt.datetime(2026, 10, 23, 9, 59)
+    assert rows[-1]["datetime"] == _dt.datetime(2026, 10, 23, 9, 59).isoformat()
     assert out.get("truncated") == [_SYM], "残缺快照必须带 truncated 标记"
 
 
@@ -87,11 +88,11 @@ def test_pull_success_merges_without_truncated(repo, monkeypatch):
     _pin_clock(repo, monkeypatch, {_SYM: _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 30), 30)},
                _bars(_SYM, _dt.datetime(2026, 10, 23, 10, 0), 30), calls)
 
-    out = kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]})
+    out = json.loads(kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]}).body)
     rows = out["data"][_SYM]
     assert len(rows) == 60
-    assert rows[0]["datetime"] == _dt.datetime(2026, 10, 23, 9, 30)
-    assert rows[-1]["datetime"] == _dt.datetime(2026, 10, 23, 10, 29)
+    assert rows[0]["datetime"] == _dt.datetime(2026, 10, 23, 9, 30).isoformat()
+    assert rows[-1]["datetime"] == _dt.datetime(2026, 10, 23, 10, 29).isoformat()
     assert "truncated" not in out
 
 
@@ -103,7 +104,7 @@ def test_fresh_local_skips_pull_and_truncated(repo, monkeypatch):
     _pin_clock(repo, monkeypatch, {_SYM: _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 30), 90)},
                pl.DataFrame(), calls)
 
-    out = kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]})
+    out = json.loads(kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]}).body)
     assert len(out["data"][_SYM]) == 90
     assert calls == [], "新鲜路径不应触发补拉"
     assert "truncated" not in out
@@ -116,7 +117,7 @@ def test_no_local_rows_stays_absent(repo, monkeypatch):
     calls: list = []
     _pin_clock(repo, monkeypatch, {}, pl.DataFrame(), calls)
 
-    out = kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]})
+    out = json.loads(kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]}).body)
     assert _SYM not in out["data"]
     assert "truncated" not in out
 
@@ -129,8 +130,8 @@ def test_since_filter_drops_symbol_and_truncated_marker(repo, monkeypatch):
     _pin_clock(repo, monkeypatch, {_SYM: _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 30), 30)},
                pl.DataFrame(), calls)
 
-    out = kline_api.get_minute_batch(
+    out = json.loads(kline_api.get_minute_batch(
         _fake_req(repo), {"symbols": [_SYM], "since": "2026-10-23T10:50:00"},
-    )
+    ).body)
     assert _SYM not in out["data"]
     assert "truncated" not in out, "标记必须与 data 键一致, 不回传的标的不得标记"

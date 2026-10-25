@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { api, type MinuteKlineRow } from '@/lib/api'
+import { getMinuteBatchChunkSize } from '@/lib/klineBatchLimits'
 import { QK } from '@/lib/queryKeys'
 
 // 分钟批量分时的增量轮询助手:
@@ -12,15 +13,13 @@ import { QK } from '@/lib/queryKeys'
 // 大列表内存约束 (千只自选场景):
 // - 缓存 key 固定为 QK.minuteBatch() 单键, 数据按 symbol upsert — 不再把全量
 //   symbol 拼进 key (增删 1 只即换 key 整批重拉、新旧两份共存);
-// - 请求按 MINUTE_BATCH_CHUNK 分块 (后端单次上限 400), 串行发出避免并发多批
-//   同时放大服务端峰值;
+// - 请求按端点单请求上限分块 (值与后端校验同源, 见 lib/klineBatchLimits),
+//   串行发出避免并发多批同时放大服务端峰值;
 // - 缓存 symbol 数超过 MINUTE_CACHE_MAX_SYMBOLS 时按 LRU 淘汰视口外序列
 //   (滚动历史不再永久常驻)。
 
 type MinuteBatchData = Record<string, MinuteKlineRow[]>
 
-/** 单请求分块大小 (后端 /api/kline/minute-batch 上限 400, 留安全余量) */
-export const MINUTE_BATCH_CHUNK = 300
 /** 缓存内 symbol 数上限: 视口滚动历史只保留最近请求过的 */
 export const MINUTE_CACHE_MAX_SYMBOLS = 500
 /** 视口集合未就绪时大列表的播种行数 (effect 填充视口后防抖补拉) */
@@ -117,7 +116,7 @@ export async function fetchMinuteBatchIncremental(
   const prev = qc.getQueryData<{ data: MinuteBatchData }>(cacheKey)?.data
   let data: MinuteBatchData = prev ?? {}
   const sinceOf = sinceBySymbol(data, symbols)
-  for (const part of chunk(symbols, MINUTE_BATCH_CHUNK)) {
+  for (const part of chunk(symbols, getMinuteBatchChunkSize())) {
     // 按 since 分组: 端点单请求只收一个 since, 而块的 symbols 可能混合
     // 「已缓存(有 since)」与「新增(无 since)」。混发会把新 symbol 裁成 1 根。
     const groups = new Map<string | undefined, string[]>()
