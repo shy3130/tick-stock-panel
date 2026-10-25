@@ -413,6 +413,18 @@ function AssistantSettingsMenu({ onDone }: { onDone: () => void }) {
   )
 }
 
+/** 会话时间: 今天/昨天 + HH:MM, 年内 MM-DD HH:MM, 跨年带年份 */
+function formatSessionTime(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  if (d.toDateString() === now.toDateString()) return `今天 ${hm}`
+  const yesterday = new Date(now.getTime() - 86_400_000)
+  if (d.toDateString() === yesterday.toDateString()) return `昨天 ${hm}`
+  const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md}`
+}
+
 function SessionMenu({
   sessions,
   activeId,
@@ -439,11 +451,14 @@ function SessionMenu({
           >
             <button
               type="button"
-              className="min-w-0 flex-1 cursor-pointer truncate text-left"
+              className="min-w-0 flex-1 cursor-pointer text-left"
               onClick={() => { selectSession(session.id); onDone() }}
               title={session.title}
             >
-              {session.title || '新对话'}
+              <span className="block truncate">{session.title || '新对话'}</span>
+              <span className="block text-[10px] leading-tight text-muted">
+                {formatSessionTime(session.createdAt)}
+              </span>
             </button>
             <button
               type="button"
