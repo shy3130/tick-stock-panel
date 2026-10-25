@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { setKlineBatchLimits, getDailyBatchChunkSize, getMinuteBatchChunkSize, resetKlineBatchLimits } from '@/lib/klineBatchLimits'
 
 describe('klineBatchLimits', () => {
