@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import secrets_store
@@ -2292,3 +2294,95 @@ def api_tokens_revoke(token_id: str, request: Request) -> dict:
     if not svc.revoke_token(request.app.state.repo.store.data_dir, token_id):
         raise HTTPException(status_code=404, detail=f"Token '{token_id}' 不存在")
     return {"status": "revoked", "id": token_id}
+
+
+# ── 声效语音包: 用户上传自定义提示音 (data/sound_packs), 前端以 custom:<文件名> 选择 ──
+
+_SOUND_PACK_DIR = "sound_packs"
+# 浏览器 <audio> 即取即播, 单文件无需过大; 过大的文件上传慢且占磁盘
+_SOUND_PACK_MAX_BYTES = 4 * 1024 * 1024
+_SOUND_PACK_EXTS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".opus", ".webm"}
+_SOUND_PACK_MEDIA_TYPES = {
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+    ".opus": "audio/ogg", ".webm": "audio/webm",
+}
+
+
+def _sound_pack_dir(request: Request) -> Path:
+    return request.app.state.repo.store.data_dir / _SOUND_PACK_DIR
+
+
+def _safe_pack_path(pack_dir: Path, name: str) -> Path:
+    """名字 → 目录内路径; 拒绝穿越/非法名。"""
+    if not name or "/" in name or "\\" in name or ".." in name or name != name.strip():
+        raise HTTPException(status_code=400, detail="语音包名称非法")
+    path = (pack_dir / name).resolve()
+    if path.parent != pack_dir.resolve():
+        raise HTTPException(status_code=400, detail="语音包名称非法")
+    return path
+
+
+@router.get("/sound-packs")
+def sound_packs_list(request: Request) -> dict:
+    pack_dir = _sound_pack_dir(request)
+    packs: list[dict] = []
+    if pack_dir.is_dir():
+        for f in sorted(pack_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in _SOUND_PACK_EXTS:
+                packs.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "ext": f.suffix.lower().lstrip("."),
+                })
+    return {"packs": packs}
+
+
+@router.post("/sound-packs")
+async def sound_packs_upload(request: Request, file: UploadFile = File(...)) -> dict:
+    import re
+
+    raw = file.filename or ""
+    suffix = Path(raw).suffix.lower()
+    if suffix not in _SOUND_PACK_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的音频格式 '{suffix or '(无后缀)'}', 可选: {', '.join(sorted(_SOUND_PACK_EXTS))}",
+        )
+    # 词干只保留安全字符 (中文/字母/数字/_-.), 其余替换为 _; 控制长度防文件名失控
+    stem = re.sub(r"[^\w\-.()\u4e00-\u9fff]", "_", Path(raw).stem).strip("._")[:40] or "pack"
+    name = f"{stem}{suffix}"
+
+    data = await file.read()
+    if len(data) > _SOUND_PACK_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件超过 {_SOUND_PACK_MAX_BYTES // 1024 // 1024}MB 上限 (当前 {len(data) / 1024 / 1024:.1f}MB)",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+
+    pack_dir = _sound_pack_dir(request)
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    target = _safe_pack_path(pack_dir, name)
+    # 同名重传 = 替换 (用户自定义音的自然语义)
+    target.write_bytes(data)
+    return {"status": "saved", "pack": {"name": name, "size": len(data), "ext": suffix.lstrip(".")}}
+
+
+@router.delete("/sound-packs/{name}")
+def sound_packs_delete(name: str, request: Request) -> dict:
+    path = _safe_pack_path(_sound_pack_dir(request), name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"语音包 '{name}' 不存在")
+    path.unlink()
+    return {"status": "deleted", "name": name}
+
+
+@router.get("/sound-packs/{name}/file")
+def sound_packs_file(name: str, request: Request) -> FileResponse:
+    path = _safe_pack_path(_sound_pack_dir(request), name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"语音包 '{name}' 不存在")
+    media_type = _SOUND_PACK_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type)

@@ -3,9 +3,9 @@
  *
  * 独立于实时监控, 放置影响整体应用行为的开关项。
  */
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import type { UpgradeGuardCategory } from '@/lib/api'
@@ -14,7 +14,7 @@ import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
-import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
+import { mergeSoundOptions, previewSound, CUSTOM_SOUND_PREFIX } from '@/lib/notificationSound'
 import { setUiPref } from '@/lib/uiPrefs'
 import { setKlineBatchLimits,
   DAILY_BATCH_SYMBOLS_MIN,
@@ -73,6 +73,43 @@ export function SettingsSystemPanel() {
       return v >= 0.5 && v <= 2 ? v : 1
     } catch { return 1 }
   })
+
+  // ===== 自定义语音包 (上传提示音, 存后端 data/sound_packs, 跨设备可用) =====
+  const { data: packData } = useQuery({
+    queryKey: QK.soundPacks,
+    queryFn: api.listSoundPacks,
+    staleTime: 60_000,
+  })
+  const soundPacks = packData?.packs ?? []
+  const soundOptions = mergeSoundOptions(soundPacks.map(p => p.name))
+  const soundFileRef = useRef<HTMLInputElement>(null)
+
+  const uploadSoundPack = useMutation({
+    mutationFn: (file: File) => api.uploadSoundPack(file),
+    onSuccess: (r) => {
+      toast(`已上传 ${r.pack.name}`, 'success')
+      qc.invalidateQueries({ queryKey: QK.soundPacks })
+    },
+    onError: (e: Error) => toast(e.message || '上传失败', 'error'),
+  })
+  const deleteSoundPack = useMutation({
+    mutationFn: (name: string) => api.deleteSoundPack(name),
+    onSuccess: (_r, name) => {
+      toast(`已删除 ${name}`, 'success')
+      // 删掉的恰是当前选中音 → 回退默认, 避免悬空引用
+      if (soundType === CUSTOM_SOUND_PREFIX + name) {
+        setUiPref('alert_sound', 'ding')
+        setSoundType('ding')
+      }
+      qc.invalidateQueries({ queryKey: QK.soundPacks })
+    },
+    onError: (e: Error) => toast(e.message || '删除失败', 'error'),
+  })
+  const onSoundFilePicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f) uploadSoundPack.mutate(f)
+    e.target.value = ''  // 同名重选也能触发 onChange
+  }, [uploadSoundPack])
 
   // 语音包异步加载 (Google 云语音为 Chrome 联网注入, 比本地晚到), 监听刷新
   useEffect(() => {
@@ -219,9 +256,9 @@ export function SettingsSystemPanel() {
                 setSoundType(v)
                 if (v !== 'none') previewSound(v)
               }}
-              className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+              className="w-44 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
             >
-              {SOUND_OPTIONS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {soundOptions.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             <button
               onClick={() => previewSound(soundType)}
@@ -232,6 +269,58 @@ export function SettingsSystemPanel() {
             </button>
           </div>
         </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0 flex items-center gap-1.5">
+            <Upload className="h-3.5 w-3.5 text-muted" />
+            <div>
+              <div className="text-sm text-foreground">自定义语音包</div>
+              <div className="text-[11px] text-muted truncate">上传自己的提示音 (mp3/wav/ogg/m4a/flac/aac, ≤4MB), 同名重传替换</div>
+            </div>
+          </div>
+          <input
+            ref={soundFileRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac,.opus,.webm"
+            className="hidden"
+            onChange={onSoundFilePicked}
+          />
+          <button
+            onClick={() => soundFileRef.current?.click()}
+            disabled={uploadSoundPack.isPending}
+            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn text-xs bg-elevated text-secondary hover:text-foreground transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {uploadSoundPack.isPending ? '上传中…' : '上传'}
+          </button>
+        </div>
+        {soundPacks.length > 0 && (
+          <div className="mt-1 space-y-1">
+            {soundPacks.map(p => (
+              <div key={p.name} className="flex items-center justify-between gap-2 pl-5 pr-1.5 py-1 rounded-btn bg-base/60">
+                <span className="text-xs text-foreground truncate">
+                  {p.name}
+                  <span className="text-muted ml-1.5">{p.size >= 1024 * 1024 ? `${(p.size / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(p.size / 1024))}KB`}</span>
+                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => previewSound(CUSTOM_SOUND_PREFIX + p.name)}
+                    className="px-2 py-0.5 rounded-btn border border-border text-xs text-secondary hover:text-foreground hover:border-accent/30 transition-colors cursor-pointer"
+                  >
+                    试听
+                  </button>
+                  <button
+                    onClick={() => deleteSoundPack.mutate(p.name)}
+                    disabled={deleteSoundPack.isPending && deleteSoundPack.variables === p.name}
+                    className="px-2 py-0.5 rounded-btn border border-border text-xs text-secondary hover:text-foreground hover:border-accent/30 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {deleteSoundPack.isPending && deleteSoundPack.variables === p.name ? '删除中' : '删除'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
