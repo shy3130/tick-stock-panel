@@ -28,6 +28,7 @@ import contextlib
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -74,6 +75,21 @@ def _load_configs(data_dir: Path):
 
 def _numeric_fields(config) -> list:
     return [f for f in config.fields if f.dtype in _NUMERIC_DTYPES]
+
+
+def numeric_timeseries_ext_columns(data_dir: Path | None = None) -> frozenset[str]:
+    """时序模式数值扩展字段的列名集合 — 回测矩阵可注入的白名单。
+
+    快照模式 (mode=snapshot) 刻意排除: 快照是"最新值", 回看历史注入即未来函数,
+    帧路径的 include_snapshot=False 同理只放行时序。
+    """
+    root = _resolve_dir(data_dir)
+    return frozenset(
+        ext_column_name(cfg.id, f.name)
+        for cfg in _load_configs(root)
+        if cfg.mode == "timeseries"
+        for f in _numeric_fields(cfg)
+    )
 
 
 def _signal_fields(config) -> list:
@@ -324,6 +340,56 @@ def attach_ext_columns(
         if tmp_date:
             df = df.drop("_ext_date")
     return df
+
+
+def attach_matrix_ext_fields(market: Any, data_dir: Path | None, names: Any) -> Any:
+    """把时序扩展数值列作为 matrix fields 附加到 (frozen) MarketDataMatrix 副本。
+
+    回测矩阵只读 enriched parquet 的 14 个存储列 (扩展列按设计不落盘, 见
+    pipeline._select_storage_cols); 扩展数据在这里按矩阵自身的 (日期×标的)
+    骨架现场 join — 与策略页帧路径同一台 attach_ext_columns (PIT 安全:
+    include_snapshot=False, 只进时序模式)。left join 保持骨架行序, 直接
+    reshape 为 (T, A); 缺失 (标的, 日期) 为 NaN, 与叠加条件掩码"NaN 不命中"
+    及帧路径 fill_null(False) 同语义。财务因子的 attach_matrix_fundamental_fields
+    是同构先例。
+    """
+    import dataclasses
+    from types import MappingProxyType
+
+    import numpy as np
+
+    wanted = sorted({str(n) for n in names})
+    if not wanted:
+        return market
+    labels = list(market.timestamp_labels)
+    symbols = list(market.symbols)
+    n_t, n_a = len(labels), len(symbols)
+    if n_t == 0 or n_a == 0:
+        return market
+    skeleton = pl.DataFrame({
+        "date": np.repeat(np.array(labels, dtype=object), n_a),
+        "symbol": np.tile(np.array(symbols, dtype=object), n_t),
+    })
+    enriched = attach_ext_columns(skeleton, include_snapshot=False, data_dir=data_dir)
+    missing = [c for c in wanted if c not in enriched.columns]
+    if missing:
+        raise ValueError(
+            f"扩展字段数据不可用: {missing} — 检查扩展数据是否已拉取、字段是否仍存在"
+        )
+    extra: dict[str, np.ndarray] = {}
+    for name in wanted:
+        arr = (
+            enriched[name]
+            .cast(pl.Float64)
+            .fill_null(float("nan"))
+            .to_numpy()
+            .astype(np.float32)
+        )
+        arr = arr.reshape(n_t, n_a)
+        arr.flags.writeable = False
+        extra[name] = arr
+    merged = {**dict(market.fields), **extra}
+    return dataclasses.replace(market, fields=MappingProxyType(merged))
 
 
 def invalidate_ext_caches(data_dir: Path | None = None, *, keep_strategy_cache: bool = False) -> None:

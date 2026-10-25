@@ -520,6 +520,22 @@ class BacktestEngine:
             | set(feature_plan.instrument_columns)
             | set(feature_plan.matrix_columns)
         )
+        # 扩展时序数值字段不进 parquet 解析 (enriched 只落 14 存储列), 矩阵构建后
+        # 按 (日期, 标的) 对齐现场注入 — 与财务因子 attach 同构。快照模式/字符串
+        # 字段/未注册名在此拦截 (快照回看历史 = 未来函数)。
+        from app.factors.ext_factors import numeric_timeseries_ext_columns
+
+        ext_wanted = frozenset(c for c in field_columns if c.startswith("ext_"))
+        if ext_wanted:
+            invalid_ext = ext_wanted - numeric_timeseries_ext_columns(
+                self.repo.store.data_dir
+            )
+            if invalid_ext:
+                raise ValueError(
+                    f"扩展字段不可用于矩阵回测 (需为时序模式的数值扩展字段): "
+                    f"{sorted(invalid_ext)}"
+                )
+            field_columns = field_columns - ext_wanted
         cache_root = (
             self.repo.store.data_dir / ".backtest_matrix_cache"
             if settings.backtest_matrix_disk_cache_enabled
@@ -530,6 +546,7 @@ class BacktestEngine:
             if cache_profile is not None
             else frozenset(field_columns)
         )
+        cache_fields = frozenset(cache_fields) - ext_wanted
         cache_max_bytes = (
             cache_profile.max_disk_bytes
             if cache_profile is not None
@@ -574,6 +591,14 @@ class BacktestEngine:
                         market,
                         self.repo.store.data_dir if self.repo is not None else None,
                         fundamental_names,
+                    )
+                if ext_wanted:
+                    from app.factors.ext_factors import attach_matrix_ext_fields
+
+                    market = attach_matrix_ext_fields(
+                        market,
+                        self.repo.store.data_dir if self.repo is not None else None,
+                        ext_wanted,
                     )
                 return market
             except EnrichedGenerationUnavailableError:
