@@ -25,7 +25,7 @@
   由 provider 自管批量与限速 (rpm 配置/内部并发), 服务不代限。
 - 稳态轮单请求: 无脉冲并发, 间隔可低至 3s; 实际节奏 = max(间隔, 单轮完成),
   服务端响应 ~5s 时自动退化为响应节奏, 不会重叠请求。
-- 固定节奏: 默认 6s 一轮 (clamp [3, 300]), 不补跑 (missed 轮次直接跳过);
+- 固定节奏: 默认 6s 一轮 (clamp [3, 120]), 不补跑 (missed 轮次直接跳过);
   仅修复轮的自定义源下限抬到 60s (全天批量打不住 6s 节奏)。
 - 仅连续竞价时段运行 (9:30-11:30 / 13:00-15:00), 午休/收盘自动暂停与恢复;
   午休后恢复因覆盖滞后会多跑一次修复轮, 幂等无害。
@@ -50,7 +50,7 @@ from typing import Any
 import polars as pl
 
 from app.market_time import cn_now, cn_today, in_continuous_session
-from app.services import preferences
+from app.services import minute_adjust, preferences
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,8 @@ class _RefreshState:
     last_error: str | None = None
     next_round_at: float | None = None      # epoch 秒
     extra: dict[str, Any] = field(default_factory=dict)
+    minute_basis_raw: bool | None = None   # 上轮落盘时本地库是否 raw 基准
+    basis_warned: bool = False             # 混基准风险只警告一次
 
 
 class MinuteRefreshService:
@@ -338,10 +340,25 @@ class MinuteRefreshService:
                 )
                 return
             self._empty_rounds = 0
+            # 基准可见性: intraday 端点的价格基准未签约 (SDK 无 adjust 参数),
+            # 本地库未迁移 raw (.raw_basis 缺失) 时服务写入与端点补拉 (forward)
+            # 可能混基准 —— 只暴露状态与一次性警告, 不阻断 (阻断属功能变更, 另行决策)。
+            basis_raw = minute_adjust.minute_basis_is_raw(self._repo.store.data_dir)
+            if not basis_raw and not self._state.basis_warned:
+                logger.warning(
+                    "全量分钟: 本地分钟库未迁移 raw 基准 (.raw_basis 缺失), intraday "
+                    "价格基准未签约, 服务写入可能与端点补拉混基准; 建议先运行分钟基准迁移"
+                )
+                self._state.basis_warned = True
+            self._state.minute_basis_raw = basis_raw
             write_started = time.perf_counter()
-            written = kline_sync._write_minute_partition(
-                df, self._repo.store.data_dir / "kline_minute",
-            )
+            # 读-改-写必须持仓库写锁 (与 minute-batch 补拉 / 盘后同步同一纪律):
+            # 无互斥的两个写者并发替换同一分区时, 后写者以过期基底覆盖丢整批行,
+            # 且会共用同一 tmp 文件交错损坏。实测增量轮落盘 ~10ms, 锁占用可忽略。
+            with self._repo._write_lock:
+                written = kline_sync._write_minute_partition(
+                    df, self._repo.store.data_dir / "kline_minute",
+                )
             write_ms = (time.perf_counter() - write_started) * 1000
 
         self._state.rounds += 1
@@ -413,6 +430,7 @@ class MinuteRefreshService:
             "last_symbols": self._state.last_symbols,
             "last_requests": self._state.last_requests,
             "last_mode": self._state.last_mode,
+            "minute_basis_raw": self._state.minute_basis_raw,
             "next_round_at": self._state.next_round_at,
             "last_error": self._state.last_error,
         }

@@ -96,7 +96,9 @@ def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     *.parquet glob, 不会被扫描误读。Windows 下目标正被并发读取时由
     replace_with_retry 短退避穿过。
     """
-    tmp = out.with_name(out.name + ".tmp")
+    # 唯一后缀: 两个写入者共用固定名 tmp 并发写同一文件会交错损坏 (被 rename
+    # 定版后分区报废)。崩溃残留的孤儿 tmp 不匹配 *.parquet glob, 读侧无影响。
+    tmp = out.with_name(f"{out.name}.{uuid.uuid4().hex[:8]}.tmp")
     df.write_parquet(tmp)
     replace_with_retry(tmp, out)
 
