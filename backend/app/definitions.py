@@ -175,3 +175,133 @@ def definition_dependencies(kind: str, definition: dict) -> frozenset[str]:
     if extractor is None:
         return frozenset()
     return extractor(definition)
+
+
+# ── 统一目录与导入冒烟 (P4) ──────────────────────────────
+# 「定义即扩展」的消费面: 一份跨 kind 的目录 (统一选择器的数据半边) 和
+# 导入即冒烟 (校验 + 编译 + 依赖可解析, 无 IO) — 备份导入 / AI 生成 /
+# 手工创建统一调用, 导入完成即知道定义能不能算。
+
+# 回测恒载的分组/日期列 — 依赖提取的 root_names 会带上 .over("symbol")
+# 的 symbol, 它们不参与"未知依赖"判定。
+_ALWAYS_LOADED_COLUMNS = frozenset({"symbol", "date"})
+
+
+def _known_input_columns() -> frozenset[str]:
+    """定义可引用的全部输入列 (依赖可解析性判据): enriched 存储/指标列 ∪
+    注册表因子 ∪ 字符串扩展字段。"""
+    from app.indicators.pipeline import ENRICHED_STORAGE_COLS, INDICATOR_COLUMNS
+    from app.strategy import custom_signals
+
+    return frozenset(
+        set(ENRICHED_STORAGE_COLS) | set(INDICATOR_COLUMNS) | set(custom_signals.allowed_fields())
+    )
+
+
+class _IssueCapture(logging.Handler):
+    """冒烟期捕获 custom_signals 编译告警 (build_expressions 失败只告警不抛)。"""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def smoke_definition(kind: str, definition: dict) -> dict:
+    """导入冒烟 (静态层): validate → 编译 → 依赖可解析。
+
+    返回 {ok, issues: [{code, message}], dependencies, warmup_bars};
+    ok=False 时 issues 至少一条, 不会静默通过。
+    """
+    issues: list[dict[str, str]] = []
+    try:
+        validate_definition(kind, definition)
+    except ValueError as e:
+        return {"ok": False, "issues": [{"code": "V001", "message": str(e)}],
+                "dependencies": [], "warmup_bars": None}
+
+    dependencies: frozenset[str] = frozenset()
+    warmup_bars: int | None = None
+    if kind == "signal":
+        from app.strategy import custom_signals
+
+        capture = _IssueCapture()
+        signal_logger = logging.getLogger("app.strategy.custom_signals")
+        signal_logger.addHandler(capture)
+        try:
+            if definition.get("timeframe") == custom_signals.TIMEFRAME_INTRADAY:
+                exprs = custom_signals.build_intraday_expressions([definition])
+                column = custom_signals.intraday_column_name(str(definition.get("id", "")))
+            else:
+                exprs = custom_signals.build_expressions([definition])
+                column = custom_signals.resolve_column(definition)
+        finally:
+            signal_logger.removeHandler(capture)
+        if column not in exprs:
+            issues.append({
+                "code": "C001",
+                "message": capture.messages[0] if capture.messages else "信号编译失败",
+            })
+        dependencies = definition_dependencies("signal", definition)
+    else:
+        from app.factors import store as factor_store
+
+        try:
+            spec = factor_store.to_spec(definition)
+        except ValueError as e:  # validate 已过, 这里只剩环境性失败
+            return {"ok": False, "issues": [{"code": "V002", "message": str(e)}],
+                    "dependencies": [], "warmup_bars": None}
+        dependencies = spec.dependencies
+        warmup_bars = spec.warmup_bars
+
+    unknown = sorted(
+        dependencies - _known_input_columns() - _ALWAYS_LOADED_COLUMNS
+    )
+    if unknown:
+        issues.append({"code": "W001", "message": f"依赖列不在已知输入列: {unknown}"})
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "dependencies": sorted(dependencies),
+        "warmup_bars": warmup_bars,
+    }
+
+
+def catalog(data_dir: Path) -> list[dict]:
+    """全部已存定义的统一目录视图 (signal + factor), 供统一选择器消费。"""
+    from app.factors import store as factor_store
+    from app.strategy import custom_signals
+
+    items: list[dict] = []
+    for sig in custom_signals.load_all(data_dir):
+        items.append({
+            "kind": "signal",
+            "id": sig.get("id"),
+            "label": sig.get("name") or sig.get("id"),
+            "enabled": sig.get("enabled") is not False,
+            "timeframe": sig.get("timeframe") or "daily",
+            "lang": "conditions",
+            "dependencies": sorted(definition_dependencies("signal", sig)),
+        })
+    for definition in factor_store.load_all(data_dir):
+        item = {
+            "kind": "factor",
+            "id": definition.get("id"),
+            "label": definition.get("label") or definition.get("id"),
+            "lang": str(definition.get("lang", "dsl")),
+            "status": str(definition.get("status", "draft")),
+        }
+        try:
+            spec = factor_store.to_spec(definition)
+            item.update({
+                "dependencies": sorted(spec.dependencies),
+                "warmup_bars": spec.warmup_bars,
+                "group": spec.group,
+            })
+        except ValueError as e:
+            item["error"] = str(e)  # 目录不因单个坏定义失败 (隔离要求)
+        items.append(item)
+    items.sort(key=lambda item: (str(item["kind"]), str(item["id"])))
+    return items

@@ -635,6 +635,10 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
         _result(entry.category)["imported"] += 1
         if entry.category in reload_hints:
             reload_hints[entry.category] = True
+        # 导入即冒烟 (P4): 信号/因子落盘后立刻静态冒烟, 结果随导入返回 —
+        # 导入完成即知道定义能不能算, 不用等回测报错才发现。
+        if entry.category in ("custom_signals", "custom_factors"):
+            _result(entry.category).setdefault("smoke", []).append(_smoke_entry(entry, payload))
 
     # auth.json 是外部写入的凭证文件, 进程内密码/会话缓存需要重读。
     if results.get("auth", {}).get("imported"):
@@ -681,3 +685,19 @@ def _groupby_dir(strategy_codes: dict[_Entry, str]) -> list[tuple[Path, list[tup
     for batch in grouped.values():
         batch.sort(key=lambda item: (not item[0].target.name.startswith("_"), item[0].name))
     return sorted(grouped.items(), key=lambda kv: kv[0].name)
+
+
+def _smoke_entry(entry: "_Entry", payload: bytes) -> dict:
+    """对导入的信号/因子定义跑静态冒烟; 冒烟自身异常不阻断导入 (fail-open)。"""
+    from app.definitions import smoke_definition
+
+    kind = "signal" if entry.category == "custom_signals" else "factor"
+    try:
+        definition = json.loads(payload.decode("utf-8"))
+        if not isinstance(definition, dict):
+            raise ValueError("定义不是 JSON 对象")
+        result = smoke_definition(kind, definition)
+    except Exception as e:  # noqa: BLE001 — 冒烟是增值信息, 不构成导入失败
+        return {"file": entry.name, "ok": False, "issues": [{"code": "S000", "message": f"冒烟未执行: {e}"}]}
+    result["file"] = entry.name
+    return result
