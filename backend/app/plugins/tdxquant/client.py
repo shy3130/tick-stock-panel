@@ -14,7 +14,7 @@ import os
 import shutil
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -215,14 +215,25 @@ class TdxQuantClient:
         raise last
 
     # ---- K 线(count 模式, 原始列) ----
-    def his_dats(self, code: str, end_d: date, count: int, period: str = "1d") -> dict:
+    def his_dats(self, code: str, end_d: date | datetime, count: int, period: str = "1d") -> dict:
         """单标的 K 线原生 dict: Date 'YYYYMMDD' / Open / High / Low / Close /
         Volume(股) / Amount(万元) 等。count 模式下 start 恒空(服务端只用 end)。
+
+        传 datetime 时保留时刻 — 分钟周期把 end 截到 00:00:00 会整日丢当根
+        (#509); 传 date 时沿用日K惯例的当日零点。部分环境的原生返回会把
+        数据整体包在 "Value" 键里, 这里统一解包 (SDK get_market_data 同款)。
         """
         if count <= 0:
             return {}
-        end = f"{end_d:%Y-%m-%d} 00:00:00"
+        end = (
+            f"{end_d:%Y-%m-%d %H:%M:%S}" if isinstance(end_d, datetime)
+            else f"{end_d:%Y-%m-%d} 00:00:00"
+        )
         out = self._raw("get_his_dats", code, "", end, period, "none", int(count))
+        if isinstance(out, dict):
+            inner = out.get("Value")
+            if isinstance(inner, dict):
+                out = inner
         return out if isinstance(out, dict) else {}
 
     # ---- 除权事件 ----

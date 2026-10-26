@@ -19,7 +19,9 @@
   - 日K Volume 为股 → floor(/100) 转手; Amount 为万元 → ×10000 转元。
   - 分钟K与日K同源同口径 (实测茅台全天 240 根 sum(Volume)=3511100 ≈ 日K
     3511051 股): Volume 股 → floor(/100) 转手; Amount 万元 → ×10000 转元;
-    datetime = Date+Time 拼北京墙钟 naive (契约 §分钟K)。
+    datetime = Date+Time 拼北京墙钟 naive (契约 §分钟K)。Time 列实测可为
+    int/float 裸值或缺前导零 (2026-10 #509 整批 0 行事故), 按 int 归一后再拼;
+    原生返回可能整体包在 "Value" 键内 (SDK get_market_data 有同款防御)。
   - 日K取数 dividend="none" 锁定原始价, 前复权由 indicators.pipeline 用本地因子计算。
   - 除权事件 Bonus/ShareBonus/Allotment 均为每 10 股口径 → ÷10 转每股再进公式。
   - ex_factor 为单事件比值(非累积), 累积链由 pipeline._apply_adj_factor 构建。
@@ -222,8 +224,19 @@ def _price_limit(symbol: str) -> float:
     return 0.10
 
 
+def _unwrap_value(raw: dict) -> dict:
+    """部分原生返回把数据整体包在 "Value" 键里 (SDK get_market_data 有同款防御),
+    解包后才是 Date/Open/… 列式结构; 无包装原样返回。"""
+    if isinstance(raw, dict):
+        inner = raw.get("Value")
+        if isinstance(inner, dict):
+            return inner
+    return raw
+
+
 def _kline_rows(symbol: str, raw: dict, start_d: date | None, end_d: date) -> list[dict]:
     """原生 count 模式 K 线 dict → 内部行(窗口过滤, volume 股→手, amount 万元→元)。"""
+    raw = _unwrap_value(raw)
 
     def _col(name: str, i: int) -> float | None:
         values = raw.get(name)
@@ -257,18 +270,67 @@ def _bars_for_window(span_days: int) -> int:
     return max(30, min(_HIST_MAX_COUNT, int(span_days * 5 / 7) + 20))
 
 
+def _hhmmss_digits(value) -> str | None:
+    """Time 列值 → 6 位 HHMMSS 数字串; 无法归一返回 None。
+
+    原生层实测混出 int/float 裸值 (93100) 与缺前导零的 5 位串 (#509), SDK
+    自身按 int 归一 (get_market_data 的 "%06d" 拼法); 6 位取前 6、5 位
+    左补零; 4 位及以下按 HHMM 补 "00" — 分钟K 9:30-15:00 时段内 HHMM 是
+    唯一能落到交易时刻的读法。全零视为无时间 (日K行混入)。
+    """
+    if value is None:
+        return None
+    if isinstance(value, float):
+        value = int(value)  # 93100.0 → 93100
+    text = str(value).strip()
+    if not text or not text.isdigit():
+        return None
+    if len(text) > 6:
+        text = text[:6]
+    elif len(text) == 5:
+        text = text.zfill(6)
+    elif len(text) < 6:
+        text = text.zfill(4) + "00"  # HHMM → HHMMSS
+    return None if text == "000000" else text
+
+
 def _minute_dt(compact_date, hhmmss) -> datetime | None:
-    """Date 'YYYYMMDD' + Time 'HHMMSS' → 北京墙钟 naive datetime; 非法返回 None。"""
+    """Date 'YYYYMMDD' + Time (数值或 'HHMMSS' 串) → 北京墙钟 naive; 非法返回 None。"""
     d = _compact_date(compact_date)
     if d is None:
         return None
-    t = str(hhmmss or "").strip()
-    if len(t) < 6 or not t[:6].isdigit():
+    t = _hhmmss_digits(hhmmss)
+    if t is None:
         return None
     try:
         return datetime(d.year, d.month, d.day, int(t[:2]), int(t[2:4]), int(t[4:6]))
     except ValueError:
         return None
+
+
+# 全市场分钟一轮 5579 标的, "返回非空但解析 0 行" 的诊断样本只打前几个防刷屏
+_UNPARSED_MINUTE_SAMPLES = 0
+
+
+def _warn_minute_unparsed(symbol: str, raw: dict) -> None:
+    """返回非空但整批解析 0 行 = 格式漂移最直接的信号 (#509 曾完全静默)。
+
+    进程内限前 3 个标的; 采样键名与每列前两个值, 供反馈定位。
+    """
+    global _UNPARSED_MINUTE_SAMPLES
+    if _UNPARSED_MINUTE_SAMPLES >= 3:
+        return
+    _UNPARSED_MINUTE_SAMPLES += 1
+    sample: dict[str, object] = {}
+    for key, values in list(raw.items())[:8]:
+        if isinstance(values, (list, tuple)):
+            sample[key] = [repr(v) for v in values[:2]]
+        else:
+            sample[key] = repr(values)[:40]
+    logger.warning(
+        "TdxQuant 分钟K %s 返回 %d 行但解析为 0 行(疑似返回结构漂移), 字段样本: %s — 请附此日志反馈",
+        symbol, len(raw.get("Date") or ()), sample,
+    )
 
 
 def _minute_rows(
@@ -279,6 +341,7 @@ def _minute_rows(
 
     today_only 非空时仅保留该交易日的行(修复轮用: count 模式尾部会带前一日余量)。
     """
+    raw = _unwrap_value(raw)
     dates = raw.get("Date") or []
     times = raw.get("Time") or []
     out: list[dict] = []
@@ -604,11 +667,14 @@ class TdxQuantProvider:
         count = _minute_count_for_window(start_time, end_dt)
         for i, symbol in enumerate(symbols):
             try:
-                raw = client.his_dats(symbol, end_dt.date(), count, period="1m")
+                # 分钟周期必须传完整时刻: end 截到 00:00:00 会把当日分钟全部排除在窗口外
+                raw = client.his_dats(symbol, end_dt, count, period="1m")
             except TdxQuantError as e:
                 logger.warning("TdxQuant 分钟K %s 拉取失败: %s", symbol, e)
                 raw = {}
             rows = _minute_rows(symbol, raw, start_time, end_dt)
+            if not rows and raw.get("Date") and not _minute_rows(symbol, raw, None, None):
+                _warn_minute_unparsed(symbol, raw)  # 去掉窗口过滤仍 0 行才是解析失败
             yield pl.DataFrame(rows, schema=_MINUTE_SCHEMA)
             if on_chunk_done:
                 on_chunk_done(i + 1, len(symbols))
@@ -626,18 +692,21 @@ class TdxQuantProvider:
         if not symbols or asset_type != "stock":
             return pl.DataFrame(schema=_MINUTE_SCHEMA)
         client = self._get_client()
-        today = datetime.now().date()
+        now = datetime.now()
+        today = now.date()
         fetch = max(_MINUTE_BARS_PER_DAY, min(count, 480)) + _MINUTE_BARS_PER_DAY
         out: list[pl.DataFrame] = []
         for symbol in symbols:
             try:
-                raw = client.his_dats(symbol, today, fetch, period="1m")
+                raw = client.his_dats(symbol, now, fetch, period="1m")
             except TdxQuantError as e:
                 logger.warning("TdxQuant 修复轮 %s 拉取失败: %s", symbol, e)
                 continue
             rows = _minute_rows(symbol, raw, None, None, today_only=today)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
+            elif raw.get("Date") and not _minute_rows(symbol, raw, None, None):
+                _warn_minute_unparsed(symbol, raw)  # 盘前返回全为前一日属正常, 仅解析失败才告警
             time.sleep(_MINUTE_INTERVAL_S)
         return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame(schema=_MINUTE_SCHEMA)
 
@@ -656,17 +725,19 @@ class TdxQuantProvider:
                 logger.warning("TdxQuant 增量轮股票池枚举失败: %s", e)
                 return pl.DataFrame(schema=_MINUTE_SCHEMA)
         count = max(1, min(int(count), 30))
-        today = datetime.now().date()
+        now = datetime.now()
         out: list[pl.DataFrame] = []
         for j, symbol in enumerate(targets):
             try:
-                raw = client.his_dats(symbol, today, count, period="1m")
+                raw = client.his_dats(symbol, now, count, period="1m")
             except TdxQuantError as e:
                 logger.warning("TdxQuant 增量轮 %s 拉取失败: %s", symbol, e)
                 continue
             rows = _minute_rows(symbol, raw, None, None)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
+            elif raw.get("Date"):
+                _warn_minute_unparsed(symbol, raw)
             if j % 1000 == 999:
                 logger.info("TdxQuant 增量轮进度: %d/%d", j + 1, len(targets))
             time.sleep(_MINUTE_INTERVAL_S)

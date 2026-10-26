@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -204,6 +205,35 @@ def test_raw_retries_none_then_data(monkeypatch):
     sleeps: list[float] = []
     c = _client_with_raw(monkeypatch, [None, {"Date": ["20260101"]}], sleeps)
     assert c.his_dats("600519.SH", date(2026, 1, 10), 5)["Date"] == ["20260101"]
+
+
+def test_client_his_dats_end_time_format(monkeypatch):
+    """#509: datetime end 保留时刻(分钟周期), date end 维持日K零点惯例。"""
+    c = object.__new__(tc.TdxQuantClient)
+    captured: dict[str, tuple] = {}
+
+    def _raw_value(_method, *args):
+        captured["args"] = args
+        return {"Date": ["20260101"]}
+
+    c._tqs = SimpleNamespace(_clean=lambda raw: raw)
+    c._native_cls = SimpleNamespace(get_instance=lambda: SimpleNamespace(get_his_dats=_raw_value))
+    c._universe, c._universe_at = [], 0.0
+    monkeypatch.setattr(tc.time, "sleep", lambda s: None)
+
+    c.his_dats("600519.SH", datetime(2026, 1, 10, 14, 30), 5, period="1m")
+    assert captured["args"][1] == "2026-01-10 14:30:00"  # args[0]=start(空), [1]=end
+    c.his_dats("600519.SH", date(2026, 1, 10), 5)
+    assert captured["args"][1] == "2026-01-10 00:00:00"
+
+
+def test_client_his_dats_unwraps_value_envelope(monkeypatch):
+    """#509: 部分环境原生返回整体包在 "Value" 键里, 客户端层统一解包。"""
+    sleeps: list[float] = []
+    c = _client_with_raw(
+        monkeypatch, [{"Value": {"Date": ["20260101"]}, "ErrorId": 0}], sleeps
+    )
+    assert c.his_dats("600519.SH", date(2026, 1, 10), 5) == {"Date": ["20260101"]}
 
 
 # ---------------------------------------------------------------- provider: 快照映射
@@ -475,8 +505,8 @@ def test_datasets_declaration():
 
 
 # ---------------------------------------------------------------- minute / full_minute
-def _minute_raw(rows: list[tuple[str, str, float, float, float, float, float, float]]) -> dict:
-    """(Date, Time, O, H, L, C, Volume股, Amount万元) → 原生 1m 列式 dict。"""
+def _minute_raw(rows: list[tuple[str, object, float, float, float, float, float, float]]) -> dict:
+    """(Date, Time[串或数值], O, H, L, C, Volume股, Amount万元) → 原生 1m 列式 dict。"""
     return {
         "Date": [r[0] for r in rows], "Time": [r[1] for r in rows],
         "Open": [r[2] for r in rows], "High": [r[3] for r in rows],
@@ -531,6 +561,111 @@ def test_minute_transport_error_soft():
     fake.his = {"600519.SH": tc.TdxQuantError("boom")}
     df = _provider(fake).get_minute(["600519.SH"], None, datetime.now())
     assert df.is_empty()  # 软失败不阻断
+
+
+# ---------------------------------------------------------------- minute: #509 返回形态容错
+def test_minute_integer_and_short_time_shapes():
+    """#509: Time 列可为 int/float 裸值或缺前导零串, 不得整批静默丢弃。"""
+    fake = _FakeClient()
+    fake.his = {"600519.SH": _minute_raw([
+        ("20261009", 93100, 1255.0, 1256.0, 1254.9, 1255.5, 123_400.0, 15_500.0),
+        ("20261009", 93100.0, 1255.5, 1256.0, 1255.0, 1256.0, 88_800.0, 11_160.0),
+        ("20261009", "93100", 1256.0, 1257.0, 1256.0, 1257.0, 100_000.0, 12_500.0),
+        ("20261009", 130000, 1257.0, 1258.0, 1257.0, 1258.0, 100_000.0, 12_500.0),
+        ("20261009", "0931", 1258.0, 1259.0, 1258.0, 1259.0, 100_000.0, 12_500.0),
+        ("20261009", "0", 1259.0, 1260.0, 1259.0, 1260.0, 100_000.0, 12_500.0),  # 无时间 → 丢弃
+    ])}
+    df = _provider(fake).get_minute(
+        ["600519.SH"], datetime(2026, 10, 8), datetime(2026, 10, 9, 23, 59)
+    )
+    assert df.height == 5
+    assert set(df["datetime"].to_list()) == {
+        datetime(2026, 10, 9, 9, 31, 0), datetime(2026, 10, 9, 13, 0, 0),
+    }
+
+
+def test_minute_full_trading_day_integer_times_all_parse():
+    """#509 复现: 全天 240 根全为 int 时间 → 修复前 0 行、任务"成功"扣积分; 修复后全量落库。"""
+    stamps = []
+    # A 股 240 根/日: 09:31-11:30 (120) + 13:01-15:00 (120), 全部整型 HHMMSS
+    for h, m0, m1 in ((9, 31, 60), (10, 0, 60), (11, 0, 31), (13, 1, 60), (14, 0, 60), (15, 0, 1)):
+        for m in range(m0, m1):
+            stamps.append(int(f"{h:02d}{m:02d}00"))
+    assert len(stamps) == 240
+    fake = _FakeClient()
+    fake.his = {"600519.SH": _minute_raw([
+        ("20261009", t, 10.0, 10.1, 9.9, 10.0, 12_300.0, 1_500.0) for t in stamps
+    ])}
+    df = _provider(fake).get_minute(
+        ["600519.SH"], datetime(2026, 10, 8), datetime(2026, 10, 9, 23, 59)
+    )
+    assert df.height == 240
+    dts = df["datetime"].to_list()
+    assert dts[0] == datetime(2026, 10, 9, 9, 31, 0)
+    assert dts[-1] == datetime(2026, 10, 9, 15, 0, 0)
+
+
+def test_minute_and_daily_unwrap_value_envelope():
+    """#509: 数据整体包在 "Value" 键的返回不得解析为 0 行 (FakeClient 绕过
+    client 层, 这里验证 provider 解析层的双保险)。"""
+    fake = _FakeClient()
+    fake.his = {"600519.SH": {"Value": _minute_raw([
+        ("20261009", 93100, 1255.0, 1256.0, 1254.9, 1255.5, 123_400.0, 15_500.0),
+    ])}}
+    df = _provider(fake).get_minute(
+        ["600519.SH"], datetime(2026, 10, 8), datetime(2026, 10, 9, 23, 59)
+    )
+    assert df.height == 1
+    assert df.to_dicts()[0]["datetime"] == datetime(2026, 10, 9, 9, 31, 0)
+
+    fake2 = _FakeClient()
+    fake2.his = {"600519.SH": {"Value": _his_raw()}}
+    assert _provider(fake2).get_daily(
+        ["600519.SH"], datetime(2025, 12, 1), datetime(2026, 1, 31)
+    ).height == 2
+
+
+def test_minute_request_end_keeps_intraday_time():
+    """#509: 分钟请求 end 不得截到 00:00:00, 必须传完整时刻。"""
+    fake = _FakeClient()
+    fake.his["600519.SH"] = _minute_raw([
+        ("20261009", 93100, 1255.0, 1256.0, 1254.9, 1255.5, 123_400.0, 15_500.0),
+    ])
+    _provider(fake).get_minute(["600519.SH"], None, datetime(2026, 10, 9, 14, 30))
+    end = fake.his_calls[0]["end"]
+    assert isinstance(end, datetime) and (end.hour, end.minute, end.second) == (14, 30, 0)
+    _provider(fake).get_intraday_batch(["600519.SH"])
+    assert isinstance(fake.his_calls[1]["end"], datetime)
+    _provider(fake).get_intraday_latest(["600519.SH"], count=2)
+    assert isinstance(fake.his_calls[2]["end"], datetime)
+
+
+def test_minute_zero_parse_diagnostic_warns_with_sample(caplog):
+    """#509: 返回非空但解析 0 行必须留下带样本的 WARNING, 不再静默成功。"""
+    tp._UNPARSED_MINUTE_SAMPLES = 0  # 模块级限流计数, 测试前复位
+    fake = _FakeClient()
+    fake.his = {"600519.SH": _minute_raw([
+        ("20261009", "not-a-time", 10.0, 10.1, 9.9, 10.0, 12_300.0, 1_500.0),
+    ])}
+    with caplog.at_level(logging.WARNING, logger="app.plugins.tdxquant.provider"):
+        df = _provider(fake).get_minute(
+            ["600519.SH"], datetime(2026, 10, 8), datetime(2026, 10, 9, 23, 59)
+        )
+    assert df.is_empty()
+    assert "解析为 0 行" in caplog.text
+    assert "600519.SH" in caplog.text and "not-a-time" in caplog.text  # 带样本可定位
+
+
+def test_minute_zero_parse_diagnostic_rate_limited(caplog):
+    tp._UNPARSED_MINUTE_SAMPLES = 0
+    fake = _FakeClient()
+    bad = _minute_raw([("20261009", "bad", 10.0, 10.1, 9.9, 10.0, 12_300.0, 1_500.0)])
+    symbols = [f"60000{i}.SH" for i in range(5)]
+    for sym in symbols:
+        fake.his[sym] = bad
+    with caplog.at_level(logging.WARNING, logger="app.plugins.tdxquant.provider"):
+        _provider(fake).get_minute(symbols, None, datetime(2026, 10, 9, 23, 59))
+    assert caplog.text.count("解析为 0 行") == 3  # 全市场轮不刷屏
 
 
 def test_get_intraday_batch_today_only():
