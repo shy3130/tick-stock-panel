@@ -15,7 +15,10 @@ router = APIRouter(prefix="/api/definitions", tags=["definitions"])
 
 class SmokeRequest(BaseModel):
     kind: str = Field(pattern="^(signal|factor)$")
-    definition: dict
+    definition: dict | None = None
+    # 二选一: 传 id 时按存储重查该定义复检 (统一选择器的"逐条冒烟"),
+    # 不必先把原始定义回传服务端。
+    id: str | None = None
 
 
 @router.get("")
@@ -26,6 +29,12 @@ def list_definitions(request: Request) -> dict:
 @router.post("/smoke")
 def smoke_definition(req: SmokeRequest) -> dict:
     """导入冒烟: 返回 ok/issues/dependencies/warmup_bars, 不落盘。"""
+    if req.id is not None:
+        return defs.smoke_stored(req.kind, req.id, _data_dir(None))
+    if req.definition is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail="definition 与 id 必须提供其一")
     return defs.smoke_definition(req.kind, req.definition)
 
 

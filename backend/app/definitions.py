@@ -269,6 +269,25 @@ def smoke_definition(kind: str, definition: dict) -> dict:
     }
 
 
+def smoke_stored(kind: str, definition_id: str, data_dir: Path) -> dict:
+    """按 id 复检已存定义 (统一选择器逐条冒烟); 不存在时 fail-closed 报错。"""
+    from fastapi import HTTPException
+
+    from app.factors import store as factor_store
+    from app.strategy import custom_signals
+
+    if kind == "signal":
+        definitions = custom_signals.load_all(data_dir)
+    elif kind == "factor":
+        definitions = factor_store.load_all(data_dir)
+    else:
+        raise HTTPException(status_code=422, detail=f"未知 kind: {kind}")
+    for definition in definitions:
+        if definition.get("id") == definition_id:
+            return smoke_definition(kind, definition)
+    raise HTTPException(status_code=404, detail=f"定义不存在: {kind}/{definition_id}")
+
+
 def catalog(data_dir: Path) -> list[dict]:
     """全部已存定义的统一目录视图 (signal + factor), 供统一选择器消费。"""
     from app.factors import store as factor_store

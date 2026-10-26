@@ -15,7 +15,7 @@ import polars as pl
 import pytest
 
 from app.config import settings
-from app.definitions import catalog, smoke_definition
+from app.definitions import catalog, smoke_definition, smoke_stored
 from app.services import config_backup
 
 
@@ -58,6 +58,20 @@ def test_smoke_ok_for_valid_signal_and_factor() -> None:
     assert factor["ok"], factor["issues"]
     assert factor["dependencies"] == ["close"]
     assert factor["warmup_bars"] == 6
+
+
+def test_smoke_stored_by_id_roundtrip(tmp_path: Path):
+    """统一选择器逐条冒烟: 按 id 从存储复检, 不存在时 fail-closed 404。"""
+    from app.strategy import custom_signals
+
+    custom_signals.save_one(tmp_path, {**_GOOD_SIGNAL})
+    result = smoke_stored("signal", "smoke_ok", tmp_path)
+    assert result["ok"] is True
+
+    import fastapi
+    with pytest.raises(fastapi.HTTPException) as ei:
+        smoke_stored("signal", "missing_id", tmp_path)
+    assert ei.value.status_code == 404
 
 
 def test_smoke_flags_typos_and_invalid_definitions() -> None:

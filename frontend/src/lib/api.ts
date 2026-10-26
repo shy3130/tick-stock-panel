@@ -2173,6 +2173,32 @@ export interface ConfigBackupApplyCategory {
   imported: number
   skipped_conflict: number
   failed: { file: string; error: string }[]
+  /** 导入即冒烟 (仅 custom_signals/custom_factors): 逐条校验+编译+依赖检查结果 */
+  smoke?: (DefinitionSmokeResult & { file: string })[]
+}
+
+/** 统一定义目录项 (GET /api/definitions) — 信号+因子统一视图 */
+export interface DefinitionsCatalogItem {
+  kind: 'signal' | 'factor'
+  id: string
+  label: string
+  enabled?: boolean
+  timeframe?: string
+  lang: string
+  status?: string
+  group?: string
+  dependencies?: string[]
+  warmup_bars?: number | null
+  /** 目录不因单个坏定义失败 — 坏条目携带错误原因 (隔离要求) */
+  error?: string
+}
+
+/** 导入冒烟结果 (POST /api/definitions/smoke) */
+export interface DefinitionSmokeResult {
+  ok: boolean
+  issues: { code: string; message: string }[]
+  dependencies: string[]
+  warmup_bars: number | null
 }
 
 export interface ConfigBackupApplyResult {
@@ -3817,6 +3843,18 @@ export const api = {
       timeoutMs: 120_000,
     })
   },
+
+  // ── 统一定义目录 / 导入冒烟 (P4) ──
+
+  definitionsList: () =>
+    request<{ items: DefinitionsCatalogItem[] }>('/api/definitions'),
+
+  /** 逐条冒烟: 按 id 复检已存定义 (definition 与 id 二选一) */
+  definitionsSmoke: (kind: 'signal' | 'factor', id: string) =>
+    request<DefinitionSmokeResult & { file?: string }>('/api/definitions/smoke', {
+      method: 'POST',
+      body: JSON.stringify({ kind, id }),
+    }),
 
   analysisMenu: (id: string) =>
     request<AnalysisMenu>(`/api/analysis-menus/${encodeURIComponent(id)}`),

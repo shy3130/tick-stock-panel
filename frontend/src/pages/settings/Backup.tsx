@@ -7,7 +7,7 @@
  */
 import { useCallback, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Download, FileArchive, RotateCcw, ShieldAlert, TriangleAlert, Upload } from 'lucide-react'
+import { CheckCircle2, Download, FileArchive, FlaskConical, RotateCcw, ShieldAlert, TriangleAlert, Upload } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { ConfigBackupApplyResult, ConfigBackupInspect } from '@/lib/api'
 import { toast } from '@/components/Toast'
@@ -473,6 +473,36 @@ export function SettingsBackupPanel() {
                   c.failed.map((f) => (
                     <div key={`${c.key}:${f.file}`} className="truncate text-[11px] text-danger" title={f.error}>
                       {f.file}: {f.error}
+                    </div>
+                  )),
+                )}
+              </div>
+            )}
+            {/* 导入即冒烟: 信号/因子逐条 校验→编译→依赖可解析 结果 */}
+            {applyResult.categories.some((c) => (c.smoke?.length ?? 0) > 0) && (
+              <div className="space-y-1.5 border-t border-border/60 pt-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+                  <FlaskConical className="h-3.5 w-3.5 text-accent" />
+                  导入冒烟
+                  <span className="font-normal text-muted">校验 → 编译 → 依赖可解析 (不跑回测)</span>
+                </div>
+                {applyResult.categories.flatMap((c) =>
+                  (c.smoke ?? []).map((sm) => (
+                    <div key={`${c.key}:${sm.file}`} className="rounded-btn bg-elevated/50 px-2.5 py-1.5">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        {sm.ok
+                          ? <CheckCircle2 className="h-3 w-3 shrink-0 text-accent" />
+                          : <TriangleAlert className="h-3 w-3 shrink-0 text-danger" />}
+                        <span className="truncate font-mono text-muted" title={sm.file}>{sm.file}</span>
+                        {sm.ok && sm.warmup_bars != null && (
+                          <span className="ml-auto shrink-0 text-muted">预热 {sm.warmup_bars} bars</span>
+                        )}
+                      </div>
+                      {!sm.ok && sm.issues.map((i, idx) => (
+                        <div key={idx} className="mt-0.5 pl-4.5 text-[11px] text-danger">
+                          <span className="rounded bg-danger/10 px-1 py-px font-mono text-[10px]">{i.code}</span> {i.message}
+                        </div>
+                      ))}
                     </div>
                   )),
                 )}
