@@ -20,13 +20,24 @@ from app.factors import materialize_cache
 from app.factors.registry import unregister_factor
 from app.factors.store import register_definition
 
+_REGISTERED: list[str] = []
+
 
 @pytest.fixture(autouse=True)
 def _isolated_cache(tmp_path: Path, monkeypatch) -> None:
-    """缓存写到临时目录; 每个测试从全空缓存开始。"""
+    """缓存写到临时目录; 每个测试从全空缓存开始。
+
+    收尾同时注销本测试注册的 uf_* 因子 — 注册表是进程级全局,
+    残留会污染 test_factor_registry 的快照断言 (累积运行必挂)。"""
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     materialize_cache.invalidate(disk=True)
     yield
+    import contextlib
+
+    for fid in _REGISTERED:
+        with contextlib.suppress(ValueError):
+            unregister_factor(fid)
+    _REGISTERED.clear()
     materialize_cache.invalidate(disk=True)
 
 
@@ -49,6 +60,7 @@ def _register(fid: str, formula: str, version: int = 1) -> None:
         "id": fid, "label": fid, "kind": "custom",
         "formula": formula, "status": "active", "version": version,
     })
+    _REGISTERED.append(fid)
 
 
 def test_hit_matches_fresh_computation_lru_and_disk() -> None:
