@@ -320,7 +320,12 @@ def _check_call(node: dict, errors: list[DslError]) -> dict[str, float]:
         return {}
     constants: dict[str, float] = {}
     for index, const_name in enumerate(const_names):
-        arg = args[n_expr + index]
+        arg_index = n_expr + index
+        if arg_index >= len(args):
+            # 可选常量参数被省略 (winsorize 的 k, 默认 3) —
+            # 此前这里直接 IndexError, winsorize(x) 完全不可用。
+            break
+        arg = args[arg_index]
         value = _const_value(arg)
         if value is None:
             errors.append(DslError(

@@ -290,8 +290,15 @@ def materialize_scoring_columns(
 ) -> pl.DataFrame:
     # custom (DSL) 因子先物化: frame_transform 可能需要多阶段临时列 (嵌套窗口规避),
     # 与单表达式路径不同, 必须整体走帧变换 —— 与检验/试算共用同一条计算路径 (P3)。
+    # P2b: 物化结果走内容寻址缓存 (键 = 定义 + 依赖列内容), 重复求值零成本;
+    # 缓存故障一律回退现算, 不影响正确性。
     from app.factors.dsl import FACTOR_COLUMN, compile_formula_cached
+    from app.factors.materialize_cache import cache_key, get_cached, put_cached
 
+    # 两段式: 命中列一次批量附着 (成本与因子数无关 — 每列一次 with_columns
+    # 会随 K 线性拷贝帧); 未命中的逐个现算 (帧变换有依赖顺序)。
+    pending: list[tuple[str, object, str | None]] = []
+    hits: dict[str, pl.Series] = {}
     for name in names:
         spec = _registry_get_factor(str(name))
         if spec is None or spec.kind != "custom" or name in frame.columns:
@@ -299,10 +306,34 @@ def materialize_scoring_columns(
         compiled = compile_formula_cached(spec.formula_text)
         if compiled.frame_transform is None:
             continue
+        key = cache_key(
+            str(name), spec.formula_text, spec.version, frame,
+            set(spec.dependencies) | set(compiled.referenced_factors),
+        )
+        if key is not None:
+            cached = get_cached(key, frame.height)
+            if cached is not None:
+                hits[str(name)] = cached
+                continue
+        pending.append((str(name), compiled, key))
+    if hits:
+        frame = frame.with_columns([series.alias(name) for name, series in hits.items()])
+    for name, compiled, key in pending:
+        if name in frame.columns:
+            continue
         transformed = compiled.frame_transform(frame)
         if transformed is None:
             continue
-        frame = transformed.with_columns(pl.col(FACTOR_COLUMN).alias(str(name))).drop(FACTOR_COLUMN)
+        column = transformed.get_column(FACTOR_COLUMN).alias(name)
+        if key is not None:
+            put_cached(key, column)
+        # 丢弃 DSL 分阶段临时列 — 与缓存命中路径的列集合完全一致
+        # (临时列本就是变换内部工件, 不应泄漏进下游帧)。
+        staged_temps = [
+            c for c in transformed.columns
+            if c not in frame.columns and c != FACTOR_COLUMN
+        ]
+        frame = transformed.drop([FACTOR_COLUMN, *staged_temps]).with_columns(column)
     expressions = [
         expression.alias(name)
         for name in names

@@ -207,3 +207,11 @@ def test_runtime_missing_column_fails_closed() -> None:
     assert compiled.frame_transform is not None
     assert compiled.frame_transform(frame_without_volume) is None  # E013 语义
     assert compiled.frame_transform(_panel()) is not None
+
+
+def test_winsorize_optional_k_omitted_compiles():
+    """回归: winsorize(x) 省略 k — 此前 _check_call 直接 IndexError (编译器崩溃,
+    而不是返回错误), winsorize 无 k 写法完全不可用。"""
+    compiled = compile_formula("winsorize(close)")
+    assert compiled.ok, compiled.errors
+    assert compiled.warmup_bars == 1
