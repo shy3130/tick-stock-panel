@@ -49,7 +49,7 @@
 |---|---|---|---|
 | P0 基准 | `backend/scripts/bench_feature_resolution.py`; 依赖解析宽度/耗时基线 | 基线 JSON 落 `data/benchmarks/`(本地不入库) | ✅ |
 | P1a 依赖推导 | filter_history AST 列推导(`app/strategy/feature_deps.py`), 引擎加载接入 | 无声明且可证明的策略不再全量兜底 | ✅ |
-| P1b 契约统一 | signal/factor 统一 schema + 依赖提取公共化 | 新增 kind 复用同一校验/注册路径 | ⬜ |
+| P1b 契约统一 | signal/factor 统一 schema + 依赖提取公共化 | 新增 kind 复用同一校验/注册路径 | ✅ |
 | P2 L2 物化 | 按需物化 + 内容寻址缓存 + 失效传播; 指标成为一等定义 | 调参循环提速 ≥2×; 新增 10 个自定义指标热路径耗时不变 | ⬜ |
 | P3 表达式级 Python | T2 中间层 (ctx 追踪依赖+安全) | SKDJ 类口径零 DSL 可表达 | ⬜ |
 | P4 体验与分发 | 统一选择器/自动表单/导入冒烟; 备份管线复用为扩展包 | 新增信号导入到可回测 ≤2 分钟 | ⬜ |
@@ -66,3 +66,17 @@
 | short_term_top10 | 37 | 37 | 1.0× (动态列名循环, 正确 fail-closed) |
 
 数据加载 IO 随列宽近似线性, 宽度比即回测数据准备阶段的近似提速上界。
+
+## P1b 交付(2026-10-26)
+
+- `app/definitions.py`: `JsonDefinitionStore`(原子写 + 损坏跳过 + 目录 mtime 签名,
+  glob/日志名/逐条归一化参数化)收口四处同型持久化 — 自定义信号 / 自定义因子 /
+  监控规则 / 批次, 公开函数签名零变化; `DefinitionKind` 注册表 +
+  `validate_definition` / `definition_dependencies` 统一分发, 内置 kind 惰性导入
+  (消费方无需预导入领域模块)。
+- 两种真实 kind 接入: signal(校验=`custom_signals.validate`, 依赖=编译表达式
+  `meta.root_names` 与回测/管线同源)、factor(校验/依赖=`to_spec` DSL 编译同源)。
+  验收测试 `test_definition_contract.py::test_new_kind_reuses_same_pipeline`:
+  注册第三种 kind 描述器即走同一存取/校验/依赖管线, 零新持久化代码。
+- 契约视图(params/inputs/expression 归一化渲染)留给 P4 消费方出现时再加;
+  失效广播/文件锁随 P2 物化叠加。

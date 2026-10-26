@@ -1,20 +1,19 @@
 """自定义/复合因子存储 (P3) — data/user_data/custom_factors/*.json。
 
-镜像 custom_signals 的持久化写法; 单文件损坏只禁用该因子并告警, 不影响启动
-(对齐 CONTRIBUTING 第 4 节插件隔离要求)。生命周期状态: draft → active →
-watch → retired (P4 状态机, 存储字段就绪, 迁移逻辑见巡检设计)。
+持久化收口到统一契约 Store (app/definitions.py); 单文件损坏只禁用该因子并
+告警, 不影响启动 (对齐 CONTRIBUTING 第 4 节插件隔离要求)。生命周期状态:
+draft → active → watch → retired (P4 状态机, 存储字段就绪, 迁移逻辑见巡检设计)。
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
+from app.definitions import DefinitionKind, JsonDefinitionStore, register_kind
 from app.factors.dsl import compile_formula
 from app.factors.registry import FactorSpec, factor_dependencies, get_factor, register_factor
-from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -23,40 +22,20 @@ COMPOSITE_ID_PATTERN = re.compile(r"^cf_[a-z0-9_]{1,40}$")
 MAX_COMPOSITE_MEMBERS = 8
 STATUSES = frozenset({"draft", "active", "watch", "retired"})
 
-
-def _dir(data_dir: Path) -> Path:
-    directory = data_dir / "user_data" / "custom_factors"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
-
-
-def _path(data_dir: Path, factor_id: str) -> Path:
-    return _dir(data_dir) / f"{factor_id}.json"
+_STORE = JsonDefinitionStore("user_data/custom_factors", label="custom factor")
 
 
 def load_all(data_dir: Path) -> list[dict]:
     """读取全部自定义/复合因子定义; 损坏文件跳过。"""
-    out: list[dict] = []
-    for file in sorted(_dir(data_dir).glob("*.json")):
-        try:
-            out.append(json.loads(file.read_text(encoding="utf-8")))
-        except Exception as exc:
-            logger.warning("custom factor load failed %s: %s", file.name, exc)
-    return out
+    return _STORE.load_all(data_dir)
 
 
 def save_one(data_dir: Path, definition: dict) -> None:
-    target = _path(data_dir, str(definition["id"]))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(target, json.dumps(definition, ensure_ascii=False, indent=2))
+    _STORE.save_one(data_dir, definition)
 
 
 def delete_one(data_dir: Path, factor_id: str) -> bool:
-    target = _path(data_dir, factor_id)
-    if target.exists():
-        target.unlink()
-        return True
-    return False
+    return _STORE.delete_one(data_dir, factor_id)
 
 
 def _now() -> str:
@@ -189,3 +168,26 @@ def load_into_registry(data_dir: Path) -> list[str]:
             break
         pending = deferred
     return loaded
+
+
+# ── 统一定义契约注册 (P1b) ───────────────────────────────
+_FACTOR_ID_PATTERN = re.compile(r"^(uf|cf)_[a-z0-9_]{1,40}$")
+
+
+def _validate_definition(definition: dict) -> None:
+    """统一契约校验器 = to_spec (id/label/DSL/复合成员全量校验, 非法抛 ValueError)。"""
+    to_spec(definition)
+
+
+def _definition_dependencies(definition: dict) -> frozenset[str]:
+    """因子定义 → 输入列 (统一契约的依赖提取器) = DSL/复合成员编译依赖, 与 to_spec 同源。"""
+    return to_spec(definition).dependencies
+
+
+register_kind(DefinitionKind(
+    kind="factor",
+    store=_STORE,
+    id_pattern=_FACTOR_ID_PATTERN,
+    validate=_validate_definition,
+    dependencies=_definition_dependencies,
+))

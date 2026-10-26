@@ -15,14 +15,13 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
 
 import polars as pl
 
-from app.services.fs_utils import atomic_write_text
+from app.definitions import DefinitionKind, JsonDefinitionStore, register_kind
 
 logger = logging.getLogger(__name__)
 
@@ -135,41 +134,25 @@ def materialize_factor_columns(
     return materialize_scoring_columns(df, sorted(to_compute))
 
 
-# ── 持久化（镜像 strategy/config.py 的写法）──────────────
+# ── 持久化（统一契约 Store, 镜像写法收口见 app/definitions.py）──
+_STORE = JsonDefinitionStore("user_data/custom_signals", label="custom signal")
+
+
 def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "custom_signals"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _path(data_dir: Path, signal_id: str) -> Path:
-    return _dir(data_dir) / f"{signal_id}.json"
+    return _STORE.dir(data_dir)
 
 
 def load_all(data_dir: Path) -> list[dict]:
     """读取全部自定义信号定义。损坏的文件被跳过。"""
-    d = _dir(data_dir)
-    out: list[dict] = []
-    for f in sorted(d.glob("*.json")):
-        try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
-        except Exception as e:
-            logger.warning("custom signal load failed %s: %s", f.name, e)
-    return out
+    return _STORE.load_all(data_dir)
 
 
 def save_one(data_dir: Path, sig: dict) -> None:
-    p = _path(data_dir, sig["id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(p, json.dumps(sig, ensure_ascii=False, indent=2))
+    _STORE.save_one(data_dir, sig)
 
 
 def delete_one(data_dir: Path, signal_id: str) -> bool:
-    p = _path(data_dir, signal_id)
-    if p.exists():
-        p.unlink()
-        return True
-    return False
+    return _STORE.delete_one(data_dir, signal_id)
 
 
 # ── 校验 ────────────────────────────────────────────────
@@ -720,22 +703,13 @@ def apply_intraday_edges(frame: pl.DataFrame, exprs: dict[str, pl.Expr]) -> pl.D
 _intraday_cache: dict[Path, tuple[object, list[dict]]] = {}
 
 
-def _dir_fingerprint(d: Path) -> tuple:
-    """目录内 *.json 的 (文件名, mtime) 指纹 — 创建/删除/编辑都会变化。"""
-    try:
-        return tuple(sorted((f.name, f.stat().st_mtime_ns) for f in d.glob("*.json")))
-    except OSError:
-        return ()
-
-
 def load_intraday_all(data_dir: Path) -> list[dict]:
     """读取全部启用的盘中信号定义(带缓存)。
 
     盘中评估与引擎注入每分钟执行, 不宜每次全量读盘; save/delete 端点
     调用 invalidate_intraday_cache() 主动失效。
     """
-    d = _dir(data_dir)
-    fp = _dir_fingerprint(d)
+    fp = _STORE.fingerprint(data_dir)
     cached = _intraday_cache.get(data_dir)
     if cached is not None and cached[0] == fp:
         return cached[1]
@@ -793,8 +767,7 @@ def signal_names(data_dir: Path) -> dict[str, str]:
 
     指纹含文件名 + mtime, 保存/删除信号后自动失效重载, 调用方无需配合失效。
     """
-    d = _dir(data_dir)
-    fp = _dir_fingerprint(d)
+    fp = _STORE.fingerprint(data_dir)
     cached = _names_cache.get(data_dir)
     if cached is not None and cached[0] == fp:
         return cached[1]
@@ -807,3 +780,30 @@ def signal_names(data_dir: Path) -> dict[str, str]:
             names[intraday_column_name(sid)] = name
     _names_cache[data_dir] = (fp, names)
     return names
+
+
+# ── 统一定义契约注册 (P1b) ───────────────────────────────
+def _definition_dependencies(sig: dict) -> frozenset[str]:
+    """信号定义 → 输入列 (统一契约的依赖提取器)。
+
+    复用编译路径本身 (build_expressions / build_intraday_expressions →
+    meta.root_names), 与回测/管线看到的依赖同源, 不引入第二套提取。
+    编译失败 (build_* 已告警) 返回空集 — 上游本就按缺列跳过该信号。
+    """
+    exprs = (
+        build_intraday_expressions([sig])
+        if sig.get("timeframe") == TIMEFRAME_INTRADAY
+        else build_expressions([sig])
+    )
+    if not exprs:
+        return frozenset()
+    return frozenset(_expr_root_columns(next(iter(exprs.values()))))
+
+
+register_kind(DefinitionKind(
+    kind="signal",
+    store=_STORE,
+    id_pattern=ID_RE,
+    validate=validate,
+    dependencies=_definition_dependencies,
+))

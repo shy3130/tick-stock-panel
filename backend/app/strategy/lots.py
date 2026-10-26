@@ -1,36 +1,22 @@
 """批次登记域 — 薄"批次"页 (持仓提醒): 只生成监控规则, 不做会计。
 
 每行一个买入批次 → 派生两条规则: lot_{id}_p (price 止盈止损) / lot_{id}_d (date 到期提醒)。
-记账/加减仓属"交易口径", 不在本模块 (issue #230)。纯函数 + 文件存储, 镜像 monitor_rules.py,
-不做 API、不做引擎重载。
+记账/加减仓属"交易口径", 不在本模块 (issue #230)。纯函数 + 文件存储 (统一契约 Store,
+收口见 app/definitions.py), 不做 API、不做引擎重载。
 """
 from __future__ import annotations
 
-import json
-import logging
 from datetime import UTC, datetime
 from datetime import date as _date
 from pathlib import Path
 
-from app.services.fs_utils import atomic_write_text
+from app.definitions import JsonDefinitionStore
 from app.strategy import monitor_rules
 from app.strategy.monitor import MonitorRuleEngine  # 复用条件文本拼装 (静态方法)
-
-logger = logging.getLogger(__name__)
 
 # id 需满足规则 id 同款正则, 且为后缀留位: 派生规则 {id}_p/_d 不得超过 40 字符
 _ID = monitor_rules.ID_RE
 _MAX_ID_LEN = 40 - 2  # 派生规则 id 后缀 "_p" / "_d"
-
-
-def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "lots"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _path(data_dir: Path, lot_id: str) -> Path:
-    return _dir(data_dir) / f"{lot_id}.json"
 
 
 def _now_iso() -> str:
@@ -83,30 +69,24 @@ def normalize_lot(lot: dict) -> dict:
     return d
 
 
-# ── 持久化 ─────────────────────────────────────────────
+# ── 持久化 (统一契约 Store; normalize_lot 在上方定义) ────
+# 只认 lot_*.json — 目录里的其他文件 (误放的导出等) 不进读取面。
+_LOT_STORE = JsonDefinitionStore(
+    "user_data/lots", glob_pattern="lot_*.json", label="lot", normalize=normalize_lot
+)
+
+
 def load_all(data_dir: Path) -> list[dict]:
     """读取全部批次。损坏的文件被跳过。"""
-    out: list[dict] = []
-    for f in sorted(_dir(data_dir).glob("lot_*.json")):
-        try:
-            out.append(normalize_lot(json.loads(f.read_text(encoding="utf-8"))))
-        except Exception as e:
-            logger.warning("lot load failed %s: %s", f.name, e)
-    return out
+    return _LOT_STORE.load_all(data_dir)
 
 
 def save_one(data_dir: Path, lot: dict) -> None:
-    p = _path(data_dir, lot["id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(p, json.dumps(lot, ensure_ascii=False, indent=2))
+    _LOT_STORE.save_one(data_dir, lot)
 
 
 def delete_one(data_dir: Path, lot_id: str) -> bool:
-    p = _path(data_dir, lot_id)
-    if p.exists():
-        p.unlink()
-        return True
-    return False
+    return _LOT_STORE.delete_one(data_dir, lot_id)
 
 
 # ── 批次 → 监控规则 (纯映射) ───────────────────────────
