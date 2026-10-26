@@ -115,6 +115,9 @@ class PullConfigReq(BaseModel):
     # 日内序列表时间列名 (字段映射后的列名, 如 "ts"): 配置后同 symbol 允许多行,
     # 按 [symbol, time_field] 去重; 留空 = 每日快照表 (按 symbol 去重)
     time_field: str | None = Field(None, max_length=32)
+    # 增量续传参数名 (如 "since"): 每次拉取自动带上本地目标日分区 time_field 的
+    # 最大值, 源只返回其后数据 (盘中多盘表免全量重拉); 需先配置 time_field
+    since_param: str | None = Field(None, min_length=1, max_length=16, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     # 鉴权方式; 请求中缺省 (None) = 保留现有配置, {"type":"none"} = 关闭鉴权
     auth: PullAuthReq | None = None
     # 单次拉取请求超时 (秒), 默认 30 与历史行为一致; 大响应接口可调高
@@ -414,6 +417,53 @@ def _date_range(config: ExtConfig, data_dir: Path) -> list[str] | None:
     return [dates[0], dates[-1]]
 
 
+def _plate_stats(config: ExtConfig, data_dir: Path) -> dict | None:
+    """日内多盘表最新分区的盘次概览 (源卡片展示用)。
+
+    只读最新分区的时间列: 盘数 = 时刻值去重计数, from/to = 时刻范围 (HH:MM:SS,
+    与 collapse_ext_rows_at 的时刻切片同口径, 兼容 ISO 前缀/纯时刻两种列)。
+    非多盘表 (非 timeseries 或未配 time_field)、无分区、列缺失或文件损坏 → None。
+    """
+    if config.mode != "timeseries":
+        return None
+    tf = config.pull.time_field if config.pull else None
+    if not tf:
+        return None
+    base = _ext_data_dir(config, data_dir)
+    if not base.exists():
+        return None
+    parts = sorted(
+        d.name[5:] for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    )
+    if not parts:
+        return None
+    try:
+        col = pl.read_parquet(
+            base / f"date={parts[-1]}" / "part.parquet", columns=[tf]
+        )[tf].cast(pl.Utf8)
+    except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 无多盘信息, 不阻断列表
+        return None
+    if col.is_empty():
+        return None
+    tod = (
+        pl.DataFrame({tf: col})
+        .select(
+            pl.when(pl.col(tf).str.len_chars() >= 11)
+            .then(pl.col(tf).str.slice(11, 8))
+            .otherwise(pl.col(tf))
+            .alias("_tod")
+        )
+        .select(
+            plates=pl.col("_tod").n_unique(),
+            first=pl.col("_tod").min(),
+            last=pl.col("_tod").max(),
+        )
+        .row(0, named=True)
+    )
+    return {"date": parts[-1], "plates": tod["plates"], "from": tod["first"], "to": tod["last"]}
+
+
 @router.get("")
 def list_configs(request: Request):
     """列出所有扩展数据配置。"""
@@ -424,6 +474,7 @@ def list_configs(request: Request):
         d = c.to_dict()
         d["latest_sync_date"] = _latest_sync_date(c, data_dir)
         d["date_range"] = _date_range(c, data_dir)
+        d["plate"] = _plate_stats(c, data_dir)
         items.append(d)
     return {"items": items}
 
@@ -1057,6 +1108,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         date_param=body.date_param,
         date_format=body.date_format,
         time_field=body.time_field,
+        since_param=body.since_param,
         auth=new_auth,
         timeout_seconds=body.timeout_seconds,
         page_param=body.page_param,

@@ -3938,6 +3938,7 @@ export const api = {
     time_window_start?: string | null; time_window_end?: string | null;
     date_param?: string | null;
     time_field?: string | null;
+    since_param?: string | null;
     auth?: ExtPullAuth;
     timeout_seconds?: number;
     page_param?: string | null;
@@ -4874,6 +4875,8 @@ export interface PullConfig {
   date_format?: string
   /** 日内序列表时间列名 (如 "ts"): 配置后同 symbol 允许多行 (按 symbol+时间列去重), 用于集合竞价等多盘数据 */
   time_field?: string | null
+  /** 增量续传参数名 (如 "since"): 每次拉取自动带上本地目标日分区时间列最大值, 源只返回其后数据; 需先配置 time_field */
+  since_param?: string | null
   auth?: ExtPullAuth | null
   /** 单次拉取请求超时 (秒), 默认 30 */
   timeout_seconds?: number
@@ -4966,6 +4969,8 @@ export interface ExtDataConfig {
   updated_at: string
   latest_sync_date?: string | null
   date_range?: string[] | null
+  /** 日内多盘表最新分区的盘次概览; 非多盘表为 null */
+  plate?: { date: string; plates: number; from: string; to: string } | null
   pull?: PullConfig | null
 }
 

@@ -158,6 +158,35 @@ def _with_date_param(url: str, date_param: str | None, day: date, date_format: s
     return f"{url}{sep}{date_param}={_format_date_value(day, date_format)}"
 
 
+def since_cursor(data_dir, config: ExtConfig, day: date) -> str | None:
+    """增量续传游标: 目标日本地分区 time_field 列的最大值 (字符串化)。
+
+    盘中多盘表 (配置 pull.since_param + time_field) 用它让源只返回新于本地的
+    盘次。缺口感知天然成立 —— 本地缺多少源补多少; 下列情况返回 None (不带
+    参数 = 整日全量), 全部是安全的回退方向:
+      - 未配置 since_param/time_field (PullConfig 构造时已归一联动)
+      - 本地无该日分区 (首拉/新交易日/分区被删修复)
+      - 分区缺 time_field 列 (schema 漂移) 或文件损坏、列为空
+    snapshot 模式无日期分区, 恒返回 None —— 增量仅对 timeseries 有意义。
+    """
+    pull = config.pull
+    if not pull or not pull.since_param or not pull.time_field or pull.fanout:
+        return None  # fanout 两级拉取 (目录→明细) 无整表游标语义
+    part = _day_partition(Path(data_dir), config.id, day)
+    if not part.exists():
+        return None
+    import polars as pl
+
+    try:
+        col = pl.read_parquet(part, columns=[pull.time_field])[pull.time_field]
+        value = col.max()
+    except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 全量, 不阻断拉取
+        return None
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
 # Hub 管理后台的会话 Cookie 名。它是有有效期的浏览器会话(默认 24h),
 # 换机器/换部署即失效, 不能当作定时拉取的长期凭据。
 _HUB_SESSION_COOKIES = frozenset({"tickflow_hub_access"})
@@ -351,22 +380,27 @@ def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[
     return _apply_field_map(rows, pull.field_map)
 
 
-async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+async def fetch_rows_for_date(config: ExtConfig, target_date: date, data_dir=None) -> list[dict]:
     async with _pull_client_scope():
-        return await _fetch_rows_for_date(config, target_date)
+        return await _fetch_rows_for_date(config, target_date, data_dir)
 
 
-async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+async def _fetch_rows_for_date(config: ExtConfig, target_date: date, data_dir=None) -> list[dict]:
     """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
 
     与 fetch_and_ingest 共用同一解析链 (response_path/字段映射/关联字段校验),
     历史回补与当日拉取不产生第二套口径。
     配置了 pull.page_param 时按页循环拉取 (仅 GET), 空页/短页/达 max_pages 停。
     配置了 pull.fanout 时走两级拉取 (目录 → 逐条目明细), 见 ext_fanout。
+    传入 data_dir 且配置了 pull.since_param 时带增量游标 (?since=本地最大盘次);
+    历史回补不传 data_dir → 恒全量 (回补只拉缺失分区, 游标无意义)。
     """
     pull = config.pull
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
+
+    cursor = since_cursor(data_dir, config, target_date) if data_dir is not None else None
+    since_extra: dict[str, str] | None = {pull.since_param: cursor} if cursor else None
 
     if pull.fanout:
         from app.services.ext_fanout import fetch_fanout_rows
@@ -376,7 +410,8 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
         collected: list[dict] = []
         page = pull.page_start
         for _ in range(pull.max_pages):
-            extra: dict[str, str] = {pull.page_param: str(page)}
+            # since 是结果集过滤器, 与页码参数一起每页携带
+            extra: dict[str, str] = {**(since_extra or {}), pull.page_param: str(page)}
             if pull.page_size_param and pull.page_size > 0:
                 extra[pull.page_size_param] = str(pull.page_size)
             data = await _request_json(pull, config.id, day=target_date, extra_params=extra)
@@ -395,7 +430,7 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
             )
         rows = collected
     else:
-        data = await _request_json(pull, config.id, day=target_date)
+        data = await _request_json(pull, config.id, day=target_date, extra_params=since_extra)
         rows = _parse_rows_payload(config, pull, data)
 
     # 校验可关联标的的字段：直接 symbol/code，或配置里声明的映射源列。
@@ -432,7 +467,7 @@ async def fetch_and_ingest(
     """
     # 同上: 落盘分区按北京日期, 否则 UTC 容器在北京时间 08:00 之前写的是前一天。
     day = target_date or cn_today()
-    rows = await fetch_rows_for_date(config, day)
+    rows = await fetch_rows_for_date(config, day, data_dir)
     if not rows:
         raise ValueError("提取到的行数为 0")
     n = rows_to_parquet(

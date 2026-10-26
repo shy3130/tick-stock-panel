@@ -26,16 +26,49 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
   const [fieldsExpanded, setFieldsExpanded] = useState(false)
   const fieldsRef = useRef<HTMLDivElement>(null)
   const [fieldsOverflow, setFieldsOverflow] = useState(false)
+  const [collapsedH, setCollapsedH] = useState(48)
 
   useEffect(() => {
     const el = fieldsRef.current
     if (!el) return
-    const prev = el.style.maxHeight
-    el.style.maxHeight = 'none'
-    const full = el.scrollHeight
-    el.style.maxHeight = prev
-    setFieldsOverflow(full > 68)
+    const chip = el.firstElementChild as HTMLElement | null
+    // 折叠高度按整行 chip 对齐 (行高 = chip 高 + gap-1), 只露完整行, 不拦腰截断
+    const rowH = (chip ? chip.offsetHeight : 20) + 4
+    const h = 2 * rowH - 4
+    setCollapsedH(h)
+    setFieldsOverflow(el.scrollHeight > h + 1)
   }, [config.fields])
+
+  // 描述固定两行: 内嵌引擎有最小字号 (text-[10px] 实际行距 ≈17px 而非 16.25),
+  // -webkit-line-clamp 与 px 硬编码都不可靠 — 实测前两行文本的包络高度定容器高
+  const descRef = useRef<HTMLDivElement>(null)
+  const [descMaxH, setDescMaxH] = useState<number | undefined>(undefined)
+  useEffect(() => {
+    const el = descRef.current
+    if (!el) return
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    // 文本矩形按 top 聚类成行 (同行内中英文片段 top 差 < 8px)
+    const lines: Array<{ top: number; bottom: number }> = []
+    for (const r of [...range.getClientRects()].sort((a, b) => a.top - b.top)) {
+      const last = lines[lines.length - 1]
+      if (last && r.top - last.top < 8) {
+        last.top = Math.min(last.top, r.top)
+        last.bottom = Math.max(last.bottom, r.bottom)
+      } else {
+        lines.push({ top: r.top, bottom: r.bottom })
+      }
+    }
+    if (lines.length < 3) {
+      setDescMaxH(undefined)  // 本就不足三行, 不设限
+      return
+    }
+    // 裁剪线定在第 3 行顶之上: 无论行距/行盒是否重叠, 第三行笔画一个像素都进不了盒内。
+    // getBoundingClientRect 受页面缩放 (实测 ~1.1×) 影响, 须除回 CSS 像素再设置高度
+    const r = el.getBoundingClientRect()
+    const zoom = r.height / el.clientHeight || 1
+    setDescMaxH(Math.max(24, Math.ceil((lines[2].top - r.top - 0.5) / zoom)))
+  }, [config.description])
 
   const upload = useMutation({
     mutationFn: ({ id, file }: { id: string; file: File }) => api.extDataUpload(id, file),
@@ -64,37 +97,66 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
     if (file) doUpload(file)
   }
 
+  // 模式主色: 快照=蓝 / 时序=琥珀 (延续历史语义)。展示为三处层次而非整卡平涂:
+  // 染色边框 + 顶部发光边线 + 自主色到卡底的纵向渐变 — 有色而不闹
+  const accent = config.mode === 'snapshot' ? {
+    border: 'border-blue-400/25 hover:border-blue-400/45',
+    bg: 'bg-gradient-to-b from-blue-400/[0.07] via-surface to-surface',
+    line: 'via-blue-400/60',
+  } : {
+    border: 'border-amber-400/25 hover:border-amber-400/45',
+    bg: 'bg-gradient-to-b from-amber-400/[0.07] via-surface to-surface',
+    line: 'via-amber-400/60',
+  }
+
   return (
-    <div className={`rounded-card border flex flex-col transition-all duration-300 ${
-      config.mode === 'snapshot'
-        ? 'border-blue-500/30 bg-blue-500/[0.03]'
-        : 'border-amber-500/30 bg-amber-500/[0.03]'
-    }`}>
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <h3 className="text-sm font-medium text-foreground">{config.label}</h3>
-        <div className="flex items-center gap-1.5">
-          <span className={`text-[10px] px-1.5 py-px rounded font-medium ${
-            config.mode === 'snapshot'
-              ? 'bg-blue-500/10 text-blue-400'
-              : 'bg-amber-500/10 text-amber-400'
-          }`}>
-            {config.mode === 'snapshot' ? '快照' : '时序'}
-          </span>
-          <button
-            onClick={() => setSettingsOpen(v => !v)}
-            className="p-0.5 rounded hover:bg-elevated transition-colors text-secondary"
-          >
-            <Settings className="h-3.5 w-3.5" />
-          </button>
+    <div className={`rounded-card border ${accent.border} ${accent.bg} relative flex flex-col transition-colors duration-300`}>
+      <div className={`pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent ${accent.line} to-transparent`} />
+      <div className="flex items-start justify-between gap-2 px-4 pt-4">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-medium text-foreground truncate" title={config.label}>
+            {config.label}
+          </h3>
+          <div className="flex items-center gap-1.5 mt-1.5">
+            <span className={`whitespace-nowrap text-[10px] leading-none font-medium px-1.5 py-1 rounded-md ${
+              config.mode === 'snapshot'
+                ? 'bg-blue-500/10 text-blue-400'
+                : 'bg-amber-500/10 text-amber-400'
+            }`}>
+              {config.mode === 'snapshot' ? '快照' : '时序'}
+            </span>
+            {config.mode === 'timeseries' && config.pull?.time_field && (
+              <span
+                className="whitespace-nowrap text-[10px] leading-none font-medium px-1.5 py-1 rounded-md bg-emerald-500/10 text-emerald-500 dark:text-emerald-400"
+                title={`日内多盘 · 时间列 ${config.pull.time_field}`}
+              >
+                多盘
+              </span>
+            )}
+          </div>
         </div>
+        <button
+          onClick={() => setSettingsOpen(v => !v)}
+          className="shrink-0 p-1.5 rounded-md hover:bg-elevated/70 transition-colors text-muted hover:text-secondary"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <div className="px-4 pb-1.5 text-[10px] text-muted/70 leading-relaxed line-clamp-2">
+      {/* 描述固定两行: 行距由运行时实测 (见上方 descMaxH), 52px 为测量前的兜底 */}
+      <div
+        ref={descRef}
+        style={descMaxH !== undefined ? { maxHeight: descMaxH } : undefined}
+        className="px-4 pt-2 pb-1.5 text-[10px] text-muted leading-relaxed max-h-[52px] shrink-0 overflow-hidden break-words"
+      >
         {config.description || `扩展数据 · ${config.mode === 'snapshot' ? '与标的 JOIN' : '与日K JOIN'}`}
       </div>
 
-      <div className="flex-1 min-h-[81px] px-4 pb-2">
-        <div className={`relative overflow-hidden transition-all duration-300 ${fieldsExpanded ? '' : 'h-[75px]'}`}>
+      <div className="flex-1 min-h-0 px-4 pb-2">
+        <div
+          className="relative overflow-hidden transition-[height] duration-300"
+          style={fieldsExpanded || !fieldsOverflow ? undefined : { height: collapsedH }}
+        >
           <div
             ref={fieldsRef}
             className="flex flex-wrap gap-1"
@@ -102,41 +164,62 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
             {config.fields
               .filter(f => f.name !== 'symbol' && f.name !== 'code')
               .map((f) => (
-                <span key={f.name} className="inline-flex items-center gap-1 text-[10px] bg-elevated rounded px-1.5 py-0.5">
-                  <Tag className="h-2.5 w-2.5 text-muted" />
-                  <span className="text-secondary">{f.label || f.name}</span>
+                <span
+                  key={f.name}
+                  className="text-[10px] leading-none py-1 px-1.5 rounded-md bg-elevated/70 border border-border/40 text-secondary"
+                  title={f.name}
+                >
+                  {f.label || f.name}
                 </span>
               ))
             }
           </div>
-          {fieldsOverflow && !fieldsExpanded && (
-            <div
-              className="absolute bottom-0 inset-x-0 h-6 bg-gradient-to-t from-surface to-transparent cursor-pointer flex items-end justify-center"
-              onClick={() => setFieldsExpanded(true)}
-            >
-              <ChevronDown className="h-3 w-3 text-muted" />
-            </div>
-          )}
           {fieldsExpanded && fieldsOverflow && (
             <button
               onClick={() => setFieldsExpanded(false)}
-              className="w-full flex items-center justify-center pt-1 text-[10px] text-muted hover:text-secondary transition-colors"
+              className="w-full flex items-center justify-center pt-1.5 text-muted hover:text-secondary transition-colors"
+              title="收起字段"
             >
               <ChevronUp className="h-3 w-3" />
             </button>
           )}
         </div>
+        {fieldsOverflow && !fieldsExpanded && (
+          <button
+            onClick={() => setFieldsExpanded(true)}
+            className="mx-auto mt-1 flex items-center rounded-full border border-border/60 bg-elevated/60 px-2.5 py-0.5 text-muted hover:text-secondary hover:border-border transition-colors"
+            title="展开全部字段"
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        )}
       </div>
 
-      <div className="mt-auto px-4 pb-4 pt-2 border-t border-border/50">
-        <div className="flex justify-between text-[11px]">
-          <span className="text-muted">标识</span>
-          <span className="font-mono text-secondary">{config.id}</span>
+      <div className="mt-auto px-4 pb-4 pt-2.5 border-t border-border/60 space-y-1 text-[11px]">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-muted shrink-0">标识</span>
+          <span className="font-mono text-secondary/80 truncate" title={config.id}>{config.id}</span>
         </div>
-        <div className="flex justify-between text-[11px] mt-1">
-          <span className="text-muted">最新</span>
-          <span className="text-secondary">{config.latest_sync_date ?? '—'}</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-muted shrink-0">最新</span>
+          <span
+            className="text-secondary/80 tabular-nums truncate"
+            title={config.latest_sync_date ?? undefined}
+          >
+            {config.latest_sync_date ?? '—'}
+          </span>
         </div>
+        {config.plate && (
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-muted shrink-0">盘次</span>
+            <span
+              className="font-mono text-secondary/80 tabular-nums whitespace-nowrap"
+              title={`${config.plate.date} 多盘保留, @时刻可选盘`}
+            >
+              {config.plate.plates} 盘 · {config.plate.from.slice(0, 5)}–{config.plate.to.slice(0, 5)}
+            </span>
+          </div>
+        )}
       </div>
 
       <AnimatePresence>

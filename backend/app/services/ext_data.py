@@ -12,7 +12,7 @@ from typing import Literal
 
 import polars as pl
 
-from app.market_time import cn_today
+from app.market_time import cn_now, cn_today
 from app.services.fs_utils import atomic_write_parquet, atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,16 @@ SCHEDULE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # 多盘扩展列选盘时刻 (ext_columns 的 "@HH:MM[:SS]" 后缀) 的合法格式
 EXT_SNAPSHOT_AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$")
+
+# time_field 保留名: 源数据没有时间列时 (人气榜/资金流等每日快照表), 配置它
+# 让写入路径注入拉取时刻, 快照表同样获得日内多盘能力 (去重键 [symbol, 拉取时刻])。
+# 注入值是北京时间 ISO 串, 与 collapse_ext_rows_at 的时刻切片口径兼容。
+PLATE_TS_FIELD = "__pull_ts__"
+
+
+def _pull_ts_value() -> str:
+    """注入用拉取时刻 (北京时间 ISO 串); 测试 monkeypatch 本函数固定时刻。"""
+    return cn_now().isoformat()
 
 
 def norm_ext_snapshot_at(raw: str) -> str:
@@ -103,7 +113,7 @@ class PullConfig:
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
         "fanout", "schedule_time", "schedule_period", "schedule_day",
-        "schedule_trading_only",
+        "schedule_trading_only", "since_param",
     )
 
     def __init__(
@@ -138,6 +148,7 @@ class PullConfig:
         schedule_period: str | None = None,
         schedule_day: int | None = None,
         schedule_trading_only: bool = False,
+        since_param: str | None = None,
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -164,6 +175,14 @@ class PullConfig:
         # symbol 允许多行 (按 [symbol, time_field] 去重), 用于集合竞价等日内多盘
         # 数据; None = 每日快照表 (按 symbol 去重, 默认)
         self.time_field = (time_field or "").strip() or None
+        # 增量续传参数名 (如 "since"): 配置后每次拉取自动带上本地目标日分区
+        # time_field 列的最大值, 源只返回该值之后的数据 —— 盘中多盘表免全量重拉
+        # (缺口感知: 本地缺多少源补多少; 无本地数据时不带参数=全量, 见 ext_pull)。
+        # 依赖 time_field (游标值取自该列), 未配置 time_field 时归一 None (失效);
+        # PLATE_TS_FIELD 是本地注入的拉取时刻, 源无法按它过滤, 同样失效。
+        self.since_param = (
+            (since_param or "").strip() or None
+        ) if self.time_field and self.time_field != PLATE_TS_FIELD else None
         # 拉取接口鉴权方式 {"type": "none|bearer|header|query", "header": ..., "param": ...},
         # 与自定义行情源 AuthConfig 同口径; Key 本体存 secrets_store, 不落 config.json
         self.auth = auth
@@ -237,6 +256,7 @@ class PullConfig:
             "date_param": self.date_param,
             "date_format": self.date_format,
             "time_field": self.time_field,
+            "since_param": self.since_param,
             "auth": self.auth,
             "timeout_seconds": self.timeout_seconds,
             "page_param": self.page_param,
@@ -274,6 +294,7 @@ class PullConfig:
             date_param=d.get("date_param"),
             date_format=d.get("date_format", "iso"),
             time_field=d.get("time_field"),
+            since_param=d.get("since_param"),
             auth=d.get("auth"),
             timeout_seconds=d.get("timeout_seconds", 30),
             page_param=d.get("page_param"),
@@ -798,13 +819,18 @@ def write_ext_parquet(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "part.parquet"
 
+        # time_field 配置为保留名: 注入拉取时刻, 盘中每次拉取各存一盘
+        # (同批一次注入 → 批内仍按 symbol 收敛; 不同批次不同盘)。
+        tf = config.pull.time_field if config.pull else None
+        if tf == PLATE_TS_FIELD and PLATE_TS_FIELD not in df.columns:
+            df = df.with_columns(pl.lit(_pull_ts_value()).alias(PLATE_TS_FIELD))
+
         # 如果已有文件，合并去重
         if out_path.exists():
             try:
                 existing = pl.read_parquet(out_path)
                 key: str | list[str] = "symbol" if "symbol" in df.columns else df.columns[0]
                 # 日内序列表 (配置 time_field): 同 symbol 同时刻去重, 不同盘并存
-                tf = config.pull.time_field if config.pull else None
                 if tf and tf in df.columns:
                     key = [key, tf]
                 df = pl.concat([existing, df]).unique(
