@@ -28,11 +28,14 @@ from app.backtest.matrix import (
     MatrixPipelineConfig,
     MatrixPrewarmCancelledError,
     MatrixStrategyPipeline,
+    PanelMatrixEncoding,
     SignalMatrix,
     apply_time_masks,
     build_market_data_matrix,
     build_market_matrix,
+    build_market_matrix_from_encoding,
     build_market_matrix_from_signals,
+    encode_panel_matrix,
     slice_market_data_matrix,
     slice_signal_matrix,
 )
@@ -800,6 +803,8 @@ class PreparedPanelBacktest:
     load_start: date
     load_end: date
     sim_end: date
+    # sim 半边的参数无关矩阵编码 (P2a-2); None = 未启用 (回退逐组建矩阵)
+    sim_encoding: PanelMatrixEncoding | None = None
 
 
 class StrategyBacktestService:
@@ -1195,6 +1200,25 @@ class StrategyBacktestService:
         )
         if panel.is_empty():
             raise ValueError("共享特征面板无数据，请检查日期范围或先运行盘后管道")
+
+        # sim 半边的参数无关编码 (P2a-2): 行情矩阵/轴/信号码一次构建,
+        # 试算只散布 score/entry/exit。sim 窗口与列选择和 run() 完全同口径;
+        # 构建失败不阻断 (回退逐组建矩阵, 只损失性能)。
+        sim_encoding = None
+        try:
+            sim_range = self._date_range_mask(panel, first.start, sim_end)
+            sim_columns = [
+                column for column in feature_plan.matrix_columns if column in panel.columns
+            ]
+            sim_panel = panel.filter(sim_range).select(sorted(sim_columns))
+            sim_encoding = encode_panel_matrix(
+                sim_panel,
+                entry_signal_ids=list(entry_signals),
+                exit_signal_ids=list(exit_signals),
+            )
+        except Exception as e:  # noqa: BLE001 — 编码是纯优化, 失败回退整建
+            logger.warning("共享面板矩阵编码失败, 试算回退逐组建矩阵: %s", e)
+
         return PreparedPanelBacktest(
             signature=signature,
             panel=panel,
@@ -1202,6 +1226,7 @@ class StrategyBacktestService:
             load_start=load_start,
             load_end=load_end,
             sim_end=sim_end,
+            sim_encoding=sim_encoding,
         )
 
     def run(
@@ -1824,16 +1849,48 @@ class StrategyBacktestService:
             }
 
             t_matrix = time.perf_counter()
-            market_matrix = build_market_matrix(
-                sim_panel,
-                sim_entry_mask,
-                sim_exit_mask,
-                entry_delay_bars=1 if matcher_config.entry_fill == "open_t+1" else 0,
-                exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
-                entry_signal_ids=entry_signals,
-                exit_signal_ids=exit_signals,
-                minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
+            shared_encoding = (
+                prepared_panel.sim_encoding if prepared_panel is not None else None
             )
+            # score 列只在 run 侧存在 (_apply_score 产物), 编码面板没有 —
+            # 重构后两路径的市场矩阵都不含 score 场, 比对忽略它。
+            _enc_cols = (
+                tuple(c for c in shared_encoding.sim_columns if c != "score")
+                if shared_encoding is not None else None
+            )
+            if (
+                shared_encoding is not None
+                and _enc_cols == tuple(c for c in sorted(sim_columns) if c != "score")
+                and len(sim_entry_mask) == shared_encoding.panel_rows
+            ):
+                # P2a-2: 共享矩阵编码 — 只散布随参数变化的 score/entry/exit。
+                # 列序或行数不一致 (计划漂移) 时回退整建, 回退是优化放弃而非
+                # 正确性闸门, 整建结果总是正确。
+                score_series = (
+                    sim_panel.get_column("score")
+                    if "score" in sim_panel.columns and sim_panel["score"].dtype.is_numeric()
+                    else None
+                )
+                market_matrix = build_market_matrix_from_encoding(
+                    shared_encoding,
+                    score=score_series,
+                    entries=sim_entry_mask,
+                    exits=sim_exit_mask,
+                    entry_delay_bars=1 if matcher_config.entry_fill == "open_t+1" else 0,
+                    exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
+                    minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
+                )
+            else:
+                market_matrix = build_market_matrix(
+                    sim_panel,
+                    sim_entry_mask,
+                    sim_exit_mask,
+                    entry_delay_bars=1 if matcher_config.entry_fill == "open_t+1" else 0,
+                    exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
+                    entry_signal_ids=entry_signals,
+                    exit_signal_ids=exit_signals,
+                    minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
+                )
             timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
             del panel, sim_panel, sim_entry_mask, sim_exit_mask
 

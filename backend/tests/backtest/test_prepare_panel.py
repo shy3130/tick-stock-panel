@@ -203,3 +203,71 @@ def test_panel_backend_predicate() -> None:
     assert not _panel_backend("matrix_native")
     assert not _panel_backend("composite")
     assert not _panel_backend("minute_filter")
+
+
+# ── P2a-2: 共享矩阵编码 ──────────────────────────────────
+
+def test_matrix_encoding_equivalence() -> None:
+    """编码路径与整建路径逐元素一致 (含 score 的 null→nan→0 语义)。"""
+    import dataclasses
+
+    import numpy as np
+
+    from app.backtest.matrix import (
+        build_market_matrix,
+        build_market_matrix_from_encoding,
+        encode_panel_matrix,
+    )
+
+    rows = []
+    for i in range(30):
+        for order, sym in enumerate(("A", "B", "C")):
+            close = 10.0 + i * 0.1
+            rows.append({
+                "symbol": sym, "name": sym, "date": date(2024, 1, 1) + timedelta(days=i),
+                "open": close - 0.05, "high": close + 0.1, "low": close - 0.1, "close": close,
+                "volume": 1000.0 + i, "ma5": close - 0.1, "ma10": close - 0.2, "ma20": close - 0.3,
+                # null (非候选行) 与负值/越界值都要走到 — nan_to_num(0) 语义一致
+                "score": None if i % 7 == 0 else (i * 0.01 if order != 1 else -1.0),
+                "signal_limit_up": i % 11 == 0, "signal_limit_down": False,
+                "signal_golden": (i + order) % 9 == 0,
+            })
+    panel = pl.DataFrame(rows).sort(["symbol", "date"]).with_columns(
+        pl.col("score").cast(pl.Float64, strict=False)
+    )
+    n = len(panel)
+    entries = pl.Series([(i + j) % 13 == 0 for i in range(30) for j in range(3)][:n])
+    exits = pl.Series([(i * j) % 17 == 0 for i in range(30) for j in range(3)][:n])
+
+    direct = build_market_matrix(
+        panel, entries, exits,
+        entry_delay_bars=1, exit_delay_bars=1,
+        entry_signal_ids=["signal_golden"],
+    )
+    encoding = encode_panel_matrix(panel, entry_signal_ids=["signal_golden"])
+    via_encoding = build_market_matrix_from_encoding(
+        encoding,
+        score=panel.get_column("score"),
+        entries=entries, exits=exits,
+        entry_delay_bars=1, exit_delay_bars=1,
+    )
+
+    for field in dataclasses.fields(direct):
+        a, b = getattr(direct, field.name), getattr(via_encoding, field.name)
+        if isinstance(a, np.ndarray):
+            assert np.array_equal(a, b, equal_nan=True), f"{field.name} 数组不一致"
+        else:
+            assert a == b, f"{field.name} 不一致: {a!r} vs {b!r}"
+
+
+def test_prepare_builds_sim_encoding_and_runs_use_it() -> None:
+    service, engine = _service(_panel())
+    cfgs = [_cfg({"ma_proximity": 1}), _cfg({"ma_proximity": 2})]
+    prepared = service.prepare_panel_optimization(cfgs)
+
+    assert prepared.sim_encoding is not None
+    assert prepared.sim_encoding.panel_rows > 0
+    for cfg in cfgs:
+        result = service.run(cfg, prepared_panel=prepared)
+        assert result.error is None, result.error
+    assert engine.load_count == 1
