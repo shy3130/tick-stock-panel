@@ -233,6 +233,28 @@ class _RealtimeMatrixEntry:
     buffer: Any
 
 
+def _resolve_required_features(meta: dict, mod, filter_history_fn) -> frozenset[str]:
+    """显式声明 (META/module REQUIRED_FEATURES) 优先; 缺失且存在动态
+    filter_history 时, AST 推导列依赖兜底 — 推导不可证明则保持为空,
+    回测层继续走全量指标计算 (fail-closed)。"""
+    declared = frozenset(meta.get("required_features", []) or []) | frozenset(
+        getattr(mod, "REQUIRED_FEATURES", []) or []
+    )
+    if declared or filter_history_fn is None:
+        return declared
+    from app.strategy.feature_deps import infer_filter_history_features
+
+    inferred = infer_filter_history_features(filter_history_fn)
+    if inferred is None:
+        return declared
+    logger.info(
+        "strategy %s: filter_history AST 推导出 %d 个依赖列, 免除回测全量兜底",
+        meta.get("id", "<unknown>"),
+        len(inferred),
+    )
+    return inferred
+
+
 class StrategyEngine:
     """策略引擎 — 策略加载 + 执行 + 评分"""
 
@@ -582,8 +604,7 @@ class StrategyEngine:
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
-            required_features=frozenset(meta.get("required_features", []) or [])
-            | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or []),
+            required_features=_resolve_required_features(meta, mod, filter_history_fn),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
             source=source,
             file_path=path,
