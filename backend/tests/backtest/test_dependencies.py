@@ -178,6 +178,8 @@ def test_history_strategy_without_required_features_falls_back_to_full(caplog):
 
     assert plan.full_feature_fallback is True
     assert "rsi_14" in plan.indicator_columns
+    # 动态依赖策略可能引用股本列 — 兜底一并加载 (kanban float_shares 回归)
+    assert {"float_shares", "total_shares"} <= plan.instrument_columns
     assert "falls back to full feature computation" in caplog.text
 
 

@@ -181,8 +181,22 @@ import polars as pl
 
 
 def momentum_ok(col_name: str) -> pl.Expr:
-    # 列名经参数传递 — 调用方可传任意列, AST 常量收集无法证明
+    # 列名经参数传递; 是否可证明取决于调用点实参 (常量流)
     return pl.col(col_name) < 30
+'''
+
+
+_DEP_IMPORTER_DYNAMIC = '''\
+META = {"id": "custom_inf_dep_dyn", "name": "depd", "description": "", "tags": []}
+
+import polars as pl
+
+import _dep
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    col = str(params.get("col", "rsi_6"))
+    return df.filter(_dep.momentum_ok(col) & (pl.col("close") > 1))
 '''
 
 
@@ -208,8 +222,8 @@ def test_engine_infers_dependency_file_columns(tmp_path):
     assert s.required_features == frozenset({"close", "rsi_6"})
 
 
-def test_engine_family_fail_closed_on_dynamic_dependency(tmp_path):
-    """依赖文件里出现动态列名 → 整个家族不可证明 → 保持全量兜底。"""
+def test_engine_constant_flow_crosses_dependency_module(tmp_path):
+    """依赖模块形参列名 + 调用点全常量 (`_dep.momentum_ok("rsi_6")`) → 可证明。"""
     d = tmp_path / "custom"
     d.mkdir(parents=True)
     (d / "custom_inf_dep.py").write_text(_DEP_IMPORTER, encoding="utf-8")
@@ -218,4 +232,84 @@ def test_engine_family_fail_closed_on_dynamic_dependency(tmp_path):
     assert not engine.load_errors()
     s = engine.get("custom_inf_dep")
     assert s is not None
+    assert s.required_features == frozenset({"close", "rsi_6"})
+
+
+def test_engine_family_fail_closed_on_dynamic_dependency(tmp_path):
+    """依赖文件列名经形参传递且调用点实参是运行时变量 → 家族不可证明 → 全量兜底。"""
+    d = tmp_path / "custom"
+    d.mkdir(parents=True)
+    (d / "custom_inf_dep_dyn.py").write_text(_DEP_IMPORTER_DYNAMIC, encoding="utf-8")
+    (d / "_dep.py").write_text(_DEP_FILE_DYNAMIC, encoding="utf-8")
+    engine = StrategyEngine(strategy_dirs=[d])
+    assert not engine.load_errors()
+    s = engine.get("custom_inf_dep_dyn")
+    assert s is not None
     assert s.required_features == frozenset()
+
+
+# ── 常量流: 列名经辅助函数形参传递 (P1a+) ─────────────────
+# 回归: custom_v1_kanban_strict 的 _ema_expr(col, alpha) 形态 — pl.col(col)
+# 参数级动态, 但全部调用点传常量; 此前整体回退全量兜底。
+
+_HELPER_PARAM = '''\
+META = {"id": "custom_cf_ok", "name": "ok", "description": "", "tags": []}
+
+import polars as pl
+
+
+def _ema(col, alpha):
+    return pl.col(col).ewm_mean(alpha=alpha, adjust=False)
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    d = df.with_columns(_ema("close", 0.5).over("symbol").alias("_e"))
+    return d.filter((pl.col("close") * pl.col("float_shares")) > 1e10)
+'''
+
+_HELPER_PARAM_DYNAMIC_CALL = '''\
+META = {"id": "custom_cf_dyn", "name": "d", "description": "", "tags": []}
+
+import polars as pl
+
+
+def _ema(col, alpha):
+    return pl.col(col).ewm_mean(alpha=alpha, adjust=False)
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    col = str(params.get("col", "close"))
+    return df.filter(_ema(col, 0.5) > 1)
+'''
+
+
+def test_engine_infers_constant_flow_helper_params(tmp_path):
+    engine = _engine_with(tmp_path, _HELPER_PARAM)
+    assert not engine.load_errors()
+    s = engine.get("custom_cf_ok")
+    assert s is not None
+    # 形参动态 + 调用点全常量 → 常量并入 (close 经 _ema, float_shares 直接引用);
+    # AST 层不收集 .over("symbol") 的分组参数 (与表达式 root_names 口径不同,
+    # symbol/date 由回测恒载, 无需进依赖)
+    assert s.required_features == frozenset({"close", "float_shares"})
+
+
+def test_engine_constant_flow_breaks_on_dynamic_call_site(tmp_path):
+    engine = _engine_with(tmp_path, _HELPER_PARAM_DYNAMIC_CALL)
+    assert not engine.load_errors()
+    s = engine.get("custom_cf_dyn")
+    assert s is not None
+    # 调用点实参是运行时变量 → 常量流断裂 → 整体回退 (fail-closed)
+    assert s.required_features == frozenset()
+
+
+def test_constant_flow_supports_keyword_and_default():
+    from app.strategy.feature_deps import infer_features_from_sources
+
+    src = (
+        "import polars as pl\n"
+        "def _c(col='close'):\n"
+        "    return pl.col(col)\n"
+        "x = _c() + _c(col='volume')\n"
+    )
+    assert infer_features_from_sources([src]) == frozenset({"close", "volume"})

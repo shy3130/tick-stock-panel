@@ -230,6 +230,9 @@ class StrategyDependencyResolver:
                 strategy.meta.get("id", "<unknown>"),
             )
             required_features.update(INDICATOR_COLUMNS)
+            # 动态依赖策略同样可能引用 instruments 股本列 (如 float_shares)
+            # — 全量兜底语义下一并加载, 代价是多两列 join。
+            required_features.update(_INSTRUMENT_COLUMNS - {"name"})
             required_signals.update(signal_dependencies)
             required_signals.update(LIMIT_SIGNAL_OUTPUTS)
 

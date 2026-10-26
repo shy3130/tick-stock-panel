@@ -36,43 +36,136 @@ def _dotted(func: ast.expr) -> str | None:
     return None
 
 
-def _is_dynamic_name_expr(expr: ast.expr) -> bool:
-    """col(...) 参数是否为动态列名 (非常量字符串)。"""
-    return not (isinstance(expr, ast.Constant) and isinstance(expr.value, str))
+def _dynamic_col_param_functions(tree: ast.Module) -> dict[str, dict[str, ast.expr | None]]:
+    """形参被 col/cols 动态引用的模块级函数: {函数名: {形参名: 默认值}}。
+
+    典型形态: `def _ema(col, alpha): return pl.col(col).ewm_mean(...)` —
+    列名经形参传入。是否可证明取决于调用点实参是否全为常量 (见
+    _collect_from_source 的常量流)。"""
+    dynamic: dict[str, dict[str, ast.expr | None]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        param_order = [a.arg for a in node.args.args]
+        defaults: dict[str, ast.expr | None] = {name: None for name in param_order}
+        # defaults 与形参列表尾部对齐 (python 语义)
+        for offset, default in enumerate(node.args.defaults):
+            defaults[param_order[len(param_order) - len(node.args.defaults) + offset]] = default
+        hit: set[str] = set()
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            dotted = _dotted(call.func)
+            if dotted not in _COL_FORMS and dotted not in _COLS_FORMS:
+                continue
+            for arg in (*call.args, *(kw.value for kw in call.keywords)):
+                if isinstance(arg, ast.Name) and arg.id in defaults:
+                    hit.add(arg.id)
+        if hit:
+            dynamic[node.name] = {name: defaults[name] for name in hit}
+    return dynamic
+
+
+def _collect_from_sources(sources) -> tuple[set[str], bool]:
+    """对一组源码整体收集; 返回 (列名, 是否存在不可证明形态)。
+
+    常量流 (P1a+): 列名经辅助函数形参传递时 (`def _e(col): ... pl.col(col)`),
+    该函数**全部调用点**的对应实参 (或形参默认值) 都是字符串常量 → 常量并入
+    收集; 任一调用点非常量 (变量/循环元素) → 整体不可证明。模块级自由变量
+    的 col 引用同样不可证明 — 宁可回退全量兜底, 不冒漏列风险。
+
+    动态形参函数注册表与调用点解析是**跨文件**的: `_dep.py` 里定义
+    `momentum_ok(col_name)`、主文件里 `_dep.momentum_ok("rsi_6")` 属于同一
+    条常量流。同名函数跨文件并集 — 误并入只多收集列或整体断裂, 不漏列。"""
+    trees: list[ast.Module] = []
+    names: set[str] = set()
+    uninferable = False
+    dyn_funcs: dict[str, dict[str, ast.expr | None]] = {}
+    func_defs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for raw in sources:
+        tree = ast.parse(textwrap.dedent(raw))
+        trees.append(tree)
+        for fname, params in _dynamic_col_param_functions(tree).items():
+            dyn_funcs.setdefault(fname, {}).update(params)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                func_defs[node.name] = node
+
+    def _resolve_argument(node: ast.Call, callee: str, param: str, default: ast.expr | None) -> None:
+        """解析调用点上形参 param 的实参 (关键字优先, 其次位置, 最后默认值)。"""
+        nonlocal uninferable
+        func = func_defs.get(callee)
+        value: ast.expr | None = None
+        for kw in node.keywords:
+            if kw.arg == param:
+                value = kw.value
+                break
+        if value is None and func is not None:
+            param_order = [a.arg for a in func.args.args]
+            if param in param_order:
+                pos = param_order.index(param)
+                if pos < len(node.args):
+                    value = node.args[pos]
+        if value is None:
+            value = default
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            names.add(value.value)
+        else:
+            uninferable = True  # 变量/表达式实参 → 常量流断裂
+
+    for tree in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            dotted = _dotted(node.func)
+            if dotted is None:
+                continue
+            # 辅助函数调用点: 裸名调用 + 跨模块属性调用 (`_dep.helper(...)`,
+            # 与某动态形参函数同名即并入解析 — 误中只会多收集列, 不漏列)。
+            if isinstance(node.func, ast.Name):
+                callee = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                callee = node.func.attr
+            else:
+                callee = ""
+            if callee in dyn_funcs:
+                for param, default in dyn_funcs[callee].items():
+                    _resolve_argument(node, callee, param, default)
+                continue
+            # pl.all() 是列选择器 (裸 all(...) 是 python 内建, 与列无关, 忽略);
+            # polars.selectors (import polars.selectors as cs; cs.numeric()) 全族不可推导。
+            if dotted == "pl.all" or dotted.startswith("cs."):
+                uninferable = True
+                continue
+            if dotted in _COL_FORMS:
+                if not node.args:
+                    continue
+                if not _classify_column_argument(node.args[0], dyn_funcs, names):
+                    uninferable = True
+            elif dotted in _COLS_FORMS:
+                for arg in node.args:
+                    if not _classify_column_argument(arg, dyn_funcs, names):
+                        uninferable = True
+    return names, uninferable
 
 
 def _collect_from_source(source: str) -> tuple[set[str], bool]:
-    """返回 (收集到的列名, 是否存在不可证明形态)。"""
-    tree = ast.parse(source)
-    names: set[str] = set()
-    uninferable = False
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        dotted = _dotted(node.func)
-        if dotted is None:
-            continue
-        # pl.all() 是列选择器 (裸 all(...) 是 python 内建, 与列无关, 忽略);
-        # polars.selectors (import polars.selectors as cs; cs.numeric()) 全族同样不可推导。
-        if dotted == "pl.all" or dotted.startswith("cs."):
-            uninferable = True
-        elif dotted in _COL_FORMS:
-            if not node.args:
-                continue
-            if _is_dynamic_name_expr(node.args[0]):
-                # 动态列名: col(f"{p}_col") / col(name_var) — 漏掉就是错列。
-                uninferable = True
-            else:
-                assert isinstance(node.args[0], ast.Constant)
-                names.add(node.args[0].value)
-        elif dotted in _COLS_FORMS:
-            for arg in node.args:
-                if _is_dynamic_name_expr(arg):
-                    uninferable = True
-                else:
-                    assert isinstance(arg, ast.Constant)
-                    names.add(arg.value)
-    return names, uninferable
+    """单文件收集 (家族路径请用 _collect_from_sources 跨文件解析)。"""
+    return _collect_from_sources([source])
+
+
+def _classify_column_argument(arg: ast.expr, dyn_funcs, names: set[str]) -> bool:
+    """col/cols 实参分类: 常量 → 收集; 动态形参 → True (交由调用点解析);
+    其他 (自由变量/表达式) → False (调用方据此置 uninferable)。"""
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        names.add(arg.value)
+        return True
+    if isinstance(arg, ast.Name):
+        # 与某个动态形参同名: 该引用由函数调用点的常量流覆盖;
+        # 模块级自由变量恰与形参同名的场景, 常量流同样覆盖了该形参
+        # 的全部取值, 不漏列。其余 Name → 不可证明。
+        return any(arg.id in params for params in dyn_funcs.values())
+    return False
 
 
 def infer_filter_history_features(fn) -> frozenset[str] | None:
@@ -98,15 +191,12 @@ def infer_features_from_sources(sources) -> frozenset[str] | None:
     """
     from app.indicators.pipeline import ENRICHED_STORAGE_COLS, INDICATOR_COLUMNS
 
-    names: set[str] = set()
-    for raw in sources:
-        try:
-            collected, uninferable = _collect_from_source(textwrap.dedent(raw))
-        except SyntaxError:
-            return None  # 家族文件解析失败按不可证明处理
-        if uninferable:
-            return None
-        names |= collected
+    try:
+        names, uninferable = _collect_from_sources(sources)
+    except SyntaxError:
+        return None  # 家族文件解析失败按不可证明处理
+    if uninferable:
+        return None
     if not names:
         # 收集不到列引用 (如 df["x"] 下标风格) 同样不可证明。
         return None
