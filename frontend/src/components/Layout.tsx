@@ -21,6 +21,7 @@ import {
   useToggleRealtimeQuotes,
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
+import { setUiPref } from '@/lib/uiPrefs'
 import { getPageScale } from '@/lib/pageZoom'
 import { setKlineBatchLimits } from '@/lib/klineBatchLimits'
 import { compareByDefaultNav, defaultNavIndex, seedHiddenForNewUser } from '@/lib/navOrder'
@@ -426,7 +427,7 @@ export function Layout() {
   const overlayTimer = useRef<number | undefined>(undefined)
   const setNavStatePersist = (s: NavState) => {
     setNavState(s)
-    try { localStorage.setItem('tf-nav-state', s) } catch {}
+    try { setUiPref('tf-nav-state', s) } catch {}
   }
   // 图标条形态仅桌面 rail 态成立 (移动端抽屉与 overlay 预览恒为完整形态)
   const railMode = isDesktop && navState === 'rail'

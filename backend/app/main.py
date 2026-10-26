@@ -17,6 +17,7 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    config_backup,
     data,
     events,
     ext_data,
@@ -657,6 +658,7 @@ app.include_router(upgrade_guard_api.router)
 app.include_router(strategy.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
+app.include_router(config_backup.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(events.router)

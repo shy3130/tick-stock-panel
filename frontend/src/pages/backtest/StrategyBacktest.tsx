@@ -15,6 +15,7 @@ import {
   REGIME_STATE_COLORS,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { setUiPref } from '@/lib/uiPrefs'
 import { groupParams, visibleParams } from '@/lib/strategyParams'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
@@ -1662,7 +1663,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     } catch { return 128 }
   })
   useEffect(() => {
-    try { localStorage.setItem('bt_strategy_list_maxh', String(strategyListMaxH)) } catch { /* 私有模式等 */ }
+    try { setUiPref('bt_strategy_list_maxh', String(strategyListMaxH)) } catch { /* 私有模式等 */ }
   }, [strategyListMaxH])
   const listResize = useRef<{ startY: number; startH: number } | null>(null)
   const onListResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {

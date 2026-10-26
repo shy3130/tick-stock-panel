@@ -2149,6 +2149,41 @@ export interface SoundPack {
   ext: string
 }
 
+/** 配置备份 — 预览 (inspect) 与导入结果 (apply), 对应后端 config_backup */
+export interface ConfigBackupCategoryCount {
+  key: string
+  label: string
+  count: number
+  conflicts: number
+}
+
+export interface ConfigBackupInspect {
+  created_at: string
+  app_version: string
+  has_secrets: boolean
+  categories: ConfigBackupCategoryCount[]
+  total_files: number
+  conflict_files: number
+  out_of_scope_files: number
+}
+
+export interface ConfigBackupApplyCategory {
+  key: string
+  label: string
+  imported: number
+  skipped_conflict: number
+  failed: { file: string; error: string }[]
+}
+
+export interface ConfigBackupApplyResult {
+  categories: ConfigBackupApplyCategory[]
+  preferences_merged: boolean
+  secrets_merged: boolean
+  skipped_unselected: number
+  out_of_scope_files: number
+  reload_hints: Record<string, boolean>
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -3755,6 +3790,33 @@ export const api = {
   // 备份下载走浏览器原生下载 (同源 /api, dev 由 Vite 代理), 存到用户下载文件夹
   pageAdminBackupUrl: (filename: string) =>
     `/api/pages-admin/backups/${encodeURIComponent(filename)}`,
+
+  // 配置备份 (切换设备迁移配置; 导出直链下载, 导入先 inspect 预览再 apply)
+  // categories: 勾选的类别键 (后端 config_backup._CATEGORY_LABELS 的键);
+  // 含 'secrets' 才导出/导入密钥, 不含则该类别跳过。
+  configBackupExportUrl: (categoryKeys: readonly string[]) =>
+    `/api/config-backup/export?categories=${encodeURIComponent(categoryKeys.join(','))}`,
+
+  configBackupInspect: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<ConfigBackupInspect>('/api/config-backup/inspect', {
+      method: 'POST',
+      body: fd,
+    })
+  },
+
+  configBackupApply: (file: File, allowOverwrite: boolean, categoryKeys: readonly string[]) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('allow_overwrite', allowOverwrite ? 'true' : 'false')
+    fd.append('categories', categoryKeys.join(','))
+    return request<ConfigBackupApplyResult>('/api/config-backup/apply', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 120_000,
+    })
+  },
 
   analysisMenu: (id: string) =>
     request<AnalysisMenu>(`/api/analysis-menus/${encodeURIComponent(id)}`),

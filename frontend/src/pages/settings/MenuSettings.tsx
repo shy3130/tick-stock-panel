@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { setUiPref } from '@/lib/uiPrefs'
 import { toast } from '@/components/Toast'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -374,7 +375,7 @@ export function SettingsMenuSettingsPanel() {
     if (id !== '/monitor') return
     const next = !badgeEnabled
     setBadgeEnabled(next)
-    try { localStorage.setItem('monitor_badge_enabled', next ? '1' : '0') } catch { /* ignore */ }
+    try { setUiPref('monitor_badge_enabled', next ? '1' : '0') } catch { /* ignore */ }
   }
 
   return (

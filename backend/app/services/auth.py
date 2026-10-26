@@ -90,6 +90,17 @@ def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
 # 密码管理
 # ================================================================
 
+def invalidate_runtime_caches() -> None:
+    """auth.json 被外部写入后 (配置备份导入) 失效进程内缓存。
+
+    密码判定缓存 + 会话内存态都基于旧文件; 导入覆盖后必须重读,
+    否则新设备恢复的密码/会话在本进程内不可见。
+    """
+    global _configured_cache
+    _configured_cache = None
+    _restore_sessions()
+
+
 def is_configured() -> bool:
     """是否已设置访问密码 (带缓存)。
 
