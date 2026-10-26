@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +54,8 @@ class _FakeService:
         self.calls = []
         self.prepared_calls = []
         self.prepared_values = []
+        self.prepared_panel_values = []
+        self.panel_prepared_calls = []
         self.result_policies = []
         self.matrix_cache_max_bytes = None
         self.cache = _FakeCache()
@@ -66,6 +69,11 @@ class _FakeService:
             "compute_cache": self.cache,
         })()
 
+    def prepare_panel_optimization(self, configs):
+        self.panel = SimpleNamespace(estimated_size=lambda: 2048)
+        self.panel_prepared_calls.append(list(configs))
+        return SimpleNamespace(panel=self.panel)
+
     def run(
         self,
         config,
@@ -73,10 +81,12 @@ class _FakeService:
         cancel_event=None,
         prepared=None,
         result_policy=None,
+        prepared_panel=None,
     ):
         with self._lock:
             self.calls.append(dict(config.params or {}))
             self.prepared_values.append(prepared)
+            self.prepared_panel_values.append(prepared_panel)
             self.result_policies.append(result_policy)
         return self.score_fn(config.params or {})
 
@@ -235,10 +245,29 @@ def test_progress_callback_reports_done_total():
     def cb(msg):
         seen.append(msg)
     _optimizer(score).optimize(_cfg(), progress_cb=cb)
-    assert len(seen) == 4
+    # P2a: 面板路径先发一条 optimizer_prepare (含共享面板字节), 再逐组进度。
+    assert len(seen) == 5
+    assert seen[0]["type"] == "optimizer_prepare"
+    assert seen[0]["shared_panel_bytes"] == 2048
     assert seen[-1]["type"] == "optimizer_finalize"
     assert seen[-1]["done"] == 3
     assert all(m["total"] == 3 for m in seen)
+
+
+def test_panel_optimizer_prepares_once_and_passes_to_trials():
+    def score(p):
+        return _FakeResult(stats={"sortino": p["ma_proximity"]})
+
+    opt = _optimizer(score)  # 默认 polars_expr
+    out = opt.optimize(_cfg(max_workers=8))
+
+    assert len(opt.service.panel_prepared_calls) == 1
+    assert len(opt.service.panel_prepared_calls[0]) == 3  # 全部组合一次性解析
+    assert out["shared_panel"] is True
+    assert out["shared_panel_bytes"] == 2048
+    # 每个试算 + 最优复跑 (3+1) 都复用同一份共享面板
+    assert len(opt.service.prepared_panel_values) == 4
+    assert all(v is not None and v.panel is opt.service.panel for v in opt.service.prepared_panel_values)
 
 
 def test_matrix_optimizer_prepares_once_and_reuses_same_market_data():

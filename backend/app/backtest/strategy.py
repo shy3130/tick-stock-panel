@@ -102,8 +102,8 @@ def _merge_resolved_feature_plans(
     if not plans:
         raise ValueError("cannot merge an empty feature plan list")
     backends = {plan.execution_backend for plan in plans}
-    if backends != {"matrix_native"}:
-        raise ValueError("shared MarketDataMatrix preparation only supports matrix_native")
+    if len(backends) != 1:
+        raise ValueError("shared preparation requires a single execution backend")
 
     def _union(field: str) -> frozenset[str]:
         merged: set[str] = set()
@@ -120,7 +120,7 @@ def _merge_resolved_feature_plans(
         instrument_columns=_union("instrument_columns"),
         warmup_bars=max(plan.warmup_bars for plan in plans),
         full_feature_fallback=any(plan.full_feature_fallback for plan in plans),
-        execution_backend="matrix_native",
+        execution_backend=backends.pop(),
         fundamental_columns=_union("fundamental_columns"),
     )
 
@@ -780,6 +780,28 @@ class PreparedMatrixBacktest:
     compute_cache: MatrixComputeCache
 
 
+def _panel_backend(execution_backend: str) -> bool:
+    """该执行后端走 polars 面板路径 (run 的 else 分支): polars_expr 与
+    python_history_legacy (动态 filter_history) 等一切非矩阵/复合/分钟后端。"""
+    return execution_backend not in ("matrix_native", "composite", "minute_filter")
+
+
+@dataclass(frozen=True)
+class PreparedPanelBacktest:
+    """polars_expr 参数网格的共享特征面板 (P2a) — 一次加载, 全部试算复用。
+
+    面板列是全部参数组依赖计划的并集; run 逐组做子集校验 (fail-closed),
+    缺列直接报错而不是静默回退加载 — 静默回退会掩盖计划漂移, 且优化器
+    正在拿"部分组快、部分组慢"的混合结果, 不如整批显式失败。"""
+
+    signature: tuple
+    panel: pl.DataFrame
+    columns: frozenset[str]
+    load_start: date
+    load_end: date
+    sim_end: date
+
+
 class StrategyBacktestService:
     def __init__(
         self,
@@ -1107,6 +1129,81 @@ class StrategyBacktestService:
             compute_cache=compute_cache,
         )
 
+    def prepare_panel_optimization(
+        self,
+        configs: list[StrategyBacktestConfig],
+    ) -> PreparedPanelBacktest:
+        """polars_expr 参数网格的共享特征面板 (P2a): 逐组解析依赖计划取并集,
+        一次加载全组复用 — 消灭每组重复的 载盘/指标计算/信号注入。
+
+        与 prepare_matrix_optimization 同一套签名约束 (params 不入签名 — 参数
+        驱动的列差异由并集计划覆盖); load 窗口推导与 run() 完全同口径。
+        """
+        if not configs:
+            raise ValueError("optimizer preparation requires at least one backtest config")
+
+        signature = self._matrix_prepare_signature(configs[0])
+        if any(self._matrix_prepare_signature(config) != signature for config in configs[1:]):
+            raise ValueError("optimizer trials must share strategy, universe, range and overrides")
+
+        first = configs[0]
+        strategy = self.strategy_engine.get(first.strategy_id)
+        if not _panel_backend(strategy.execution_backend):
+            raise ValueError("shared feature panel preparation requires a panel-path strategy")
+        StrategyEngine.validate_context(
+            strategy,
+            StrategyDataContext(
+                asset_type=first.asset_type,
+                timeframe="1d",
+                as_of=first.end,
+            ),
+        )
+
+        overrides = first.overrides or {}
+        basic_filter = _basic_filter_for_asset(
+            self._effective_basic_filter(strategy, overrides), first.asset_type
+        )
+        entry_signals = self._effective_signals(overrides, "entry_signals", strategy.entry_signals)
+        exit_signals = self._effective_signals(overrides, "exit_signals", strategy.exit_signals)
+        resolver = StrategyDependencyResolver()
+        plans: list[ResolvedFeaturePlan] = []
+        for config in configs:
+            params = self._normalize_params(config.params or {}, strategy)
+            plans.append(resolver.resolve(
+                strategy,
+                params=params,
+                basic_filter=basic_filter,
+                entry_signals=entry_signals,
+                exit_signals=exit_signals,
+                overrides=overrides,
+                minute_fill=config.minute_fill,
+                asset_type=config.asset_type,
+            ))
+        feature_plan = _merge_resolved_feature_plans(plans)
+
+        max_hold_days = self._override_value(overrides, "max_hold_days", strategy.max_hold_days)
+        full_horizon_days = max(int(max_hold_days or first.holding_days or 5), 1)
+        warmup_days = max(120, int(max(feature_plan.warmup_bars, 1) * 1.6))
+        load_start = first.start - timedelta(days=warmup_days)
+        load_end = first.end
+        if first.mode == "full":
+            load_end = first.end + timedelta(days=(full_horizon_days + 5) * 2)
+        sim_end = load_end if first.mode == "full" else first.end
+
+        panel = self.engine.load_panel_for_backtest(
+            first.symbols, load_start, load_end, feature_plan, asset_type=first.asset_type,
+        )
+        if panel.is_empty():
+            raise ValueError("共享特征面板无数据，请检查日期范围或先运行盘后管道")
+        return PreparedPanelBacktest(
+            signature=signature,
+            panel=panel,
+            columns=frozenset(panel.columns),
+            load_start=load_start,
+            load_end=load_end,
+            sim_end=sim_end,
+        )
+
     def run(
         self,
         config: StrategyBacktestConfig,
@@ -1114,6 +1211,7 @@ class StrategyBacktestService:
         cancel_event: threading.Event | None = None,
         prepared: PreparedMatrixBacktest | None = None,
         result_policy: BacktestResultPolicy | None = None,
+        prepared_panel: PreparedPanelBacktest | None = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
@@ -1347,18 +1445,38 @@ class StrategyBacktestService:
                 return _err("正式回测区间内无数据")
             feature_width = len(feature_plan.matrix_columns)
         else:
-            t_load = time.perf_counter()
-            try:
-                panel = self.engine.load_panel_for_backtest(
-                    config.symbols,
-                    load_start,
-                    load_end,
-                    feature_plan,
-                    asset_type=config.asset_type,
+            if prepared_panel is not None:
+                # P2a 共享面板: 优化器准备的超集面板直接复用, 跳过载盘/指标/信号注入。
+                if not _panel_backend(s.execution_backend):
+                    return _err("共享特征面板只能用于面板路径策略")
+                if prepared_panel.signature != self._matrix_prepare_signature(config):
+                    return _err("共享特征面板与当前回测配置不匹配")
+                required_columns = (
+                    set(feature_plan.base_columns) | set(feature_plan.instrument_columns)
+                    | set(feature_plan.signal_columns) | set(feature_plan.indicator_columns)
+                    | set(feature_plan.fundamental_columns)
                 )
-            except (ValueError, pl.exceptions.PolarsError) as e:
-                return _err(f"回测特征准备失败: {e}")
-            timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
+                missing_columns = required_columns - prepared_panel.columns
+                if missing_columns:
+                    return _err(f"共享特征面板缺少本参数组所需列: {sorted(missing_columns)}")
+                panel = prepared_panel.panel
+                load_start = prepared_panel.load_start
+                load_end = prepared_panel.load_end
+                sim_end = prepared_panel.sim_end
+                timing_ms["load_panel"] = 0.0
+            else:
+                t_load = time.perf_counter()
+                try:
+                    panel = self.engine.load_panel_for_backtest(
+                        config.symbols,
+                        load_start,
+                        load_end,
+                        feature_plan,
+                        asset_type=config.asset_type,
+                    )
+                except (ValueError, pl.exceptions.PolarsError) as e:
+                    return _err(f"回测特征准备失败: {e}")
+                timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
             if panel.is_empty():
                 return _err("无数据，请检查日期范围或先运行盘后管道")
             # 环境过滤下正式起点=面板首日时顺延 (首日让渡为预热)
