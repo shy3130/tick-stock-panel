@@ -5,7 +5,8 @@
 
 ensure_builtin_presets 的契约:
   - 只创建/补齐 config.json, 不拉取数据 (数据由调度器或用户手动触发)
-  - 空壳 / 历代出厂配方 → 补齐/替换为当前配方
+  - 创建仅发生在首次安装 (播种标记缺失); 已播种后删除的内置表不复活
+  - 空壳 / 历代出厂配方 → 补齐/替换为当前配方 (不受播种标记限制)
   - 用户自定义过 pull (URL 非出厂值) 或 description → 一律不碰
   - 失败只记 warning, 不阻断启动
 """
@@ -56,6 +57,46 @@ def test_ensure_builtin_presets_writes_complete_configs(tmp_path: Path) -> None:
         assert config.pull is not None, f"{cid} 出厂配方未写入"
         assert config.pull.url, f"{cid} 第一级 URL 为空"
         assert config.pull.fanout, f"{cid} 两级配方未写入"
+
+
+# ------------------------------------------------------- 只播种一次 (不复活)
+def test_seed_marker_written_on_first_install_and_survives_delete(tmp_path: Path) -> None:
+    """首次安装写播种标记; 标记在 ext_data 根下, 删除单表目录不会误清。"""
+    asyncio.run(ensure_builtin_presets(tmp_path))
+    marker = tmp_path / "ext_data" / ".builtin_presets_seeded"
+    assert marker.exists(), "首次安装未写播种标记"
+
+    assert ExtConfigStore(tmp_path).delete("ext_gn_ths") is True
+    assert marker.exists(), "删除单表误清了播种标记"
+
+
+def test_deleted_builtin_preset_is_not_resurrected(tmp_path: Path) -> None:
+    """已播种后删除内置表 → 重启不复活 (用户可能已接自有概念/行业源)。
+
+    复活会让两套表并存, 内置表每天再拉 710 次成分股调用。
+    """
+    asyncio.run(ensure_builtin_presets(tmp_path))
+    store = ExtConfigStore(tmp_path)
+    assert store.delete("ext_gn_ths") is True
+
+    asyncio.run(ensure_builtin_presets(tmp_path))
+
+    assert store.get("ext_gn_ths") is None, "已播种后被删除的内置表又被复活"
+    assert store.get("ext_hy_ths") is not None, "存活的另一张表不应受影响"
+
+
+def test_partial_install_fills_missing_once_then_stops(tmp_path: Path) -> None:
+    """老库升级形态: 目录里已有部分预设但无标记 → 补齐缺失 + 落标记 (仅此一次)。"""
+    store = ExtConfigStore(tmp_path)
+    store.upsert(_industry_preset())
+
+    asyncio.run(ensure_builtin_presets(tmp_path))
+
+    refreshed = ExtConfigStore(tmp_path)
+    assert refreshed.get("ext_gn_ths") is not None, "缺的预设未被补齐"
+    assert refreshed.delete("ext_gn_ths") is True
+    asyncio.run(ensure_builtin_presets(tmp_path))
+    assert refreshed.get("ext_gn_ths") is None, "播种后再次删除仍被复活"
 
 
 def test_ensure_builtin_presets_fills_empty_shell(tmp_path: Path) -> None:
