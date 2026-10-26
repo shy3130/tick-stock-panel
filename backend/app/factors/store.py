@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.definitions import DefinitionKind, JsonDefinitionStore, register_kind
 from app.factors.dsl import compile_formula
+from app.factors.py_expr import compile_python_expression
 from app.factors.registry import FactorSpec, factor_dependencies, get_factor, register_factor
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,30 @@ def to_spec(definition: dict) -> FactorSpec:
 
     if kind == "custom":
         formula = str(definition.get("formula", ""))
+        lang = str(definition.get("lang", "dsl")).strip().lower()
+        if lang not in ("dsl", "python"):
+            raise ValueError(f"未知 lang: {lang} (可选 dsl / python)")
+        if lang == "python":
+            # T2 表达式级 Python (P3): 依赖由 ctx 构造期登记; 显式 warmup
+            # 只允许增大 (推断值是安全下限, 少算会失真)。
+            compiled = compile_python_expression(formula)
+            if not compiled.ok:
+                first = compiled.errors[0]
+                raise ValueError(f"表达式无效 [{first.code}]: {first.message}")
+            declared_warmup = int(definition.get("warmup_bars", 0) or 0)
+            return FactorSpec(
+                id=factor_id,
+                label=label,
+                group=str(definition.get("group", "自定义")),
+                formula_text=formula,
+                kind="custom",
+                lang="python",
+                version=int(definition.get("version", 1)),
+                dependencies=compiled.dependencies,
+                warmup_bars=max(declared_warmup, compiled.warmup_bars),
+                direction=str(definition.get("direction", "none")),  # type: ignore[arg-type]
+                stability="stable" if status == "active" else "experimental",
+            )
         compiled = compile_formula(formula)
         if not compiled.ok:
             first = compiled.errors[0]

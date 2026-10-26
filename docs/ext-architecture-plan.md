@@ -51,7 +51,7 @@
 | P1a 依赖推导 | filter_history AST 列推导(`app/strategy/feature_deps.py`), 引擎加载接入 | 无声明且可证明的策略不再全量兜底 | ✅ |
 | P1b 契约统一 | signal/factor 统一 schema + 依赖提取公共化 | 新增 kind 复用同一校验/注册路径 | ✅ |
 | P2 L2 物化 | 按需物化 + 内容寻址缓存 + 失效传播; 指标成为一等定义 | 调参循环提速 ≥2×; 新增 10 个自定义指标热路径耗时不变 | ✅ |
-| P3 表达式级 Python | T2 中间层 (ctx 追踪依赖+安全) | SKDJ 类口径零 DSL 可表达 | ⬜ |
+| P3 表达式级 Python | T2 中间层 (ctx 追踪依赖+安全) | SKDJ 类口径零 DSL 可表达 | ✅ |
 | P4 体验与分发 | 统一选择器/自动表单/导入冒烟; 备份管线复用为扩展包 | 新增信号导入到可回测 ≤2 分钟 | ⬜ |
 | 条件: 沙箱 | T3 子进程执行 | 触发条件: 首次真实导入第三方扩展 | ⬜ |
 
@@ -82,6 +82,20 @@ stats 剔除计时字段后逐组完全一致, 交易逐笔相同; tests/backtes
 剩余每组成本 = filter_history (参数相关, 不可共享) + 掩码散布。
 P2b (L2 内容寻址物化) 在此之上进一步覆盖跨 run/跨策略的因子复用。
 
+
+## P3 交付(2026-10-26)
+
+- `app/factors/py_expr.py` T2 表达式级 Python: AST 白名单文法 (仅赋值/表达式
+  语句, 名字限 ctx/pl/局部量, 禁 import/def/lambda/循环/推导式/下划线属性/
+  回调与 IO 类方法) + {ctx, pl} + 空 builtins 求值, 结果必须是单个 pl.Expr。
+- 依赖: ctx.col 构造期登记 → FactorSpec.dependencies (回测计划/P2b 缓存键
+  同源); warmup 从窗口常量保守推断, 显式声明只能增大 (安全下限)。
+- 贯通: registry FactorSpec.lang 字段 (默认 dsl, 存量零影响) → store to_spec
+  编译分支 → materialize_scoring_columns 分发 → API validate/trial 支持
+  lang=python。
+- 验收: 看板口径 SKDJ (9日RSV→EMA(α=0.5)×2, 分母 0 取 50) 的 T2 单表达式与
+  策略文件分阶段实现**逐元素一致** (test_skdj_t2_matches_staged_reference_exactly);
+  19 个契约测试含 11 种文法拒绝形态。
 
 ## P2b 实测(2026-10-26, 本机, 132 万行合成帧, 13 个自定义 DSL 因子)
 

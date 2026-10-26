@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.factors import store
 from app.factors.dsl import FACTOR_COLUMN, compile_formula
+from app.factors.py_expr import compile_python_expression
 from app.factors.registry import all_factors, unregister_factor
 from app.market_time import cn_today
 
@@ -60,6 +61,7 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
 
 class FormulaValidateRequest(BaseModel):
     formula: str = Field(..., min_length=1, max_length=2000)
+    lang: str = Field(default="dsl", pattern="^(dsl|python)$")
 
 
 def _compiled_payload(compiled) -> dict:
@@ -75,7 +77,11 @@ def _compiled_payload(compiled) -> dict:
 
 @router.post("/validate")
 def validate_formula(req: FormulaValidateRequest) -> dict:
-    """公式校验: 语法/语义/窗口纪律/依赖推导, 编译期 fail-closed。"""
+    """公式校验: 语法/语义/窗口纪律/依赖推导, 编译期 fail-closed。
+
+    lang=dsl → 受限公式; lang=python → T2 表达式级 Python (P3)。"""
+    if req.lang == "python":
+        return _compiled_payload(compile_python_expression(req.formula))
     return _compiled_payload(compile_formula(req.formula))
 
 
@@ -87,7 +93,9 @@ class FormulaTrialRequest(FormulaValidateRequest):
 @router.post("/trial")
 def trial_formula(req: FormulaTrialRequest, request: Request) -> dict:
     """公式试算: 最近 N 个交易日截面 Rank IC 快照 (复用回测面板与虚拟因子物化路径)。"""
-    compiled = compile_formula(req.formula)
+    compiled = (
+        compile_python_expression(req.formula) if req.lang == "python" else compile_formula(req.formula)
+    )
     if not compiled.ok:
         raise HTTPException(status_code=400, detail={"errors": [error.to_dict() for error in compiled.errors]})
 

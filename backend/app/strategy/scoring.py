@@ -294,6 +294,7 @@ def materialize_scoring_columns(
     # 缓存故障一律回退现算, 不影响正确性。
     from app.factors.dsl import FACTOR_COLUMN, compile_formula_cached
     from app.factors.materialize_cache import cache_key, get_cached, put_cached
+    from app.factors.py_expr import compile_python_expression_cached
 
     # 两段式: 命中列一次批量附着 (成本与因子数无关 — 每列一次 with_columns
     # 会随 K 线性拷贝帧); 未命中的逐个现算 (帧变换有依赖顺序)。
@@ -303,7 +304,12 @@ def materialize_scoring_columns(
         spec = _registry_get_factor(str(name))
         if spec is None or spec.kind != "custom" or name in frame.columns:
             continue
-        compiled = compile_formula_cached(spec.formula_text)
+        if getattr(spec, "lang", "dsl") == "python":
+            compiled = compile_python_expression_cached(spec.formula_text)
+        else:
+            compiled = compile_formula_cached(spec.formula_text)
+        if not getattr(compiled, "ok", True):
+            continue
         if compiled.frame_transform is None:
             continue
         key = cache_key(
