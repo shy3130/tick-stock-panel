@@ -2,8 +2,9 @@
 
 背景: 声明了 filter_history (动态 Python 过滤) 但没有声明 REQUIRED_FEATURES 的
 策略, 回测无法静态推断需要哪些列, 只能退回"计算全部指标"(backtest/strategy.py
-的 full_fallback, 结果正确但白白多算)。本模块对函数体做 AST 静态追踪, 收集
-列引用常量, 让绝大多数此类策略拿到精确依赖, 消灭全量兜底。
+的 full_fallback, 结果正确但白白多算)。本模块对策略文件及其 `_*.py` 依赖文件
+做 AST 静态追踪, 收集列引用常量 (含模块级辅助函数), 让绝大多数此类策略拿到
+精确依赖, 消灭全量兜底。
 
 fail-closed 契约: 任何无法证明的形态 — 动态列名、pl.all()/polars.selectors、
 完全收集不到列引用 — 一律返回 None, 调用方保持原有全量兜底。宁可慢,
@@ -75,25 +76,39 @@ def _collect_from_source(source: str) -> tuple[set[str], bool]:
 
 
 def infer_filter_history_features(fn) -> frozenset[str] | None:
-    """推导 filter_history 引用的输入列; None = 不可推导 (调用方保持全量兜底)。
+    """推导单个 filter_history 函数引用的输入列; None = 不可推导。
 
-    只保留已知输入列 (enriched 存储/指标/证券维表), `_` 前缀的中间列
-    (函数内 with_columns 先建后用的临时列) 不是输入依赖, 剔除。
+    只看函数自身源码 — 覆盖不了"同模块辅助函数/`_*.py` 依赖文件里硬编码列"
+    的形态, 引擎路径请用 infer_features_from_sources (整家族文件一起推导)。
     """
-    from app.indicators.pipeline import ENRICHED_STORAGE_COLS, INDICATOR_COLUMNS
-
     try:
-        # 嵌套定义的函数 getsource 带原始缩进, 直接 parse 会 IndentationError。
         source = textwrap.dedent(inspect.getsource(fn))
     except (OSError, TypeError) as e:
         logger.debug("feature inference: no source for %r: %s", getattr(fn, "__name__", fn), e)
         return None
-    try:
-        names, uninferable = _collect_from_source(source)
-    except SyntaxError:
-        return None  # 已加载模块不应有语法错误; 防御性 fail-closed
-    if uninferable or not names:
-        # 收集不到列引用 (如 df["x"] 下标风格) 与存在动态形态同样不可证明。
+    return infer_features_from_sources([source])
+
+
+def infer_features_from_sources(sources) -> frozenset[str] | None:
+    """对一组源码 (策略主文件 + `_*.py` 依赖) 整体推导输入列。
+
+    家族内任一文件出现不可证明形态 (动态列名/pl.all/cs.*) 即整体返回 None —
+    辅助函数漏列会让回测帧缺列, 宁可整体回退全量兜底。
+    其余 fail-closed 契约与单函数版一致。
+    """
+    from app.indicators.pipeline import ENRICHED_STORAGE_COLS, INDICATOR_COLUMNS
+
+    names: set[str] = set()
+    for raw in sources:
+        try:
+            collected, uninferable = _collect_from_source(textwrap.dedent(raw))
+        except SyntaxError:
+            return None  # 家族文件解析失败按不可证明处理
+        if uninferable:
+            return None
+        names |= collected
+    if not names:
+        # 收集不到列引用 (如 df["x"] 下标风格) 同样不可证明。
         return None
     known = set(ENRICHED_STORAGE_COLS) | set(INDICATOR_COLUMNS) | {"name", "total_shares", "float_shares"}
     features = frozenset(n for n in names if n in known and not n.startswith("_"))

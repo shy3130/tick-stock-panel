@@ -135,3 +135,87 @@ def test_engine_explicit_declaration_wins(tmp_path):
     engine = _engine_with(tmp_path, source)
     assert not engine.load_errors()
     assert engine.get("custom_inf_ok").required_features == frozenset({"close"})
+
+
+# ── 家族推导: 模块级辅助函数 + `_*.py` 依赖文件 ────────────
+# 回归: 只解析 filter_history 函数体会漏掉这些位置硬编码的列 → 回测帧缺列
+# ColumnNotFoundError。范围放宽只会多载列, 不会漏。
+
+_HELPER = '''\
+META = {"id": "custom_inf_helper", "name": "helper", "description": "", "tags": []}
+
+import polars as pl
+
+
+def _trend_ok(df: pl.DataFrame) -> pl.Expr:
+    return pl.col("ma20") > pl.col("ma60")
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    return df.filter(_trend_ok(df) & (pl.col("close") > 1))
+'''
+
+_DEP_IMPORTER = '''\
+META = {"id": "custom_inf_dep", "name": "dep", "description": "", "tags": []}
+
+import polars as pl
+
+import _dep
+
+
+def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    return df.filter(_dep.momentum_ok("rsi_6") & (pl.col("close") > 1))
+'''
+
+_DEP_FILE = '''\
+import polars as pl
+
+
+def momentum_ok(col_name: str) -> pl.Expr:
+    # 实现固定引用 rsi_6 (col_name 参数仅供调用方语义, 不参与列选择)
+    return pl.col("rsi_6") < 30
+'''
+
+_DEP_FILE_DYNAMIC = '''\
+import polars as pl
+
+
+def momentum_ok(col_name: str) -> pl.Expr:
+    # 列名经参数传递 — 调用方可传任意列, AST 常量收集无法证明
+    return pl.col(col_name) < 30
+'''
+
+
+def test_engine_infers_module_level_helper_columns(tmp_path):
+    engine = _engine_with(tmp_path, _HELPER)
+    assert not engine.load_errors()
+    s = engine.get("custom_inf_helper")
+    assert s is not None
+    # ma20/ma60 在辅助函数里, 不在 filter_history 函数体内 — 必须仍被推导
+    assert s.required_features == frozenset({"close", "ma20", "ma60"})
+
+
+def test_engine_infers_dependency_file_columns(tmp_path):
+    d = tmp_path / "custom"
+    d.mkdir(parents=True)
+    (d / "custom_inf_dep.py").write_text(_DEP_IMPORTER, encoding="utf-8")
+    (d / "_dep.py").write_text(_DEP_FILE, encoding="utf-8")
+    engine = StrategyEngine(strategy_dirs=[d])
+    assert not engine.load_errors()
+    s = engine.get("custom_inf_dep")
+    assert s is not None
+    # rsi_6 只存在于 `_dep.py` — 家族推导必须覆盖依赖文件
+    assert s.required_features == frozenset({"close", "rsi_6"})
+
+
+def test_engine_family_fail_closed_on_dynamic_dependency(tmp_path):
+    """依赖文件里出现动态列名 → 整个家族不可证明 → 保持全量兜底。"""
+    d = tmp_path / "custom"
+    d.mkdir(parents=True)
+    (d / "custom_inf_dep.py").write_text(_DEP_IMPORTER, encoding="utf-8")
+    (d / "_dep.py").write_text(_DEP_FILE_DYNAMIC, encoding="utf-8")
+    engine = StrategyEngine(strategy_dirs=[d])
+    assert not engine.load_errors()
+    s = engine.get("custom_inf_dep")
+    assert s is not None
+    assert s.required_features == frozenset()

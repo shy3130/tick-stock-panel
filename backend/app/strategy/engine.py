@@ -233,22 +233,32 @@ class _RealtimeMatrixEntry:
     buffer: Any
 
 
-def _resolve_required_features(meta: dict, mod, filter_history_fn) -> frozenset[str]:
+def _resolve_required_features(meta: dict, mod, filter_history_fn, path: Path) -> frozenset[str]:
     """显式声明 (META/module REQUIRED_FEATURES) 优先; 缺失且存在动态
     filter_history 时, AST 推导列依赖兜底 — 推导不可证明则保持为空,
-    回测层继续走全量指标计算 (fail-closed)。"""
+    回测层继续走全量指标计算 (fail-closed)。
+
+    推导范围是整个策略文件 + 同目录 `_*.py` 依赖文件, 不只是 filter_history
+    函数体: 列引用在模块级辅助函数或依赖文件里硬编码时, 只看函数体会漏列,
+    回测帧缺列直接 ColumnNotFoundError。范围放宽只会多载列, 不会漏。"""
     declared = frozenset(meta.get("required_features", []) or []) | frozenset(
         getattr(mod, "REQUIRED_FEATURES", []) or []
     )
     if declared or filter_history_fn is None:
         return declared
-    from app.strategy.feature_deps import infer_filter_history_features
+    from app.strategy.feature_deps import infer_features_from_sources
 
-    inferred = infer_filter_history_features(filter_history_fn)
+    family = [path, *sorted(p for p in path.parent.glob("_*.py") if p != path)]
+    try:
+        sources = [p.read_text(encoding="utf-8") for p in family]
+    except OSError as e:
+        logger.debug("strategy %s: 依赖源码读取失败, 保持全量兜底: %s", meta.get("id", "<unknown>"), e)
+        return declared
+    inferred = infer_features_from_sources(sources)
     if inferred is None:
         return declared
     logger.info(
-        "strategy %s: filter_history AST 推导出 %d 个依赖列, 免除回测全量兜底",
+        "strategy %s: 依赖源码 AST 推导出 %d 个依赖列, 免除回测全量兜底",
         meta.get("id", "<unknown>"),
         len(inferred),
     )
@@ -604,7 +614,7 @@ class StrategyEngine:
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
-            required_features=_resolve_required_features(meta, mod, filter_history_fn),
+            required_features=_resolve_required_features(meta, mod, filter_history_fn, path),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
             source=source,
             file_path=path,
