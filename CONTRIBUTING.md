@@ -1,3 +1,437 @@
+# Tick Stock Panel — Contributing, AI Development & Review Guide
+
+This document applies to the entire repository and is shared by contributors, AI coding agents, and PR reviewers. Its purpose is to put changes in the right module, keep data semantics, pluginization, and compatibility consistent, and reduce rework through reproducible verification.
+
+`CONTRIBUTING.md` is the project's contribution and review standard. It does not replace the user-facing documentation in `README.md` or the domain documentation under `docs/`. Every contributor and AI coding agent must read this document before modifying code, committing, or reviewing a PR.
+
+When doing secondary development, also follow [`docs/secondary-development.md`](docs/secondary-development.md). On the frontend, prefer real, existing controlled slots or registration entry points; on the backend, prefer small-grained strategy interfaces and dependency injection. When existing extension points cannot express a core behavior change, modifying the source directly is allowed, but the change must stay focused and must come with compatibility verification.
+
+## 1. Core Principles
+
+### 1.1 Understand Before Modifying
+
+- First locate the real call chain, data source, cache layer, and existing tests. Do not guess the implementation from file names or UI symptoms.
+- Clarify the user problem, inputs, outputs, asset type, timeframe, and compatibility boundary before changing anything.
+- When multiple interpretations exist, state your assumptions. Ambiguities that change business semantics must be confirmed first.
+- Prefer reusing existing interfaces, services, types, and components. Do not build a second, parallel implementation of the same logic.
+
+### 1.2 Keep It Simple
+
+- Implement only the current requirement. Do not add unrequested configuration, compatibility layers, or general-purpose frameworks.
+- Do not abstract single-use logic prematurely. Reuse only when real duplication or a clear module boundary appears.
+- If a change fits within an existing module, do not introduce cross-layer dependencies or new directories.
+- Comments explain "why", not what the code does.
+
+### 1.3 Minimal Scope
+
+- Every change must be traceable to the current problem.
+- Do not refactor, rename, reformat, or delete unrelated code along the way.
+- Preserve uncommitted changes from users and other contributors. Do not overwrite or revert them.
+- Only clean up unused imports, variables, files, and debug output produced by this change.
+
+### 1.4 Verification Results Define "Done"
+
+- When fixing a bug, prefer writing a test that reproduces the problem first, then fix until the test passes.
+- New features must cover at least the happy path, key boundaries, and failure paths.
+- "The code is written", "the page opens", or "GitHub has no red X" do not mean the work is done.
+- If the required verification cannot be run, the PR must state why and what risk remains.
+
+## 2. Project Architecture
+
+### 2.1 Tech Stack
+
+- Backend: Python 3.11+, FastAPI, Pydantic v2, Polars, DuckDB, PyArrow.
+- The backtest boundary may use pandas; business data computation should prefer Polars. `vectorbt` is an optional dependency and must never break main flows when it is not installed.
+- Frontend: React 18, TypeScript, Vite, TanStack Query, Tailwind CSS, ECharts, lightweight-charts.
+- Package management and verification commands: the backend uses `uv`, the frontend uses `pnpm`.
+
+### 2.2 Main Data Flow
+
+```text
+Data source or data plugin
+  -> services synchronization, validation, and normalization
+  -> DataStore / KlineRepository / Parquet
+  -> indicators pipeline producing enriched data
+  -> strategy / monitoring / backtest / analysis services
+  -> FastAPI API / SSE
+  -> frontend API types + TanStack Query
+  -> pages and shared components
+```
+
+Before changing anything, check the upstream and downstream along this chain. It is forbidden to bypass normalization, repositories, and business services by reading a data source or local file directly from the page or API layer.
+
+### 2.3 Module Boundaries
+
+| Directory | Responsibility | Placement rules |
+| --- | --- | --- |
+| `backend/app/api/` | HTTP, SSE, parameter validation, and response mapping | Keep it thin. No heavy computation, full scans, or data-source-specific business logic |
+| `backend/app/services/` | Synchronization, realtime quotes, notifications, and other business orchestration | Compose domain capabilities. Do not duplicate repository or provider implementations |
+| `backend/app/tickflow/` | Data storage, repositories, capability detection, and TickFlow integration | Expose capabilities only through existing abstractions; upper layers must not depend on storage details |
+| `backend/app/data_providers/` | Data source interfaces, normalized models, and custom data sources | Define the dataset contract first for any new data capability, then implement it in a provider |
+| `backend/app/plugins/` | Plugin discovery, loading, and plugin protocol | Plugin failure must not break main flows when the plugin is not enabled |
+| `backend/app/indicators/` | Indicator computation and the enriched pipeline | Keep it vectorized; be explicit about raw price, adjusted price, and output units |
+| `backend/app/strategy/` | Strategy registration, execution, monitoring, and AI strategies | Built-in and custom strategies should share the execution contract as much as possible; do not create divergent semantics |
+| `backend/app/backtest/` | Backtesting, optimization, walk-forward optimization, and workers | Strictly isolate signal generation from fill simulation to prevent look-ahead bias |
+| `frontend/src/lib/api.ts` | Frontend API requests and type contracts | Backend contract changes must be reflected in types and callers |
+| `frontend/src/lib/queryKeys.ts` | TanStack Query keys | Maintain query keys centrally; do not build parallel keys inside components |
+| `frontend/src/lib/useSharedQueries.ts` and similar | Cross-page shared queries | Prefer shared caching for identical data; avoid repeated requests per card |
+| `frontend/src/pages/` | Page-level orchestration | Push complex domain logic down into hooks, components, or backend services |
+| `frontend/src/components/` | Reusable interactive components | Keep prop contracts stable; do not put page-specific state into shared components |
+| `data/` | User runtime data | Not committed to Git. Never write local samples, account information, or absolute paths into a PR |
+
+## 3. Data Contracts That Must Not Be Mixed
+
+Errors in financial data often do not raise exceptions, but they produce results that look plausible but are wrong. For the fields below, correctness of semantics must be proven in variable names, boundary conversions, or tests.
+
+### 3.1 Ratios and Percentages
+
+| Field/scenario | Current semantics | Example |
+| --- | --- | --- |
+| `change_pct` at the custom realtime data source entry | Decimal ratio | `0.0366` means `3.66%` |
+| `change_pct` inside enriched and stock monitoring | Usually decimal ratio | Confirm the call chain before threshold comparisons; do not infer from the field name |
+| Change percentage in the index realtime display cache | Percentage semantics exist | Must be converted explicitly before use; never reuse directly in stock monitoring |
+| `turnover_rate` at the realtime data source entry | Decimal ratio | `0.05` means `5%` |
+| `turnover_rate` in enriched | Percentage value | `5` means `5%` |
+
+Any new cross-boundary mapping must add unit tests. Heuristic conversions such as "multiply by 100 if the value is less than 1" are forbidden, because they mask real data errors.
+
+The `bid_volumes` / `ask_volumes` of the five-level order book follow the existing sealed-order-volume semantics, in units of "lots" (手); the frontend multiplies by `100` to convert to shares when computing sealed-order amounts. Providers must complete unit conversion at the data boundary.
+
+### 3.2 Prices and Adjustment
+
+- The `open/high/low/close` in enriched data are forward-adjusted prices.
+- `raw_close/raw_high/raw_low` are unadjusted raw prices.
+- `limit_up_price` / `limit_down_price` are runtime columns for **limit judgment**: the exchange-effective price with a ∓0.005 tolerance (`raw_close >= limit_up_price` means limit-up; `null` on days without price limits or when the base price is missing). They are an engine capability, not a signal — signals that reference them (limit-up/limit-down/touch-and-break/limit-up break) are ordinary custom signal definitions; deleting the definition does not affect the judgment columns, and referencing parties degrade gracefully.
+- Limit-up, limit-down, one-line boards, limit-up breaks, and exchange price limits must be determined from raw prices and the corresponding trading-day rules.
+- Which price an indicator or return series uses must be consistent with existing indicator definitions. Do not mix prices within a single formula.
+
+### 3.3 Dates, Trading Days, and Time Zones
+
+- Windows, N-day lookbacks, and batch recomputation all follow actual trading days. Natural days must never be substituted directly.
+- A-share trading sessions are handled uniformly in Beijing time. The server time zone must not become an implicit input to business logic.
+- The `datetime` of minute bars is uniformly Beijing wall-clock time (naive, e.g. `09:35:00`); data source entries (`_normalize_minute` / `_try_custom_minute` in `kline_sync`) must enforce normalization. UTC semantics must never be stored or emitted.
+- Daily bars, minute bars, and realtime snapshots must have an explicit trading-date attribution, especially around the lunch break, after close, and across-day restarts.
+- Minute bars for stocks, ETFs, and indices are stored and routed separately. Never guess the asset type from the code format alone.
+
+### 3.4 Historical Share Capital and Turnover Rate
+
+- The turnover rate should prefer historical share capital whose announcement date is not later than the target trading day.
+- Only when usable historical share capital is missing may a fallback to the latest dimension-table share capital be allowed.
+- The current-day dimension table, the financial announcement date, and the reporting period are different concepts. A reporting period must never leak data that has not been announced yet.
+- When modifying share-capital completion or enriched recomputation, both paths must be covered: "historical share capital available" and "fallback without historical share capital".
+
+## 4. Data Source Plugin Requirements
+
+Data sources are already pluginized. Any general feature must access data through provider capabilities and normalized datasets. TickFlow SDK calls must never be hardcoded into strategies, monitoring, backtests, APIs, or frontend flows.
+
+- Use the existing `get_provider()`, `provider_has_dataset()`, and preferences-based routing capabilities.
+- Supported datasets include but are not limited to `daily`, `adj_factor`, `minute`, `full_minute` (intraday full-market minute persistence), `realtime`, `depth5`, and `financial`. New datasets must first define a clear input/output contract.
+- Providers are responsible for converting vendor fields, units, dates, and symbol formats into the internal standard format.
+- Upper-layer services depend on standard fields and capability declarations, not on vendor response structures.
+- Only features explicitly marked as TickFlow-exclusive may depend on TickFlow directly, and they must not affect other providers.
+- When a provider lacks a capability, the system must clearly indicate it, skip the feature, or fail closed. Silently switching to wrong data or wrong semantics is forbidden.
+- Plugin load failures, missing fields, and empty data must have isolation tests. They must not cause application startup failure or make other data sources unavailable.
+- New data source adapters must update the corresponding contract in `docs/custom-data-source.md` or `docs/plugin-development.md`.
+
+### Capability Routing Matrix Contract
+
+The capability matrix (the registry in `backend/app/data_providers/capabilities.py` plus `/api/settings/capability-matrix`) is the single source of truth for capability routing. The following invariants apply:
+
+- The registry centrally declares each capability's display metadata, routing preference fields, and TickFlow tier requirements. The frontend must not hardcode the capability list. Add new capabilities following the existing pattern: registry + preferences getter + capability-matrix injection + matrix test.
+- All page-level capability gating must rely on the matrix's `usable` value (whether the active source can genuinely provide the capability right now), not on the TickFlow plan perspective. Missing-capability prompts must guide users to data source configuration.
+- Capability layer neutrality: general UI (sidebar badges, capability routing cards, per-page gating messages) must not contain TickFlow tier or subscription vocabulary. Tier information appears only in the TickFlow-exclusive detail card. Provider names may appear as routing facts.
+- Each capability is routed independently. Follow-on/derived special values are forbidden (`same_as_daily` has been removed). Legacy invalid preference values self-heal via preference getter fallback instead of migration.
+- Boundary notes: intraday monitoring is backed by the minute capability (`intraday_monitor_support`); there is no separate intraday capability. Both the `full_minute` (full minute data) and `depth5` datasets are open for plugin declaration. `depth5` is routed independently and does not fall back across sources on failure.
+- Realtime indices are a product-level fixed contract and do not go through the routing matrix: the display layer (sidebar index strip, market overview) is fixed to the four core indices (`backend/app/services/index_const.py` is the single source of truth: SSE Composite / SZSE Component / ChiNext / STAR Composite). Backend consumers and the frontend Layout reference the same definition without creating copies. The index page is retained, but its symbols are fixed to the four core indices (no all-index search/browsing; `/api/index/list` and `/api/index/search` have been removed). Sidebar index multi-select configuration has been removed, along with the related preferences (`realtime_index_symbols`/`sidebar_index_symbols`/`indices_nav_pinned`/`realtime_pull_index`/`realtime_index_mode`). Monitoring rule index symbols are unrestricted — quote_service merges the four core indices with indices from enabled rules into an explicit pull list.
+- Custom-source index supplement protocol: A-share snapshots generally do not include indices (fuyao's tested behavior has no indices; indices live on a separate endpoint). Providers may implement an optional method `get_realtime_indices(symbols) -> list[dict] | None` (record structure identical to `realtime`); quote_service duck-types this call in the custom-source branch to supplement. `None` means the request failed and the last valid index cache is kept; `[]` means the request succeeded but returned no data; if unimplemented, the source index cache stays empty and local daily K-lines take over as fallback. fuyao index snapshots have coupled-failure semantics — a request mixed with unknown codes fails entirely, so plugins must filter unsupported suffixes first (e.g. `.BJ`).
+
+## 5. Domain-Specific Requirements
+
+### 5.1 Strategy
+
+- Built-in and custom strategies must follow a unified contract for base parameters, strategy parameters, filters, scoring, and result structure.
+- After changing parameters, verify all of the following: persisted content, runtime instance, strategy result cache, monitoring instance, and frontend queries.
+- The form state for creating a strategy must be initialized every time it opens. Edit-state data must not leak into create-state, and the previous strategy ID must not remain after closing or after a successful creation.
+- Strategy IDs are stable identifiers. Renaming, copying, importing, and deleting must each handle ID conflicts separately. Conflicts must never be resolved by silently overwriting files.
+- AI-generated strategy META must go through structured parsing and normalization. Preserve the ability to read legacy formats for compatibility, but new output must use the current specification.
+- Scoring fields must have a deterministic data source or a temporary computation path. When inputs are missing, return an explicit "not computable" state. Never disguise a missing value as a zero score.
+- Deleting a strategy touches user files. The target scope must be validated and fail closed. Path traversal and deletion of files outside the strategy directory must be impossible.
+
+### 5.2 Monitoring and Notifications
+
+- Monitoring computation should reuse normalized realtime quotes and unified rules. Do not compute separately for pages, voice, Feishu, and WeCom.
+- Change percentage, limit-up/limit-down, and average-price crossovers must have explicit data semantics, trading-session rules, asset types, and threshold directions.
+- Minute signals are enabled only when the provider declares minute data capability and the symbol is in the subscription pool. When permissions are missing, give an explicit status.
+- The quote callback thread must not run long-running tasks such as full historical recomputation, synchronous webhooks, or slow disk scans.
+- Notification text must use Chinese names that users can understand. Do not leak internal enum names, module names, or debug fields.
+- Deduplication, cooldown, and recovery state for the same event must be testable, and post-restart behavior must be consistent with the persistence design.
+
+### 5.3 Backtest, Optimization, and Walk-Forward Optimization
+
+- Signal generation and fill simulation are two phases. The distinction between signal time, fillable time, and the price used must be explicit.
+- Look-ahead bias is strictly forbidden: on a trading day, only data that was already public and available at that time may be used.
+- Stock rules must preserve T+1, commissions, slippage, and non-fillable limit-up/limit-down constraints. New fill options must not bypass these rules.
+- A daily backtest must not claim "filled at the moment the signal triggered". Minute-precision fills may only be enabled when minute data fully covers the target window.
+- Exit options such as "same-day close", "next-day open", and "next-minute open" must each be tested for time alignment and missing boundary data.
+- Optimization and walk-forward optimization share a matrix. The matrix must cover each fold's full window, and cache keys must include every input that changes matrix results.
+- When modifying strategy, scoring, or sorting logic, verify simultaneously whether historical strategy results, backtest trade records, and UI display use the same candidate set and sort direction.
+
+## 6. Caching, Concurrency, and Performance
+
+The project has repository caches, enriched history caches, realtime aggregation, screening caches, strategy result caches, backtest matrix caches, mtime caches, SSE, and frontend TanStack Query. When modifying read/write paths, you must enumerate every affected cache layer.
+
+### 6.1 Cache Consistency
+
+- After writing data, check all of the following: persisted files, in-memory caches, generation/version, SSE events, and frontend query invalidation.
+- It is not enough to guarantee "the file was written" while still returning stale in-memory objects.
+- For multi-step refreshes, prefer building a new snapshot and replacing it atomically, so the UI never briefly shows empty lists or zero results during a refresh.
+- Cache keys must cover asset type, timeframe, date, strategy parameters, and any other dimension that changes results.
+- Invalidation scope should be precise. Never clear all history caches unconditionally just to fix a single data point.
+
+### 6.2 Concurrency Safety
+
+- When APIs, background workers, and realtime quote threads share dictionaries or caches, use locks, immutable snapshots, or atomic replacement.
+- Do not perform network requests, full disk scans, or heavy recomputation while holding a lock.
+- Cancellation, timeout, and application shutdown paths must release resources. Background threads must not prevent the process from exiting.
+
+### 6.3 Performance Constraints
+
+- List pages must avoid N+1 APIs, per-card independent requests, and repeated full strategy computations. Prefer batch APIs and shared queries.
+- Polars computation should prefer expressions and batching. Avoid row-by-row Python loops.
+- Realtime hot paths must not grow linearly with historical data volume. When a history window is needed, read only the necessary range.
+- When there are no rules, no subscribers, or the provider lacks the capability, do not perform the corresponding realtime computation.
+- A PR claiming a "performance improvement" must provide before/after data under the same data scale and the same environment, including at least latency or request counts.
+
+## 7. Frontend Requirements
+
+- Reuse the request wrappers and types in `frontend/src/lib/api.ts`. Components must not scatter request URLs directly.
+- Use centrally defined TanStack Query keys. Parameters that affect results — asset type, date, timeframe, etc. — must be part of the query key.
+- After switching stock, ETF, date, or strategy, cached results from the previous context must not be treated as current results.
+- Realtime refresh must keep the last valid data until new data is ready, avoiding flicker where columns, counts, and lists disappear.
+- Opening and closing dialogs must correctly reset temporary form state. Create state and edit state must be separated.
+- Cross-page behaviors such as shared tabs, stock detail, and constituent stocks must use shared components. Do not duplicate interactions across multiple pages.
+- New interactions must cover loading, empty data, error, disabled, and no-permission states.
+- Changes should be checked at common desktop and narrow-screen sizes for text truncation, overlap, scroll regions, and dialog operability.
+- Do not use frontend patches to mask backend unit or contract errors. Contract issues must be fixed at the data boundary.
+
+## 8. Security, Compatibility, and User Data
+
+- Never commit `data/`, secrets, tokens, webhooks, user strategies, logs, databases, Parquet samples, or machine absolute paths.
+- Logs and exception responses must not contain authorization information, full configuration, or sensitive user data.
+- File deletion, overwriting, migration, and batch recomputation are high-risk operations: restrict the target directory, validate paths, provide clear failure reasons, and stay fail-closed.
+- Do not execute SQL, shell, or dynamic Python through unsafe string concatenation.
+- Changes to configuration, strategy JSON, Parquet schemas, and API fields require backward compatibility by default. New fields should provide defaults, and readers should tolerate missing fields in historical data.
+- When existing behavior must change, the PR must list the migration approach, degradation behavior, and scope of impact.
+- Path, encoding, recycle-bin, and permission behavior differ across Windows, macOS, Linux, and Docker. For anything involving the filesystem, review the cross-platform failure paths at minimum.
+
+## 9. Verification Matrix
+
+Execute the minimum sufficient verification based on the scope of the change. The following are minimum requirements, not upper limits.
+
+| Change type | Minimum verification |
+| --- | --- |
+| Backend pure functions, rules, or bug fixes | Targeted `pytest` for the affected code, including reproduction and boundary cases |
+| API contracts | Service tests + API tests; check success, no-data, and error responses |
+| Data sources or plugins | Provider contract tests, missing capability, empty data, field/unit normalization tests |
+| Indicators, adjustment, turnover rate, limit-up/limit-down | Numeric assertions on fixed samples, covering historical boundaries and degradation paths |
+| Strategies or monitoring | Parameter changes, cache invalidation, asset switching, restart/concurrency paths |
+| Backtesting | Signal day vs. fill day, T+1, fees, slippage, non-fillable cases, data gaps |
+| Caching or performance | Hit/invalidation tests, concurrent snapshot tests; before/after benchmarks when necessary |
+| Frontend components or pages | `pnpm build`, plus manual checks of loading, empty, error, switching, and realtime refresh states |
+| Frontend and backend contract changes together | Targeted backend tests + frontend build + corresponding page integration check |
+| Files, Docker, or cross-platform logic | Normal path, permission/capability-missing, and target-unavailable failure paths |
+
+Common commands:
+
+```bash
+cd backend
+uv run pytest tests/path/to/test_x.py -q
+uv run ruff check app/path.py tests/path.py
+
+cd frontend
+pnpm build
+
+git diff --check
+```
+
+- For the backend, run at least the tests of the affected module, not just a single newly added test.
+- New files and this change must not introduce Ruff warnings. Do not reformat the whole repository in a feature PR just to clean up historical warnings.
+- Any frontend TypeScript, component, style, or API type change requires at least one `pnpm build`.
+- Before committing, run `git diff --check` and confirm the final diff contains no debug code or unrelated files.
+
+## 10. PR Submission Requirements
+
+A reviewable PR should focus on one problem. Features, unrelated refactoring, bulk formatting, and dependency upgrades must not be mixed together.
+
+The PR description must include:
+
+1. **Problem and reproduction**: previous behavior, reproduction conditions, and affected users.
+2. **Root cause**: specific to the call chain, data contract, or state lifecycle. "Fixed a bug" is not enough.
+3. **Solution**: changed modules, key trade-offs, and why pluginization or existing semantics were not broken.
+4. **Compatibility**: impact on historical configuration, strategies, caches, Parquet, APIs, data sources, and different asset types.
+5. **Performance**: whether it enters realtime or list hot paths; include before/after data when claiming performance gains.
+6. **Verification results**: list the commands actually executed and their results. Do not write tests that are only planned.
+7. **UI evidence**: for visible changes, provide before/after screenshots or short videos, covering relevant light/dark or narrow-screen scenarios.
+8. **Risks and rollback**: remaining risks, degradation behavior, and a feasible rollback approach.
+
+Author self-check before submitting:
+
+- [ ] The change only addresses the problem described in the PR, with no unrelated cleanup.
+- [ ] The complete call chain and all affected caches have been checked.
+- [ ] Units, adjustment, trading days, time zones, and asset types have been verified.
+- [ ] The provider abstraction is not bypassed, and behavior is explicit when a capability is missing.
+- [ ] Historical configuration and old data can still be read, or a migration plan is documented.
+- [ ] There is no obvious performance regression in realtime threads, list requests, or batch processing.
+- [ ] Error paths are fail-closed and never silently return wrong financial results.
+- [ ] Tests fail on the unfixed code and pass after the fix.
+- [ ] Applicable tests, builds, Ruff, and `git diff --check` have been executed.
+- [ ] The final diff contains no sensitive data, local paths, debug output, or generated files.
+
+## 11. PR Review Process
+
+Both author self-review and maintainer review follow this order, to avoid looking only at page effects or newly added code:
+
+1. **Confirm the problem**: reproduce the old behavior based on the description and tests, and confirm the PR solves the same problem.
+2. **Check boundaries**: confirm the code sits in the correct module, with no reverse dependencies, parallel implementations, or heavy recomputation in the API layer.
+3. **Verify data contracts**: check units, adjustment, dates, time zones, asset types, nulls, and sort direction.
+4. **Verify pluginization**: check whether the change depends on provider capabilities and whether non-TickFlow data sources work or degrade explicitly.
+5. **Trace state changes**: verify persistence, caches, generation, SSE, and frontend query invalidation from the write path onward.
+6. **Check compatibility**: validate with historical configuration, old strategy JSON, old Parquet schemas, and data with missing fields.
+7. **Check performance and concurrency**: determine whether it enters realtime, list, or full-scan hot paths, and check locks and atomic replacement.
+8. **Check failure paths**: network failures, missing permissions, empty data, missing capabilities, and partial writes must not produce incorrect states.
+9. **Evaluate test quality**: tests must assert business results and cover negative cases and boundaries. Asserting only that the API returns 200 is not enough.
+10. **Check the final diff**: confirm necessity file by file, and exclude unrelated formatting, sensitive information, and temporary files.
+11. **Give a conclusion**: explicitly state "ready to merge", "merge after changes", or "not recommended to merge", distinguishing blockers from suggestions.
+
+Severity levels:
+
+| Level | Definition | Merge requirement |
+| --- | --- | --- |
+| `P0` | Data corruption, security vulnerabilities, or potential for seriously incorrect trading results | Must not merge; fix and re-review fully |
+| `P1` | Core flow unavailable, incorrect financial semantics, look-ahead bias, or broad regressions | Must not merge; fix and add regression tests |
+| `P2` | Clear functional errors, compatibility issues, or obvious performance regressions | Merge after changes |
+| `P3` | Maintainability, local UX, documentation, or test reinforcement suggestions | May not block, but the follow-up plan should be recorded |
+
+Review comments should include the file and line number, trigger conditions, actual impact, and the suggested direction of the fix. Do not write only "this may be a problem" or give conclusions without evidence.
+
+### 11.1 Review After Follow-Up Commits
+
+- First verify item by item whether every blocker from the previous round is truly resolved in code and tests. Do not rely on the submitter's reply that "it's fixed".
+- Reading new commits helps understand the intent, but the final pass must re-review the complete diff of the PR against the target branch, not only the last commit.
+- Re-run the affected tests and check whether the fix introduced new issues in units, caching, compatibility, performance, or pluginization.
+- Explicitly mark resolved issues as verified; for issues that remain, cite the current latest line numbers and explain what is missing.
+- Only when all original blockers are resolved and no new blockers are introduced may the conclusion be changed to "ready to merge".
+
+### 11.2 Recommended Review Output Format
+
+```text
+Conclusion: ready to merge / merge after changes / not recommended to merge
+
+Blockers:
+- [P1/P2] file:line - trigger conditions, actual impact, required changes
+
+Non-blocking suggestions:
+- [P3] file:line - suggestion and rationale
+
+Verified:
+- Tests or build commands executed and their results
+- Item-by-item re-check results for the previous round's issues
+
+Remaining risks:
+- Platforms, data sources, data scales, or scenarios not covered
+```
+
+When no problems are found, explicitly write "no blockers found" and state what was not verified. Do not substitute a conclusion with "looks fine".
+
+## 12. Must-Not-Merge Conditions
+
+A PR must not be merged if any of the following applies:
+
+- The root cause cannot be explained, and the change merely adds delays, retries, forced refreshes, or swallows exceptions to mask symptoms.
+- Percentages, adjusted prices, natural days, and trading days are mixed, or financial computation semantics cannot be proven.
+- A general feature is bound directly to a single data source without capability detection or explicit degradation.
+- A known cache inconsistency remains after writes, requiring a user restart or manual data cleanup for correct display.
+- The backtest introduces future data, bypasses fill constraints, or uses different strategy logic for historical results and trade records.
+- The realtime thread gains blocking network requests, full historical computation, or unbounded tasks.
+- Historical strategies, configuration, data files, or APIs are broken without a compatibility or migration plan.
+- File operations could delete outside the intended scope, overwrite user data by default, or continue executing after failure.
+- Tests do not reproduce the problem, cover only happy paths, or the necessary tests/frontend build fail.
+- The PR contains secrets, user data, local data directories, machine absolute paths, or a large amount of unrelated changes.
+- `P0`, `P1`, or `P2` issues raised in review have not been addressed or verified.
+
+## 13. Additional Rules for AI Coding Agents
+
+- Before starting, read this document, the target module, adjacent implementations, callers, and related tests.
+- Write a brief plan with each step and how it will be verified before modifying. For simple changes, one sentence is enough.
+- Do not present guesses as facts. Business semantics that cannot be confirmed from code, tests, or documentation must be explicitly asked about.
+- Do not skip reproduction, root cause analysis, or regression verification just because the user asked to "just fix it".
+- Do not automatically commit, push, merge, delete files, migrate databases, or bulk-overwrite data. Obtain explicit confirmation according to the current session's permission rules when needed.
+- Do not overwrite existing changes in the working tree. When the same file is being modified concurrently, read the latest content first and preserve both sides' logic.
+- Do not fabricate test results, performance data, GitHub status, or production behavior. Verification that was not run must be clearly marked as such.
+- When reviewing a PR, report issues first, ordered by severity and citing file line numbers. Give the merge recommendation and a brief summary at the end.
+- After completion, check `git diff` and `git status`, and accurately state what was changed, what was verified, and what risks remain.
+
+## 14. Contribution Licensing and Provenance
+
+This project uses a combination of **DCO (Developer Certificate of Origin) + contribution relicense grant**: at commit time you declare provenance and grant the maintainer the relicensing rights needed to change the license.
+
+### 14.1 Every Commit Must Be DCO-Signed
+
+All commits must carry a `Signed-off-by` trailer declaring that you created the contribution, or have the right to submit it under the project's terms, and that you agree to the contribution licensing terms in this section:
+
+```bash
+git commit -s -m "fix(scope): description"
+```
+
+`-s` automatically appends a line (the name and email must match your Git configuration):
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+The full DCO statement is at <https://developercertificate.org/>. PRs without the sign-off will not be merged; the CI DCO check will block them.
+
+### 14.2 Contribution Relicense Grant
+
+By submitting a contribution, you grant the project maintainer a **perpetual, irrevocable, worldwide, non-exclusive, royalty-free** copyright license permitting the maintainer to:
+
+- distribute your contribution under the project's current license (see `LICENSE`);
+- in the future, switch the project in whole or in part to another open-source license (including copyleft licenses such as AGPL-3.0);
+- relicense your contribution for the purpose of commercial dual licensing.
+
+You retain the copyright and attribution rights to your own contribution. This clause does not change your attribution rights and does not affect your independent use of your own contribution.
+
+> Why this is needed: the project plans to adopt AGPL-3.0 in a future version and may offer a commercial license (AGPL + commercial dual licensing). Without an explicit relicense grant, the maintainer could only distribute third-party contributions under the existing license and could not complete the license switch or dual licensing. DCO alone is insufficient to support this right, so this clause applies together with DCO.
+
+### 14.3 Boundary for Historical Contributions
+
+This section's terms **apply only to commits made after the effective date**:
+
+- Contributions already merged before that date remain licensed under the MIT license in effect at the time of their submission. **Historical versions remain MIT permanently** and will not be retroactively changed;
+- The maintainer will separately contact major historical contributors to sign the relicense grant. Parts that are not re-signed continue to be governed by MIT and do not affect the project's continued distribution of existing code under MIT.
+
+### 14.4 Cases Requiring a Formal CLA
+
+The following cases require a written CLA (individual ICLA or corporate CCLA); a DCO trailer alone is not enough:
+
+- The contribution is made within the scope of your employment duties (the company must sign a CCLA);
+- The contribution involves patents held by you or your employer;
+- A single contribution is large in scope or has a substantial impact on the project architecture.
+
+When needed, the maintainer will raise this in the PR and provide the text. Signed records are archived separately outside the repository.
+
+### 14.5 Pre-Commit Self-Check
+
+- [ ] The commit is DCO-signed with `git commit -s`;
+- [ ] The `Signed-off-by` name and email are real and match the Git commit identity;
+- [ ] If the contribution is employed-work or involves patents, this is stated in the PR.
+
+The measure of following this guide is not how much documentation is written, but whether: change scope is smaller, financial semantics have evidence, plugin boundaries are not bypassed, tests genuinely reproduce problems, review conclusions are actionable, and the same issue does not repeatedly cause rework.
+
+---
+
+# 中文版（原文）
+
 # Tick Stock Panel 贡献、AI 开发与复审指南
 
 本文档适用于整个仓库，供贡献者、AI 编码代理和 PR 审查者共同使用。目标是让改动落在正确的模块，保持数据口径、插件化和兼容性一致，并通过可复现的验证减少返工。
