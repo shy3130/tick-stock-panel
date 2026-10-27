@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import threading
 import time
@@ -64,6 +65,9 @@ class IntegrityIssue:
     day: date
     table: str
     kind: str  # "snapshot"=盘中快照 | "missing"=分区缺失
+    # snapshot 且能定位时: 缺权威行(batch)的 symbol 清单 (修复只拉这些);
+    # 空 = 干净或无法定位 (missing / 列缺失 / 读失败), 修复回退全市场。
+    symbols: tuple[str, ...] = ()
 
 
 def _quote_ts_max_ms(part_dir: Path) -> int | None:
@@ -117,21 +121,31 @@ def _is_snapshot(day: date, quote_ts_ms: int | None) -> bool:
     return ts.date() == day and ts.time() < CLOSE_CUTOFF
 
 
-def _partition_is_snapshot(day: date, part_dir: Path, quote_ts_max_ms: int | None) -> bool:
-    """判断整个分区是否仍是盘中快照, 而非同步后遗留的停牌实时行。
+def _partition_snapshot_defects(
+    day: date, part_dir: Path, quote_ts_max_ms: int | None
+) -> set[str] | None:
+    """分区级快照判定 → 缺陷 symbol 集合 (issue #514: 判坏下沉到 symbol 级)。
 
     batch 行用 null quote_ts 标识权威历史。实时轮询曾把停牌股票的 09:15、
     零成交记录写入分区; 后续 batch 会过滤停牌日, merge-upsert 因而留下这些
-    孤立行。若分区已有 batch 行, 且当日收盘前的实时行全部零成交, 则它们不应
-    让整个分区反复进入修复。整分区都是实时行时仍按快照处理, 包括盘前零成交。
+    孤立行。旧逻辑「任一行有成交即判坏整分区」会让 4 行残留触发全市场重拉。
+
+    返回语义:
+    - None      : 无法判定但按坏处理 (volume/amount 列缺失 / 读失败 / 无 symbol
+                  列却有成交残留) — 保守 fail-closed, 修复回退全市场;
+    - 空集合    : 分区干净 (残留 symbol 均已有权威行, 或仅零成交残留且权威行占多数);
+    - 非空集合  : 恰好这些 symbol 在窗口内写了有成交实时行且无权威行 → 只修它们。
     """
     if not _is_snapshot(day, quote_ts_max_ms):
-        return False
+        return set()
 
     start_ms = int(datetime.combine(day, dt_time.min, tzinfo=CN_TZ).timestamp() * 1000)
     cutoff_ms = int(datetime.combine(day, CLOSE_CUTOFF, tzinfo=CN_TZ).timestamp() * 1000)
     authoritative_rows = 0
     suspicious_rows = 0
+    authoritative_symbols: set[str] = set()
+    suspicious_symbols: set[str] = set()  # 窗口内实时行的 symbol (含零成交)
+    active_symbols: set[str] = set()  # 窗口内且有成交的实时行 symbol
 
     for path in sorted(part_dir.glob("*.parquet")):
         try:
@@ -139,13 +153,17 @@ def _partition_is_snapshot(day: date, part_dir: Path, quote_ts_max_ms: int | Non
             if "quote_ts" not in schema:
                 continue
             columns = [
-                name for name in ("quote_ts", "volume", "amount")
+                name for name in ("symbol", "quote_ts", "volume", "amount")
                 if name in schema
             ]
             frame = pl.read_parquet(path, columns=columns).with_columns(
                 pl.col("quote_ts").cast(pl.Int64, strict=False),
             )
-            authoritative_rows += frame["quote_ts"].null_count()
+            has_symbol = "symbol" in frame.columns
+            authoritative = frame.filter(pl.col("quote_ts").is_null())
+            authoritative_rows += authoritative.height
+            if has_symbol:
+                authoritative_symbols.update(authoritative["symbol"].drop_nulls().to_list())
             suspicious = frame.filter(
                 pl.col("quote_ts").is_between(start_ms, cutoff_ms, closed="left")
             )
@@ -157,20 +175,36 @@ def _partition_is_snapshot(day: date, part_dir: Path, quote_ts_max_ms: int | Non
                 name for name in ("volume", "amount") if name in suspicious.columns
             ]
             if not activity_columns:
-                return True
-            has_activity = suspicious.select(
+                return None
+            active = suspicious.filter(
                 pl.any_horizontal(
                     pl.col(name).cast(pl.Float64, strict=False).fill_null(0) > 0
                     for name in activity_columns
-                ).any()
-            ).item()
-            if has_activity:
-                return True
+                )
+            )
+            if has_symbol:
+                suspicious_symbols.update(suspicious["symbol"].drop_nulls().to_list())
+                active_symbols.update(active["symbol"].drop_nulls().to_list())
+            elif active.height > 0:
+                return None  # 无 symbol 列却存在成交残留, 无法定位 → 整分区保守判坏
         except Exception as e:
             logger.debug("snapshot residue scan skipped %s: %s", path, e)
-            return True
+            return None
 
-    return suspicious_rows > 0 and authoritative_rows <= suspicious_rows
+    if active_symbols:
+        # 有成交残留: 只把「无权威行」的 symbol 记为缺陷; 两行兼有 = 无害滞后残留。
+        return active_symbols - authoritative_symbols
+    # 零成交残留: 沿用旧比例兜底 (权威行不占多数 → 整分区仍判坏, 现有行为锁定)。
+    if suspicious_rows > 0 and authoritative_rows <= suspicious_rows:
+        defects = suspicious_symbols - authoritative_symbols
+        return defects or None  # 定位不到 symbol (如无 symbol 列) → 按未知处理
+    return set()
+
+
+def _partition_is_snapshot(day: date, part_dir: Path, quote_ts_max_ms: int | None) -> bool:
+    """整个分区是否仍是盘中快照 (旧布尔口径, 供既有调用方; 内部走 symbol 级判据)。"""
+    defects = _partition_snapshot_defects(day, part_dir, quote_ts_max_ms)
+    return defects is None or bool(defects)
 
 
 def _candidate_days(today: date, lookback_days: int) -> list[date]:
@@ -269,8 +303,12 @@ def scan_recent_integrity(
                 continue
             part_dir = base / f"date={day.isoformat()}"
             quote_ts = _quote_ts_max_ms(part_dir)
-            if _partition_is_snapshot(day, part_dir, quote_ts):
-                issues.append(IntegrityIssue(day=day, table=table, kind="snapshot"))
+            defects = _partition_snapshot_defects(day, part_dir, quote_ts)
+            if defects is None or defects:
+                issues.append(IntegrityIssue(
+                    day=day, table=table, kind="snapshot",
+                    symbols=tuple(sorted(defects)) if defects else (),
+                ))
 
     issues.sort(key=lambda i: (i.day, i.table))
     return issues
@@ -293,6 +331,43 @@ def within_auto_repair_window(day: date | None, *, today: date | None = None) ->
         return False
     today = today or datetime.now(CN_TZ).date()
     return (today - day).days <= AUTO_REPAIR_MAX_LAG_DAYS
+
+
+# ── 自动修复退避 (issue #514) ────────────────────────────────────────
+# 同一坏日的自动修复失败后 (多为数据源拉取失败), 重启/再开实时行情不应无条件
+# 再发一次全量修复。按坏日在 data_dir 记 last_attempt, 冷却期内跳过自动修复;
+# 数据页手动修正不受限制 (不走 launch_integrity_repair)。
+INTEGRITY_REPAIR_BACKOFF_S = 6 * 3600.0
+
+
+def _backoff_path(data_dir: Path) -> Path:
+    return Path(data_dir) / ".integrity_repair_backoff.json"
+
+
+def repair_backoff_remaining_s(data_dir: Path, start_date: date) -> float:
+    """自动修复冷却剩余秒数 (0 = 不在退避期)。按修复起点日 (最早坏日) 记账。"""
+    try:
+        payload = json.loads(_backoff_path(data_dir).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0.0
+    last = (payload.get("last_attempt") or {}).get(start_date.isoformat())
+    if not isinstance(last, (int, float)):
+        return 0.0
+    elapsed = time.time() - float(last)
+    if elapsed >= INTEGRITY_REPAIR_BACKOFF_S:
+        return 0.0
+    return INTEGRITY_REPAIR_BACKOFF_S - elapsed
+
+
+def _record_repair_attempt(data_dir: Path, start_date: date) -> None:
+    payload = {"last_attempt": {start_date.isoformat(): time.time()}}
+    path = _backoff_path(data_dir)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        logger.debug("repair backoff marker write failed: %s", e)
 
 
 def prune_enriched_partitions(
@@ -335,15 +410,22 @@ def describe_issues(issues: list[IntegrityIssue]) -> str:
     return f"{day_text} 的数据为{reason}"
 
 
-def launch_integrity_repair(app_state, start_date: date, reason: str) -> tuple[str | None, bool]:
+def launch_integrity_repair(
+    app_state,
+    start_date: date,
+    reason: str,
+    symbols: list[str] | None = None,
+) -> tuple[str | None, bool]:
     """自动创建数据修复任务 (复用 repair_daily 管道 + JobStore 任务体系)。
 
     返回 (job_id, is_new):
-    - (None, False)  : 无法修复 (无 batch 能力 / 无 repo)
+    - (None, False)  : 无法修复 (无 batch 能力 / 无 repo) 或自动修复退避中
     - (id, False)    : 已有 pending/running 任务复用 (singleflight)
     - (id, True)     : 新建并启动
     任务体与 /api/kline/repair_daily 完全一致: run slot + 实时 paused 互斥 +
-    run_repair_daily(override_start_date)。
+    run_repair_daily(override_start_date, symbols)。
+
+    symbols: 坏分区能定位到的缺陷标的清单 (issue #514 定向修复); None/空 = 全市场。
 
     调度自适应: 调用方在事件循环内 (API 端点) → executor 后台执行;
     无事件循环 (boot Timer 线程) → 独立 daemon 线程执行。
@@ -364,6 +446,18 @@ def launch_integrity_repair(app_state, start_date: date, reason: str) -> tuple[s
     except Exception:  # noqa: BLE001
         return None, False
 
+    try:
+        remaining = repair_backoff_remaining_s(repo.store.data_dir, start_date)
+    except Exception:  # noqa: BLE001 — repo 形态异常时不因退避查询阻断修复
+        remaining = 0.0
+    if remaining > 0:
+        logger.warning(
+            "integrity: 自动修复退避中 (start=%s, 剩余 %.0f 分钟, reason=%s), 跳过。"
+            "上次修复未成功多为数据源拉取失败, 可稍后自动重试或在数据页手动修正",
+            start_date, remaining / 60, reason,
+        )
+        return None, False
+
     from app.services.pipeline_jobs import (
         JobCancelledError,
         job_store,
@@ -377,6 +471,9 @@ def launch_integrity_repair(app_state, start_date: date, reason: str) -> tuple[s
     if not is_new:
         return job_id, False
 
+    with contextlib.suppress(Exception):
+        _record_repair_attempt(repo.store.data_dir, start_date)
+    repair_symbols = list(symbols) if symbols else None
     qs = getattr(app_state, "quote_service", None)
 
     def progress(stage: str, pct: int, msg: str,
@@ -387,8 +484,12 @@ def launch_integrity_repair(app_state, start_date: date, reason: str) -> tuple[s
         # 修复期间暂停实时取数, 防止覆写同一批 parquet 竞态
         if qs:
             with qs.paused():
-                return run_repair_daily(repo, capset, start_date, on_progress=progress)
-        return run_repair_daily(repo, capset, start_date, on_progress=progress)
+                return run_repair_daily(
+                    repo, capset, start_date, on_progress=progress, symbols=repair_symbols,
+                )
+        return run_repair_daily(
+            repo, capset, start_date, on_progress=progress, symbols=repair_symbols,
+        )
 
     def _execute() -> None:
         try:
@@ -454,4 +555,18 @@ def boot_integrity_check(app_state) -> None:
         )
         return
     with contextlib.suppress(Exception):
-        launch_integrity_repair(app_state, earliest, "boot_integrity_check")
+        launch_integrity_repair(
+            app_state, earliest, "boot_integrity_check",
+            symbols=_stock_snapshot_symbols(issues),
+        )
+
+
+def _stock_snapshot_symbols(issues: list[IntegrityIssue]) -> list[str] | None:
+    """issues 里股票日K快照坏分区可定位的缺陷标的并集 (定向修复用; 空则全市场)。"""
+    symbols = {
+        s
+        for i in issues
+        if i.table == "kline_daily" and i.kind == "snapshot"
+        for s in i.symbols
+    }
+    return sorted(symbols) if symbols else None

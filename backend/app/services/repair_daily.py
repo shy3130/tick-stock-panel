@@ -31,6 +31,7 @@ def run_repair_daily(
     start_date: date,
     end_date: date | None = None,
     on_progress: Callable | None = None,
+    symbols: list[str] | None = None,
 ) -> dict:
     """修正 / 补全数据 — 复用盘后管道,日期范围由用户指定。
 
@@ -43,6 +44,8 @@ def run_repair_daily(
         start_date:  用户选定的起始日期
         end_date:    保留参数(目前盘后管道固定拉到今天, 此值未使用, 为接口兼容保留)
         on_progress: 进度回调
+        symbols:     完整性自动修复传入的坏标的清单 (issue #514: 定向重拉,
+                     不再全市场); 手动修正不传 = 全标的池。
 
     Returns:
         run_now() 的完整结果 dict。
@@ -51,7 +54,13 @@ def run_repair_daily(
     if start_date > today:
         return {"error": "起始日期不能晚于今天"}
 
-    logger.info("repair_daily: run pipeline with override_start_date=%s", start_date)
+    logger.info(
+        "repair_daily: run pipeline with override_start_date=%s symbols=%s",
+        start_date, f"{len(symbols)} targeted" if symbols else "universe",
+    )
 
     from app.jobs.daily_pipeline import run_now
-    return run_now(repo, capset, on_progress=on_progress, override_start_date=start_date)
+    return run_now(
+        repo, capset, on_progress=on_progress,
+        override_start_date=start_date, override_symbols=symbols,
+    )

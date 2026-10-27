@@ -185,6 +185,7 @@ def run_now(
     capset: CapabilitySet,
     on_progress: ProgressCb | None = None,
     override_start_date: _date | None = None,
+    override_symbols: list[str] | None = None,
 ) -> dict:
     """立即执行一次盘后管道,支持进度回调。
 
@@ -193,6 +194,9 @@ def run_now(
 
     override_start_date: 传入时强制走 batch 拉取分支,用该日期作为日K/除权/指数的
         拉取起点(到今天),用于「数据修正/补数据」场景。None 时走原有自动判定逻辑。
+    override_symbols: 数据修正时只重拉这些股票的日K (issue #514: 修复只补坏标的,
+        不再全市场重拉)。None = 全标的池。仅作用于日K (kline_daily) 阶段;
+        ETF/指数族沿用各自的全量口径。
     """
     emit = on_progress or _noop
     skipped: list[str] = []
@@ -271,16 +275,34 @@ def run_now(
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
                  f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        # 完整性修复带了坏 symbol 清单时只拉这些标的 (issue #514);
+        # 单票失败也要上浮 (failed_out), 不能只留 WARNING。
+        symbols_for_repair = list(override_symbols) if override_symbols else universe
+        repair_failed_symbols: list[str] = []
         written_daily = kline_sync.sync_and_persist_daily_batch(
-            universe, repo, capset,
+            symbols_for_repair, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
+            failed_out=repair_failed_symbols,
         )
-        gap_days = (today - start_date).days
-        new_daily_days = gap_days
-        emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
-        logger.info("sync_daily: [%s ~ %s] done, %d days", start_date, today, gap_days)
+        if override_symbols:
+            emit("sync_daily", 45,
+                 f"日K 完成(定向修复 {len(symbols_for_repair)} 只, 失败 {len(repair_failed_symbols)} 只)")
+        else:
+            gap_days = (today - start_date).days
+            new_daily_days = gap_days
+            emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
+        logger.info(
+            "sync_daily: [%s ~ %s] done, symbols=%d(%s) failed=%d",
+            start_date, today, len(symbols_for_repair),
+            "targeted" if override_symbols else "universe",
+            len(repair_failed_symbols),
+        )
+        if repair_failed_symbols:
+            preview = ", ".join(repair_failed_symbols[:10])
+            more = "" if len(repair_failed_symbols) <= 10 else f" 等 {len(repair_failed_symbols)} 只"
+            stage_errors.append(f"日K修复有 {len(repair_failed_symbols)} 只标的拉取失败: {preview}{more}")
     elif (
         today_exists
         and stale_day is None
@@ -790,6 +812,26 @@ def run_now(
         "skipped_stages": skipped,
         "stage_errors": stage_errors,
     }
+
+    # 修复路径后置校验 (issue #514): 修完必须重扫一遍, 仍有坏分区时如实报失败 —
+    # 不再出现「修复自报成功 (integrity_issues 恒 0) 但坏行仍在」的假闭环。
+    # 夜间常规管道 (无 override) 不走此逻辑 (它自己开头扫过)。
+    if override_start_date is not None:
+        try:
+            from app.services import data_integrity as _di
+
+            remaining_issues = _di.scan_recent_integrity(repo.store.data_dir, today=today)
+            if remaining_issues:
+                stage_errors.append(
+                    f"数据修复后完整性仍不通过: {_di.describe_issues(remaining_issues)}"
+                    f" (剩余 {len(remaining_issues)} 个坏分区, 多为数据源拉取失败;"
+                    " 可稍后重试或到 数据→修正数据 手动执行)"
+                )
+                logger.warning(
+                    "integrity: post-repair scan found %d remaining issues", len(remaining_issues),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("integrity: post-repair scan failed (soft): %s", e)
 
     # 有阶段软失败: 进度协议已走完(done/100, 前端进度条正常收尾), 但数据可能陈旧,
     # 抛出让上层 job_store 把终态标记为 failed —— 不再"部分失败却报成功"。

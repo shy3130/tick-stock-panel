@@ -1196,8 +1196,14 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
                 issues = []
             earliest = data_integrity.earliest_issue_day(issues)
             if issues and data_integrity.within_auto_repair_window(earliest):
+                symbols = sorted({
+                    s
+                    for i in issues
+                    if i.table == "kline_daily" and i.kind == "snapshot"
+                    for s in i.symbols
+                }) or None
                 job_id, is_new = data_integrity.launch_integrity_repair(
-                    request.app.state, earliest, "realtime_gate",
+                    request.app.state, earliest, "realtime_gate", symbols=symbols,
                 )
                 if job_id is not None:
                     detail = (
@@ -1207,6 +1213,16 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
                         + f"（任务 {job_id}）"
                     )
                     raise HTTPException(status_code=409, detail=detail)
+                backoff = data_integrity.repair_backoff_remaining_s(
+                    repo.store.data_dir, earliest,
+                )
+                if backoff > 0:
+                    raise HTTPException(status_code=409, detail=(
+                        f"检测到{data_integrity.describe_issues(issues)}；"
+                        f"上次自动修复未成功（多为数据源拉取失败），"
+                        f"{int(backoff // 60) + 1} 分钟后将自动重试，"
+                        "也可到 数据→修正数据 手动执行"
+                    ))
 
     preferences.save({"realtime_quotes_enabled": req.realtime_quotes_enabled})
     if qs:
