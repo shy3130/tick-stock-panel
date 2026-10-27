@@ -8,8 +8,11 @@
  * 上限的大桶, 名单可编辑, localStorage 按 kind 持久化) 或自定义监控清单
  * (≤20, localStorage 按 kind 持久化); 显示模式: 走势线 (默认) / 热力图。
  * 资金流维度来自用户选择的扩展数据列; 指数叠加线来自 /api/index/* (核心四只)。
- * 布局: 展示图全宽在上; 下方左=切换强度线, 右=板块榜单。
- * 强度图与展示图 x 轴窗口一致, 经 echarts.connect 联动指针; 榜单行与展示图双向高亮。
+ * 布局 (issue #518): 宽屏展示图 (aspect 9:5) 在左, 右列=切换强度线+板块榜单
+ * (右列绝对定位脱离行高计算, 榜单列内滚动, 两列底部齐平); 窄屏上下堆叠。
+ * 时间轴全天铺刻度 (09:30–15:00), 盘中数据止于当前桶、右侧留白。
+ * 强度图与展示图 x 轴窗口一致, 经 echarts.connect 联动指针; 榜单行与展示图双向高亮;
+ * 板块配色按名称稳定分配 (colorForSector), 走势线/易主圆点/切换图标注/榜单圆点同源。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -56,12 +59,55 @@ const HEAT_COLS_1M = 60
 const HEAT_ROW_HEIGHT = 26
 // 走势线行数上限 = 自定义监控上限
 const MAX_CUSTOM_SECTORS = 20
-// 走势线调色板 (≤20 条线各自可辨)
+// 走势线调色板 (≤20 条线各自可辨)。原版有两组近绿、三组琥珀、一组蓝青,
+// 1.4px 细线 + 抗锯齿下极易认错线 (issue #518); 现按色相族间距挑选,
+// 后段用同族加深变浅扩容 — 相邻摆放时仍可靠明度区分。
 const TREND_COLORS = [
-  '#60a5fa', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#f87171', '#4ade80', '#fbbf24',
-  '#22d3ee', '#fb923c', '#818cf8', '#e879f9', '#4dd0e1', '#aed581', '#ffb74d', '#f06292',
-  '#9575cd', '#81c784', '#ffd54f', '#4fc3f7',
+  '#60a5fa', '#f87171', '#34d399', '#fbbf24', '#a78bfa', '#f472b6', '#fb923c', '#22d3ee',
+  '#818cf8', '#a3e635', '#e879f9', '#2dd4bf', '#f43f5e', '#7c3aed', '#d946ef', '#14b8a6',
+  '#94a3b8', '#fca5a5', '#67e8f9', '#c7d2fe',
 ]
+// 未进展示矩阵的榜单板块: 灰色占位点 (此前 transparent 看着像漏画了一半)
+const SECTOR_DOT_UNMATCHED = 'rgba(128,140,160,0.4)'
+
+// 板块稳定配色: 按名称首次出现分配并缓存 — 下标取色会随排序维度/名单刷新漂移,
+// 刚记住的「颜色↔板块」映射就失效了 (issue #518)。走势线/易主圆点/切换图
+// 标注/榜单圆点统一走这里, 上下两张图里同一板块同色。
+const sectorColorCache = new Map<string, string>()
+export function colorForSector(name: string): string {
+  let color = sectorColorCache.get(name)
+  if (color === undefined) {
+    color = TREND_COLORS[sectorColorCache.size % TREND_COLORS.length]
+    sectorColorCache.set(name, color)
+  }
+  return color
+}
+
+/**
+ * 全天时间轴刻度 (issue #518): 盘中类目轴只铺已产生的桶, 32 个点被均匀铺满
+ * 整个绘图区, 线顶到右缘像走完了全天; 分时图习惯是画到当前时刻、右侧留白。
+ * 刻度必须与后端桶标签逐格对齐: 后端按桶起点截断 (dt.truncate), 上午最后一桶
+ * 是 11:25 (不是 11:30), 下午含 15:00 收盘桶 — 按此生成, 5 分钟桶全天 49 点。
+ */
+export function fullDayBuckets(bucketMinutes: number): string[] {
+  const labels: string[] = []
+  const push = (minutes: number) => {
+    const h = Math.floor(minutes / 60)
+    const m = minutes % 60
+    labels.push(`${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}`)
+  }
+  for (let t = 570; t < 690; t += bucketMinutes) push(t)   // 09:30 起, 上午最后一桶起点 < 11:30
+  for (let t = 780; t <= 900; t += bucketMinutes) push(t)  // 13:00 起到 15:00 (含收盘桶)
+  return labels
+}
+
+/** 全天刻度 ∪ 窗口实际桶标签 (数据侧边界约定变化时并集兜底, 不丢列); HH:MM 字典序即时间序。 */
+export function mergeFullDayBuckets(windowBuckets: string[], bucketMinutes: number): string[] {
+  const axis = fullDayBuckets(bucketMinutes)
+  const have = new Set(axis)
+  const extra = windowBuckets.filter(label => !have.has(label))
+  return extra.length ? [...axis, ...extra].sort() : axis
+}
 
 /** 一次「领涨易主」: col 列起 rowIdx 板块接管 (prevRowIdx=前任, 窗口开局时为 null) */
 export interface LeaderReign {
@@ -427,7 +473,12 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   const trendOption = useMemo<echarts.EChartsOption | null>(() => {
     const heatSeries = data?.series
     if (!heatSeries || !heatSeries.sectors.length || !heatSeries.buckets.length) return null
-    const buckets = heatSeries.buckets.slice(startCol)
+    const winBuckets = heatSeries.buckets.slice(startCol)
+    // 全天铺轴 (issue #518): 仅全窗口视图铺 — 1 分钟桶的「最近 60 列」是滑动
+    // 窗口不是全天进度视图, 不铺。盘中未产生的桶为 null → 线止于当前时刻,
+    // 右侧留白到 15:00, 扫一眼即知当天进行到哪。
+    const axisBuckets = startCol === 0 ? mergeFullDayBuckets(winBuckets, bucket) : winBuckets
+    const dataIndexOf = new Map(winBuckets.map((label, i) => [label, i] as const))
     // 领涨易主: 逐列 top 行变化 → 在接管板块的线上标圆点+板块名 (频繁易主时按在位时长截断)
     const totalCols = heatSeries.buckets.length
     const reigns = computeLeaderReigns(heatSeries.matrix, startCol)
@@ -444,12 +495,12 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
         : heatSeries.sectors.map((_, i) => i).sort((a, b) => latestVals[b] - latestVals[a]).slice(0, 6),
     )
     return {
-      grid: { left: 44, right: 78, top: 12, bottom: 40 },
+      // bottom 预留两行 plain 图例的高度 (scroll 图例会翻页, 一眼看不全所有板块)
+      grid: { left: 44, right: 78, top: 12, bottom: 56 },
       legend: {
-        type: 'scroll', bottom: 0, left: 'center',
+        type: 'plain', bottom: 0, left: 'center', width: '94%',
         itemWidth: 14, itemHeight: 2, itemGap: 8,
         textStyle: { fontSize: 10, color: chartTheme.text },
-        pageIconSize: 8,
       },
       tooltip: {
         trigger: 'axis',
@@ -460,9 +511,11 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
           const list = (Array.isArray(params) ? params : [params]) as Array<{
             axisValue?: string; seriesName?: string; marker?: string; value?: number | null
           }>
-          const idx = buckets.indexOf(list[0]?.axisValue ?? '')
-          const point = timeline[startCol + idx]
-          if (!point) return ''
+          const axisValue = list[0]?.axisValue ?? ''
+          const idx = dataIndexOf.get(axisValue)
+          const point = idx === undefined ? undefined : timeline[startCol + idx]
+          // 全天铺轴后右侧留白区无数据点: 至少回显时刻
+          if (!point) return `<b>${axisValue}</b>`
           const lines = [
             `<b>${point.time}</b>`,
             `领涨${dimLabel} ${point.leader} (${fmtPct(point.leader_pct)})`,
@@ -478,13 +531,14 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
         },
       },
       xAxis: {
-        type: 'category', data: buckets,
+        type: 'category', data: axisBuckets,
         axisLine: { show: false }, axisTick: { show: false },
         // 目标 6 个刻度; hideOverlap 兜底 — ECharts 对最大刻度有"强制显示"倾向,
         // 取整后的间隔会让末尾刻度与它挤在一起
         axisLabel: {
           fontSize: 9, color: chartTheme.text, hideOverlap: true,
-          interval: Math.max(0, Math.ceil(buckets.length / 6) - 1),
+          interval: Math.max(0, Math.ceil(axisBuckets.length / 6) - 1),
+          showMaxLabel: true,
         },
       },
       yAxis: {
@@ -493,20 +547,26 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
         splitLine: { lineStyle: { color: 'rgba(128,140,160,0.15)' } },
       },
       series: heatSeries.sectors.map((name, i) => {
-        const color = TREND_COLORS[i % TREND_COLORS.length]
+        const color = colorForSector(name)
+        const row = heatSeries.matrix[i] ?? []
+        // 数据对齐全天轴: 窗口内的桶取真实值, 未产生/缺失的桶为 null (右侧留白)
+        const linedata = axisBuckets.map(label => {
+          const winIdx = dataIndexOf.get(label)
+          return winIdx === undefined ? null : row[startCol + winIdx] ?? null
+        })
         // 本线的易主标注点 (接管时点), 坐标 = 桶标签 + 当列涨幅
         const switchPoints = reigns
           .filter(r => r.rowIdx === i && labelCols.has(r.col))
           .map(r => ({
             name,
-            coord: [buckets[r.col - startCol], heatSeries.matrix[i]?.[r.col] ?? 0] as [string, number],
+            coord: [heatSeries.buckets[r.col], heatSeries.matrix[i]?.[r.col] ?? 0] as [string, number],
           }))
         return {
           name,
           type: 'line' as const,
           smooth: true,
           symbol: 'none',
-          data: (heatSeries.matrix[i] ?? []).slice(startCol),
+          data: linedata,
           lineStyle: { color, width: 1.4 },
           connectNulls: true,
           // 悬停聚焦 (图上线条或榜单行均可触发): 目标线加粗并在末端浮出板块名,
@@ -713,32 +773,94 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
   }, [displayMode, hoverName, data, bucket, cols, displayNames, heat.instRef, trend.instRef])
 
   // 强度图: 黄=切换强度 (左轴), 灰虚线=全市场, 蓝线=指数 (右轴 %); 窗口与展示图一致;
-  // 领涨易主时点标注新领涨板块名: 可见窗口内取强度最高 2 个 (琥珀) 与最低 2 个 (灰色)
-  // 常显, 不用 hideOverlap — 其余切换点仅 tooltip 可见, 避免密集切换时标签互相遮挡
+  // 领涨易主时点以 markPoint 圆点+板块名标注: 圆点颜色与走势线同源 (colorForSector,
+  // 上下两图同一板块同色), 强度改由圆点大小表达 — 最强 3 次大点 / 最弱 2 次小点
+  // (line series 设 symbol:'none' 后 data item 的 symbol 不生效, 只能走 markPoint)
   const chartOption = useMemo<echarts.EChartsOption | null>(() => {
     if (!timeline.length) return null
-    const buckets = timeline.slice(startCol).map(point => point.time)
-    if (!buckets.length) return null
+    const winBuckets = timeline.slice(startCol).map(point => point.time)
+    if (!winBuckets.length) return null
+    // 全天铺轴 (与走势图同一规则, 两图指针联动依赖轴窗口一致)
+    const axisBuckets = startCol === 0 ? mergeFullDayBuckets(winBuckets, bucket) : winBuckets
+    const dataIndexOf = new Map(winBuckets.map((label, i) => [label, i] as const))
     const switchIndices: number[] = []
     for (let index = 1; index < timeline.length; index++) {
       if (timeline[index - 1].leader !== timeline[index].leader) switchIndices.push(index)
     }
-    const inWindow = switchIndices.filter(index => index >= startCol)
-    const byRotation = [...inWindow].sort(
+    // 事件集 = 窗口内易主 + 窗口开局领涨 (走势图对开局领涨一直有圆点标注,
+    // 切换图不标会"少一个事件" — 开盘即领涨的板块整段没有任何标记)
+    const eventIndices = [startCol, ...switchIndices.filter(index => index > startCol)]
+    const byRotation = [...eventIndices].sort(
       (a, b) => timeline[a].rotation - timeline[b].rotation,
     )
     const highIdx = new Set(byRotation.slice(-3))
     const lowIdx = new Set(byRotation.slice(0, 2))
-    const switchLabel = (text: string, color: string) => ({
-      show: true, formatter: text, position: 'top' as const,
-      fontSize: 9.5, color, textBorderColor: chartTheme.tooltipBg, textBorderWidth: 2,
-    })
-    const intensityData = timeline.slice(startCol).map((point, offset) => {
-      const index = startCol + offset
-      if (highIdx.has(index)) return { value: point.rotation, label: switchLabel(point.leader, '#f59e0b') }
-      if (lowIdx.has(index)) return { value: point.rotation, label: switchLabel(point.leader, 'rgba(128,140,160,0.95)') }
-      return point.rotation
-    })
+    // 易主标注点: 颜色=接管板块的走势线色, 大小=切换强度; formatter 用函数式 —
+    // markPoint data item 的字符串 formatter 会让整个 markPoint 不渲染。
+    // 标签防挤叠 (像素级 AABB): 按绘图区几何估算每个标签的包围盒 (上/下随侧别
+    // 偏移), 与已放置标签相交则隐藏本标签只留圆点 — 低点的 top 标签和高点的
+    // bottom 标签会收敛到同一水平线, 按圆点数值差判断拦不住, 必须按标签落位判断。
+    // 密集聚簇与其拼成一个词不如少一个装饰性标签 (tooltip 信息完整)。
+    // 圆点加底色描边, 防小圆点贴在强度线上看不见。
+    // 绘图区按 h-44 容器的保守值估算 (实际更宽只会更宽松, 宁可多隐藏不重叠)。
+    const plotW = 380, plotH = 126
+    const bucketW = plotW / Math.max(1, axisBuckets.length)
+    const labelBox = (index: number, value: number, side: 'top' | 'bottom', textLen: number): number[] => {
+      const x = (index - startCol) * bucketW
+      const y = (1 - value) * plotH   // 数值轴 0 在底部
+      const w = textLen * 9.5, h = 12
+      // 各向外扩 2px 余量
+      return side === 'top'
+        ? [x - w / 2 - 2, y - 5 - h - 2, x + w / 2 + 2, y - 5 + 2]
+        : [x - w / 2 - 2, y + 5 - 2, x + w / 2 + 2, y + 5 + h + 2]
+    }
+    const boxesOverlap = (a: number[], b: number[]) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+    const takeoverMarks: {
+      name: string
+      coord: [string, number]
+      symbolSize: number
+      itemStyle: { color: string; borderColor: string; borderWidth: number }
+      label: Record<string, unknown>
+    }[] = []
+    const sideLastBucket: { top: number; bottom: number } = { top: -999, bottom: -999 }
+    const placedBoxes: number[][] = []
+    // 最强切换 (大点) 的标签信息量最高, 密集区先占位 — 弱事件标签撞上才被隐藏
+    const orderedEvents = [
+      ...eventIndices.filter(index => highIdx.has(index)),
+      ...eventIndices.filter(index => !highIdx.has(index) && lowIdx.has(index)),
+    ]
+    for (const index of orderedEvents) {
+      const point = timeline[index]
+      const strong = highIdx.has(index)
+      if (!strong && !lowIdx.has(index)) continue
+      const color = colorForSector(point.leader)
+      const prefer: 'top' | 'bottom' = takeoverMarks.length % 2 ? 'bottom' : 'top'
+      const alt: 'top' | 'bottom' = prefer === 'top' ? 'bottom' : 'top'
+      const side = index - sideLastBucket[prefer] < 6
+        ? (index - sideLastBucket[alt] < 6 ? prefer : alt)
+        : prefer
+      sideLastBucket[side] = index
+      const box = labelBox(index, point.rotation, side, point.leader.length)
+      const showLabel = placedBoxes.every(placed => !boxesOverlap(box, placed))
+      if (showLabel) placedBoxes.push(box)
+      takeoverMarks.push({
+        name: point.leader,
+        coord: [point.time, point.rotation],
+        symbolSize: strong ? 8 : 5,
+        itemStyle: { color, borderColor: chartTheme.tooltipBg, borderWidth: 1 },
+        label: {
+          show: showLabel, formatter: () => point.leader,
+          position: side,
+          distance: 5,
+          fontSize: 9.5, color, textBorderColor: chartTheme.tooltipBg, textBorderWidth: 2,
+        },
+      })
+    }
+    const onAxis = (pick: (point: (typeof timeline)[number], absIdx: number) => number | null) =>
+      axisBuckets.map(label => {
+        const winIdx = dataIndexOf.get(label)
+        return winIdx === undefined ? null : pick(timeline[startCol + winIdx], startCol + winIdx)
+      })
     return {
       grid: { left: 38, right: 46, top: 26, bottom: 24 },
       tooltip: {
@@ -748,26 +870,28 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
         textStyle: { color: chartTheme.tooltipText, fontSize: 10 },
         formatter: (params: unknown) => {
           const list = (Array.isArray(params) ? params : [params]) as Array<{ axisValue?: string }>
-          const idx = buckets.indexOf(list[0]?.axisValue ?? '')
-          const point = timeline[startCol + idx]
-          if (!point) return ''
+          const axisValue = list[0]?.axisValue ?? ''
+          const idx = dataIndexOf.get(axisValue)
+          const point = idx === undefined ? undefined : timeline[startCol + idx]
+          if (!point) return `<b>${axisValue}</b>`
           const lines = [
             `<b>${point.time}</b>`,
             `切换强度 ${point.rotation.toFixed(2)}`,
             `领涨${dimLabel} ${point.leader} (${fmtPct(point.leader_pct)})`,
             `全市场 ${fmtPct(point.market_pct)}`,
           ]
-          const idxVal = indexLine ? indexLine.points[startCol + idx] : null
+          const idxVal = indexLine && idx !== undefined ? indexLine.points[startCol + idx] : null
           if (indexLine && idxVal != null) lines.push(`${indexLine.label} ${fmtPct(idxVal)}`)
           if (phase === 'live' && idx === cols - 1) lines.push('<span style="color:#f59e0b">进行中的桶 · 数据未封口</span>')
           return lines.join('<br/>')
         },
       },
       xAxis: {
-        type: 'category', data: buckets,
+        type: 'category', data: axisBuckets,
         axisLabel: {
           fontSize: 9, color: chartTheme.text, hideOverlap: true,
-          interval: Math.max(0, Math.ceil(buckets.length / 6) - 1),
+          interval: Math.max(0, Math.ceil(axisBuckets.length / 6) - 1),
+          showMaxLabel: true,
         },
       },
       yAxis: [
@@ -777,24 +901,27 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
       series: [
         {
           name: '切换强度', type: 'line', smooth: true, symbol: 'none',
-          data: intensityData,
+          data: onAxis(point => point.rotation),
           lineStyle: { color: '#f59e0b', width: 1.6 },
           areaStyle: { color: 'rgba(245,158,11,0.12)' },
+          connectNulls: true,
+          ...(takeoverMarks.length ? { markPoint: { symbol: 'circle', silent: true, data: takeoverMarks } } : {}),
         },
         {
           name: '全市场', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 1,
-          data: timeline.slice(startCol).map(point => point.market_pct),
+          data: onAxis(point => point.market_pct),
           lineStyle: { color: 'rgba(128,140,160,0.55)', width: 1, type: 'dashed' },
+          connectNulls: true,
         },
         ...(indexLine ? [{
           name: indexLine.label, type: 'line' as const, smooth: true, symbol: 'none', yAxisIndex: 1,
-          data: indexLine.points.slice(startCol),
+          data: onAxis((_point, absIdx) => indexLine.points[absIdx] ?? null),
           lineStyle: { color: '#60a5fa', width: 1.4 },
           connectNulls: true,
         }] : []),
       ],
     }
-  }, [data, dimLabel, indexLine, timeline, startCol, cols, phase, chartTheme])
+  }, [data, dimLabel, indexLine, timeline, startCol, cols, phase, chartTheme, bucket])
   const chart = useEChart(chartOption)
 
   // 强度图与展示图 x 轴指针跨实例联动 (两图 x 轴窗口一致才可对齐)
@@ -870,6 +997,8 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
 
   const latest = data?.timeline?.[data.timeline.length - 1]
   const heatHeight = Math.max(180, heatRows * HEAT_ROW_HEIGHT + 62)
+  // 左列是否渲染 (走势线无板块 / 热力图无行时缺位, 右列全宽补上)
+  const showLeftChart = displayMode === 'heatmap' ? heatRows > 0 : displayNames.length > 0
 
   // 未开启全量分钟落盘时整卡隐藏 (整卡空态占位过大, 白占首屏);
   // 其余 reason (当日数据为空/成分缺失) 属"有能力缺数据", 保留引导文案
@@ -1135,42 +1264,108 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
             </div>
           )}
 
-          {displayMode === 'heatmap' ? (
-            heatRows > 0 && (
-              // key 强制模式切换时销毁重建容器: 两个分支同为 <div> 时 React 会原地
-              // 复用节点换挂 ref, 造成两个 echarts 实例交叉挤占同一个 dom
-              <div key="heatmap" className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
-                <Legend
-                  items={[
-                    { swatch: swatchBlock('#B91C1C'), label: '涨' },
-                    { swatch: swatchBlock('#323945'), label: '平' },
-                    { swatch: swatchBlock('#14532D'), label: '跌' },
-                    { swatch: swatchFrame('#FCD34D'), label: '领涨轨迹 (该桶最强)' },
-                    ...(phase === 'live'
-                      ? [{ swatch: swatchFrame('rgba(255,255,255,0.9)'), label: '未封口桶' }]
-                      : []),
-                    { label: '悬停联动榜单' },
-                  ]}
-                />
-                <div ref={heat.ref} style={{ height: heatHeight }} className="w-full" />
+          {/* 宽屏左右并排 (issue #518 #2): 左=展示图 (aspect-ratio 随列宽, ~1.8:1,
+              不再全宽 4.4:1 压扁), 右=切换强度图+榜单; 窄屏退回上下堆叠。
+              右列内层 xl 下绝对定位脱离 grid 行高计算 — 30 行榜单不再把行顶到
+              1100px+, 榜单列内 flex-1 内部滚动, 两列底部齐平。 */}
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+            {displayMode === 'heatmap' ? (
+              heatRows > 0 && (
+                // key 强制模式切换时销毁重建容器: 两个分支同为 <div> 时 React 会原地
+                // 复用节点换挂 ref, 造成两个 echarts 实例交叉挤占同一个 dom
+                <div key="heatmap" className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
+                  <Legend
+                    items={[
+                      { swatch: swatchBlock('#B91C1C'), label: '涨' },
+                      { swatch: swatchBlock('#323945'), label: '平' },
+                      { swatch: swatchBlock('#14532D'), label: '跌' },
+                      { swatch: swatchFrame('#FCD34D'), label: '领涨轨迹 (该桶最强)' },
+                      ...(phase === 'live'
+                        ? [{ swatch: swatchFrame('rgba(255,255,255,0.9)'), label: '未封口桶' }]
+                        : []),
+                      { label: '悬停联动榜单' },
+                    ]}
+                  />
+                  <div ref={heat.ref} style={{ height: heatHeight }} className="w-full" />
+                </div>
+              )
+            ) : (
+              displayNames.length > 0 && (
+                <div key="trend" className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
+                  <Legend
+                    items={[
+                      { swatch: swatchLine('#60a5fa'), label: '线端常显板块名 (悬停聚焦)' },
+                      { swatch: swatchDot('#fbbf24'), label: '圆点=领涨易主 · 标注接管板块' },
+                      { swatch: swatchDash('rgba(128,140,160,0.9)'), label: '0% 轴: 上穿=切入 / 下穿=退潮' },
+                    ]}
+                  />
+                  {/* 高度随列宽 (9:5): 固定像素高在宽窗口会压成 4:1 扁条; minHeight 兜底窄列 */}
+                  <div ref={trend.ref} style={{ aspectRatio: '9 / 5', minHeight: 300 }} className="w-full" />
+                </div>
+              )
+            )}
+            <div className={cn('relative xl:min-h-0', !showLeftChart && 'xl:col-span-2')}>
+              <div className="flex flex-col gap-2 xl:absolute xl:inset-0">
+                {/* 涨跌切换 (0轴穿越) — 独立分组: 可见窗口累计 + 最新事件名单,
+                    悬停名称联动上图/榜单定位 */}
+                <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
+                  <Legend
+                    items={[
+                      { swatch: swatchLine('#f59e0b'), label: '切换强度 (左轴)' },
+                      { swatch: swatchDot('#f59e0b'), label: '圆点=领涨易主(含开局) · 颜色同走势线 · 大点=最强切换' },
+                      ...(indexLine
+                        ? [{ swatch: swatchLine('#60a5fa'), label: `${indexLine.label} (右轴)` }]
+                        : []),
+                      { swatch: swatchDash('rgba(128,140,160,0.8)'), label: '全市场 (右轴) · 与展示图指针联动' },
+                    ]}
+                  />
+                  <div ref={chart.ref} className="h-44 w-full" />
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60">
+                  <div className="grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] border-b border-border bg-base/50 px-2 py-1.5 text-[9px] font-medium text-muted">
+                    <span>{dimLabel}</span><span className="text-right">现涨幅</span><span className="text-right">1h前</span><span className="text-right">排名变化</span><span className="text-right">{data.flow_available ? '资金流 / 综合分' : '综合分'}</span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {data.sectors.map((sector: SectorRotationSector) => (
+                      <div
+                        key={sector.name}
+                        onMouseEnter={() => setHoverName(sector.name)}
+                        onMouseLeave={() => setHoverName(null)}
+                        className={cn(
+                          'grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] items-center border-b border-border/40 px-2 py-1.5 text-[10px] last:border-b-0 hover:bg-elevated/40',
+                          hoverName === sector.name && 'bg-accent/10',
+                        )}
+                      >
+                        <span className="truncate font-medium text-foreground" title={`${sector.name} · 成分 ${sector.n_members_with_bars}/${sector.n_members}`}>
+                          <span
+                            aria-hidden
+                            className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                            style={{
+                              // 与走势线/易主圆点同一稳定配色; 未进矩阵的板块给灰色占位点
+                              backgroundColor: displayNames.includes(sector.name)
+                                ? colorForSector(sector.name)
+                                : SECTOR_DOT_UNMATCHED,
+                            }}
+                          />
+                          {sector.name}
+                        </span>
+                        <span className={`text-right font-mono ${pctClass(sector.pct_now)}`}>{fmtPct(sector.pct_now)}</span>
+                        <span className={`text-right font-mono ${pctClass(sector.pct_prev)}`}>{fmtPct(sector.pct_prev)}</span>
+                        <span className={`text-right font-mono ${sector.rank_change == null ? 'text-muted' : sector.rank_change > 0 ? 'text-bull' : sector.rank_change < 0 ? 'text-bear' : 'text-muted'}`}>
+                          {sector.rank_change == null ? '—' : sector.rank_change > 0 ? `↑${sector.rank_change}` : sector.rank_change < 0 ? `↓${-sector.rank_change}` : '—'}
+                        </span>
+                        <span className="truncate text-right font-mono text-secondary" title={data.flow_available ? `资金流 ${fmtFlow(sector.flow)}` : '未选择资金流, 综合分=涨幅归一'}>
+                          {data.flow_available ? `${fmtFlow(sector.flow)} · ${sector.score?.toFixed(0) ?? '—'}` : `${sector.score?.toFixed(0) ?? '—'}分`}
+                        </span>
+                      </div>
+                    ))}
+                    {!data.sectors.length && <div className="p-3 text-center text-[10px] text-muted">暂无板块数据</div>}
+                  </div>
+                </div>
               </div>
-            )
-          ) : (
-            displayNames.length > 0 && (
-              <div key="trend" className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
-                <Legend
-                  items={[
-                    { swatch: swatchLine('#60a5fa'), label: '线端常显板块名 (悬停聚焦)' },
-                    { swatch: swatchDot('#fbbf24'), label: '圆点=领涨易主 · 标注接管板块' },
-                    { swatch: swatchDash('rgba(128,140,160,0.9)'), label: '0% 轴: 上穿=切入 / 下穿=退潮' },
-                  ]}
-                />
-                <div ref={trend.ref} style={{ height: Math.max(260, displayNames.length * 8 + 240) }} className="w-full" />
-              </div>
-            )
-          )}
-          {/* 涨跌切换 (0 轴穿越) — 独立分组: 可见窗口累计 + 最新事件名单,
-              悬停名称联动上图/榜单定位 */}
+            </div>
+          </div>
+          {/* 涨跌切换 (0 轴穿越) 事件带 — 全宽, 名称悬停联动上图/榜单定位 */}
           {(() => {
             const win = timeline.slice(startCol)
             const upTotal = win.reduce((sum, point) => sum + (point.cross_up ?? 0), 0)
@@ -1224,62 +1419,6 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
               </div>
             )
           })()}
-          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_1fr]">
-            <div className="rounded-lg border border-border/60 bg-elevated/30 p-1.5">
-              <Legend
-                items={[
-                  { swatch: <span className="font-medium text-[#f59e0b]">琥珀字</span>, label: '最强 3 次切换的新领涨' },
-                  { swatch: <span className="text-[rgba(128,140,160,0.95)]">灰字</span>, label: '最弱 2 次' },
-                  { swatch: swatchLine('#f59e0b'), label: '切换强度 (左轴)' },
-                  ...(indexLine
-                    ? [{ swatch: swatchLine('#60a5fa'), label: `${indexLine.label} (右轴)` }]
-                    : []),
-                  { swatch: swatchDash('rgba(128,140,160,0.8)'), label: '全市场 (右轴) · 与展示图指针联动' },
-                ]}
-              />
-              <div ref={chart.ref} className="h-44 w-full" />
-            </div>
-            <div className="overflow-hidden rounded-lg border border-border/60">
-              <div className="grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] border-b border-border bg-base/50 px-2 py-1.5 text-[9px] font-medium text-muted">
-                <span>{dimLabel}</span><span className="text-right">现涨幅</span><span className="text-right">1h前</span><span className="text-right">排名变化</span><span className="text-right">{data.flow_available ? '资金流 / 综合分' : '综合分'}</span>
-              </div>
-              <div className="max-h-40 overflow-y-auto">
-                {data.sectors.map((sector: SectorRotationSector) => (
-                  <div
-                    key={sector.name}
-                    onMouseEnter={() => setHoverName(sector.name)}
-                    onMouseLeave={() => setHoverName(null)}
-                    className={cn(
-                      'grid grid-cols-[minmax(0,1.4fr)_64px_64px_58px_minmax(72px,1fr)] items-center border-b border-border/40 px-2 py-1.5 text-[10px] last:border-b-0 hover:bg-elevated/40',
-                      hoverName === sector.name && 'bg-accent/10',
-                    )}
-                  >
-                    <span className="truncate font-medium text-foreground" title={`${sector.name} · 成分 ${sector.n_members_with_bars}/${sector.n_members}`}>
-                      <span
-                        aria-hidden
-                        className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
-                        style={{
-                          backgroundColor: displayNames.includes(sector.name)
-                            ? TREND_COLORS[displayNames.indexOf(sector.name) % TREND_COLORS.length]
-                            : 'transparent',
-                        }}
-                      />
-                      {sector.name}
-                    </span>
-                    <span className={`text-right font-mono ${pctClass(sector.pct_now)}`}>{fmtPct(sector.pct_now)}</span>
-                    <span className={`text-right font-mono ${pctClass(sector.pct_prev)}`}>{fmtPct(sector.pct_prev)}</span>
-                    <span className={`text-right font-mono ${sector.rank_change == null ? 'text-muted' : sector.rank_change > 0 ? 'text-bull' : sector.rank_change < 0 ? 'text-bear' : 'text-muted'}`}>
-                      {sector.rank_change == null ? '—' : sector.rank_change > 0 ? `↑${sector.rank_change}` : sector.rank_change < 0 ? `↓${-sector.rank_change}` : '—'}
-                    </span>
-                    <span className="truncate text-right font-mono text-secondary" title={data.flow_available ? `资金流 ${fmtFlow(sector.flow)}` : '未选择资金流, 综合分=涨幅归一'}>
-                      {data.flow_available ? `${fmtFlow(sector.flow)} · ${sector.score?.toFixed(0) ?? '—'}` : `${sector.score?.toFixed(0) ?? '—'}分`}
-                    </span>
-                  </div>
-                ))}
-                {!data.sectors.length && <div className="p-3 text-center text-[10px] text-muted">暂无板块数据</div>}
-              </div>
-            </div>
-          </div>
           <div className="mt-1.5 flex items-center gap-1.5 text-[9px] text-muted">
             <Database className="h-3 w-3" />
             {`${data.member_count} 个${dimLabel} · ${data.bucket_minutes}分钟桶 · 基准 ${data.basis === 'prev_close' ? '昨收' : data.basis === 'first_close' ? '今开' : '混合'}`}
