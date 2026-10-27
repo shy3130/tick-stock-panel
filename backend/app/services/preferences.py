@@ -1395,6 +1395,8 @@ _UI_PREFS_KEYS = (
     "settings_nav_collapsed",
     "bt_strategy_list_maxh",
     "nav_state",
+    # AI 助手悬浮球显隐 (assistant.fab.enabled 的后端副本) — 同样受端口漂移影响
+    "assistant_fab_enabled",
 )
 _UI_PREFS_MAX_JSON = 16 * 1024
 

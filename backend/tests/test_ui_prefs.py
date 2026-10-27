@@ -89,3 +89,11 @@ def test_get_preferences_exposes_ui_prefs(prefs_file):
     preferences.set_ui_prefs({"alert_toast_max": 2})
     payload = get_preferences()
     assert payload["ui_prefs"] == {"alert_toast_max": 2}
+
+
+def test_assistant_fab_enabled_in_whitelist(prefs_file):
+    """AI 助手悬浮球显隐必须在白名单内 — 否则桌面版换端口 (换 origin) 后
+    localStorage 丢失, 开关闪回默认开启 (用户反馈「关了过一会又开」)。"""
+    saved = preferences.set_ui_prefs({"assistant_fab_enabled": False})
+    assert saved["assistant_fab_enabled"] is False
+    assert preferences.get_ui_prefs()["assistant_fab_enabled"] is False

@@ -2,7 +2,8 @@
  * 设置→系统「界面」区的「显示悬浮球」开关 — 经 settings.system.section 插槽渲染。
  *
  * 样式与核心 System 面板 ToggleRow 同款 (h-5 w-9 胶囊开关 + label/desc 两行),
- * 开关状态走 assistant store 的 fabVisible (localStorage 持久化, 默认开启)。
+ * 开关状态走 assistant store 的 fabVisible (localStorage + 后端 ui_prefs 双写,
+ * 桌面版换端口也不丢; 默认开启)。
  * 删除助手扩展即整行消失, 核心零依赖。
  */
 import { cn } from '@/lib/cn'

@@ -16,6 +16,7 @@ import {
   type ChatHistoryMessage,
 } from './client'
 import { mergeSessions } from './sessionsMerge'
+import { hydrateUiPrefs, setUiPref } from '@/lib/uiPrefs'
 
 /**
  * running=执行中; awaiting=动作工具等待用户确认; approved/denied=用户已点
@@ -58,7 +59,7 @@ interface AssistantState {
   activeId: string
   open: boolean
   sending: boolean
-  /** 悬浮球是否显示 (纯 UI 偏好, 独立 localStorage, 不随会话持久化) */
+  /** 悬浮球是否显示 (纯 UI 偏好, 经 uiPrefs 双写持久化, 不随聊天会话同步) */
   fabVisible: boolean
 }
 
@@ -87,6 +88,16 @@ const listeners = new Set<() => void>()
 let abortController: AbortController | null = null
 let pageContext: AssistantContext = {}
 let serverSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+// 悬浮球显隐跨端口持久化: localStorage 只是同步读取的本地缓存, 后端 ui_prefs
+// 才是权威副本 (桌面版 _find_free_port 换端口即换 origin, 纯 localStorage 的
+// 偏好在换端口后读不到, 表现为「关了过一会又自己开启」)。hydrate 把后端值回填
+// localStorage 后刷新内存态 — hydrateUiPrefs 幂等且共享 Promise, 与 main.tsx
+// 的调用谁先谁后都等到同一次回填完成。
+void hydrateUiPrefs().then(() => {
+  const v = loadFabVisible()
+  if (v !== state.fabVisible) setState({ fabVisible: v }, false)
+})
 
 function emit() {
   for (const listener of listeners) listener()
@@ -421,9 +432,9 @@ export function closeAssistant() {
   setState({ open: false }, false)
 }
 
-/** 设置悬浮球可见性并持久化 (默认开启)。 */
+/** 设置悬浮球可见性并持久化 (localStorage 缓存 + 后端 ui_prefs 权威副本, 默认开启)。 */
 export function setFabVisible(visible: boolean) {
-  try { localStorage.setItem(FAB_STORAGE_KEY, visible ? '1' : '0') } catch { /* 存储不可用仅内存态 */ }
+  setUiPref(FAB_STORAGE_KEY, visible ? '1' : '0')
   setState({ fabVisible: visible }, false)
 }
 
