@@ -1,6 +1,7 @@
 """Tick Stock Panel backend."""
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from pathlib import Path
 # ISCC)、macOS 包元数据 (tsp.spec 读它)、页面版本徽标与更新检查 (本模块) 全部同源,
 # 改版本只改那一份文件。dev 模式读仓库文件; PyInstaller 冻结后读 _MEIPASS/package.json
 # (tsp.spec 的 datas 会收集)。读取失败回退硬编码值 —— 版本号绝不阻塞应用启动。
-_FALLBACK_VERSION = "0.3.17"
+# 三处伴生标记 (VERSION / backend/pyproject.toml / _FALLBACK_VERSION) 由
+# scripts/sync_versions.py 从 package.json 派生, release/docker 流水线自动执行。
+_FALLBACK_VERSION = "0.3.19"
 
 
 def _load_version() -> str:
@@ -19,7 +22,12 @@ def _load_version() -> str:
         pkg = Path(__file__).resolve().parents[2] / "frontend" / "package.json"
     try:
         return json.loads(pkg.read_text(encoding="utf-8"))["version"]
-    except Exception:
+    except Exception as e:
+        # 静默降级但必须可观测 (issue #513: Docker 镜像缺该文件时整站显示旧版本,
+        # 无任何日志线索)。Dockerfile 已 COPY 兜底, 走到这通常是打包配置坏了。
+        logging.getLogger(__name__).warning(
+            "读 %s 失败 (%s), 回退 _FALLBACK_VERSION=%s", pkg, e, _FALLBACK_VERSION
+        )
         return _FALLBACK_VERSION
 
 
