@@ -126,6 +126,9 @@ def delete_account(request: Request, force: bool = False, account: str = Query(p
     result, err = paper.delete_account(_data_dir(request), _acc(request, account), force=force)
     if err:
         raise HTTPException(status_code=400 if "force" in (err or "") else 404, detail=err)
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))  # 账户删了, 绑定集变了
     return {"ok": True, "deleted": _acc(request, account), **(result or {})}
 
 
@@ -369,28 +372,31 @@ def list_auto_rules(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT
 
 @router.post("/auto_rules")
 def create_auto_rule(request: Request, body: AutoRuleModel, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
-    from app.strategy import paper_auto
+    from app.strategy import paper_auto, paper_watch
     try:
         rule = paper_auto.create_auto_rule(_data_dir(request), body.model_dump(), _acc(request, account))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))  # 绑定即评估
     return {"rule": rule}
 
 
 @router.post("/auto_rules/{rule_id}/enabled")
 def set_auto_rule_enabled(request: Request, rule_id: str, enabled: bool, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
-    from app.strategy import paper_auto
+    from app.strategy import paper_auto, paper_watch
     rule = paper_auto.set_enabled(_data_dir(request), rule_id, enabled, _acc(request, account))
     if rule is None:
         raise HTTPException(status_code=404, detail=f"规则不存在: {rule_id}")
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
     return {"rule": rule}
 
 
 @router.delete("/auto_rules/{rule_id}")
 def delete_auto_rule(request: Request, rule_id: str, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
-    from app.strategy import paper_auto
+    from app.strategy import paper_auto, paper_watch
     if not paper_auto.delete_auto_rule(_data_dir(request), rule_id, _acc(request, account)):
         raise HTTPException(status_code=404, detail=f"规则不存在: {rule_id}")
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
     return {"ok": True}
 
 
@@ -470,4 +476,7 @@ def arena_batch_create(request: Request, body: ArenaBatchModel):
             created.append({"account": account_id, "name": acc_name, "rule_id": saved["id"]})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, data_dir)  # 绑定即评估
     return {"created": created}
