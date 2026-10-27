@@ -62,6 +62,8 @@ _CONFIG_FIELDS: dict[str, frozenset[str]] = {
             "max_exposure_pct",
             "initial_capital",
             "position_sizing",
+            "position_policy",
+            "position_policy_params",
             "mode",
             "holding_days",
             "asset_type",

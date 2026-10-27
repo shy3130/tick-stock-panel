@@ -58,6 +58,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "strategy_overrides": "策略调参",
     "custom_signals": "自定义信号",
     "custom_factors": "自定义因子",
+    "position_policies": "仓位策略",
     "monitor_rules": "监控规则",
     "watchlist": "自选股",
     "lots": "批量持仓",
@@ -85,6 +86,7 @@ _CATEGORY_ORDER = (
     "strategy_overrides",
     "custom_signals",
     "custom_factors",
+    "position_policies",
     "monitor_rules",
     "watchlist",
     "lots",
@@ -152,6 +154,13 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
         and _name_ok(parts[2], ".py")
     ):
         return "strategies", data_dir / Path(*parts)
+    if (
+        len(parts) == 3
+        and parts[0] == "user_data"
+        and parts[1] == "position_policies"
+        and _name_ok(parts[2], ".py")
+    ):
+        return "position_policies", data_dir / Path(*parts)
     if (
         len(parts) == 3
         and parts[0] == "user_data"
@@ -234,6 +243,7 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
         _glob(data_dir / "strategies" / sub, "*.py")
     for sub in ("strategy_overrides", "custom_signals", "custom_factors", "monitor_rules"):
         _glob(data_dir / "user_data" / sub, "*.json")
+    _glob(data_dir / "user_data" / "position_policies", "*.py")
     _glob(data_dir / "user_data" / "lots", "lot_*.json")
     for name in (
         "watchlist.parquet", "watchlist_groups.json", "preferences.json",
@@ -577,6 +587,7 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
     # 策略条目先攒批 — 同目录 _*.py 依赖要进主文件的 import 白名单
     # (与 engine._load_file 的 dependency glob 口径一致), 校验必须看全批。
     strategy_codes: dict[_Entry, str] = {}
+    policy_codes: dict[_Entry, str] = {}
     plain_entries: list[tuple[_Entry, bytes]] = []
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
@@ -605,10 +616,17 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
                     _result("strategies")["failed"].append(
                         {"file": entry.name, "error": f"策略文件不是有效 UTF-8: {e}"}
                     )
+            elif entry.category == "position_policies":
+                try:
+                    policy_codes[entry] = payload.decode("utf-8")
+                except UnicodeDecodeError as e:
+                    _result("position_policies")["failed"].append(
+                        {"file": entry.name, "error": f"仓位策略文件不是有效 UTF-8: {e}"}
+                    )
             else:
                 plain_entries.append((entry, payload))
 
-    # 第二遍: 内容校验 + 写盘 (策略 → 其余文件)。
+    # 第二遍: 内容校验 + 写盘 (策略 → 仓位策略 → 其余文件)。
     for directory, batch in _groupby_dir(strategy_codes):
         # 依赖名单 = 本批同目录 _*.py + 本机已存在的 _*.py (引擎 reload 时
         # glob 的是落盘后的目录, 两边取并集才不误杀)。
@@ -624,6 +642,26 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
                 continue
             _result("strategies")["imported"] += 1
             reload_hints["strategies"] = True
+
+    # 仓位策略: 与策略同一信任模型 — 安全校验 + 结构解析 + 合成冒烟三关全过才写盘
+    # (validate_policy_code 内置); 注册表按目录签名惰性刷新, 无需 reload 钩子。
+    if policy_codes:
+        from app.backtest import position_policies as _pp
+
+        for entry, code in policy_codes.items():
+            check = _pp.validate_policy_code(code)
+            if not check["ok"]:
+                _result("position_policies")["failed"].append(
+                    {"file": entry.name, "error": "; ".join(check["issues"])}
+                )
+                continue
+            try:
+                _write_payload(entry.target, code.encode("utf-8"))
+            except OSError as e:
+                _result("position_policies")["failed"].append({"file": entry.name, "error": str(e)})
+                continue
+            _result("position_policies")["imported"] += 1
+        _pp.invalidate_cache()
 
     for entry, payload in plain_entries:
         try:

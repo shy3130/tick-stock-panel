@@ -64,6 +64,8 @@ export const QK = {
   factorLibrary:        (assetType: string) => ['factors-library', assetType] as const,
   /** 统一定义目录 (信号+因子, P4) — 定义选择器数据源 */
   definitions:          ['definitions'] as const,
+  /** 用户自定义仓位策略 (设置→定义 与 回测设置共用) */
+  positionPolicies:     ['backtest-position-policies'] as const,
   miningRuns:           ['backtest-mining-runs'] as const,
   miningAvailability:   (assetType: string, profile: string, start: string, end: string) =>
                           ['backtest-mining-availability', assetType, profile, start, end] as const,

@@ -7,10 +7,12 @@
  */
 import { Library } from 'lucide-react'
 import { DefinitionPicker } from '@/components/DefinitionPicker'
+import { PositionPoliciesPanel } from '@/components/settings/PositionPoliciesPanel'
 
 export function SettingsDefinitionsPanel() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
+      <PositionPoliciesPanel />
       <div className="rounded-card border border-border bg-surface p-4">
         <div className="flex items-start gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-btn bg-accent/10 text-accent">
