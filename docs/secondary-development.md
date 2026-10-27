@@ -22,12 +22,15 @@
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
 - 当前前端插槽：`layout.navigation.extra`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
+- 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
 - 因子平台与策略线的既有桥接（已实现，二开时直接复用、勿重复实现）：因子库一键生成单因子排名策略（`GenerateFactorStrategyDialog` → `custom_factor_*`）；策略触发器引用因子条件信号（`AddFactorSignalDialog`，`csg_f_*`）；自定义信号 AI 提示词含因子分组（`custom_signals_ai.py`）；策略回测因子归因（`strategy.py` 的 `factor_attribution`，覆盖 `meta.scoring` 非空的策略）。
+- 策略包导出/导入（已实现）：策略设置「导出策略包」按依赖闭包打包策略 `.py` + 引用的自定义信号/因子定义 + 用户调参（叠加策略含子策略，递归展开）。服务层 `app/services/strategy_bundle.py`；条目路径与配置备份白名单形态一致，导入直接复用 `config_backup.apply_archive` 的安全校验/导入即冒烟/热重载。包内只允许策略/调参/信号/因子四类，其余路径 400 拒绝；缺失依赖（不在包内也不在本机）导入预览黄色预警。API：`GET /api/strategies/{id}/bundle`、`POST /api/strategies/bundle/inspect|apply`。
+- 模拟盘「绑定即评估」（已实现，`app/strategy/paper_watch.py`）：账户绑定策略（自动跟单规则 `match_kind=strategy`）即自动进入实时评估循环——引擎内存态注入合成规则（`paper_watch:{strategy_id}`，不落盘、不进监控页），事件照常喂 `paper_auto.on_rule_events`。同步幂等且与真监控规则去重（同策略已有启用中的监控规则则不注入，避免重复事件）；`set_rules` 是全量覆盖，故监控规则任何保存后都会重注入。合成规则的信号是沙盒信号：只驱动模拟盘下单，不进 SSE 告警/系统通知/webhook/留痕（`quote_service` 按 `is_paper_watch_event` 分流）。
 
 尚未实现、只能在真实需求出现后增加的能力：
 
 - 更多页面局部插槽。
-- 候选过滤、评分、仓位、风控和回测成本等后端业务策略接口。
+- 候选过滤、评分、风控和回测成本等后端业务策略接口（仓位 `PositionSizingPolicy` 已实现，见上）。
 - 配置 schema 迁移注册表。
 
 AI 在开始任务前必须通过代码搜索确认能力是否已经实现。找不到定义和测试时，应把示例视为设计规范，不得虚构导入路径或调用结果。
