@@ -212,6 +212,8 @@ class StrategyDef:
     # 仅 minute_filter: META["daily_history_bars"] 声明需要的日线历史窗口 (0=不需要;
     # >0 时 filter_minute_history 必须接受 daily 关键字, 引擎注入 context.daily_history)
     minute_daily_bars: int = 0
+    # 模块 SCORING 常量的因子键 (custom_factor_* 排名策略用; 策略包闭包消费)
+    scoring_columns: tuple[str, ...] = ()
 
 
 @dataclass
@@ -539,6 +541,13 @@ class StrategyEngine:
             )
 
         matrix_strategy = getattr(mod, "MATRIX_STRATEGY", None)
+        # 因子排名类策略 (custom_factor_*) 把评分因子写在模块 SCORING 常量里交给
+        # MATRIX_STRATEGY 构造, 不进 META.scoring — 依赖闭包 (strategy_bundle) 需要
+        # 在加载期拿到它, 与 ENTRY_SIGNALS 等常量同一口径。
+        module_scoring = getattr(mod, "SCORING", None)
+        scoring_columns: tuple[str, ...] = ()
+        if isinstance(module_scoring, dict) and module_scoring:
+            scoring_columns = tuple(str(k) for k in module_scoring)
         composite_spec: CompositeSpec | None = None
         minute_daily_bars = 0
         if execution_backend == "matrix_native":
@@ -623,6 +632,7 @@ class StrategyEngine:
             composite=composite_spec,
             filter_minute_history_fn=filter_minute_history_fn,
             minute_daily_bars=minute_daily_bars,
+            scoring_columns=scoring_columns,
         )
 
     def reload(self) -> None:

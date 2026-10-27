@@ -84,6 +84,8 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/strategies/ai/status",
     "GET /api/strategies/{strategy_id}",
     "GET /api/strategies/{strategy_id}/source",
+    # 策略包导出 (bundle): 与 /source 同敏感级, 同为开放层
+    "GET /api/strategies/{strategy_id}/bundle",
 }
 
 

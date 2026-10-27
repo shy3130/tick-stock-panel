@@ -815,6 +815,35 @@ export interface ParamVisibleIf {
   any?: ParamVisibleIf[]
 }
 
+/** 仓位策略定义 (设置 → 定义 → 仓位策略 / 回测设置引用) */
+export interface PositionPolicyMeta {
+  id: string
+  label: string
+  description: string
+  params: StrategyParamDef[]
+}
+export interface PositionPolicyInfo {
+  id: string
+  label: string
+  description: string
+  params: StrategyParamDef[]
+  source_file: string
+}
+export interface PositionPolicyTemplate {
+  key: string
+  label: string
+  description: string
+  meta: { id: string; label: string; description: string; params: StrategyParamDef[] }
+  code: string
+}
+export interface PositionPolicySavePayload {
+  id?: string
+  label: string
+  description?: string
+  params?: StrategyParamDef[]
+  code: string
+}
+
 export interface StrategyParamDef {
   id: string
   label: string
@@ -2208,6 +2237,25 @@ export interface ConfigBackupApplyResult {
   skipped_unselected: number
   out_of_scope_files: number
   reload_hints: Record<string, boolean>
+}
+
+/** 策略包条目预览 (POST /api/strategies/bundle/inspect) */
+export interface StrategyBundleEntry {
+  path: string
+  kind: 'strategies' | 'strategy_overrides' | 'custom_signals' | 'custom_factors'
+  id: string
+  action: 'create' | 'conflict'
+  bytes: number
+}
+
+export interface StrategyBundleInspect {
+  strategy_id: string
+  label: string
+  created_at?: string
+  counts: Record<string, number>
+  warnings: string[]
+  missing_deps: string[]
+  entries: StrategyBundleEntry[]
 }
 
 export interface Preferences {
@@ -3654,7 +3702,9 @@ export const api = {
     slippage_bps?: number
     max_positions?: number
     initial_capital?: number
-    position_sizing?: 'equal' | 'score_weight'
+    position_sizing?: 'equal' | 'score_weight' | 'policy'
+    position_policy?: string | null
+    position_policy_params?: Record<string, number | boolean | string> | null
     asset_type?: 'stock' | 'etf' | 'index'
     minute_fill?: boolean
   }) =>
@@ -3662,6 +3712,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  positionPolicyList: () => request<{
+    policies: PositionPolicyInfo[]
+    errors: Record<string, string>
+  }>('/api/backtest/position-policies'),
+  positionPolicyTemplates: () => request<{ templates: PositionPolicyTemplate[] }>(
+    '/api/backtest/position-policies/templates',
+  ),
+  positionPolicyGet: (id: string) => request<{ id: string; meta: PositionPolicyMeta; code: string }>(
+    `/api/backtest/position-policies/${id}`,
+  ),
+  positionPolicyValidate: (payload: PositionPolicySavePayload) => request<{
+    ok: boolean
+    issues: string[]
+    smoke: { weights: number[]; budget_scale: number } | null
+  }>('/api/backtest/position-policies/validate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  positionPolicySave: (payload: PositionPolicySavePayload) => request<{ ok: boolean; id: string; issues: string[] }>(
+    '/api/backtest/position-policies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  ),
+  positionPolicyDelete: (id: string) => request<{ ok: boolean }>(
+    `/api/backtest/position-policies/${id}`, { method: 'DELETE' },
+  ),
 
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },
@@ -4625,6 +4703,32 @@ export const api = {
   /** 获取策略源文件内容 */
   strategyGetSource: (id: string) =>
     request<{ code: string; source: string }>(`/api/strategies/${id}/source`),
+
+  // 策略包 (bundle): 依赖感知的导出/导入 — 策略 .py + 引用的信号/因子定义 + 用户调参。
+  // 导出走浏览器原生下载 (同配置备份直链模式)。
+  strategyBundleExportUrl: (strategyId: string) =>
+    `/api/strategies/${encodeURIComponent(strategyId)}/bundle`,
+
+  strategyBundleInspect: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<StrategyBundleInspect>('/api/strategies/bundle/inspect', {
+      method: 'POST',
+      body: fd,
+    })
+  },
+
+  strategyBundleApply: (file: File, allowOverwrite: boolean) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('allow_overwrite', allowOverwrite ? 'true' : 'false')
+    return request<ConfigBackupApplyResult>('/api/strategies/bundle/apply', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 120_000,
+    })
+  },
+
   strategyBuild: (step: number, payload: Record<string, any>) =>
     request<StrategyBuildResult>(
       '/api/strategies/build',

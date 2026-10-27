@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import { X, Plus, GripVertical, Upload, Loader2, Trash2, ListPlus } from 'lucide-react'
-import { api, type StrategyDetail } from '@/lib/api'
+import { api, type StrategyBundleInspect, type StrategyDetail } from '@/lib/api'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
@@ -45,6 +45,13 @@ function fileStem(name: string): string {
   return name.replace(/\.py$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^_+|_+$/g, '')
 }
 
+const BUNDLE_KIND_LABEL: Record<string, string> = {
+  strategies: '策略',
+  strategy_overrides: '调参',
+  custom_signals: '信号',
+  custom_factors: '因子',
+}
+
 export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   const backdrop = useDialogBackdrop(onClose)
   // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
@@ -56,6 +63,11 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   const [importError, setImportError] = useState('')
   const [importMsg, setImportMsg] = useState('')
   const [publishingId, setPublishingId] = useState<string | null>(null)
+  // 策略包 (.zip) 导入: 选文件 → inspect 预览 → 确认 apply
+  const [bundleFile, setBundleFile] = useState<File | null>(null)
+  const [bundlePreview, setBundlePreview] = useState<StrategyBundleInspect | null>(null)
+  const [bundleApplying, setBundleApplying] = useState(false)
+  const [bundleOverwrite, setBundleOverwrite] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const loadStrategies = useCallback(async () => {
@@ -150,9 +162,25 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   }, [loadStrategies])
 
   const handleImportFile = useCallback(async (file: File) => {
+    setImportError(''); setImportMsg('')
+    const name = file.name.toLowerCase()
+    if (name.endsWith('.zip')) {
+      // 策略包: 先 inspect 预览, 用户确认后再 apply
+      setBundleFile(file); setBundlePreview(null); setBundleOverwrite(false)
+      setImporting(true)
+      try {
+        setBundlePreview(await api.strategyBundleInspect(file))
+      } catch (e: any) {
+        setBundleFile(null)
+        setImportError(String(e?.message ?? '策略包解析失败'))
+      } finally {
+        setImporting(false)
+      }
+      return
+    }
     setImporting(true); setImportError(''); setImportMsg('')
     try {
-      if (!file.name.toLowerCase().endsWith('.py')) throw new Error('只能导入 .py 策略文件')
+      if (!file.name.toLowerCase().endsWith('.py')) throw new Error('只能导入 .py 策略文件或 .zip 策略包')
       const code = await file.text()
       const rawId = parseMetaId(code) || fileStem(file.name)
       if (!rawId) throw new Error('无法识别策略 ID，请检查 META.id 或文件名')
@@ -180,6 +208,28 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
     }
   }, [loadStrategies])
 
+  const handleBundleApply = useCallback(async () => {
+    if (!bundleFile || !bundlePreview) return
+    setBundleApplying(true); setImportError(''); setImportMsg('')
+    try {
+      const result = await api.strategyBundleApply(bundleFile, bundleOverwrite)
+      const imported = result.categories.reduce((acc, c) => acc + c.imported, 0)
+      const skipped = result.categories.reduce((acc, c) => acc + c.skipped_conflict, 0)
+      const failed = result.categories.reduce((acc, c) => acc + c.failed.length, 0)
+      await loadStrategies()
+      setBundleFile(null); setBundlePreview(null)
+      const parts = [`已导入 ${imported} 个文件`]
+      if (skipped) parts.push(`跳过冲突 ${skipped}`)
+      if (failed) parts.push(`失败 ${failed}`)
+      setImportMsg(`策略包「${bundlePreview.label || bundlePreview.strategy_id}」: ${parts.join(', ')}`)
+    } catch (e: any) {
+      setImportError(String(e?.message ?? '策略包导入失败'))
+    } finally {
+      setBundleApplying(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }, [bundleFile, bundlePreview, bundleOverwrite, loadStrategies])
+
   return (
     <AnimatePresence>
       <motion.div
@@ -206,7 +256,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".py,text/x-python,text/plain"
+                accept=".py,.zip,text/x-python,text/plain,application/zip"
                 className="hidden"
                 onChange={e => {
                   const file = e.target.files?.[0]
@@ -216,6 +266,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={importing}
+                title="导入单个 .py 策略, 或导出的 .zip 策略包 (含信号/因子/调参)"
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-accent/30 bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-50 transition-colors cursor-pointer"
               >
                 {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
@@ -230,6 +281,71 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
           {(importError || importMsg) && (
             <div className={`mx-4 mt-2 px-3 py-2 rounded-btn border text-[11px] shrink-0 ${importError ? 'border-danger/20 bg-danger/10 text-danger' : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-400'}`}>
               {importError || importMsg}
+            </div>
+          )}
+
+          {bundlePreview && bundleFile && (
+            <div className="mx-4 mt-2 rounded-btn border border-border bg-elevated/40 p-3 text-[11px] shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <span className="font-medium text-foreground">
+                    策略包: {bundlePreview.label || bundlePreview.strategy_id}
+                  </span>
+                  <span className="ml-2 text-muted">
+                    {bundlePreview.entries.length} 个文件
+                    {bundlePreview.created_at ? ` · ${bundlePreview.created_at.slice(0, 10)}` : ''}
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setBundleFile(null); setBundlePreview(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                  className="text-muted hover:text-foreground transition-colors cursor-pointer"
+                  aria-label="取消导入策略包"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+                {bundlePreview.entries.map(e => (
+                  <div key={e.path} className="flex items-center gap-1.5 min-w-0">
+                    <span className={`shrink-0 rounded border px-1 py-px text-[9px] leading-tight ${e.action === 'conflict' ? 'border-amber-400/30 bg-amber-400/10 text-amber-400' : 'border-border bg-surface text-muted'}`}>
+                      {BUNDLE_KIND_LABEL[e.kind] ?? e.kind}
+                    </span>
+                    <span className="truncate text-secondary font-mono">{e.id}</span>
+                    {e.action === 'conflict' && <span className="shrink-0 text-amber-400">已存在</span>}
+                  </div>
+                ))}
+              </div>
+
+              {(bundlePreview.missing_deps.length > 0 || bundlePreview.warnings.length > 0) && (
+                <div className="mt-2 rounded-btn border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 text-amber-400/90 leading-relaxed">
+                  {[...bundlePreview.missing_deps, ...bundlePreview.warnings].slice(0, 6).map((w, i) => (
+                    <div key={i}>· {w}</div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-2.5 flex items-center justify-between">
+                {bundlePreview.entries.some(e => e.action === 'conflict') ? (
+                  <label className="flex items-center gap-1.5 text-muted cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={bundleOverwrite}
+                      onChange={e => setBundleOverwrite(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    覆盖已存在的同名项
+                  </label>
+                ) : <span />}
+                <button
+                  onClick={handleBundleApply}
+                  disabled={bundleApplying}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-btn bg-accent text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 transition-colors cursor-pointer"
+                >
+                  {bundleApplying && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  导入策略包
+                </button>
+              </div>
             </div>
           )}
 

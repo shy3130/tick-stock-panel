@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -72,6 +72,10 @@ def _invalidate_strategy_runtime(request: Request) -> None:
     monitor_engine = getattr(request.app.state, "monitor_engine", None)
     if monitor_engine is not None:
         monitor_engine.invalidate_strategy_state()
+    # 策略删除/失效 → 清掉指向它的模拟盘合成评估规则
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
 
 
 def _missing_custom_signals(data_dir: Path, required_features) -> list[str]:
@@ -948,6 +952,68 @@ def get_strategy_source(strategy_id: str, request: Request):
         raise HTTPException(status_code=404, detail="策略源文件不存在")
 
     return {"code": path.read_text(encoding="utf-8"), "source": s.source}
+
+
+# ── 策略包 (bundle): 依赖感知的导出/检查/导入 ────────────────────────
+
+_BUNDLE_FILE = File(...)  # 模块级单例, 与 config_backup._UPLOAD_FILE 同模式
+
+
+def _bundle_service():
+    from app.services import strategy_bundle
+
+    return strategy_bundle
+
+
+@router.get("/{strategy_id}/bundle")
+def export_strategy_bundle(strategy_id: str, request: Request):
+    """导出策略包 ZIP: 策略 .py + 引用的信号/因子定义 + 用户调参 (依赖闭包)。"""
+    import io
+
+    engine = _get_engine(request)
+    _get_public_strategy(engine, strategy_id)  # research_only 404 口径与源码端点一致
+    from app.config import settings
+
+    try:
+        data, filename, _summary = _bundle_service().build_bundle(
+            settings.data_dir, engine, strategy_id
+        )
+    except _bundle_service().StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/bundle/inspect")
+async def inspect_strategy_bundle(file: UploadFile = _BUNDLE_FILE):
+    """导入预览: 条目清单 (create/conflict) + 缺失依赖预警, 不落盘。"""
+    data = await file.read()
+    try:
+        return _bundle_service().inspect_bundle(data)
+    except _bundle_service().StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/bundle/apply")
+async def apply_strategy_bundle(
+    request: Request, file: UploadFile = _BUNDLE_FILE, allow_overwrite: bool = Form(False)
+):
+    """导入策略包: 复用配置备份的校验/写盘/导入即冒烟/热重载管线。"""
+    data = await file.read()
+    service = _bundle_service()
+    try:
+        result = service.apply_bundle(data, allow_overwrite=allow_overwrite)
+    except service.StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    hints = result.get("reload_hints") or {}
+    if hints.get("strategies"):
+        engine = getattr(request.app.state, "strategy_engine", None)
+        if engine is not None:
+            engine.reload()
+    return result
 
 
 @router.post("/ai/test")
