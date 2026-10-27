@@ -58,6 +58,12 @@ def sync(ver: str, *, check: bool = False) -> list[str]:
 
 
 def main() -> int:
+    # Windows runner 的 stdout/stderr 默认 cp1252, 中文输出直接 UnicodeEncodeError
+    # (CI 里杀掉整个作业) — 统一重配为 UTF-8, replace 兜底极端控制台代码页。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="只报告不一致, 不写文件")
     args = parser.parse_args()
