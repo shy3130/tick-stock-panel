@@ -387,9 +387,38 @@ class TdxQuantProvider:
     name = "tdxquant"
     builtin = True
 
+    # 鉴权熔断 (issue #515): Key 失效时 SDK 表现为逐只「返回空数据」, 无异常可分。
+    # 连续 N 只全空 → 判定凭据级故障, 熔断期内整轮快速失败 (不再逐只调原生库,
+    # DLL 打进 stdout 的错误刷屏随之停止)。恢复 = load_all 重建 provider (设置页
+    # 重新保存 Key) 或冷却期满自动放行重试。
+    _AUTH_BLANK_STREAK = 10
+    _AUTH_COOLDOWN_S = 15 * 60.0
+
     def __init__(self) -> None:
         self.config = _TdxQuantConfig()
         self._client: TdxQuantClient | None = None
+        self._auth_failed_at: float | None = None
+
+    def _auth_cooldown_active(self) -> bool:
+        if self._auth_failed_at is None:
+            return False
+        if time.monotonic() - self._auth_failed_at < self._AUTH_COOLDOWN_S:
+            return True
+        self._auth_failed_at = None  # 冷却期满, 放行重试
+        return False
+
+    def _trip_auth_breaker(self, streak: int, first_error: str) -> None:
+        self._auth_failed_at = time.monotonic()
+        logger.error(
+            "TdxQuant 连续 %d 只标的返回空数据, 疑似凭据失效(Key 无效/过期/额度耗尽), "
+            "已熔断 %d 分钟: 分钟增量/修复轮暂停拉取。请到 设置→数据源 重新保存 "
+            "TdxQuant Key (保存即自动恢复)。首个错误: %s",
+            streak, int(self._AUTH_COOLDOWN_S // 60), first_error or "未知",
+        )
+
+    @staticmethod
+    def _is_blank_error(e: TdxQuantError) -> bool:
+        return "返回空数据" in str(e)
 
     def close(self) -> None:  # loader.load_all 重建注册表时会对每个 provider 调 close
         if self._client is not None:
@@ -691,23 +720,47 @@ class TdxQuantProvider:
         """
         if not symbols or asset_type != "stock":
             return pl.DataFrame(schema=_MINUTE_SCHEMA)
+        if self._auth_cooldown_active():
+            logger.warning(
+                "TdxQuant 修复轮跳过: 凭据疑似失效熔断中 (最多 %d 分钟), 请重新保存 Key",
+                int(self._AUTH_COOLDOWN_S // 60),
+            )
+            return pl.DataFrame(schema=_MINUTE_SCHEMA)
         client = self._get_client()
         now = datetime.now()
         today = now.date()
         fetch = max(_MINUTE_BARS_PER_DAY, min(count, 480)) + _MINUTE_BARS_PER_DAY
         out: list[pl.DataFrame] = []
+        blank_streak = 0
+        failures = 0
+        first_error = ""
         for symbol in symbols:
             try:
                 raw = client.his_dats(symbol, now, fetch, period="1m")
             except TdxQuantError as e:
-                logger.warning("TdxQuant 修复轮 %s 拉取失败: %s", symbol, e)
+                failures += 1
+                first_error = first_error or str(e)
+                if self._is_blank_error(e):
+                    blank_streak += 1
+                    if blank_streak >= self._AUTH_BLANK_STREAK:
+                        self._trip_auth_breaker(blank_streak, first_error)
+                        break
+                else:
+                    blank_streak = 0
+                logger.debug("TdxQuant 修复轮 %s 拉取失败: %s", symbol, e)
                 continue
+            blank_streak = 0
             rows = _minute_rows(symbol, raw, None, None, today_only=today)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
             elif raw.get("Date") and not _minute_rows(symbol, raw, None, None):
                 _warn_minute_unparsed(symbol, raw)  # 盘前返回全为前一日属正常, 仅解析失败才告警
             time.sleep(_MINUTE_INTERVAL_S)
+        if failures:
+            logger.warning(
+                "TdxQuant 修复轮: %d/%d 只标的失败 (首个错误: %s)",
+                failures, len(symbols), first_error,
+            )
         return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame(schema=_MINUTE_SCHEMA)
 
     def get_intraday_latest(self, symbols: list[str] | None = None, count: int = 3) -> pl.DataFrame:
@@ -716,6 +769,12 @@ class TdxQuantProvider:
         与修复轮同为逐标的 count 调用(无批量端点), 差别在根数少、负载轻;
         失败标的跳过, 空轮由调用方按空处理。
         """
+        if self._auth_cooldown_active():
+            logger.warning(
+                "TdxQuant 增量轮跳过: 凭据疑似失效熔断中 (最多 %d 分钟), 请重新保存 Key",
+                int(self._AUTH_COOLDOWN_S // 60),
+            )
+            return pl.DataFrame(schema=_MINUTE_SCHEMA)
         client = self._get_client()
         targets = list(symbols) if symbols else []
         if not targets:
@@ -727,12 +786,25 @@ class TdxQuantProvider:
         count = max(1, min(int(count), 30))
         now = datetime.now()
         out: list[pl.DataFrame] = []
+        blank_streak = 0
+        failures = 0
+        first_error = ""
         for j, symbol in enumerate(targets):
             try:
                 raw = client.his_dats(symbol, now, count, period="1m")
             except TdxQuantError as e:
-                logger.warning("TdxQuant 增量轮 %s 拉取失败: %s", symbol, e)
+                failures += 1
+                first_error = first_error or str(e)
+                if self._is_blank_error(e):
+                    blank_streak += 1
+                    if blank_streak >= self._AUTH_BLANK_STREAK:
+                        self._trip_auth_breaker(blank_streak, first_error)
+                        break
+                else:
+                    blank_streak = 0
+                logger.debug("TdxQuant 增量轮 %s 拉取失败: %s", symbol, e)
                 continue
+            blank_streak = 0
             rows = _minute_rows(symbol, raw, None, None)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
@@ -741,6 +813,11 @@ class TdxQuantProvider:
             if j % 1000 == 999:
                 logger.info("TdxQuant 增量轮进度: %d/%d", j + 1, len(targets))
             time.sleep(_MINUTE_INTERVAL_S)
+        if failures:
+            logger.warning(
+                "TdxQuant 增量轮: %d/%d 只标的失败 (首个错误: %s)",
+                failures, len(targets), first_error,
+            )
         return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame(schema=_MINUTE_SCHEMA)
 
     # ---- depth5 ----
