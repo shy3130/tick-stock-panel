@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -10,6 +11,31 @@ from contextlib import contextmanager
 from typing import ClassVar, Literal
 
 HeavyJobKind = Literal["normal", "mining", "exclusive"]
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(float(raw))
+    except ValueError:
+        return default
+
+
+# 内存准入 (issue #516): 可用内存低于阈值时重任务不进门, 挂起等待恢复,
+# 避免叠加任务把整机拖进 swap。0 = 关闭。等待者以 _MEMORY_POLL_S 周期重查
+# (内存恢复不会触发 condition notify, 必须轮询)。
+_HEAVY_MIN_AVAILABLE_BYTES = _env_int("TICK_HEAVY_MIN_AVAILABLE_BYTES", 1024**3)
+_MEMORY_POLL_S = 5.0
+
+
+def _memory_admission_ok() -> bool:
+    if _HEAVY_MIN_AVAILABLE_BYTES <= 0:
+        return True
+    import psutil
+
+    return psutil.virtual_memory().available >= _HEAVY_MIN_AVAILABLE_BYTES
 
 
 class HeavyJobLimitTimeoutError(TimeoutError):
@@ -70,7 +96,11 @@ class HeavyJobLimiter:
                 while True:
                     if cancel_event is not None and cancel_event.is_set():
                         return False
-                    if self._waiters[0] is ticket and self._used + weight <= self.capacity:
+                    if (
+                        self._waiters[0] is ticket
+                        and self._used + weight <= self.capacity
+                        and _memory_admission_ok()
+                    ):
                         self._used += weight
                         self._acquired[kind] += 1
                         return True
@@ -83,6 +113,9 @@ class HeavyJobLimiter:
                         wait_for = self._cancel_poll_interval
                         if remaining is not None:
                             wait_for = min(wait_for, remaining)
+                    # 内存准入需要周期性重查 (内存恢复不触发 notify)
+                    if wait_for is None or wait_for > _MEMORY_POLL_S:
+                        wait_for = _MEMORY_POLL_S
                     self._condition.wait(wait_for)
             finally:
                 self._waiters.remove(ticket)
