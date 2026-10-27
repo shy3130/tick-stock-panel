@@ -26,6 +26,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # issue #513: 镜像内 VERSION / pyproject / _FALLBACK_VERSION 从
+      # frontend/package.json 派生, 防止发版只改 package.json 时版本漂移。
+      - name: 同步版本号 (从 frontend/package.json 派生)
+        run: python3 scripts/sync_versions.py
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 

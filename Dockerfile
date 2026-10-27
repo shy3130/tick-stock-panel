@@ -93,6 +93,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
 COPY backend/app ./app
 COPY tiers.yaml /app/tiers.yaml
+# 版本号运行时兜底 (issue #513): 非冻结路径 _load_version() 读
+# /app/frontend/package.json, 缺文件会静默回退 _FALLBACK_VERSION 显示旧版本。
+COPY frontend/package.json /app/frontend/package.json
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data \
