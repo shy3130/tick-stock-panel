@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 
 from app.enriched_generation import EnrichedPublication
 from app.indicators.pipeline import ENRICHED_COLUMNS
+from app.services.pipeline_jobs import job_store
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ _LARGE_TABLES = {"minute"}
 
 _storage_cache: dict[str, Any] | None = None
 _storage_cache_ts: float = 0.0
+_storage_cache_stale: dict[str, Any] | None = None
 _storage_lock = threading.Lock()
 
 _table_cache: dict[str, dict | None] = {
@@ -48,6 +50,9 @@ _table_cache: dict[str, dict | None] = {
     "financials": None,
 }
 _table_cache_ts: dict[str, float] = {k: 0.0 for k in _table_cache}
+# 最后一次非空统计 (失效事件不清空): 同步任务期间 /status 的兜底展示 —
+# 宁可数字旧一点, 也不能让重聚合在 DuckDB 锁上排队到前端超时
+_table_cache_stale: dict[str, dict | None] = {}
 _table_cache_lock = threading.Lock()
 
 _last_finished_cache: dict[str, str | None] | None = None
@@ -79,11 +84,22 @@ def invalidate_storage_cache() -> None:
     invalidate_data_cache(None)
 
 
-def _get_table_stats(name: str, fetch: Callable[[], dict | None]) -> dict | None:
-    """走 TTL+事件 双重缓存。fetch 在锁外执行避免阻塞别的请求。"""
+def _get_table_stats(
+    name: str, fetch: Callable[[], dict | None], *, busy: bool = False
+) -> dict | None:
+    """走 TTL+事件 双重缓存。fetch 在锁外执行避免阻塞别的请求。
+
+    busy (同步任务运行中 / 指标预热未完成) 时完全不重算, 直接回最后一次非空值
+    (可能为 None): 这些聚合夹着 DuckDB 查询, 与同步管道共用 repository 的
+    DuckDB 单连接全局锁 — 管道持锁跑长查询时重算会在锁上排队, 2s 的 /status
+    轮询堆积后触发前端 30s 超时 (2026-10-28 用户反馈)。任务结束的失效事件
+    会清 TTL 缓存, 结束后第一次调用即恢复正常重算。
+    """
     ttl = _TABLE_TTL_LARGE if name in _LARGE_TABLES else _TABLE_TTL
     now = time.time()
     with _table_cache_lock:
+        if busy:
+            return _table_cache_stale.get(name)
         cached = _table_cache.get(name)
         cached_ts = _table_cache_ts.get(name, 0.0)
         if cached is not None and (now - cached_ts) < ttl:
@@ -94,6 +110,8 @@ def _get_table_stats(name: str, fetch: Callable[[], dict | None]) -> dict | None
     with _table_cache_lock:
         _table_cache[name] = fresh
         _table_cache_ts[name] = now
+        if fresh is not None:
+            _table_cache_stale[name] = fresh
     return fresh
 
 
@@ -544,17 +562,22 @@ def _next_cron_run(scheduler, job_id: str) -> str | None:
     return None
 
 
-def _get_storage(data_dir: Path) -> dict:
-    """返回缓存的 storage 统计；走独立 TTL，stage 写完不触发重算。"""
-    global _storage_cache, _storage_cache_ts
+def _get_storage(data_dir: Path, *, busy: bool = False) -> dict:
+    """返回缓存的 storage 统计；走独立 TTL，stage 写完不触发重算。
+
+    busy 时同样不重算 (目录 du 在同步写盘期间会显著变慢), 回最后一次值。"""
+    global _storage_cache, _storage_cache_ts, _storage_cache_stale
     now = time.time()
     with _storage_lock:
+        if busy:
+            return _storage_cache_stale
         if _storage_cache is not None and (now - _storage_cache_ts) < _STORAGE_TTL:
             return _storage_cache
     fresh = _compute_storage(data_dir)
     with _storage_lock:
         _storage_cache = fresh
         _storage_cache_ts = now
+        _storage_cache_stale = fresh
     return fresh
 
 
@@ -580,28 +603,40 @@ def _last_finished(job_label: str) -> str | None:
     return cache.get(job_label)
 
 
+def _data_pipeline_busy(request: Request) -> bool:
+    """同步任务运行中或指标预热未完成 — /status 的重聚合应退化为纯缓存读。"""
+    if not getattr(request.app.state, "indicators_ready", True):
+        return True
+    active_id = job_store.active_id()
+    if not active_id:
+        return False
+    active = job_store.get(active_id) or {}
+    return active.get("status") in ("pending", "running")
+
+
 @router.get("/status")
 def status(request: Request) -> dict:
     repo = request.app.state.repo
     scheduler = getattr(request.app.state, "scheduler", None)
     data_dir = repo.store.data_dir
+    busy = _data_pipeline_busy(request)
 
     return {
-        "daily":       _get_table_stats("daily",       lambda: _safe_aggregate_daily(repo)),
-        "enriched":    _get_table_stats("enriched",    lambda: _safe_aggregate_enriched(repo)),
-    "index_daily":       _get_table_stats("index_daily",       lambda: _safe_aggregate_index_daily(repo)),
-    "index_enriched":    _get_table_stats("index_enriched",    lambda: _safe_aggregate_index_enriched(repo)),
-    "index_instruments": _get_table_stats("index_instruments", lambda: _safe_aggregate_index_instruments(repo)),
-    "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
-    "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
-    "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
-    "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
-        "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
-        "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
-        "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
+        "daily":       _get_table_stats("daily",       lambda: _safe_aggregate_daily(repo), busy=busy),
+        "enriched":    _get_table_stats("enriched",    lambda: _safe_aggregate_enriched(repo), busy=busy),
+    "index_daily":       _get_table_stats("index_daily",       lambda: _safe_aggregate_index_daily(repo), busy=busy),
+    "index_enriched":    _get_table_stats("index_enriched",    lambda: _safe_aggregate_index_enriched(repo), busy=busy),
+    "index_instruments": _get_table_stats("index_instruments", lambda: _safe_aggregate_index_instruments(repo), busy=busy),
+    "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo), busy=busy),
+    "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo), busy=busy),
+    "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo), busy=busy),
+    "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo), busy=busy),
+        "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo), busy=busy),
+        "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo), busy=busy),
+        "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo), busy=busy),
 
         # 文件层面信息(缓存)
-        "storage": _get_storage(data_dir),
+        "storage": _get_storage(data_dir, busy=busy),
 
         # 调度
         "next_instruments_run": _next_cron_run(scheduler, "pre_market_instruments"),
