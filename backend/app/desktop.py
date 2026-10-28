@@ -339,6 +339,9 @@ def _open_window(url: str) -> None:
     """主线程: 用 pywebview 打开桌面窗口。"""
     import webview  # type: ignore[import-not-found]
 
+    # pywebview 5.0 起默认取消所有文件下载 (Edge WebView2 / WKWebView 一致):
+    # 配置备份导出、回测 CSV 等 <a download> 直链会点击无反应, 必须在 start() 前显式开启。
+    webview.settings["ALLOW_DOWNLOADS"] = True
     window = webview.create_window(
         _APP_NAME,
         url,

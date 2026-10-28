@@ -134,3 +134,31 @@ def test_main_proceeds_when_mining_lock_precheck_conflicts(
     assert opened and opened[0].startswith("http://127.0.0.1:")
     assert "启动预检" in caplog.text
     assert not (tmp_path / ".desktop.lock").exists()
+
+
+# ---------- _open_window: pywebview 下载启用 ----------
+
+def test_open_window_enables_downloads_before_start(monkeypatch):
+    """pywebview 5.0+ 默认取消所有文件下载 (Edge WebView2 / WKWebView 一致) —
+    必须在 webview.start() 前显式开启 ALLOW_DOWNLOADS, 否则配置备份导出、
+    回测 CSV 等 <a download> 直链在桌面版点击无反应 (2026-10-27 用户反馈)。"""
+    import sys
+    import types
+
+    calls: list[str] = []
+
+    class _RecordingSettings(dict):
+        def __setitem__(self, key, value):
+            calls.append(f"set:{key}={value}")
+            super().__setitem__(key, value)
+
+    fake = types.ModuleType("webview")
+    fake.settings = _RecordingSettings()
+    fake.create_window = lambda *a, **k: calls.append("create_window") or object()
+    fake.start = lambda *a, **k: calls.append("start")
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:1")
+
+    assert fake.settings.get("ALLOW_DOWNLOADS") is True
+    assert calls == ["set:ALLOW_DOWNLOADS=True", "create_window", "start"]
