@@ -123,6 +123,10 @@ def test_persistent_rotate_failure_disables_handler(data_dir, no_leaked_handlers
     handler = [h for h in logging.getLogger().handlers
                if isinstance(h, logfile.StallSafeRotatingFileHandler)][-1]
     handler.maxBytes = 60
+    # gh-116263 (Python 3.12.9+): 空文件永不滚动 — 预置内容让首条日志即触发滚动,
+    # 否则 3.12 上 shouldRollover 直接 False, rotate/handleError 根本不会执行
+    handler.stream.write("-" * 100 + "\n")
+    handler.stream.flush()
 
     def boom(src, dest):
         raise OSError(32, "另一个程序正在使用此文件")
