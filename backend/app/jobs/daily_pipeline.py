@@ -972,13 +972,7 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
     path = paths.get(name)
     if not path:
         return
-    try:
-        repo.db.execute(
-            f"CREATE OR REPLACE VIEW {name} AS "
-            f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("refresh view %s failed: %s", name, e)
+    repo.refresh_view(name, path)
 
 
 def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
@@ -989,13 +983,7 @@ def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
 def _refresh_instruments_view(repo: KlineRepository) -> None:
     """单独刷新 instruments 视图。"""
     d = repo.store.data_dir.as_posix()
-    try:
-        repo.db.execute(
-            f"CREATE OR REPLACE VIEW instruments AS "
-            f"SELECT * FROM read_parquet('{d}/instruments/**/*.parquet', union_by_name=true)"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("refresh instruments view failed: %s", e)
+    repo.refresh_view("instruments", f"{d}/instruments/**/*.parquet")
 
 
 def _push_phase_change_alert(data_dir) -> None:

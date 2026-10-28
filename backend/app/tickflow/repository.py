@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -284,12 +285,14 @@ class DataStore:
     def _has_parquet(self, subdir: str) -> bool:
         return any((self.data_dir / subdir).rglob("*.parquet"))
 
-    def _register_unified_views(self) -> None:
+    def _register_unified_views(self, con=None) -> None:
         """Register optional all-asset views when their backing parquet exists.
 
         Physical storage remains split for performance and compatibility. These
-        views are convenience read models for new APIs/features.
+        views are convenience read models for new APIs/features. 运行期调用方
+        传独立 cursor (rebuild_views/refresh_index_views), 初始化走根连接。
         """
+        db = con if con is not None else self.db
         daily_parts: list[str] = []
         enriched_parts: list[str] = []
         minute_parts: list[str] = []
@@ -361,9 +364,22 @@ class DataStore:
             if not parts:
                 continue
             try:
-                self.db.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(parts))
+                db.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(parts))
             except Exception as e:  # noqa: BLE001
                 logger.debug("unified view %s skipped: %s", name, e)
+
+
+def _read_concurrency_env() -> int:
+    """DuckDB 并发读上限 (默认 3)。
+
+    并发扫描各自持有缓冲, 上限过高会推高峰值内存 (#516 同因); 1 = 恢复
+    完全串行的旧行为。
+    """
+    try:
+        value = int(os.environ.get("TICK_DUCKDB_READ_CONCURRENCY", "3"))
+    except ValueError:
+        return 3
+    return min(max(value, 1), 16)
 
 
 class KlineRepository:
@@ -372,7 +388,16 @@ class KlineRepository:
     def __init__(self, store: DataStore) -> None:
         self.store = store
         self.db = store.db
-        self._lock = threading.Lock()
+        # DuckDB 读并发: cursor() 即同一内存库实例的独立连接 (MVCC 快照隔离,
+        # 1.5.3 实测并发读+换视图零异常)。用信号量限制同时进行的扫描数, 取代
+        # 原全局互斥 —— 同步期的长查询 (全视图扫描) 不再把交互读堵到超时。
+        self._read_limiter = threading.Semaphore(_read_concurrency_env())
+        # DDL (视图重建) 互斥: 并发 CREATE OR REPLACE VIEW 同名视图会抛
+        # Catalog write-write conflict (1.5.3 实测), 必须串行; 与读不互斥。
+        self._ddl_lock = threading.RLock()
+        # 根连接运行期只作连接工厂, 不直接执行 SQL (跨线程共用一个
+        # Connection 对象没有契约保证, cursor 各自独立)
+        self._cursor_lock = threading.Lock()
         # 序列化 parquet 分区的读-改-写: 实时轮询线程、手动 refresh、盘后管道
         # 可能并发 merge/flush 同一分区文件, 无锁会互相覆盖丢数据
         self._write_lock = threading.Lock()
@@ -424,21 +449,55 @@ class KlineRepository:
         self._index_inst_glob = str(store.data_dir / "instruments_index" / "**" / "*.parquet")
         self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
 
+    def _new_cursor(self):
+        """从根连接复制一个独立连接 (共享同一库实例, 创建开销极低)。"""
+        with self._cursor_lock:
+            return self.db.cursor()
+
     def execute_all(self, sql: str, params: list | None = None) -> list[tuple]:
-        """线程安全的 SELECT → fetchall。DuckDB 单 connection 非线程安全，所有读路径须走此方法。"""
-        with self._lock:
-            cursor = self.db.cursor()
+        """并发安全的 SELECT → fetchall。
+
+        cursor 是同一库实例的独立连接: 读与读并发、读与视图重建并发 (MVCC,
+        运行中的查询继续用旧定义) 均安全; _read_limiter 只限制同时扫描数。
+        """
+        with self._read_limiter:
+            cursor = self._new_cursor()
             try:
                 return cursor.execute(sql, params or []).fetchall()
             finally:
                 cursor.close()
 
     def execute_one(self, sql: str, params: list | None = None) -> tuple | None:
-        """线程安全的 SELECT → fetchone。"""
-        with self._lock:
-            cursor = self.db.cursor()
+        """并发安全的 SELECT → fetchone。"""
+        with self._read_limiter:
+            cursor = self._new_cursor()
             try:
                 return cursor.execute(sql, params or []).fetchone()
+            finally:
+                cursor.close()
+
+    def refresh_view(self, name: str, glob: str) -> bool:
+        """重建指向 parquet glob 的视图 (视图懒扫描, 创建本身 O(1))。
+
+        运行期所有视图重建必须走此方法, 不得直连 db.execute:
+        - 并发重建同名视图抛 Catalog write-write conflict (1.5.3 实测),
+          _ddl_lock 内互斥, 也修复了旧代码两处同步路径同时刷视图的静默失败;
+        - 与读不互斥 (MVCC), 换视图期间查询不中断。
+        """
+        if not name.isidentifier():
+            logger.warning("refresh view rejected, invalid name: %r", name)
+            return False
+        with self._ddl_lock:
+            cursor = self._new_cursor()
+            try:
+                cursor.execute(
+                    f"CREATE OR REPLACE VIEW {name} AS "
+                    f"SELECT * FROM read_parquet('{glob}', union_by_name=true)"
+                )
+                return True
+            except Exception as e:  # noqa: BLE001 — 空目录/权限问题降级为警告, 与既有刷新行为一致
+                logger.warning("refresh view %s failed: %s", name, e)
+                return False
             finally:
                 cursor.close()
 
@@ -2126,12 +2185,11 @@ class KlineRepository:
         from datetime import timedelta
         try:
             cutoff = reference_date - timedelta(days=min_gap_days)
-            with self._lock:
-                rows = self.db.execute(
-                    "SELECT symbol, max(date) AS mx FROM kline_daily "
-                    "GROUP BY symbol HAVING max(date) < ? ORDER BY mx",
-                    [cutoff],
-                ).fetchall()
+            rows = self.execute_all(
+                "SELECT symbol, max(date) AS mx FROM kline_daily "
+                "GROUP BY symbol HAVING max(date) < ? ORDER BY mx",
+                [cutoff],
+            )
             return [r[0] for r in rows if r and r[0]]
         except Exception:
             return []
@@ -2243,28 +2301,21 @@ class KlineRepository:
     def refresh_index_views(self) -> None:
         """刷新指数相关 DuckDB 视图。"""
         d = self.store.data_dir.as_posix()
-        statements = [
-            f"""CREATE OR REPLACE VIEW kline_index_daily AS
-                SELECT * FROM read_parquet('{d}/kline_index_daily/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_index_enriched AS
-                SELECT * FROM read_parquet('{d}/kline_index_enriched/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_etf_daily AS
-                SELECT * FROM read_parquet('{d}/kline_etf_daily/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_etf_enriched AS
-                SELECT * FROM read_parquet('{d}/kline_etf_enriched/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments_index AS
-                SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments_etf AS
-                SELECT * FROM read_parquet('{d}/instruments_etf/**/*.parquet', union_by_name=true)""",
-        ]
-        for sql in statements:
+        for name, path in {
+            "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
+            "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
+            "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
+            "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
+            "instruments_index": f"{d}/instruments_index/**/*.parquet",
+            "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+        }.items():
+            self.refresh_view(name, path)
+        with self._ddl_lock:
+            cursor = self._new_cursor()
             try:
-                with self._lock:
-                    self.db.execute(sql)
-            except Exception as e:  # noqa: BLE001
-                logger.debug("index/etf view refresh skipped: %s", e)
-        with self._lock:
-            self.store._register_unified_views()
+                self.store._register_unified_views(cursor)
+            finally:
+                cursor.close()
 
     def rebuild_views(self) -> None:
         """重建全部 13 张 parquet 视图并重挂 unified 视图 —— 唯一权威实现。
@@ -2290,16 +2341,13 @@ class KlineRepository:
             "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
         }
         for name, path in views.items():
+            self.refresh_view(name, path)
+        with self._ddl_lock:
+            cursor = self._new_cursor()
             try:
-                with self._lock:
-                    self.db.execute(
-                        f"CREATE OR REPLACE VIEW {name} AS "
-                        f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("rebuild view %s failed: %s", name, e)
-        with self._lock:
-            self.store._register_unified_views()
+                self.store._register_unified_views(cursor)
+            finally:
+                cursor.close()
 
     @staticmethod
     def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:

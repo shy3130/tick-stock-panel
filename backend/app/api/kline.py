@@ -1841,13 +1841,7 @@ async def rebuild_enriched(request: Request):
                 for view_name, glob in [
                     ("kline_enriched", f"{d}/kline_daily_enriched/**/*.parquet"),
                 ]:
-                    try:
-                        repo.db.execute(
-                            f"CREATE OR REPLACE VIEW {view_name} AS "
-                            f"SELECT * FROM read_parquet('{glob}', union_by_name=true)"
-                        )
-                    except Exception:
-                        pass
+                    repo.refresh_view(view_name, glob)
 
                 progress("rebuild_enriched", 100, f"完成,覆盖 {enriched_days} 天")
                 job_store.succeed(job_id, {
