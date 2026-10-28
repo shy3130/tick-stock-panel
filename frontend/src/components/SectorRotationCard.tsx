@@ -34,6 +34,10 @@ const AUTO_ROWS_PREFIX = 'sector_rotation_auto_rows_'
 const EXCLUDE_PREFIX = 'sector_rotation_exclude_'
 // 自动活跃榜展示行数可选项; excludeNames === null 表示未自定义 (用后端内置名单)
 const AUTO_ROW_OPTIONS = [5, 10, 15, 20]
+// 走势线末端常显名称上限: ≤此数全显; 15/20 行高密模式按最新值封顶 Top N。
+// 与 AUTO_ROW_OPTIONS 的默认「前10」对齐 — 常规视图所见即所名; 更多标签会在
+// 汇聚区被防重叠推离各自线端 (endLabel 无引导线), 高密模式牺牲常显名换可读性
+const END_LABEL_MAX = 10
 const MAX_EXCLUDE_SECTORS = 100
 // 板块来源: 自动榜排序维度 + 自定义监控
 type SectorSource = 'activity' | 'score' | 'pct' | 'rank_change' | 'momentum' | 'flow' | 'custom'
@@ -483,16 +487,17 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
     const totalCols = heatSeries.buckets.length
     const reigns = computeLeaderReigns(heatSeries.matrix, startCol)
     const labelCols = selectReignLabels(reigns, totalCols)
-    // 线末端常显板块名: ≤8 条全显, >8 条按最新值只显 Top 6 (其余靠悬停聚焦/图例)
+    // 线末端常显板块名: ≤END_LABEL_MAX 条全显 (默认「前10」下所见即所名);
+    // 15/20 行高密模式按最新值封顶 Top END_LABEL_MAX (其余靠悬停聚焦/图例)
     const latestVals = heatSeries.sectors.map((_, i) => {
       const row = heatSeries.matrix[i] ?? []
       for (let c = row.length - 1; c >= 0; c--) { const v = row[c]; if (v != null) return v }
       return -Infinity
     })
     const endLabelRows = new Set(
-      heatSeries.sectors.length <= 8
+      heatSeries.sectors.length <= END_LABEL_MAX
         ? heatSeries.sectors.map((_, i) => i)
-        : heatSeries.sectors.map((_, i) => i).sort((a, b) => latestVals[b] - latestVals[a]).slice(0, 6),
+        : heatSeries.sectors.map((_, i) => i).sort((a, b) => latestVals[b] - latestVals[a]).slice(0, END_LABEL_MAX),
     )
     return {
       // bottom 预留两行 plain 图例的高度 (scroll 图例会翻页, 一眼看不全所有板块)

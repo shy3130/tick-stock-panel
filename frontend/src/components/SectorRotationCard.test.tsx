@@ -87,10 +87,40 @@ function payload() {
   }
 }
 
+/** N 板块 payload: 板块 i 最新值 = 0.004*(N-i) 严格降序, 用于线端名称封顶断言 */
+function bigPayload(n: number) {
+  const sectors = Array.from({ length: n }, (_, i) => `板块${i}`)
+  const matrix = sectors.map((_, i) => BUCKETS.map((_, c) => 0.004 * (n - i) + c * 0.0001))
+  return {
+    status: 'ok' as const,
+    date: '2026-10-20',
+    as_of: '15:00',
+    member_count: n,
+    bucket_minutes: 5,
+    basis: 'prev_close',
+    flow_available: false,
+    flow_field: null,
+    default_exclude_sectors: [],
+    max_auto_members: 300,
+    timeline: BUCKETS.map((time, i) => ({
+      time, leader: sectors[0], leader_pct: matrix[0][i],
+      market_pct: 0.002, rotation: 0.3, cross_up: 0, cross_down: 0,
+    })),
+    series: { sectors, buckets: BUCKETS, matrix },
+    sectors: sectors.map((name, i) => ({
+      name, pct_now: matrix[i][5], pct_prev: 0.004, rank_now: i + 1,
+      rank_change: 0, score: 60 - i, n_members: 30, n_members_with_bars: 30,
+      activity: 1e8, flow: null,
+    })),
+    universe: sectors.map(name => ({ name, activity: 1e8, pct_now: 0.01 })),
+    cross_events: [],
+  }
+}
+
 let root: Root | null = null
 let host: HTMLElement
-async function renderCard(kind: 'concept' | 'industry' = 'industry') {
-  apiMock.sectorRotation.mockResolvedValue(payload())
+async function renderCard(kind: 'concept' | 'industry' = 'industry', data = payload()) {
+  apiMock.sectorRotation.mockResolvedValue(data)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -182,6 +212,35 @@ it('trend 模式: 线末端常显板块名, 接管线上挂易主圆点标注', 
   expect(trendOption.series[2].markPoint).toBeUndefined()
   // 图例条替代段落说明: 易主语义以色块图例呈现
   expect(host.textContent).toContain('领涨易主')
+})
+
+it('线端名称: 9 条 (默认前10 内) 全部常显', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  await renderCard('industry', bigPayload(9))
+  const options = chart.setOption.mock.calls.map(call => call[0] as any)
+  const trendOption = options.find(o => o?.series?.[0]?.endLabel)
+  expect(trendOption).toBeTruthy()
+  // 9 ≤ END_LABEL_MAX: 每条线都有线端名称 — 回归 (2026-10-27): 旧规则 >8 只显 Top6,
+  // 默认「前10」下出现下缘线无名; 新规则与行数选项对齐
+  for (const s of trendOption.series) {
+    expect(s.endLabel?.show).toBe(true)
+  }
+})
+
+it('线端名称: 前20 高密模式按最新值封顶 Top 10', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  localStorage.setItem('sector_rotation_auto_rows_industry', '20')
+  await renderCard('industry', bigPayload(12))
+  const options = chart.setOption.mock.calls.map(call => call[0] as any)
+  const trendOption = options.find(o => o?.series?.[0]?.endLabel)
+  expect(trendOption).toBeTruthy()
+  expect(trendOption.series).toHaveLength(12)
+  const labeled = trendOption.series.filter((s: any) => s.endLabel?.show).map((s: any) => s.name)
+  // 恰好 10 个, 且是最新值最高的前 10 (构造值严格降序 → 板块0..板块9)
+  expect(labeled).toHaveLength(10)
+  expect(labeled.sort()).toEqual(Array.from({ length: 10 }, (_, i) => `板块${i}`).sort())
+  // 最低的两条无常显名 (悬停聚焦/图例辨认)
+  expect(trendOption.series.filter((s: any) => !s.endLabel)).toHaveLength(2)
 })
 
 // ===== 渲染: 热力图模式 =====
