@@ -42,7 +42,7 @@ const SOURCE_LABELS: Record<Exclude<SectorSource, 'custom'>, string> = {
 }
 function parseSectorSource(raw: string | null): SectorSource {
   if (raw === 'custom' || raw === 'score' || raw === 'pct' || raw === 'rank_change' || raw === 'momentum' || raw === 'flow') return raw
-  return 'score' // 未设置过 / 旧默认值 'auto' → 默认综合分 (显式选择过的值已持久化, 不受影响)
+  return 'momentum' // 未设置过 / 旧默认值 → 默认强弱切换 (显式选择过的值已持久化, 不受影响)
 }
 // 扩展表 schema 的类型名可能是配置里的简写 (float/int), 也可能是 Parquet 的
 // 真实类型 (DOUBLE/BIGINT/DECIMAL(18,4))。两种口径都要认, 否则会漏掉整数列。

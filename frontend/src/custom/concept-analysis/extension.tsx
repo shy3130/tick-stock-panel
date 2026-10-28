@@ -349,7 +349,7 @@ export function ConceptAnalysis() {
       <>
         <div className="flex h-full flex-col">
           <PageHeader
-            title="概念分析"
+            title="概念板块"
             right={
               <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
                 <Settings2 className="h-4 w-4" />
@@ -358,7 +358,7 @@ export function ConceptAnalysis() {
           />
           <PresetFetchState
             title="暂无概念数据"
-            hint="从同花顺获取概念分类数据后即可使用概念分析"
+            hint="从同花顺获取概念分类数据后即可使用概念板块"
             isLoading={fetchMutation.isPending}
             error={fetchMutation.error}
             onFetch={() => fetchMutation.mutate()}
@@ -374,7 +374,7 @@ export function ConceptAnalysis() {
   return (
     <>
       <PageHeader
-        title="概念分析"
+        title="概念板块"
         subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">
@@ -845,7 +845,7 @@ const extension: FrontendExtension = {
     { id: 'concept-analysis', path: '/concept-analysis', component: ConceptAnalysis },
   ],
   navigation: [
-    { id: 'concept-analysis', routeId: 'concept-analysis', label: '概念分析', icon: IconConcept },
+    { id: 'concept-analysis', routeId: 'concept-analysis', label: '概念板块', icon: IconConcept },
   ],
 }
 

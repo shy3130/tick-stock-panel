@@ -400,7 +400,7 @@ export function IndustryAnalysis() {
       <>
         <div className="flex h-full flex-col">
           <PageHeader
-            title="行业分析"
+            title="行业板块"
             right={
               <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
                 <Settings2 className="h-4 w-4" />
@@ -409,7 +409,7 @@ export function IndustryAnalysis() {
           />
           <PresetFetchState
             title="暂无行业数据"
-            hint="从同花顺获取行业分类数据后即可使用行业分析"
+            hint="从同花顺获取行业分类数据后即可使用行业板块"
             isLoading={fetchMutation.isPending}
             error={fetchMutation.error}
             onFetch={() => fetchMutation.mutate()}
@@ -427,7 +427,7 @@ export function IndustryAnalysis() {
   return (
     <>
       <PageHeader
-        title="行业分析"
+        title="行业板块"
         subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">
@@ -914,7 +914,7 @@ const extension: FrontendExtension = {
     { id: 'industry-analysis', path: '/industry-analysis', component: IndustryAnalysis },
   ],
   navigation: [
-    { id: 'industry-analysis', routeId: 'industry-analysis', label: '行业分析', icon: IconIndustry },
+    { id: 'industry-analysis', routeId: 'industry-analysis', label: '行业板块', icon: IconIndustry },
   ],
 }
 
