@@ -113,7 +113,7 @@ class PullConfig:
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
         "fanout", "schedule_time", "schedule_period", "schedule_day",
-        "schedule_trading_only", "since_param",
+        "schedule_trading_only", "since_param", "granularity",
     )
 
     def __init__(
@@ -149,6 +149,7 @@ class PullConfig:
         schedule_day: int | None = None,
         schedule_trading_only: bool = False,
         since_param: str | None = None,
+        granularity: str = "auto",
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -235,6 +236,10 @@ class PullConfig:
         # 仅交易日: 跳过周六日。法定节假日无法离线判定, 仍会按期尝试 —
         # 拉取幂等且失败仅记 last_status, 不影响后续调度
         self.schedule_trading_only = bool(schedule_trading_only)
+        # 序列粒度声明: auto=按数据形态自动判断 (api 层 _granularity_effective) |
+        # intraday=日内多盘 (当日逐盘序列) | daily=日级别 (近 N 日每日一值)。
+        # 决定 series 端点口径与列表迷你图形态; 手改非法值归一 auto (fail-closed)。
+        self.granularity = granularity if granularity in ("auto", "intraday", "daily") else "auto"
 
     def to_dict(self) -> dict:
         return {
@@ -257,6 +262,7 @@ class PullConfig:
             "date_format": self.date_format,
             "time_field": self.time_field,
             "since_param": self.since_param,
+            "granularity": self.granularity,
             "auth": self.auth,
             "timeout_seconds": self.timeout_seconds,
             "page_param": self.page_param,
@@ -295,6 +301,7 @@ class PullConfig:
             date_format=d.get("date_format", "iso"),
             time_field=d.get("time_field"),
             since_param=d.get("since_param"),
+            granularity=d.get("granularity", "auto"),
             auth=d.get("auth"),
             timeout_seconds=d.get("timeout_seconds", 30),
             page_param=d.get("page_param"),

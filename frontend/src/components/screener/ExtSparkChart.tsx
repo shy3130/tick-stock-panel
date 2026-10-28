@@ -1,9 +1,10 @@
 /**
- * 日内多盘扩展列的迷你图单元格 (集合竞价快照序列等)。
+ * 日内多盘/日级扩展列的迷你图单元格 (集合竞价快照序列、近N日每日值等)。
  *
  * 纯 SVG 实现, 不引第三方图表库: 点列归一化到单元格宽高,
- * line=折线 (价格轨迹), bar=柱状 (量/额等逐盘幅度)。
- * 单点/全空序列回退为文本占位, 不伪造趋势。
+ * line=折线 (价格轨迹), bar=柱状 (量/额等逐盘/逐日幅度)。
+ * 单点/全空/全等值序列回退为文本占位 — 全等值时柱状归一化分母退化,
+ * 负值会渲染成满柱、正值塌成基线虚线, 都是伪趋势, 不如直接显示数值。
  */
 import { useId } from 'react'
 
@@ -17,12 +18,12 @@ export function ExtSparkChart({ points, kind, width = 110, height = 36 }: {
 }) {
   const gradId = useId()
   const values = points.map(p => p[1]).filter(Number.isFinite)
-  if (values.length < 2) {
-    return <span className="text-[10px] text-muted tabular-nums">{values.length === 1 ? values[0] : '—'}</span>
+  const min = values.length ? Math.min(...values) : 0
+  const max = values.length ? Math.max(...values) : 0
+  // 全等值 (含单点/全空): 数值无变化可画, 回退文本
+  if (values.length < 2 || min === max) {
+    return <span className="text-[10px] text-muted tabular-nums">{values.length >= 1 ? values[0] : '—'}</span>
   }
-
-  const min = Math.min(...values)
-  const max = Math.max(...values)
   const span = max - min || Math.abs(max) || 1
   const pad = 2
   const h = height - pad * 2

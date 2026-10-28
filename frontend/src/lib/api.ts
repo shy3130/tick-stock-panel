@@ -3995,14 +3995,15 @@ export const api = {
     ),
 
   extDataSchemaAll: () =>
-    request<{ items: { id: string; label: string; mode: string; time_field?: string | null; columns: { name: string; type: string; label: string }[] }[] }>('/api/ext-data/schema-all'),
+    request<{ items: { id: string; label: string; mode: string; time_field?: string | null; granularity?: 'intraday' | 'daily' | null; columns: { name: string; type: string; label: string }[] }[] }>('/api/ext-data/schema-all'),
 
   /** 日内多盘序列 (列表迷你图列): 每标的一天的 [HH:MM:SS, value] 点列 */
-  extDataSeries: (configId: string, field: string, date?: string | null, symbols?: string[]) =>
-    request<{ config_id: string; field: string; date: string | null; items: Record<string, [string, number][]> }>(
+  extDataSeries: (configId: string, field: string, date?: string | null, symbols?: string[], days?: number) =>
+    request<{ config_id: string; field: string; date: string | null; granularity?: 'intraday' | 'daily'; days?: number; items: Record<string, [string, number][]> }>(
       `/api/ext-data/${configId}/series?field=${encodeURIComponent(field)}`
         + (date ? `&date=${date}` : '')
-        + (symbols?.length ? `&symbols=${encodeURIComponent(symbols.join(','))}` : ''),
+        + (symbols?.length ? `&symbols=${encodeURIComponent(symbols.join(','))}` : '')
+        + (days ? `&days=${days}` : ''),
     ),
 
   extDataPullConfig: (id: string, body: {
@@ -4017,6 +4018,7 @@ export const api = {
     date_param?: string | null;
     time_field?: string | null;
     since_param?: string | null;
+    granularity?: 'auto' | 'intraday' | 'daily';
     auth?: ExtPullAuth;
     timeout_seconds?: number;
     page_param?: string | null;
@@ -4979,6 +4981,8 @@ export interface PullConfig {
   date_format?: string
   /** 日内序列表时间列名 (如 "ts"): 配置后同 symbol 允许多行 (按 symbol+时间列去重), 用于集合竞价等多盘数据 */
   time_field?: string | null
+  /** 序列粒度: auto=按数据形态自动判断 | intraday=日内多盘 | daily=日级别 (决定 series 口径与列表迷你图形态) */
+  granularity?: 'auto' | 'intraday' | 'daily'
   /** 增量续传参数名 (如 "since"): 每次拉取自动带上本地目标日分区时间列最大值, 源只返回其后数据; 需先配置 time_field */
   since_param?: string | null
   auth?: ExtPullAuth | null
@@ -5074,7 +5078,9 @@ export interface ExtDataConfig {
   latest_sync_date?: string | null
   date_range?: string[] | null
   /** 日内多盘表最新分区的盘次概览; 非多盘表为 null */
-  plate?: { date: string; plates: number; from: string; to: string } | null
+  plate?: { date: string; plates: number; from: string; to: string; granularity: 'intraday' | 'daily' } | null
+  /** 生效序列粒度 (显式声明 > 数据形态判断): intraday | daily; snapshot 表为 null */
+  granularity_effective?: 'intraday' | 'daily' | null
   pull?: PullConfig | null
 }
 

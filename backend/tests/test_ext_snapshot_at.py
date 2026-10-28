@@ -140,8 +140,8 @@ async def test_series_endpoint_shape_and_filters(tmp_path, monkeypatch):
 
 
 def test_series_rejects_table_without_time_field(tmp_path, monkeypatch):
-    from fastapi import HTTPException
-
+    """契约变更 (粒度声明): 无 time_field 的时序表不再 400 — auto 判为日级,
+    series 走近 N 日口径 (每日一值, 无分区时 items 为空)。"""
     from app.api import ext_data as ext_api
 
     class _Req:
@@ -151,9 +151,9 @@ def test_series_rejects_table_without_time_field(tmp_path, monkeypatch):
         "S", (), {"get": lambda self, cid: _auction_config(time_field=None), "data_dir": tmp_path})())
     monkeypatch.setattr(ext_api, "_data_dir", lambda request: tmp_path)
 
-    with pytest.raises(HTTPException) as ei:
-        ext_api.ext_series(_Req(), "ext_auc", field="auction_price")
-    assert ei.value.status_code == 400
+    res = ext_api.ext_series(_Req(), "ext_auc", field="auction_price", date=None)
+    assert res["granularity"] == "daily"
+    assert res["items"] == {}
 
 
 def test_schema_all_exposes_time_field(tmp_path):

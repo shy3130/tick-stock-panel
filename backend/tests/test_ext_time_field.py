@@ -151,6 +151,7 @@ def test_plate_stats(tmp_path):
     )
     assert _plate_stats(cfg, tmp_path) == {
         "date": "2026-09-15", "plates": 2, "from": "09:15:03", "to": "09:25:05",
+        "granularity": "intraday",
     }
     # 未配 time_field 的每日快照表 → None
     assert _plate_stats(_config(time_field=None), tmp_path) is None
@@ -188,5 +189,6 @@ def test_list_configs_plate_field(tmp_path):
     items = {c["id"]: c for c in ext_api.list_configs(SimpleNamespace(app=SimpleNamespace(state=state)))["items"]}
     assert items["auction"]["plate"] == {
         "date": "2026-09-15", "plates": 2, "from": "09:15:03", "to": "09:25:05",
+        "granularity": "intraday",
     }
     assert items["pop"]["plate"] is None

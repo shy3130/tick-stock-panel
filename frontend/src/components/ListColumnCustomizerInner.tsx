@@ -274,8 +274,19 @@ export function ListColumnCustomizerInner({
   })
   const backdrop = useDialogBackdrop(onClose)
 
-  // 多盘表识别用 ref 镜像 (schema 查询数据), 让 addExtColumn 保持稳定引用
-  const extTablesRef = useRef<readonly { id: string; time_field?: string | null }[]>([])
+  /** 时序扩展表的生效粒度: schema 透出值优先; 旧后端无该字段时退回 time_field 判定。
+ *  snapshot 表 (无历史分区) 与未知表 → null, 不提供序列形态配置。 */
+function extGranularityOf(
+  tables: readonly { id: string; mode?: string; time_field?: string | null; granularity?: 'intraday' | 'daily' | null }[],
+  configId: string,
+): 'intraday' | 'daily' | null {
+  const t = tables.find(x => x.id === configId)
+  if (!t || t.mode !== 'timeseries') return null
+  return t.granularity ?? (t.time_field ? 'intraday' : 'daily')
+}
+
+// 多盘表识别用 ref 镜像 (schema 查询数据), 让 addExtColumn 保持稳定引用
+  const extTablesRef = useRef<readonly { id: string; time_field?: string | null; granularity?: 'intraday' | 'daily' | null }[]>([])
   extTablesRef.current = extSchema.data?.items ?? []
 
   // columns/onChange 用 ref 镜像，让下方多数 useCallback 空依赖（addExtColumn 例外，
@@ -347,10 +358,11 @@ export function ListColumnCustomizerInner({
       toggleVisible(colId)
       return
     }
-    // 日内多盘表 (配置了时间列, 如集合竞价) 的数值列: 添加即默认分时式迷你图
-    // (与「分时」列同尺寸 150×80), 文字形态在列配置里按需切换
+    // 日内多盘表 (生效粒度 intraday, 如集合竞价) 的数值列: 添加即默认分时式迷你图
+    // (与「分时」列同尺寸 150×80), 文字形态在列配置里按需切换; 日级表默认文字值
     const multiSnapshot = !!extTablesRef.current.find(
-      t => t.id === configId && (t as { time_field?: string | null }).time_field,
+      t => t.id === configId
+        && (t.granularity === 'intraday' || (t.granularity == null && t.time_field)),
     )
     const newCol: ColumnConfig = {
       id: colId,
@@ -621,8 +633,8 @@ export function ListColumnCustomizerInner({
             </div>
           </label>
         )}
-        {/* 日内多盘表 (配置了时间列, 如集合竞价): 选盘时刻 + 展示形态 */}
-        {col.source.type === 'ext' && (extTables.find(t => t.id === (col.source as { configId: string }).configId) as { time_field?: string | null } | undefined)?.time_field != null && (
+        {/* 时序表的序列形态: 日内多盘 (集合竞价等) / 日级别 (近N日) 按生效粒度分流 */}
+        {col.source.type === 'ext' && extGranularityOf(extTables, (col.source as { configId: string }).configId) === 'intraday' && (
           <>
             <div className="border-t border-border/40 pt-2 mt-1 text-[10px] text-muted">日内多盘</div>
             <label className="flex items-center gap-2 text-xs">
@@ -670,6 +682,55 @@ export function ListColumnCustomizerInner({
                   />
                 </label>
                 <span className="text-[10px] text-muted">px · 当天全序列</span>
+              </div>
+            )}
+          </>
+        )}
+        {col.source.type === 'ext' && extGranularityOf(extTables, (col.source as { configId: string }).configId) === 'daily' && (
+          <>
+            <div className="border-t border-border/40 pt-2 mt-1 text-[10px] text-muted">日级序列</div>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-secondary w-16 shrink-0">展示形态</span>
+              <select
+                value={col.extDisplay?.snapshotRender ?? 'text'}
+                onChange={e => updateExtDisplay(col.id, { snapshotRender: e.target.value as 'text' | 'bar' | 'line' })}
+                className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+              >
+                <option value="bar">柱状图 (近N日每日值)</option>
+                <option value="line">折线图 (近N日)</option>
+                <option value="text">文字 (最新值)</option>
+              </select>
+            </label>
+            {(col.extDisplay?.snapshotRender ?? 'text') !== 'text' && (
+              <div className="flex items-center gap-2 text-xs">
+                <label className="flex items-center gap-1">
+                  <span className="text-secondary shrink-0">天数</span>
+                  <RangeNumberInput
+                    value={col.extDisplay?.chartDays ?? 10}
+                    min={3} max={60} step={1}
+                    onCommit={v => updateExtDisplay(col.id, { chartDays: v })}
+                    className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-secondary shrink-0">宽</span>
+                  <RangeNumberInput
+                    value={col.extDisplay?.chartWidth ?? 150}
+                    min={60} max={300} step={10}
+                    onCommit={v => updateExtDisplay(col.id, { chartWidth: v })}
+                    className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-secondary shrink-0">高</span>
+                  <RangeNumberInput
+                    value={col.extDisplay?.chartHeight ?? 80}
+                    min={24} max={160} step={4}
+                    onCommit={v => updateExtDisplay(col.id, { chartHeight: v })}
+                    className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+                <span className="text-[10px] text-muted">px · 近N日全序列</span>
               </div>
             )}
           </>

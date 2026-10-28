@@ -39,6 +39,8 @@ export interface ExtColumnDisplayConfig {
   chartWidth?: number
   /** 迷你图高度 px (仅 bar/line), 默认 36 */
   chartHeight?: number
+  /** 日级粒度 (近N日) 迷你图的窗口天数, 默认 10 */
+  chartDays?: number
 }
 
 /** 日k列渲染配置（builtin: candle 列专用） */

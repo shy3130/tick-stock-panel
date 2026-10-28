@@ -83,6 +83,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
       date_format: pull.date_format,
       time_field: pull.time_field ?? null,
       since_param: pull.since_param ?? null,
+      granularity: pull.granularity ?? 'auto',
       timeout_seconds: pull.timeout_seconds,
       page_param: pull.page_param ?? null,
       page_size_param: pull.page_size_param ?? null,
@@ -268,6 +269,8 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
   const [dateParam, setDateParam] = useState(pull?.date_param ?? '')
   const [dateFormat, setDateFormat] = useState(pull?.date_format ?? 'iso')
   const [timeField, setTimeField] = useState(pull?.time_field ?? '')
+  // 序列粒度: auto=按数据形态判断 | intraday=日内多盘 | daily=日级别 (钉死判断)
+  const [granularity, setGranularity] = useState<'auto' | 'intraday' | 'daily'>(pull?.granularity ?? 'auto')
   const [sinceParam, setSinceParam] = useState(pull?.since_param ?? '')
   const [timeoutSec, setTimeoutSec] = useState(pull?.timeout_seconds ?? 30)
   // 分页协议 (仅 GET): 页码参数名配置后按页循环拉取
@@ -345,6 +348,7 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
       date_format: dateFormat,
       time_field: timeField.trim() || null,
       since_param: sinceParam.trim() || null,
+      granularity,
       timeout_seconds: effTimeoutSec,
       page_param: pageParam.trim() || null,
       page_size_param: pageSizeParam.trim() || null,
@@ -810,6 +814,31 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
                     className={`${INPUT_CLS} font-mono`}
                   />
                 </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-secondary mb-1.5">
+                  序列粒度
+                  <span className="ml-1.5 text-[10px] font-normal text-muted">决定列表迷你图口径: 当日逐盘 / 近N日每日一值</span>
+                </div>
+                <select
+                  aria-label="序列粒度"
+                  value={granularity} onChange={e => setGranularity(e.target.value as 'auto' | 'intraday' | 'daily')}
+                  title="列表迷你图列与序列接口按此口径取数; 自动判断依据时间列数据形态"
+                  className="h-9 w-full rounded-lg border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent/25 focus:border-accent/50"
+                >
+                  <option value="auto">
+                    {`自动判断${config.granularity_effective
+                      ? `（当前: ${config.granularity_effective === 'intraday' ? '日内多盘' : '日级别'}${config.granularity_effective === 'intraday' && config.plate ? ` · ${config.plate.plates} 盘` : ''}）`
+                      : '（暂无数据）'}`}
+                  </option>
+                  <option value="intraday">日内多盘（当日逐盘序列）</option>
+                  <option value="daily">日级别（近 N 日每日一值）</option>
+                </select>
+                {granularity === 'auto' && (
+                  <div className="mt-1 text-[10px] text-muted/70">
+                    按时间列数据形态判断: 存在非零时刻 → 日内多盘; 日期形态 / 00:00:00 / 未配时间字段 → 日级别
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-[11px] font-medium text-secondary mb-1.5">

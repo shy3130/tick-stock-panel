@@ -118,6 +118,10 @@ class PullConfigReq(BaseModel):
     # 增量续传参数名 (如 "since"): 每次拉取自动带上本地目标日分区 time_field 的
     # 最大值, 源只返回其后数据 (盘中多盘表免全量重拉); 需先配置 time_field
     since_param: str | None = Field(None, min_length=1, max_length=16, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # 序列粒度: auto=按数据形态自动判断 (时间列值含非零时刻→日内, 否则日级;
+    # 未配 time_field 恒为日级) | intraday=日内多盘 | daily=日级别。
+    # 决定 series 端点口径与列表迷你图形态
+    granularity: Literal["auto", "intraday", "daily"] = "auto"
     # 鉴权方式; 请求中缺省 (None) = 保留现有配置, {"type":"none"} = 关闭鉴权
     auth: PullAuthReq | None = None
     # 单次拉取请求超时 (秒), 默认 30 与历史行为一致; 大响应接口可调高
@@ -458,10 +462,41 @@ def _plate_stats(config: ExtConfig, data_dir: Path) -> dict | None:
             plates=pl.col("_tod").n_unique(),
             first=pl.col("_tod").min(),
             last=pl.col("_tod").max(),
+            # 粒度判定 (值形态, 比盘数稳): 存在「含冒号且非 00:00:00」的时刻值
+            # → 日内多盘; 全为日期形态 (无冒号) 或 00:00:00 → 日级别。
+            # 盘后只拉过一两次的日内表不会因此误判 (非零时刻仍在)。
+            intraday=(pl.col("_tod").str.contains(":") & (pl.col("_tod") != "00:00:00")).any(),
         )
         .row(0, named=True)
     )
-    return {"date": parts[-1], "plates": tod["plates"], "from": tod["first"], "to": tod["last"]}
+    return {
+        "date": parts[-1],
+        "plates": tod["plates"],
+        "from": tod["first"],
+        "to": tod["last"],
+        "granularity": "intraday" if tod["intraday"] else "daily",
+    }
+
+
+def _granularity_effective(config: ExtConfig, data_dir: Path) -> str | None:
+    """序列粒度生效值: 显式声明 > 数据形态自动判断; snapshot 表 → None。
+
+    判断规则 (auto): 未配 time_field → daily (落盘契约「留空 = 每日快照表」);
+    配了 time_field 但尚无可读分区 → intraday (以配置意图为准, 与历史 UI 行为
+    一致); 有数据 → _plate_stats 的值形态判定。
+    """
+    if config.mode != "timeseries":
+        return None
+    declared = config.pull.granularity if config.pull else "auto"
+    if declared in ("intraday", "daily"):
+        return declared
+    tf = config.pull.time_field if config.pull else None
+    if not tf:
+        return "daily"
+    stats = _plate_stats(config, data_dir)
+    if stats is None:
+        return "intraday"
+    return stats["granularity"]
 
 
 @router.get("")
@@ -475,6 +510,7 @@ def list_configs(request: Request):
         d["latest_sync_date"] = _latest_sync_date(c, data_dir)
         d["date_range"] = _date_range(c, data_dir)
         d["plate"] = _plate_stats(c, data_dir)
+        d["granularity_effective"] = _granularity_effective(c, data_dir)
         items.append(d)
     return {"items": items}
 
@@ -1109,6 +1145,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         date_format=body.date_format,
         time_field=body.time_field,
         since_param=body.since_param,
+        granularity=body.granularity,
         auth=new_auth,
         timeout_seconds=body.timeout_seconds,
         page_param=body.page_param,
@@ -1292,43 +1329,116 @@ def fix_symbol(request: Request, config_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _daily_series(
+    config: ExtConfig,
+    data_dir: Path,
+    field: str,
+    date: str | None,
+    symbols: str | None,
+    days: int,
+) -> dict:
+    """日级粒度序列: 近 N 个分区, 每标的每日一值 [YYYY-MM-DD, value]。
+
+    分区日期为 x 轴 (无需 time_field); 表自带 date 列时优先用列值 (否则用
+    范围读注入的分区日期)。同日多行 (误配/补写) 取末个非空值 — 日末定型语义。
+    窗口按「实际存在的分区」截取近 N 个, 中途缺日不补点。
+    """
+    base = _ext_data_dir(config, data_dir)
+    partitions: list[str] = []
+    if base.exists():
+        partitions = sorted(
+            d.name[5:] for d in base.iterdir()
+            if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+        )
+    if date:
+        target = _partition_date(date)
+        partitions = [p for p in partitions if p <= target]
+    empty = {
+        "config_id": config.id, "field": field, "granularity": "daily",
+        "date": partitions[-1] if partitions else None, "items": {},
+    }
+    if not partitions:
+        return empty
+    window = partitions[-days:]
+    df, _ = _read_ext_dataframe(config, data_dir, start_date=window[0], end_date=window[-1])
+    day_col = next((c for c in ("date", "data_date") if c in df.columns), None)
+    if df.is_empty() or field not in df.columns or day_col is None or "symbol" not in df.columns:
+        return empty
+
+    if symbols:
+        wanted = [s.strip() for s in symbols.split(",") if s.strip()]
+        df = df.filter(pl.col("symbol").cast(pl.Utf8).is_in(wanted))
+
+    points = (
+        df.select(
+            pl.col("symbol").cast(pl.Utf8).alias("symbol"),
+            pl.col(day_col).cast(pl.Utf8).alias("d"),
+            pl.col(field).cast(pl.Float64).alias("v"),
+        )
+        .filter(pl.col("v").is_not_null() & pl.col("d").is_not_null())
+        .sort(["symbol", "d"])
+        .group_by(["symbol", "d"], maintain_order=True)
+        .agg(pl.col("v").last())
+    )
+    items: dict[str, list[list[str | float]]] = {}
+    for row in points.iter_rows(named=True):
+        items.setdefault(row["symbol"], []).append([row["d"], float(row["v"])])
+    return {
+        "config_id": config.id,
+        "field": field,
+        "granularity": "daily",
+        "date": f"{window[0]}..{window[-1]}",
+        "days": len(window),
+        "items": items,
+    }
+
+
 @router.get("/{config_id}/series")
 def ext_series(
     request: Request,
     config_id: str,
     field: str = Query(..., min_length=1, description="数值字段名"),
-    date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区"),
+    date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区; 日级粒度时为近N日窗口右端"),
     symbols: str | None = Query(None, description="逗号分隔标的过滤, 缺省全表"),
+    days: int = Query(10, ge=1, le=60, description="日级粒度的近 N 日窗口"),
 ):
-    """日内多盘序列 — 每标的一天的 [HH:MM:SS, value] 点列 (列表迷你图列用)。
+    """扩展列迷你图序列 — 生效粒度 (granularity) 决定口径。
 
-    仅 timeseries 且配置了 time_field 的表有意义 (如集合竞价); 其他表 400。
-    value 为 null 的盘点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
-    控制响应体积; 无该日分区时 items 为空 (fail-closed, 不回退他日序列)。
+    - intraday (日内多盘, 如集合竞价): 每标的一天的 [HH:MM:SS, value] 点列;
+    - daily (日级别, 如主力净流入每日值): 每标的近 N 日、每日一值
+      [YYYY-MM-DD, value] — 分区日期为 x 轴, 无需 time_field; 同日多行取
+      末个非空值 (日末定型语义)。
+    value 为 null 的点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
+    控制响应体积; 无分区时 items 为空 (fail-closed, 不回退其他窗口)。
     """
     config = _store(request).get(config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
+    if config.mode != "timeseries":
+        raise HTTPException(400, "仅时序扩展表支持序列查询")
+    data_dir = _data_dir(request)
+    effective = _granularity_effective(config, data_dir)
+    if effective == "daily":
+        return _daily_series(config, data_dir, field, date, symbols, days)
     time_field = config.pull.time_field if config.pull else None
-    if config.mode != "timeseries" or not time_field:
+    if not time_field:
         raise HTTPException(400, "仅配置了时间列 (time_field) 的时序扩展表支持序列查询")
 
-    data_dir = _data_dir(request)
     if date:
         day = _partition_date(date)
         path = data_dir / "ext_data" / config_id / "timeseries" / f"date={day}" / "part.parquet"
         if not path.exists():
-            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+            return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
     else:
         df_all, active = _read_ext_dataframe(config, data_dir)
         day = active
         if df_all.is_empty():
-            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+            return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
         path = None
 
     df = pl.read_parquet(path) if path else df_all
     if df.is_empty() or field not in df.columns or time_field not in df.columns:
-        return {"config_id": config_id, "field": field, "date": day, "items": {}}
+        return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
 
     if symbols:
         wanted = [s.strip() for s in symbols.split(",") if s.strip()]
@@ -1348,7 +1458,7 @@ def ext_series(
     items: dict[str, list[list[str | float]]] = {}
     for row in points.select("symbol", "t", "v").iter_rows(named=True):
         items.setdefault(row["symbol"], []).append([row["t"], float(row["v"])])
-    return {"config_id": config_id, "field": field, "date": day, "items": items}
+    return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": items}
 
 
 @router.post("/detect-fields")
@@ -1556,6 +1666,9 @@ def discover_all_schemas(request: Request):
             # 日内多盘表的时间列名 (pull.time_field): 前端据此展示「选盘时刻/迷你图」
             # 列配置; snapshot 表与未配置时间列的表为 null
             "time_field": (config.pull.time_field if config.pull else None),
+            # 生效粒度: intraday=日内多盘 (当日逐盘) | daily=日级别 (近N日) |
+            # null=snapshot 表。列表列自定义器据此选择迷你图形态与序列口径
+            "granularity": _granularity_effective(config, data_dir),
             "columns": columns,
         })
     return {"items": result}
