@@ -20,9 +20,15 @@
   --bear: 152 67% 45%;       /* #12B76A 绿跌 */
   --warning: 32 95% 50%;     /* #F79009 */
   --danger: 4 87% 60%;       /* #F04438 */
+  /* 原生滚动条/表单控件外观跟随主题。实测 (mac WKWebView, 2026-10): 声明了
+   * 标准 scrollbar-color 后引擎按规范压掉 ::-webkit-scrollbar 伪类, 但颜色值
+   * 又不被支持 → 落回亮色默认, 深色主题下出现白色滚动条 (桌面客户端反馈);
+   * color-scheme 是三引擎 (WebKit/Chromium/Gecko) 一致生效的修复。 */
+  color-scheme: light;
 }
 
 html.dark {
+  color-scheme: dark;
   --base: 240 5% 5%;         /* #0A0A0B */
   --surface: 240 7% 10%;     /* #18181B 略亮一点,与 base 对比清晰 */
   --elevated: 240 9% 14%;    /* #212126 */
