@@ -11,7 +11,7 @@ from pathlib import Path
 # (tsp.spec 的 datas 会收集)。读取失败回退硬编码值 —— 版本号绝不阻塞应用启动。
 # 三处伴生标记 (VERSION / backend/pyproject.toml / _FALLBACK_VERSION) 由
 # scripts/sync_versions.py 从 package.json 派生, release/docker 流水线自动执行。
-_FALLBACK_VERSION = "0.3.19"
+_FALLBACK_VERSION = "0.3.20"
 
 
 def _load_version() -> str:
