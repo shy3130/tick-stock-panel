@@ -301,6 +301,7 @@ def sync_and_persist_daily_batch(
     end_date: datetime | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
     zero_row_out: list[str] | None = None,
+    failed_out: list[str] | None = None,
 ) -> int:
     """批量同步日 K 并落到 Parquet。返回写入的行数。
 
@@ -309,12 +310,17 @@ def sync_and_persist_daily_batch(
     zero_row_out: 可选出参。本轮实际入库 0 行的标的(含无法识别被跳过的裸符号、
                   上游 200 空 payload 的静默 0 行)按调用方原始写法追加进该 list,
                   供上层 fail-loud 展示, 不再"显示成功实则全空" (#302)。
+    failed_out: 可选出参。分块拉取失败(超时/异常)的标的, 供上层把单票失败
+                上浮为 stage_errors 而非静默当成功 (#514)。
     """
     seen: set[str] = set()
     failed_syms: list[str] = []
     skipped_bare: list[str] = []
 
     def _finalize(written: int) -> int:
+        if failed_out is not None and failed_syms:
+            # 单票失败上浮给调用方 (daily_pipeline 汇入 stage_errors, #514)
+            failed_out.extend(failed_syms)
         zero_full = [s for s in requested if s not in seen and s not in failed_syms]
         if zero_full or skipped_bare:
             zero = [orig_by_full.get(s, s) for s in zero_full] + skipped_bare
