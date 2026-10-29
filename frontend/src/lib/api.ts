@@ -4920,7 +4920,7 @@ export interface DataStatus {
     ext_data_files?: number
     ext_data_size_mb?: number
     total_size_mb: number
-  }
+  } | null  // busy 降级 (预热/同步/修复期间) 且冷启动缓存未热时为 null, 不代表无数据
   next_pipeline_run: string | null
   next_instruments_run: string | null
   last_pipeline_run: string | null

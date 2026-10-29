@@ -76,6 +76,16 @@ def test_get_storage_busy_serves_stale(clean_caches, tmp_path):
     assert got is not None                   # stale 兜底仍在
 
 
+def test_get_storage_busy_cold_start_returns_none(clean_caches, tmp_path):
+    """服务刚启动、storage 缓存从未热过时, busy 期间返回 None (契约)。
+
+    /api/data/status 的消费方 (如数据页存储卡片) 必须按 null 降级 —
+    直接 s.storage.total_size_mb 会在预热/同步期间抛 TypeError
+    (v0.3.22 修复 "Cannot read properties of null (reading 'total_size_mb')" 的依据)。
+    """
+    assert data_api._get_storage(tmp_path, busy=True) is None
+
+
 # ---------- busy 判定 ----------
 
 def _req(indicators_ready=True):
