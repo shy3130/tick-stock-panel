@@ -303,7 +303,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   if (watchlistQ.data?.symbols) recordLocalNames(watchlistQ.data.symbols)
   if (symbolSearch.data?.results) recordLocalNames(symbolSearch.data.results)
   const namesQ = useQuery({
-    queryKey: ['instrument-names', symbolsKey],
+    queryKey: QK.instrumentNames(draft.symbols),
     queryFn: () => api.instrumentNames(draft.symbols),
     enabled: draft.symbols.length > 0,
     staleTime: 5 * 60_000,
@@ -353,7 +353,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   )
   // 预览区名称补齐 (分组成员通常不在 draft.symbols 里, 单独批量查询)
   const groupNamesQ = useQuery({
-    queryKey: ['instrument-names', selectedGroupSymbols.join(',')],
+    queryKey: QK.instrumentNames(selectedGroupSymbols),
     queryFn: () => api.instrumentNames(selectedGroupSymbols),
     enabled: isGroupScope && selectedGroupSymbols.length > 0,
     staleTime: 5 * 60_000,

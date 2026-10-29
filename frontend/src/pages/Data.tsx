@@ -325,7 +325,11 @@ export function Data() {
   const isLoading = status.isLoading
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
-  const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
+  // 契约 (与 Dashboard/回测页的 stats_pending 同族): busy 降级 (预热/同步/
+  // 修复期间) 统计为 null = 未知 → 按有数据对待, 不误禁"修复数据"; 非 busy
+  // 的 null = 表确为空 (后端空表返回 null 而非 rows:0) → 显示首装引导。
+  const statsPending = s?.stats_pending === true
+  const hasData = statsPending || !!(s?.instruments?.rows || s?.daily?.rows)
   // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
   const isNoKey = settings.data?.mode === 'none'
   const indexOverviewStats = s ? {

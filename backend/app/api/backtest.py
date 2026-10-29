@@ -481,6 +481,26 @@ def _cleanup_stale_jobs():
             _running_jobs.pop(k, None)
 
 
+def _acquire_or_evict_job(job_key: str, *, force: bool) -> tuple[_BacktestJob, bool]:
+    """获取或创建任务, 返回 (job, is_new)。
+
+    force 强制重跑: 同 key 已完成任务 (5 分钟 TTL 内) 直接丢弃重建, 不回放旧
+    结果/旧报错 — force 任务自己的结果同样进任务缓存, 不丢弃的话 TTL 内重复
+    强制重跑只是重放上一次。运行中的任务仍允许订阅 (重连/取消按同 key 对齐,
+    语义不变); 非 force 连接保持既有缓存复用行为。
+    """
+    with _jobs_lock:
+        job = _running_jobs.get(job_key)
+        if job is not None and force and job.done:
+            _running_jobs.pop(job_key, None)
+            job = None
+        if job is None:
+            job = _BacktestJob(job_key)
+            _running_jobs[job_key] = job
+            return job, True
+        return job, False
+
+
 def _finish_job(job: _BacktestJob, *, result=None, error: str | None = None) -> None:
     """Publish the terminal state and proactively drop the reconnect entry after TTL."""
     finished_at = time.time()
@@ -554,8 +574,9 @@ async def strategy_stream(
     - 相同参数的任务只启动一次, 多次连接订阅同一个任务
     - 断开连接不会取消任务 (除非显式调用 cancel)
     - 结果保留 5 分钟供重连
-    - force=1: 掺入 job_key 使其不命中已完成任务的缓存, 必然重算
-      (重连/取消仍按 qs 重算同一 key, 语义不变)
+    - force=1: 掺入 job_key 使其不命中普通 (非 force) 参数的结果缓存;
+      同 key 已完成的 force 任务也会被丢弃重建 — 5 分钟内重复强制重跑
+      都真正重算 (重连/取消仍按 qs 重算同一 key, 语义不变)
 
     事件类型:
       - progress: {day, total, date, equity}
@@ -600,15 +621,7 @@ async def strategy_stream(
 
     _cleanup_stale_jobs()
 
-    # 获取或创建任务
-    with _jobs_lock:
-        job = _running_jobs.get(job_key)
-        if job is None:
-            job = _BacktestJob(job_key)
-            _running_jobs[job_key] = job
-            is_new = True
-        else:
-            is_new = False
+    job, is_new = _acquire_or_evict_job(job_key, force=force)
 
     async def event_generator():
         # 范围保护: 直接报错
@@ -746,8 +759,9 @@ async def strategy_cancel(request: Request):
         v = _get(key)
         return float(v) if v else None
     def _get_opt_bool(key: str) -> bool:
-        # 与 FastAPI 查询参数 bool 解析口径一致 ("1"/"true" 为真, 其余为假)
-        return _get(key).lower() in ("1", "true")
+        # 与 FastAPI/pydantic v2 查询参数 bool 解析口径一致 (真值别名集合),
+        # 否则 stream/cancel 两端算出不同 job_key, 停止按钮失效
+        return _get(key).lower() in ("1", "true", "on", "yes", "t", "y")
     job_key = _make_job_key(
         _get("strategy_id"),
         _get("symbols") or None,
@@ -773,7 +787,7 @@ async def strategy_cancel(request: Request):
         regime_filter=_get("regime_filter") or None,
         position_policy=_get("position_policy") or None,
         position_policy_params=_get("position_policy_params") or None,
-        force=_get("force") == "1",
+        force=_get_opt_bool("force"),
     )
     # 持锁读任务表: 与 _cleanup_stale_jobs 的 pop、stream 的写入互斥
     with _jobs_lock:

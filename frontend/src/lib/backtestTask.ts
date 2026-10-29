@@ -217,12 +217,11 @@ export function startBacktest(params: {
   /** 忽略服务端同参数任务的结果缓存 (5 分钟), 必然重新计算; 重连/取消按 qs 对齐同一任务 */
   force?: boolean
 }): void {
-  // 取消之前的任务状态
+  // 关闭旧 SSE 连接 (断开不取消, 后端任务继续跑)
   if (eventSource) {
     eventSource.close()
     eventSource = null
   }
-
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
   emit()
@@ -252,6 +251,21 @@ export function startBacktest(params: {
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
     force: params.force ? 1 : undefined,
   })
+
+  // 键上还挂着旧任务且新任务参数不同 (不同 job_key): 先取消旧任务, 否则它会
+  // 占着重任务槽一直跑到自然结束。不看 prevPending — 重连放弃 (give-up) 分支
+  // 不清 RECONNECT_KEY 也不调 finishTaskRegistry, 后端任务仍在跑, 此时同样要
+  // 取消。参数相同 (同参重跑) 时跳过 — 后端按同 key 复用运行中任务 / force
+  // 重建已完成任务, 先取消反而会误杀刚接上的任务 (已结束任务的 cancel 是无害
+  // no-op, 但同 key 场景必须在覆盖键前区分开)。
+  const prevQs = localStorage.getItem(RECONNECT_KEY)
+  if (prevQs && prevQs !== qs) {
+    void fetch('/api/backtest/strategy/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qs: prevQs }),
+    }).catch(() => {})
+  }
 
   // 存 reconnect 信息 (刷新后用) + 上报注册表 (其他设备可接回)
   localStorage.setItem(RECONNECT_KEY, qs)

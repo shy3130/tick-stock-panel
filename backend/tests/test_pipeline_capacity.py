@@ -202,6 +202,7 @@ def test_api_jobs_wait_before_computing(
     app.state.repo = SimpleNamespace(
         store=SimpleNamespace(data_dir=tmp_path),
         db=SimpleNamespace(execute=lambda *args: None),
+        clear_cache=lambda: None,
         refresh_cache=lambda: None,
         get_index_symbol_set=lambda: set(),
         # rebuild_enriched 收尾经 repo.refresh_view 重建视图 (不再直连 db.execute)
@@ -305,3 +306,43 @@ def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry
             assert future.result(timeout=1)
     assert called.is_set()
     assert limiter.in_use == 0
+
+
+def test_rebuild_enriched_refreshes_repo_memory_cache(capacity, monkeypatch, tmp_path):
+    """rebuild_enriched 成功后必须失效内存 enriched 快照 (clear + refresh)。
+
+    get_enriched_latest 对非空缓存不校验 generation — 只刷 DuckDB 视图不重载
+    内存缓存的话, 重建结果对自选/筛选/监控等页面不可见, 直到进程重启。
+    """
+    import importlib
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import kline as kline_api
+    from app.api import pipeline as pipeline_api
+
+    store, _limiter = capacity
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        importlib.import_module("app.indicators.pipeline"), "run_pipeline", lambda *a, **k: 3
+    )
+    app = FastAPI()
+    app.include_router(pipeline_api.router)
+    app.include_router(kline_api.router)
+    app.state.repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        db=SimpleNamespace(execute=lambda *args: None),
+        clear_cache=lambda: calls.append("clear"),
+        refresh_cache=lambda: calls.append("refresh"),
+        refresh_view=lambda *args, **kwargs: True,
+    )
+    app.state.capabilities = SimpleNamespace(has=lambda _: True)
+    with TestClient(app) as client:
+        resp = client.post("/api/kline/rebuild_enriched", json={})
+        assert resp.status_code == 200, resp.text
+        jid = resp.json()["job_id"]
+        wait_for(lambda: store.get(jid)["status"] in ("succeeded", "failed"))
+        assert store.get(jid)["status"] == "succeeded", store.get(jid)
+    assert calls == ["clear", "refresh"]

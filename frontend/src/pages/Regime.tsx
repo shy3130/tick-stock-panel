@@ -158,11 +158,15 @@ export function Regime() {
   const days = resolveDays(range, coverage.data)
   const histRange = resolveHistoryRange(range, coverage.data)
 
-  // queryKey 用 range 的完整三元组区分: limit / start+end(全部) / custom天数
+  // queryKey 用实际请求三元组 (QK 集中定义): 'all' 在 coverage 到达前后参数
+  // 不同会自动换键重拉; 补算后经裸前缀 regimeHistoryPrefix 失效所有变体
   const history = useQuery({
-    queryKey: ['regime-history', range] as const,
+    queryKey: QK.regimeHistory(histRange),
     queryFn: () => api.regimeHistory(histRange.start, histRange.end, histRange.limit),
     staleTime: 5 * 60 * 1000,
+    // '全部' 依赖 coverage 的真实日期范围: 到达前不发请求 (先发会把后端默认
+    // 窗口数据短暂当成"全部"渲染), coverage 失败时兜底放行避免查询永久禁用
+    enabled: range !== 'all' || !!coverage.data || !!coverage.error,
   })
   const states = useQuery({
     queryKey: QK.regimeStates(days),

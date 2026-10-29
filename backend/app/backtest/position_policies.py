@@ -306,6 +306,10 @@ def save_policy(data_dir: Path, meta: dict, compute_src: str) -> dict:
 
 
 def delete_policy(data_dir: Path, policy_id: str) -> bool:
+    # 纵深防御: ID 围栏在 API 层, 这里再挡一道 — 非法 ID 一律按不存在处理
+    # (不 unlink), 防止其他调用方绕过校验拼出目录外路径。
+    if not ID_RE.match(policy_id):
+        return False
     p = Path(data_dir) / POLICY_DIR / f"{policy_id}.py"
     if p.exists():
         p.unlink()

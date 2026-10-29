@@ -145,12 +145,32 @@ class WecomBotService:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._connect_loop())
         except Exception as e:  # noqa: BLE001
-            logger.warning("智能机器人连接线程异常: %s", e)
-            self._last_error = str(e)
+            # stop() 的 loop.stop() 会以 "Event loop stopped before Future
+            # completed" 打断 run_until_complete — 属预期停止路径, 不是故障。
+            if not isinstance(e, RuntimeError) or "Event loop stopped" not in str(e):
+                logger.warning("智能机器人连接线程异常: %s", e)
+                self._last_error = str(e)
         finally:
             with self._lock:
                 self._connected = False
                 self._ws_loop = None
+            try:
+                # 取消残留任务并等其收尾 (websocket 上下文随之优雅关闭), 再关
+                # 循环 — 否则连接任务被销毁时仍 pending, 日志噪音 + 连接靠
+                # 服务端超时回收。loop.stop() 打断后循环未关闭, 可再次 run。
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    # 收尾设 5s 上限: 个别 task 吞取消/慢关 websocket 时不让 daemon
+                    # 线程无限滞留 (join(10) 超时后仅剩日志误导)
+                    loop.run_until_complete(
+                        asyncio.wait_for(
+                            asyncio.gather(*pending, return_exceptions=True), timeout=5.0
+                        )
+                    )
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 loop.close()
             except Exception:  # noqa: BLE001

@@ -425,6 +425,9 @@ export function SectorRotationCard({ kind }: { kind: 'concept' | 'industry' }) {
     enabled: !!data?.date && phase === 'live',
     refetchInterval: 30_000,
     staleTime: 25_000,
+    // 跨交易日键切换 (date 变化) 时保留同指数的上一份数据, 叠加线不闪空一拍
+    placeholderData: (prev: any, prevQuery: any) =>
+      (prevQuery?.queryKey as readonly unknown[] | undefined)?.[1] === indexSymbol ? prev : undefined,
   })
   const indexDailyQuery = useQuery({
     queryKey: QK.sectorRotationIndexDaily(indexSymbol),

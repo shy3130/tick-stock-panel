@@ -408,10 +408,18 @@ class MinuteRefreshService:
     def status(self) -> dict[str, Any]:
         import contextlib
 
+        # 偏好/能力探测异常不让状态接口 500 — 运维排障最需要它的时刻恰是
+        # 配置坏掉时; 各字段降级为关闭/未知而不是抛错。
+        enabled = False
         with contextlib.suppress(Exception):
             enabled = preferences.get_minute_refresh_enabled()
         running = self._thread is not None and self._thread.is_alive()
-        gate = self._gate_reason()
+        gate: str | None = None
+        with contextlib.suppress(Exception):
+            gate = self._gate_reason()
+        interval_seconds = 0.0
+        with contextlib.suppress(Exception):
+            interval_seconds = preferences.get_minute_refresh_interval()
         return {
             "enabled": enabled,
             "running": running,
@@ -419,7 +427,7 @@ class MinuteRefreshService:
             "provider": self.active_provider(),
             "provider_effective": self._resolve_custom()[1],
             "repair_only": self.repair_only(),
-            "interval_seconds": preferences.get_minute_refresh_interval(),
+            "interval_seconds": interval_seconds,
             "capability_ok": self.capability_ok(),
             "in_trading_hours": _in_continuous_session(),
             "gate_reason": gate if (enabled and running) else (gate or "disabled"),

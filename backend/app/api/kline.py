@@ -1843,6 +1843,17 @@ async def rebuild_enriched(request: Request):
                 ]:
                     repo.refresh_view(view_name, glob)
 
+                # 失效内存 enriched 快照: get_enriched_latest 对非空缓存不校验
+                # generation, 只刷 DuckDB 视图不重载内存缓存的话, 重建结果对
+                # 自选/筛选/监控等页面不可见, 直到进程重启 (对照 /api/data/clear
+                # 的同类修复)。clear 无条件清空 (refresh 在磁盘无数据时会提前
+                # return 留下旧缓存), refresh 重建; 在 executor 执行避免阻塞事件循环。
+                def _reload_memory_cache() -> None:
+                    repo.clear_cache()
+                    repo.refresh_cache()
+
+                await loop.run_in_executor(_long_task_executor, _reload_memory_cache)
+
                 progress("rebuild_enriched", 100, f"完成,覆盖 {enriched_days} 天")
                 job_store.succeed(job_id, {
                     "enriched_days": enriched_days,

@@ -390,6 +390,91 @@ def test_limit_down_recovery_uses_raw_low_under_later_ex_div():
     assert day3["signal_limit_down_recovery"][0] is True
 
 
+def test_matrix_limit_lock_uses_exchange_reference_on_ex_div_with_later_event(tmp_path):
+    """除权日涨跌停判定价必须用交易所除权参考价, 不能直接用前复权昨收。
+
+    事件: d3 除权 (ex_factor=1.25), d6 再除权 (ex_factor=1.25)。
+    d3 的交易所参考价 = raw昨收/ex_factor = 10/1.25 = 8.00, 涨停价 8.80;
+    前复权昨收 = 10/1.5625 = 6.40 (被 d6 事件额外缩放)。旧口径拿 6.40 当参考
+    → 限价 7.04, raw 8.79 被误标"涨停锁死"。
+    """
+    root = tmp_path / "market"
+    spec = [
+        # (date, raw_close, F(d) = 该日之后所有事件因子乘积)
+        (date(2024, 1, 2), 10.00, 1.5625),
+        (date(2024, 1, 3), 10.00, 1.5625),
+        (date(2024, 1, 4), 8.79, 1.25),   # ex1 除权日: 真涨停价 8.80, 未触及
+        (date(2024, 1, 5), 8.70, 1.25),
+        (date(2024, 1, 8), 8.70, 1.25),
+        (date(2024, 1, 9), 7.00, 1.0),    # ex2 除权日 (窗口末日)
+    ]
+    for trade_date, raw, f in spec:
+        partition = root / f"date={trade_date.isoformat()}"
+        partition.mkdir(parents=True)
+        pl.DataFrame({
+            "symbol": ["600001.SH"],
+            "date": [trade_date],
+            "open": [raw], "high": [raw], "low": [raw],
+            "close": [raw / f], "raw_close": [raw], "volume": [1000.0],
+        }).write_parquet(partition / "part.parquet")
+
+    market = load_market_data_matrix_from_parquet(
+        root, spec[0][0], spec[-1][0],
+        field_columns={"raw_close"},
+        instruments=pl.DataFrame({"symbol": ["600001.SH"], "name": ["普通股"]}),
+        cache_root=tmp_path / "cache",
+    )
+    # d3 除权日: 参考价 8.00 → 涨停 8.80 / 跌停 7.20, raw 8.79 均未触及
+    assert market.limit_up_locked[2, 0] == 0
+    assert market.limit_down_locked[2, 0] == 0
+    # d6 第二次除权日 (窗口末日, F=1): 参考价 8.70/1.25 = 6.96,
+    # 涨停 7.66 / 跌停 6.26, raw 7.00 未封板
+    assert market.limit_up_locked[5, 0] == 0
+    assert market.limit_down_locked[5, 0] == 0
+
+
+def test_limit_price_on_ex_div_with_later_event_uses_exchange_reference():
+    """enriched 路径同口径: 除权日 limit_up/down_price 用除权参考价, 不是前复权昨收。
+
+    事件: d3 除权 (f=1.25), d4 再除权 (f=1.25)。
+    d3 参考价 = 10/1.25 = 8.00 (前复权昨收 6.40 被事件额外缩放, 旧口径算出
+    涨停价 7.04 → raw 8.79 误判涨停); d4 参考价 = 8.79/1.25 = 7.032,
+    raw 7.74 恰为涨停价 → 正常检出 (防过度修正)。
+    """
+    raw = pl.DataFrame({
+        "symbol": ["600001.SH"] * 4,
+        "date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)],
+        "open": [10.00, 10.00, 8.79, 7.74],
+        "high": [10.00, 10.00, 8.79, 7.74],
+        "low": [10.00, 10.00, 8.79, 7.74],
+        "close": [10.00, 10.00, 8.79, 7.74],
+        "volume": [10000.0] * 4,
+        "amount": [1.0e7] * 4,
+    })
+    factors = pl.DataFrame({
+        "symbol": ["600001.SH"] * 2,
+        "trade_date": [date(2024, 1, 4), date(2024, 1, 5)],
+        "ex_factor": [1.25, 1.25],
+    })
+    instruments = pl.DataFrame({
+        "symbol": ["600001.SH"], "name": ["普通股"], "float_shares": [1.0e8],
+    })
+
+    df = pipeline.compute_enriched(raw, factors=factors, instruments=instruments)
+
+    d3 = df.filter(pl.col("date") == date(2024, 1, 4))
+    # 落库列为含容差的交易所生效价: 涨停 8.80-0.005 / 跌停 7.20+0.005
+    assert d3["limit_up_price"][0] == pytest.approx(8.795)
+    assert d3["limit_down_price"][0] == pytest.approx(7.205)
+    assert d3["signal_limit_up"][0] is False
+    assert d3["consecutive_limit_ups"][0] == 0
+
+    d4 = df.filter(pl.col("date") == date(2024, 1, 5))
+    assert d4["limit_up_price"][0] == pytest.approx(7.725)
+    assert d4["signal_limit_up"][0] is True
+    assert d4["consecutive_limit_ups"][0] == 1
+
+
 def test_chinext_302_codes_use_growth_board_rules():
     """深交所创业板已启用 302 号段 (如 2025-02-17 起的 302132.SZ 中航成飞),
     与 300/301 同为 ±20%, 注册制新股同样有 5 个交易日无涨跌幅窗口。"""

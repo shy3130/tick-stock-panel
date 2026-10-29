@@ -178,6 +178,8 @@ def _make_service(
         if symbols:
             df = df.filter(pl.col("symbol").is_in(list(symbols)))
         keep = set(feature_plan.base_columns) | set(feature_plan.instrument_columns) | {"symbol", "date"}
+        # 与生产 _LIMIT_BASE_COLUMNS 注入对齐: 面板始终保留原始价列
+        keep |= {"raw_close"} & set(df.columns)
         return df.select(sorted(c for c in df.columns if c in keep))
 
     bt_engine.load_panel_for_backtest = _load_panel.__get__(bt_engine)
@@ -328,3 +330,104 @@ def test_guards(scenario, tmp_path):
     empty_service = _make_service(tmp_path, panel, {})
     result = empty_service.run(_config(days["t1"], days["t3"]))
     assert "分钟K" in (result.error or "")
+
+
+def test_adjusted_panel_entry_price_not_double_discounted(tmp_path):
+    """复权因子 ≠ 1 时: 入场价不得双重复权, 涨停拒买按原始价口径比对。
+
+    面板 close = raw_close × 0.8 (前复权), 分钟K为复权口径 (get_minute_by_dates
+    读取路径已投影):
+    - 触发分钟 close (qfq) 直接作为入场价 — 旧实现再乘 0.8, 入场价被压低 f 倍,
+      与日线出场价 (qfq) 不再同尺度, 每笔虚增 1/f-1 收益;
+    - 涨停比对: minute_qfq / f 还原到原始价后对比 T-1 raw_close 的涨停价 —
+      旧实现拿 qfq 价直接比 raw 口径涨停价, f<1 时封板股照常"买入"。
+    """
+    days = _trading_days(30)
+    t1, t2 = days[-4], days[-3]
+    f = 0.8
+    panel = _daily_panel(days, ["000001.SZ"]).with_columns(
+        pl.col("open") * f, pl.col("high") * f, pl.col("low") * f, pl.col("close") * f,
+        # raw_close 保留原始价 (enriched: close 前复权 / raw_close 不复权)
+    )
+
+    def _prev_qfq(before: date) -> float:
+        return panel.filter(
+            (pl.col("symbol") == "000001.SZ") & (pl.col("date") < before)
+        ).sort("date").get_column("close")[-1]
+
+    def _prev_raw(before: date) -> float:
+        return panel.filter(
+            (pl.col("symbol") == "000001.SZ") & (pl.col("date") < before)
+        ).sort("date").get_column("raw_close")[-1]
+
+    # t2 触发分钟 qfq 收盘 = 涨停价(raw 口径) × f: 还原后恰为涨停 → 拒买
+    limit_up_qfq = round(_prev_raw(t2) * 1.10, 3) * f
+    frames = {
+        t1: _minute_frame(t1, [("000001.SZ", "09:35", round(_prev_qfq(t1) * 1.07, 3))]),
+        t2: _minute_frame(t2, [("000001.SZ", "09:35", round(limit_up_qfq, 3))]),
+    }
+    service = _make_service(tmp_path, panel, frames)
+    result = service.run(_config(t1, t2))
+    assert not result.error, result.error
+
+    entries = [t for t in result.trades if t["symbol"] == "000001.SZ"]
+    assert len(entries) == 1, "涨停日应被拒买, 只剩 t1 一笔入场"
+    trade = entries[0]
+    expected = round(_prev_qfq(t1) * 1.07, 3)
+    assert trade["entry_price"] == pytest.approx(expected, abs=1e-6)
+    assert trade["entry_date"][:10] == str(t1)
+    execution = result.stats.get("execution", {})
+    assert execution.get("buy_limit_up", 0) >= 1
+
+
+def test_ex_div_day_limit_up_uses_exchange_reference(tmp_path):
+    """除权日涨停拒买必须按除权参考价 (与 matrix/pipeline 同口径)。
+
+    事件: T 日除权 (f 0.64→0.80, ex_factor 1.25), 之后另有一次事件未入窗。
+    T-1 raw 10.00 / qfq 6.40; T raw 8.80 / qfq 7.04。
+    交易所参考价 = 10 × 0.64/0.80 = 8.00 → 涨停价 8.80, 触发分钟 raw 8.80
+    恰封板 → 拒买。旧口径直接拿 T-1 raw 10 当参考 → 涨停价 11.00,
+    8.80 未及 → 除权日封板股照常"买入" (拒买漏检)。T+1 正常触发作对照。
+    """
+    days = _trading_days(12)
+    t_ex, t_next, t_exit = days[-3], days[-2], days[-1]
+    f_prev, f_today = 0.64, 0.8
+    # T 前所有日 raw 10.00/qfq 6.40; T 除权 raw 8.80/qfq 7.04; 其后 f 保持 0.80
+    raw_map = {d: (8.80 if d == t_ex else (9.30 if d == t_next else (9.20 if d == t_exit else 10.0))) for d in days}
+
+    def _f(d: date) -> float:
+        return f_today if d >= t_ex else f_prev
+
+    # OHLC 全列按当日复权比例折算到 qfq 口径 (raw_close 保留原始价) — 只折
+    # close 会造成 close < low 的无效单元格, 矩阵 present 判定会丢弃该格。
+    rows = []
+    for day in days:
+        raw = raw_map[day]
+        f = _f(day)
+        rows.append({
+            "symbol": "000001.SZ", "date": day,
+            "open": round((raw - 0.05) * f, 3), "high": round((raw + 0.08) * f, 3),
+            "low": round((raw - 0.11) * f, 3), "close": round(raw * f, 3),
+            "raw_close": raw, "volume": 3e7, "amount": raw * 3e7,
+            "name": "股票0", "total_shares": 5e8, "float_shares": 4e8,
+            "signal_limit_up": False, "signal_limit_down": False,
+        })
+    panel = pl.DataFrame(rows).sort(["symbol", "date"])
+
+    # T (除权日): 分钟 qfq 7.04 > prev 6.40 × 1.05 → 命中, 但 raw 8.80 恰为
+    # 涨停价 (参考价 8.00 × 1.1) → 拒买。
+    # T+1: 分钟 qfq 7.45 > prev 7.04 × 1.05 → 命中, raw 9.3125 < 涨停价 9.68 → 成交
+    frames = {
+        t_ex: _minute_frame(t_ex, [("000001.SZ", "09:35", round(8.80 * f_today, 3))]),
+        t_next: _minute_frame(t_next, [("000001.SZ", "09:35", 7.45)]),
+    }
+    service = _make_service(tmp_path, panel, frames)
+    # 终点延到 t_exit: t_next 的建仓需要后续交易日离场 (末日无出场机会不建仓)
+    result = service.run(_config(t_ex, t_exit))
+    assert not result.error, result.error
+
+    entries = [t for t in result.trades if t["symbol"] == "000001.SZ"]
+    assert len(entries) == 1, "除权日封板分钟应被拒买, 只剩 T+1 一笔"
+    assert entries[0]["entry_date"][:10] == str(t_next)
+    execution = result.stats.get("execution", {})
+    assert execution.get("buy_limit_up", 0) >= 1

@@ -203,7 +203,9 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
   const [ruleWarn, setRuleWarn] = useState<string | null>(null)
 
   const strategiesQ = useQuery({
-    queryKey: QK.screenerStrategies('any', 'all'),
+    // 与 Screener/DefaultStrategyParamsDialog 同键同请求 (api.screenerStrategies(
+    // undefined, 'all')), 共享缓存而不是各拼哨兵值各拉一份
+    queryKey: [...QK.screenerStrategies('all'), 'all'],
     queryFn: () => api.screenerStrategies(undefined, 'all'),
     staleTime: 60_000,
   })
@@ -1268,7 +1270,9 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
 
   // ID 联想: 跟策略 → 策略引擎列表; 跟监控规则 → 监控规则列表。本地按中文名/ID 过滤。
   const strategiesQ = useQuery({
-    queryKey: QK.screenerStrategies('any', 'all'),
+    // 与 Screener/DefaultStrategyParamsDialog 同键同请求 (api.screenerStrategies(
+    // undefined, 'all')), 共享缓存而不是各拼哨兵值各拉一份
+    queryKey: [...QK.screenerStrategies('all'), 'all'],
     queryFn: () => api.screenerStrategies(undefined, 'all'),
     staleTime: 60_000,
   })
@@ -1826,7 +1830,9 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [maxPositions, setMaxPositions] = useState('10')
 
   const strategiesQ = useQuery({
-    queryKey: QK.screenerStrategies('any', 'all'),
+    // 与 Screener/DefaultStrategyParamsDialog 同键同请求 (api.screenerStrategies(
+    // undefined, 'all')), 共享缓存而不是各拼哨兵值各拉一份
+    queryKey: [...QK.screenerStrategies('all'), 'all'],
     queryFn: () => api.screenerStrategies(undefined, 'all'),
     staleTime: 60_000,
   })
@@ -2125,7 +2131,7 @@ function AccountPanel({ acc, name, onDeleted }: { acc: string; name?: string; on
     ...(tradesQ.data?.fills ?? []).map(f => f.symbol),
   ]))
   const namesQ = useQuery({
-    queryKey: ['instrument-names', nameSymbols.join(',')],
+    queryKey: QK.instrumentNames(nameSymbols),
     queryFn: () => api.instrumentNames(nameSymbols),
     enabled: nameSymbols.length > 0,
     staleTime: 300000,

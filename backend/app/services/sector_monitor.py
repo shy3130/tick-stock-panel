@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
+import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,8 @@ import polars as pl
 from app.services import preferences
 from app.services.ext_data import ExtConfig, ExtConfigStore
 from app.services.index_const import CORE_INDEX_NAMES as CORE_INDICES
+
+logger = logging.getLogger(__name__)
 SECTOR_KINDS = {"index", "concept", "industry"}
 _VALUE_SEP = re.compile(r"[\u3001,\uff0c;\uff1b|]+")
 _NULL_VALUES = {"nan", "none", "null", "<na>", "n/a", "-"}
@@ -53,27 +57,36 @@ class SectorMonitorService:
         self._repo = repo
         self._data_dir: Path = repo.store.data_dir
         self._catalog_signature: tuple[tuple[str, int, int], ...] | None = None
-        self._catalog: dict[str, list[dict]] = {kind: [] for kind in SECTOR_KINDS}
-        self._targets_by_key: dict[str, dict] = {}
-        self._members_by_key: dict[str, set[str]] = {}
+        # 目录三元组以单一 _view 属性整体发布 (GIL 下原子): 读方一次属性读取
+        # 即拿到配套的 (catalog, targets_by_key, members_by_key), 不会出现
+        # 分离字段交错下的混合视图。
+        self._view: tuple[
+            dict[str, list[dict]], dict[str, dict], dict[str, set[str]],
+        ] = ({kind: [] for kind in SECTOR_KINDS}, {}, {})
         self._history: dict[str, deque[tuple[float, float]]] = {}
         self._history_day: str | None = None
+        # 目录重建提交锁: API 线程与行情轮询线程并发 _ensure_catalog 时,
+        # 构建在锁外, 提交 (签名+快照) 在锁内整组完成, 防止同签名双写交错。
+        self._catalog_lock = threading.Lock()
 
     def list_targets(self) -> dict[str, list[dict]]:
         self._ensure_catalog()
-        return {kind: [dict(item) for item in self._catalog[kind]] for kind in self._catalog}
+        catalog, _, _ = self._view
+        return {kind: [dict(item) for item in catalog[kind]] for kind in catalog}
 
     def missing_target_keys(self, targets: list[dict]) -> list[str]:
         self._ensure_catalog()
-        return [str(target.get("key") or "") for target in targets if target.get("key") not in self._targets_by_key]
+        _, targets_by_key, _ = self._view
+        return [str(target.get("key") or "") for target in targets if target.get("key") not in targets_by_key]
 
     def unavailable_target_keys(self, targets: list[dict]) -> list[str]:
         self._ensure_catalog()
+        _, targets_by_key, _ = self._view
         return [
             str(target.get("key") or "")
             for target in targets
-            if target.get("key") in self._targets_by_key
-            and not self._targets_by_key[target["key"]].get("available", True)
+            if target.get("key") in targets_by_key
+            and not targets_by_key[target["key"]].get("available", True)
         ]
 
     def build_snapshots(
@@ -94,9 +107,10 @@ class SectorMonitorService:
         index_rows = self._row_map(index_df, index_values_are_percent=True)
         snapshots: dict[str, dict] = {}
 
+        _, targets_by_key, _ = self._view
         for raw_target in targets:
             key = str(raw_target.get("key") or "")
-            target = self._targets_by_key.get(key)
+            target = targets_by_key.get(key)
             if not target:
                 continue
             if target["kind"] == "index":
@@ -195,11 +209,12 @@ class SectorMonitorService:
                 target["member_count"] = len(members_by_key.get(target["key"], set()))
             catalog[kind].sort(key=lambda item: (item.get("level") or 0, item["name"], item["value"]))
 
-        self._catalog_signature = signature
-        self._catalog = catalog
-        self._targets_by_key = targets_by_key
-        self._members_by_key = members_by_key
-        self._history.clear()
+        with self._catalog_lock:
+            if self._catalog_signature == signature:
+                return  # 另一线程已用同一签名完成重建
+            self._catalog_signature = signature
+            self._view = (catalog, targets_by_key, members_by_key)
+            self._history.clear()
 
     def _data_signature(self) -> tuple[tuple[str, int, int], ...]:
         base = self._data_dir / "ext_data"
@@ -228,7 +243,10 @@ class SectorMonitorService:
             return pl.DataFrame()
         try:
             return pl.read_parquet(files)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            # fail-visible: ext parquet 损坏会让板块成员静默消失、sector 规则
+            # 无声停摆, 不留痕则排障无线索
+            logger.warning("ext 数据读取失败 (板块成员将被跳过): %s %s", config.id, e)
             return pl.DataFrame()
 
     @staticmethod
@@ -293,7 +311,8 @@ class SectorMonitorService:
         }
 
     def _dimension_snapshot(self, target: dict, stock_rows: dict[str, dict]) -> dict | None:
-        members = self._members_by_key.get(target["key"], set())
+        _, _, members_by_key = self._view
+        members = members_by_key.get(target["key"], set())
         if not members:
             return None
         valid_rows = [

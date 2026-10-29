@@ -97,3 +97,21 @@ def test_backtest_run_with_unknown_policy_returns_400(client: TestClient) -> Non
     )
     assert r.status_code == 400
     assert "仓位策略不存在" in r.json()["detail"]
+
+
+def test_get_and_delete_reject_path_traversal_ids(client: TestClient, tmp_path: Path) -> None:
+    """policy_id 直接拼文件路径: 非法 ID (路径穿越) 必须 400 fail-closed。
+
+    Windows 下 %5C 解码为分隔符, `..%5C..%5Cx` 可越界读/删目录外 .py 文件。
+    """
+    victim = tmp_path / "victim.py"
+    victim.write_text("SECRET = 1", encoding="utf-8")
+
+    # 注: 未编码 ../ 被路径归一化、含 / 的被路由分段挡掉; 编码 %5C 才是真实攻击面
+    for bad_id in ("..%5C..%5Cvictim", "UP_BAD", "a", "..%2Eevil"):
+        resp = client.get(f"/api/backtest/position-policies/{bad_id}")
+        assert resp.status_code == 400, (bad_id, resp.status_code)
+        resp = client.delete(f"/api/backtest/position-policies/{bad_id}")
+        assert resp.status_code == 400, (bad_id, resp.status_code)
+
+    assert victim.exists(), "越界删除不得发生"

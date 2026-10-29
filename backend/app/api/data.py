@@ -1,6 +1,7 @@
 """数据画像 API —— 让前端知道"我们本地有什么数据"。"""
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.enriched_generation import EnrichedPublication
 from app.indicators.pipeline import ENRICHED_COLUMNS
@@ -562,10 +563,11 @@ def _next_cron_run(scheduler, job_id: str) -> str | None:
     return None
 
 
-def _get_storage(data_dir: Path, *, busy: bool = False) -> dict:
+def _get_storage(data_dir: Path, *, busy: bool = False) -> dict | None:
     """返回缓存的 storage 统计；走独立 TTL，stage 写完不触发重算。
 
-    busy 时同样不重算 (目录 du 在同步写盘期间会显著变慢), 回最后一次值。"""
+    busy 时同样不重算 (目录 du 在同步写盘期间会显著变慢), 回最后一次值;
+    首次调用 (尚无缓存) 返回 None — 契约测试断言 is None, 注解勿再写 dict。"""
     global _storage_cache, _storage_cache_ts, _storage_cache_stale
     now = time.time()
     with _storage_lock:
@@ -653,7 +655,42 @@ def status(request: Request) -> dict:
 
 @router.post("/clear")
 def clear_data(request: Request):
-    """清除所有本地 Parquet 数据（保留 capabilities.json 和目录结构）。"""
+    """清除所有本地 Parquet 数据（保留 capabilities.json 和目录结构）。
+
+    互斥保护 (与其他破坏性路径 pipeline/repair/rebuild 一致):
+    - 重任务执行槽: 有数据任务在运行 (或上次任务卡死未结束) 时 fail-closed
+      拒绝清空 — 一边删除一边写入会让终态既非"已清空"也非"完整同步";
+    - 清空期间暂停实时行情取数, 防止轮询线程覆写同一批 parquet。
+    """
+    from app.services.pipeline_jobs import release_run_slot, try_acquire_run_slot
+
+    if not try_acquire_run_slot("data_clear"):
+        raise HTTPException(
+            status_code=409,
+            detail="有数据任务在运行（或上一次任务卡死未结束），请先停止任务或稍后再试",
+        )
+    qs = getattr(request.app.state, "quote_service", None)
+    # 全量分钟增量线程独立写 kline_minute/adj_factor 分区, 不占 run slot —
+    # 清空期间必须一并暂停, 否则"清完又被写回部分今日数据"(终态不完整)。
+    mrs = getattr(request.app.state, "minute_refresh", None)
+    mrs_was_running = False
+    try:
+        if mrs is not None:
+            with contextlib.suppress(Exception):
+                mrs_was_running = bool(mrs.status().get("running"))
+                mrs.stop()
+        if qs is not None:
+            with qs.paused():
+                return _clear_data_impl(request)
+        return _clear_data_impl(request)
+    finally:
+        if mrs is not None and mrs_was_running:
+            with contextlib.suppress(Exception):
+                mrs.start()
+        release_run_slot("data_clear")
+
+
+def _clear_data_impl(request: Request):
     import shutil
 
     repo = request.app.state.repo

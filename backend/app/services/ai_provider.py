@@ -945,8 +945,12 @@ def _compact_error_text(text: str) -> str:
     return text[:500]
 
 
+# 词边界约束: 裸 "401" 会把输出正文里任意含 401 的数字串 (如模型回复文本)
+# 误判成鉴权失败, 附出不相关的 codex login 指引; 词边界只排除数字粘连,
+# 真实鉴权报错 ("401 Unauthorized"/"status 401") 不受影响。
 _CODEX_AUTH_FAILURE_RE = re.compile(
-    r"401|unauthorized|not logged in|missing bearer|login required", re.IGNORECASE
+    r"\b401\b|\bunauthorized\b|\bnot logged in\b|\bmissing bearer\b|\blogin required\b",
+    re.IGNORECASE,
 )
 
 
@@ -1262,7 +1266,9 @@ def _resolve_macos_codex_command() -> str | None:
             continue
     for candidate in candidates:
         try:
-            if candidate.is_file():
+            # 与 shutil.which 同口径校验可执行位: 只查 is_file 会解析到同名
+            # 不可执行文件, 运行时报错不直观
+            if candidate.is_file() and os.access(candidate, os.X_OK):
                 return str(candidate)
         except OSError:
             continue

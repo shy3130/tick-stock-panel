@@ -98,7 +98,7 @@ class MinuteReplayHit:
 
     trade_date: date
     symbol: str
-    # 已按当日 复权close/原始close 比例折算到复权价系的入场价, 与日线出场价同尺度。
+    # 前复权口径入场价 — 分钟K读取路径已返回复权价系, 与日线出场价同尺度。
     entry_price: float
     trigger_time: str  # "HH:MM" — 触发分钟K的时间戳
     score: float = 0.0
@@ -162,6 +162,7 @@ class MinuteSignalReplayer:
         # 逐标的的 T-1 原始收盘/复权收盘查表 (涨停价与复权折算用)。
         prev_raw_close: dict[str, float] = {}
         prev_name: dict[str, str] = {}
+        prev_adj_factor: dict[str, float] = {}
         adj_factor: dict[str, float] = {}
 
         for i, day in enumerate(minute_days):
@@ -194,7 +195,7 @@ class MinuteSignalReplayer:
                 current = panel.filter(pl.col("date") == last_prior)
 
                 # T-1 收盘/名称 + T 日复权因子查表。
-                _refresh_day_lookups(prev_raw_close, prev_name, current, prior)
+                _refresh_day_lookups(prev_raw_close, prev_name, prev_adj_factor, current, prior)
                 day_rows = panel.filter(pl.col("date") == day).select(
                     "symbol", "close", "raw_close",
                 )
@@ -229,15 +230,29 @@ class MinuteSignalReplayer:
                 close = row.get("close")
                 if not symbol or close is None or float(close) <= 0:
                     continue
-                raw_close = float(close)
+                minute_close = float(close)
                 name = prev_name.get(str(symbol), "")
                 prev = prev_raw_close.get(str(symbol))
                 # 涨停拒买: 触发分钟收盘已达当日涨停价 (按 T-1 原始收盘 + 板块规则)。
+                # 分钟 close 为前复权口径 (raw 基准分区在 get_minute_by_dates 读取时
+                # 投影, 存量分区即复权存储), 涨停价是原始价口径 → 按 T 日复权比例
+                # 还原到原始价后再比对。
+                adj = adj_factor.get(str(symbol), 1.0)
+                minute_raw = minute_close / adj if adj and adj > 0 else minute_close
                 if prev is not None and prev > 0:
-                    limit_up = _scalar_limit_up_price(
-                        prev, price_limit_pct(str(symbol), day, is_risk_warning=is_risk_warning_name(name)),
+                    # 除权日涨停参考价 = raw_prev × f_prev / f_today = raw_prev / ex_factor
+                    # (与 matrix/pipeline 的除权参考价同口径); 直接用 raw_prev 会把
+                    # 涨停价算高, 除权日封板拒买漏检。
+                    prev_adj = prev_adj_factor.get(str(symbol), 0.0)
+                    reference = (
+                        prev * prev_adj / adj
+                        if prev_adj > 0 and adj > 0 and abs(adj - prev_adj) > 1e-9
+                        else prev
                     )
-                    if raw_close >= limit_up - 1e-9:
+                    limit_up = _scalar_limit_up_price(
+                        reference, price_limit_pct(str(symbol), day, is_risk_warning=is_risk_warning_name(name)),
+                    )
+                    if minute_raw >= limit_up - 1e-9:
                         result.buy_limit_up += 1
                         continue
                 trigger = row.get("last_datetime")
@@ -245,7 +260,9 @@ class MinuteSignalReplayer:
                 result.hits.append(MinuteReplayHit(
                     trade_date=day,
                     symbol=str(symbol),
-                    entry_price=raw_close * adj_factor.get(str(symbol), 1.0),
+                    # 分钟 close 已是复权口径, 与日线出场价 (前复权 close) 同尺度,
+                    # 直接使用 — 不得再乘复权比例 (双重复权会把入场价压低 f 倍)。
+                    entry_price=minute_close,
                     trigger_time=trigger_time,
                     score=float(run_result.scores.get(str(symbol), 0.0) or 0.0),
                 ))
@@ -257,10 +274,13 @@ class MinuteSignalReplayer:
 def _refresh_day_lookups(
     prev_raw_close: dict[str, float],
     prev_name: dict[str, str],
+    prev_adj_factor: dict[str, float],
     prior_snapshot: pl.DataFrame,
     prior: list[date],
 ) -> None:
-    """从 T-1 快照刷新逐标的原始收盘与名称查表 (涨停价/ST 判定用)。"""
+    """从 T-1 快照刷新逐标的原始收盘、名称与复权比例查表 (涨停价/ST 判定用)。
+
+    复权比例 = T-1 的 close/raw_close, 供 T 日涨停参考价在除权日折算用。"""
     if prior_snapshot.is_empty():
         return
     frame = prior_snapshot
@@ -270,13 +290,24 @@ def _refresh_day_lookups(
         frame = frame.with_columns(pl.lit("").alias("name"))
     prev_raw_close.clear()
     prev_name.clear()
-    for symbol, raw_close, name in frame.select("symbol", "raw_close", "name").iter_rows():
-        prev_raw_close[str(symbol)] = float(raw_close) if raw_close is not None else 0.0
-        prev_name[str(symbol)] = str(name or "")
+    prev_adj_factor.clear()
+    has_close = "close" in frame.columns
+    cols = ["symbol", "raw_close", "name"] + (["close"] if has_close else [])
+    for row in frame.select(cols).iter_rows(named=True):
+        symbol = str(row["symbol"])
+        raw_close = row["raw_close"]
+        prev_raw_close[symbol] = float(raw_close) if raw_close is not None else 0.0
+        prev_name[symbol] = str(row["name"] or "")
+        adj = 0.0
+        if has_close:
+            close, raw = row["close"], raw_close
+            if close and raw and float(raw) > 0:
+                adj = float(close) / float(raw)
+        prev_adj_factor[symbol] = adj
 
 
 def _adj_factors(day_rows: pl.DataFrame) -> dict[str, float]:
-    """T 日 复权close/原始close 比例: 把分钟原始价折算到复权价系。"""
+    """T 日 复权close/原始close 比例: 把复权分钟价还原到原始价系 (涨停比对用)。"""
     factors: dict[str, float] = {}
     if day_rows.is_empty() or "raw_close" not in day_rows.columns:
         return factors

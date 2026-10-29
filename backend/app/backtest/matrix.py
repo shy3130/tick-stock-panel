@@ -2223,7 +2223,17 @@ def _limit_lock_matrices(
             & np.isfinite(previous_adjustment)
             & (np.abs(current_adjustment - previous_adjustment) > 1e-6)
         )
-        reference = np.where(adjustment_changed, previous_close, previous_raw)
+        # 除权日交易所参考价 = 前复权昨收还原到当日口径 (prev_qfq / 当日复权比例)。
+        # prev_qfq = raw_prev / F(prev) × F(today) ⇒ 商 = raw_prev × F(today)/F(prev)
+        # = raw_prev / ex_factor, 即除权参考价。直接拿 prev_qfq 当参考价会把限价
+        # 压低 F(prev)/F(today) 倍 — 窗口后还有更晚除权事件时, 除权日被误标
+        # 涨停锁死、真封死跌停漏检。
+        safe_adjustment = np.where(
+            np.isfinite(current_adjustment) & (current_adjustment > 0),
+            current_adjustment,
+            1.0,
+        )
+        reference = np.where(adjustment_changed, previous_close / safe_adjustment, previous_raw)
         valid = (
             present
             & np.isfinite(reference)

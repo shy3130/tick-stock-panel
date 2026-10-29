@@ -46,8 +46,16 @@ def list_templates() -> dict:
     return {"templates": pp.TEMPLATES}
 
 
+def _validate_policy_id(policy_id: str) -> None:
+    """路径围栏: policy_id 直接拼进文件路径, 必须匹配 ID_RE — 防路径穿越
+    (Windows 下 %5C 解码为分隔符可越界读/删目录外 .py 文件)。fail-closed。"""
+    if not pp.ID_RE.match(policy_id):
+        raise HTTPException(status_code=400, detail=f"仓位策略 ID 非法: {policy_id}")
+
+
 @router.get("/{policy_id}")
 def get_position_policy(policy_id: str, request: Request) -> dict:
+    _validate_policy_id(policy_id)
     d = _data_dir(request)
     path = d / pp.POLICY_DIR / f"{policy_id}.py"
     if not path.exists():
@@ -96,6 +104,7 @@ def save_position_policy(req: PolicySaveRequest, request: Request) -> dict:
 
 @router.delete("/{policy_id}")
 def delete_position_policy(policy_id: str, request: Request) -> dict:
+    _validate_policy_id(policy_id)
     if not pp.delete_policy(_data_dir(request), policy_id):
         raise HTTPException(status_code=404, detail=f"仓位策略不存在: {policy_id}")
     return {"ok": True}

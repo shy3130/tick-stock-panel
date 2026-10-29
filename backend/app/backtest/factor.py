@@ -1231,7 +1231,8 @@ class FactorBacktestService:
                 rets = arr[1:] / prev - 1.0
             rets = rets[prev > 0]
             if rets.size:
-                std = float(np.std(rets))
+                # 样本标准差 (ddof=1), 与 engine 的 Sharpe 口径一致
+                std = float(np.std(rets, ddof=1))
                 sharpe = float(np.mean(rets) / std) * np.sqrt(_ann) if std > 0 else 0.0
                 win_rate = float(np.mean(rets > 0))
             else:
@@ -1301,7 +1302,7 @@ class FactorBacktestService:
             config.rebalance,
             252,
         )
-        ls_std = float(np.std(ls_ret))
+        ls_std = float(np.std(ls_ret, ddof=1))  # 样本标准差, 与 engine 口径一致
         sharpe = (
             float(np.mean(ls_ret) / ls_std) * np.sqrt(ann_factor)
             if ls_std > 1e-8

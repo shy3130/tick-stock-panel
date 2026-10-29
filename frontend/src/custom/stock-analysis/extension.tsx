@@ -178,10 +178,16 @@ export function StockAnalysis() {
 // ===== 分析看板:日 K + 关键价位 =====
 function StockAnalysisBoard({ symbol }: { symbol: string }) {
   const kline = useQuery({
-    queryKey: ['kline', symbol, ''],
+    // QK 集中键 (start/end 空串 = 滚动最近窗口, 无日期边界)。收益: 键进集中
+    // 管理, 且 useQuoteStream 的焦点股增量合并对无边界键生效 — 此前私拼 3 元
+    // 键永远修补不到; 注意合并依赖 _focusSymbol (预览弹窗设置焦点), 看板单独
+    // 打开时仍靠 60s staleTime 重拉, 与其他日K入口的键 (带真实日期) 不共享。
+    queryKey: QK.kline(symbol, '', ''),
     queryFn: () => api.klineDaily(symbol, 250),
     enabled: !!symbol,
     staleTime: 60_000,
+    placeholderData: (prev: any, prevQuery: any) =>
+      (prevQuery?.queryKey as readonly unknown[] | undefined)?.[1] === symbol ? prev : undefined,
   })
 
   const levelsQ = useQuery({

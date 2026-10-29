@@ -750,7 +750,7 @@ function RulesList({ rulesQuery, onEdit }: {
     return Array.from(set)
   }, [rules])
   const namesQuery = useQuery({
-    queryKey: ['instrument-names', allSymbols.join(',')],
+    queryKey: QK.instrumentNames(allSymbols),
     queryFn: () => api.instrumentNames(allSymbols),
     enabled: allSymbols.length > 0,
     staleTime: 300000,

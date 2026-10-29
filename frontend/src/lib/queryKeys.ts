@@ -100,6 +100,10 @@ export const QK = {
   // Kline
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
+  // 批量标的名称查询键: 排序后 join — 同一集合不同来源顺序 (draft/分组成员/
+  // 持仓+订单合并) 得到同一键, 复用缓存而不是各拼各的重复请求。
+  instrumentNames:      (symbols: readonly string[]) =>
+                         ['instrument-names', [...new Set(symbols)].sort().join(',')] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
   klineMinute:          (symbol: string, date: string) =>
@@ -146,7 +150,12 @@ export const QK = {
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
 
   // 市场环境(Regime) — 日级离线计算, 不进 SSE 刷新
-  regimeHistory:        (limit?: number) => ['regime-history', limit ?? 0] as const,
+  // 历史查询键 = 实际请求三元组 (影响结果的参数全部进键): 'all' 在 coverage
+  // 到达前后 start/end 不同 → 自动换键重拉, 不会把默认窗口数据当"全部"展示。
+  regimeHistory:        (range: { start?: string; end?: string; limit?: number }) =>
+                         ['regime-history', range.start ?? '', range.end ?? '', range.limit ?? 0] as const,
+  // 失效用裸前缀: 前缀匹配所有历史查询变体 (regimeHistory() 带哨兵值匹配不到任何键)
+  regimeHistoryPrefix:  ['regime-history'] as const,
   regimeLatest:         ['regime-latest'] as const,
   regimeStates:         (days: number) => ['regime-states', days] as const,
   regimeCoverage:       ['regime-coverage'] as const,

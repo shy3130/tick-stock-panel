@@ -805,19 +805,26 @@ def compute_limit_signals(
         df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("turnover_rate"))
 
     # 前一日参考收盘价（交易所涨跌停基准价）
-    # 仅在 adj_factor 发生变化（除权除息 XD/DR）时使用前复权昨收作为交易所参考价;
-    # 否则使用原始 raw_close.shift(1) 以避免浮点精度误差。
+    # 仅在 adj_factor 发生变化（除权除息 XD/DR）时用 前复权昨收/当日复权比例 还原到
+    # 当日口径 (即交易所除权参考价 = raw_prev / ex_factor); 否则使用原始
+    # raw_close.shift(1) 以避免浮点精度误差。注意不能直接用前复权昨收 —— 它还被
+    # 更晚的除权事件缩放过, 会把限价压低 F(prev)/F(today) 倍 (除权日误判封板)。
     if not need_price_limits:
         cleanup = [c for c in ("name", "float_shares", "limit_up", "limit_down", "listing_date") if c in df.columns]
         return df.drop(cleanup)
 
     _adj_today = pl.col("close") / pl.col("raw_close")
     _adj_yesterday = pl.col("close").shift(1).over("symbol") / pl.col("raw_close").shift(1).over("symbol")
-    _adj_changed = (_adj_today - _adj_yesterday).abs() > 1e-6
+    # raw_close=0 等脏行会让 _adj_today 变 inf: 不守卫的话 then 分支除以 inf 得
+    # 参考价 0, 产出行内一致的"涨停价 0"; 这里要求比例有限且为正, 脏行退化为
+    # 原始昨收口径 (与 matrix 路径的 current_raw>0 守卫对齐)。
+    _adj_changed = (
+        (_adj_today - _adj_yesterday).abs() > 1e-6
+    ) & _adj_today.is_finite() & (_adj_today > 0)
     df = df.with_columns(
         pl.when(_adj_changed)
-        .then(pl.col("close").shift(1).over("symbol"))   # 除权: 使用前复权昨收
-        .otherwise(pl.col("raw_close").shift(1).over("symbol"))  # 正常: 使用原始昨收
+        .then(pl.col("close").shift(1).over("symbol") / _adj_today)  # 除权: 除权参考价
+        .otherwise(pl.col("raw_close").shift(1).over("symbol"))      # 正常: 原始昨收
         .alias("_prev_raw_close")
     )
 

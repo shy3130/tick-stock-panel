@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,9 @@ _FILENAME = "task_registry.json"
 
 _cache: dict[str, Any] | None = None
 _cache_sig: tuple[int, int] | None = None
+# 串行化读-改-写 (upsert/delete/孤儿清理): 两个前端 fire-and-forget 上报并发时
+# 后写者会覆盖先写者 (丢终态翻转或丢整条); 文件写入本身原子, 锁只保护 RMW 段。
+_MUTATION_LOCK = threading.Lock()
 
 
 def _path(data_dir: Path) -> Path:
@@ -122,13 +126,16 @@ def _save(data_dir: Path, items: list[dict]) -> None:
 
 def list_items(data_dir: Path, kind: str | None = None) -> list[dict]:
     """按 updated_at 倒序返回 (可选 kind 过滤); 顺带回收孤儿 running 项。"""
-    items = _load_raw(data_dir)
-    if items is None:
-        return []
-    kept, orphans = _prune_orphans(items)
-    if orphans:
-        _save(data_dir, kept)
-        items = kept
+    # 读也进锁: 锁外 load 后再进锁保存, 会把窗口内并发 upsert/delete 的提交
+    # 整条覆盖丢失 (与 upsert 要修的丢更新同源)。
+    with _MUTATION_LOCK:
+        items = _load_raw(data_dir)
+        if items is None:
+            return []
+        kept, orphans = _prune_orphans(items)
+        if orphans:
+            _save(data_dir, kept)
+            items = kept
     if kind is None:
         return items
     return [it for it in items if it["kind"] == kind]
@@ -147,9 +154,10 @@ def upsert(
         raise ValueError(f"未知的任务类型: {kind}")
     if status not in TASK_STATUSES:
         raise ValueError(f"未知的任务状态: {status}")
-    items = _load_raw(data_dir) or []
     now = time.time()
-    entry = {
+    with _MUTATION_LOCK:
+        items = _load_raw(data_dir) or []
+        entry = {
         "id": task_id,
         "kind": kind,
         "status": status,
@@ -158,21 +166,22 @@ def upsert(
         "started_at": now,
         "updated_at": now,
     }
-    for i, it in enumerate(items):
-        if it["id"] == task_id:
-            entry["started_at"] = it.get("started_at") or now
-            items[i] = entry
-            break
-    else:
-        items.append(entry)
-    _save(data_dir, items)
+        for i, it in enumerate(items):
+            if it["id"] == task_id:
+                entry["started_at"] = it.get("started_at") or now
+                items[i] = entry
+                break
+        else:
+            items.append(entry)
+        _save(data_dir, items)
     return entry
 
 
 def delete(data_dir: Path, task_id: str) -> bool:
-    items = _load_raw(data_dir) or []
-    remaining = [it for it in items if it["id"] != task_id]
-    if len(remaining) == len(items):
-        return False
-    _save(data_dir, remaining)
-    return True
+    with _MUTATION_LOCK:
+        items = _load_raw(data_dir) or []
+        remaining = [it for it in items if it["id"] != task_id]
+        if len(remaining) == len(items):
+            return False
+        _save(data_dir, remaining)
+        return True
