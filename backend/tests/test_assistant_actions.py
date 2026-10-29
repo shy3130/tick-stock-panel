@@ -79,6 +79,9 @@ async def _run_chat(
 ) -> list[dict[str, Any]]:
     monkeypatch.setattr(chat_service, "ai_configured", lambda: True)
     monkeypatch.setattr(chat_service, "is_codex_cli_provider", lambda provider=None: False)
+    # 隔离宿主偏好: auto_approve_enabled 直读用户 preferences.json, 本机开了
+    # 免确认会让动作跳过确认卡直接执行, 门控断言全军覆没 (CI 偏好默认关碰巧通过)
+    monkeypatch.setattr(assistant_actions, "auto_approve_enabled", lambda: False)
     script = [{"tool_calls": tool_calls}, {"text_pieces": ["完成"]}]
     monkeypatch.setattr(chat_service, "stream_openai_round", _script_round(script))
     monkeypatch.setattr(assistant_tools, "execute_assistant_tool", fake_execute)

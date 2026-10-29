@@ -570,6 +570,9 @@ def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_API_KEY", "ai-secret")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
     monkeypatch.setenv("AUTH_PASSWORD", "password-secret")
+    # 隔离宿主: _read_codex_config 直读 ~/.codex/config.toml, 宿主若配了
+    # env_key provider 且同名环境变量在, 凭证会漏进 env, 断言随机翻红
+    monkeypatch.setattr(ai_provider, "_read_codex_config", lambda: {})
 
     env = ai_provider._codex_process_env(tmp_path / "codex-home")
 
@@ -581,6 +584,33 @@ def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
     assert "AI_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert "AUTH_PASSWORD" not in env
+
+
+def test_codex_process_env_injects_provider_env_key(monkeypatch, tmp_path):
+    """config.toml 里 env_key 指向的凭证应显式注入子进程环境 (正向覆盖)。"""
+    monkeypatch.setattr(ai_provider, "_active_codex_provider", lambda config: (
+        "custom", {"base_url": "https://example.test", "env_key": "CUSTOM_TOKEN"},
+    ))
+    monkeypatch.setattr(ai_provider, "_read_codex_config", lambda: {"model_providers": {}})
+    monkeypatch.setenv("CUSTOM_TOKEN", "tok-123")
+
+    env = ai_provider._codex_process_env(tmp_path / "codex-home")
+
+    assert env["CUSTOM_TOKEN"] == "tok-123"
+    assert env["CODEX_HOME"] == str(tmp_path / "codex-home")
+
+
+def test_codex_process_env_rejects_malformed_env_key(monkeypatch, tmp_path):
+    """env_key 不是合法环境变量名 → 不注入 (防御宿主任意读)。"""
+    monkeypatch.setattr(ai_provider, "_active_codex_provider", lambda config: (
+        "custom", {"env_key": "NOT A VALID NAME"},
+    ))
+    monkeypatch.setattr(ai_provider, "_read_codex_config", lambda: {})
+    monkeypatch.setenv("PATH", "test-path")
+
+    env = ai_provider._codex_process_env(tmp_path / "codex-home")
+
+    assert "NOT A VALID NAME" not in env
 
 
 def test_codex_config_adapts_local_access_provider_for_docker(monkeypatch, tmp_path):
@@ -752,9 +782,23 @@ def test_resolve_macos_codex_command_scans_user_locations(tmp_path, monkeypatch)
     local_bin = home / ".local" / "bin" / "codex"
     local_bin.parent.mkdir(parents=True)
     local_bin.write_bytes(b"#!/bin/sh\n")
+    # 真实安装的 CLI 带可执行位 — 解析与 shutil.which 同口径校验 X_OK
+    local_bin.chmod(0o755)
 
     monkeypatch.setattr(Path, "home", lambda: home)
     assert ai_provider._resolve_macos_codex_command() == str(local_bin)
+
+
+def test_resolve_macos_codex_command_skips_non_executable_file(tmp_path, monkeypatch):
+    """同名但无可执行位的文件不是可用 CLI: 只查 is_file 会解析到它, 运行时报错不直观。"""
+    monkeypatch.setattr(ai_provider, "_MACOS_SYSTEM_APPLICATIONS", tmp_path / "no-such-apps")
+    home = tmp_path / "home"
+    local_bin = home / ".local" / "bin" / "codex"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_bytes(b"not-a-binary\n")  # 0644, 无执行位
+
+    monkeypatch.setattr(Path, "home", lambda: home)
+    assert ai_provider._resolve_macos_codex_command() is None
 
 
 def test_resolve_command_macos_fallback_only_when_path_missing(monkeypatch):
