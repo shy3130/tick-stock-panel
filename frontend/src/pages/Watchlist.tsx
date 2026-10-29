@@ -33,6 +33,8 @@ import {
 } from '@/components/WatchlistGroups'
 import { WatchlistGroupCards } from '@/components/WatchlistGroupCards'
 import { WatchlistGroupStatsBar } from '@/components/WatchlistGroupStatsBar'
+import { AssetTypeFilter } from '@/components/AssetTypeFilter'
+import { useInstrumentSearch } from '@/lib/useInstrumentSearch'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 
 // 分时列开放排序 (StockDataTable 实例级白名单; 表头眼睛/刷新按钮已 stopPropagation)
@@ -274,20 +276,14 @@ function StockSearchBox({
   addPending: boolean
   memberPending: boolean
 }) {
-  const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [activeIdx, setActiveIdx] = useState(-1)
 
-  const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
-    enabled: query.trim().length > 0,
-    staleTime: 30_000,
-  })
-
-  const results = search.data?.results ?? []
+  // 与公共搜索框同源: 输入防抖 + 后端游标分页 + 下拉内资产类型筛选
+  const s = useInstrumentSearch('stock,etf,index')
+  const results = s.results
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -311,14 +307,14 @@ function StockSearchBox({
       setActiveIdx(i => Math.max(i - 1, -1))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      if (activeIdx >= 0) handleSelect(results[activeIdx])
+      if (activeIdx >= 0 && activeIdx < results.length) handleSelect(results[activeIdx])
       else if (results.length > 0) handleSelect(results[0])
     }
   }
 
   function handleSelect(r: { symbol: string; name: string }) {
     onPreview(r.symbol, r.name)
-    setQuery('')
+    s.clearQuery()
     setOpen(false)
     setActiveIdx(-1)
   }
@@ -331,9 +327,9 @@ function StockSearchBox({
           ref={inputRef}
           type="text"
           placeholder="搜索…"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
-          onFocus={() => { if (query.trim()) setOpen(true) }}
+          value={s.query}
+          onChange={(e) => { s.setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
+          onFocus={() => { if (s.trimmed) setOpen(true) }}
           onKeyDown={handleKeyDown}
           className="w-44 h-8 pl-8 pr-2.5 rounded-btn bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 focus:w-56 transition-all duration-200"
         />
@@ -342,12 +338,24 @@ function StockSearchBox({
       <AnimatePresence>
         {open && results.length > 0 && (
           <motion.div
+            ref={s.listRef}
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
             className="absolute right-0 top-full mt-1 z-50 w-72 max-h-[320px] overflow-y-auto rounded-card border border-border bg-base shadow-xl"
           >
+            {s.showFilter && (
+              <div className="sticky top-0 z-10 px-2 py-1.5 border-b border-border/60 bg-base/95 backdrop-blur">
+                <AssetTypeFilter
+                  types={s.types}
+                  value={s.filter}
+                  onChange={(next) => { s.setFilter(next); setActiveIdx(-1) }}
+                  count={s.results.length}
+                />
+              </div>
+            )}
+
             {results.map((r, i) => {
               const entryGids = existingBySymbol.get(r.symbol)
               const inWatchlist = entryGids !== undefined
@@ -432,6 +440,20 @@ function StockSearchBox({
                 </div>
               )
             })}
+
+            {/* 触底哨兵: 进入视口才加载下一页 */}
+            {s.hasMore && <div ref={s.sentinelRef} className="h-px" />}
+
+            {/* 触底加载 / 软上限提示 */}
+            <div className="px-3 py-1.5 text-center text-[10px] text-muted">
+              {s.isFetchingNextPage
+                ? '加载中…'
+                : s.reachedCap
+                  ? '结果过多，请输入更精确关键词'
+                  : s.hasMore
+                    ? '滚动到底部加载更多'
+                    : '已显示全部结果'}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

@@ -44,6 +44,9 @@ export const QK = {
   // (见 lib/minuteBatchIncremental.ts)。
   minuteBatch:          () => ['minute-batch'] as const,
   instrumentSearch:     (q: string, assetTypes?: string) => ['instrument-search', q, assetTypes ?? 'stock'] as const,
+  // 分页搜索 (无限滚动 + 类型筛选): 单开一个键 —— 每页 limit 与 instrumentSearch 不同,
+  // 共用键会让两种 limit 的结果互相命中缓存 (拿错条数)。
+  instrumentSearchPage: (q: string, assetTypes: string, limit: number) => ['instrument-search-page', q, assetTypes, limit] as const,
 
   // Screener
   screener:             ['screener'] as const,
