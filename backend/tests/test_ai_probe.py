@@ -159,3 +159,51 @@ async def test_test_endpoint_falls_back_to_saved_key(monkeypatch):
     assert result["ok"] is True
     assert seen["api_key"] == "sk-saved"
     assert seen["protocol"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_codex_probe_uses_draft_model_and_default_without_saved_provider(monkeypatch, tmp_path):
+    import tomllib
+    from pathlib import Path
+
+    calls = []
+    monkeypatch.setattr(ai_provider, "codex_cli_available", lambda: True)
+    monkeypatch.setattr(ai_provider, "_codex_home", lambda: tmp_path)
+    monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
+    monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "saved-other-provider")
+    monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
+    (tmp_path / "config.toml").write_text('model = "local-default"\n')
+
+    def fake_process(args, prompt, env, timeout):
+        config = tomllib.loads((Path(env["CODEX_HOME"]) / "config.toml").read_text())
+        calls.append((args, config))
+        return 0, b"OK", b""
+
+    monkeypatch.setattr(ai_provider, "_run_codex_process", fake_process)
+    for model in ("draft-model", ""):
+        assert await ai_provider.probe_ai_config(
+            provider="codex_cli", api_key="", base_url="", model=model,
+        ) == "OK"
+    assert calls[0][0][calls[0][0].index("--model") + 1] == "draft-model"
+    assert calls[0][1]["model"] == "draft-model"
+    assert "--model" not in calls[1][0]
+    assert calls[1][1]["model"] == "local-default"
+
+
+def test_codex_custom_provider_passes_only_its_configured_environment_key(monkeypatch, tmp_path):
+    import tomllib
+
+    monkeypatch.setattr(ai_provider, "_read_codex_config", lambda: {
+        "model_provider": "custom",
+        "model_providers": {"custom": {"base_url": "https://example.test", "env_key": "CUSTOM_TOKEN"}},
+    })
+    monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "")
+    monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
+    monkeypatch.setenv("CUSTOM_TOKEN", "test-token")
+    monkeypatch.setenv("TICKFLOW_API_KEY", "unrelated-secret")
+    path = tmp_path / "config.toml"
+    ai_provider._write_compatible_codex_config(path)
+    assert tomllib.loads(path.read_text())["model_providers"]["custom"]["env_key"] == "CUSTOM_TOKEN"
+    env = ai_provider._codex_process_env(tmp_path)
+    assert env["CUSTOM_TOKEN"] == "test-token"
+    assert "TICKFLOW_API_KEY" not in env

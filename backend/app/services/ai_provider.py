@@ -685,6 +685,23 @@ def _openai_client(api_key: str, timeout: float):
     )
 
 
+async def _probe_codex_cli(*, model: str = "", timeout: float = 90.0) -> str:
+    """Codex CLI 真实连通性探测: 跑一次最小 exec 验证命令与登录态。
+
+    旧实现只验 `codex --version` — 命令存在但未登录 (auth.json 缺失) 时
+    「测试连接」通过、实际调用全 401。探测与正式调用共用 _run_codex_cli,
+    鉴权/端点/模型问题在测试阶段即暴露。
+    """
+    if not codex_cli_available():
+        raise RuntimeError("Codex CLI 不可用: 未找到可运行的 codex 命令, 请先安装 Codex CLI")
+    return await _run_codex_cli(
+        [{"role": "user", "content": "Reply exactly: OK"}],
+        max_tokens=16,
+        timeout=timeout,
+        model_override=model,
+    )
+
+
 async def probe_ai_config(
     *,
     provider: str,
@@ -706,9 +723,7 @@ async def probe_ai_config(
     模型可用); 传输层异常原样抛出, 由调用方格式化后回报。
     """
     if provider == CODEX_CLI_PROVIDER:
-        if not codex_cli_available():
-            raise RuntimeError("Codex CLI 不可用: 未找到可运行的 codex 命令")
-        return ""
+        return await _probe_codex_cli(model=model)
     if not api_key:
         raise RuntimeError("未配置 API Key")
     if not base_url:
@@ -935,6 +950,7 @@ async def _run_codex_cli(
     *,
     max_tokens: int | None,
     timeout: float,
+    model_override: str | None = None,
 ) -> str:
     prompt = _codex_prompt(messages, max_tokens=max_tokens)
     run_path = Path(tempfile.mkdtemp(prefix="tickflow-codex-run-"))
@@ -944,7 +960,10 @@ async def _run_codex_cli(
         codex_home_path.mkdir()
         workspace_path.mkdir()
         output_path = codex_home_path / "last-message.txt"
-        _prepare_codex_home(codex_home_path)
+        if model_override is None:
+            _prepare_codex_home(codex_home_path)
+        else:
+            _prepare_codex_home(codex_home_path, model_override=model_override)
 
         # 不传 --ephemeral: 老版本 codex(如 0.58)无此参数, 传了直接报
         # unexpected argument; 会话隔离已由一次性临时 CODEX_HOME 保证(跑完即删)。
@@ -959,7 +978,7 @@ async def _run_codex_cli(
             "--output-last-message",
             str(output_path),
         ]
-        model = current_ai_model().strip()
+        model = (current_ai_model() if model_override is None else model_override).strip()
         if model:
             args.extend(["--model", model])
         args.extend(["--cd", str(workspace_path), "-"])
@@ -1009,7 +1028,7 @@ def _run_codex_process(
 
 
 def _codex_process_env(codex_home_path: Path) -> dict[str, str]:
-    """Pass only OS, locale, certificate, and proxy settings to Codex."""
+    """Pass OS settings and the explicitly configured provider credential to Codex."""
     env: dict[str, str] = {}
     seen: set[str] = set()
     for name in _CODEX_ENV_ALLOWLIST:
@@ -1020,6 +1039,13 @@ def _codex_process_env(codex_home_path: Path) -> dict[str, str]:
         if value:
             env[name] = value
             seen.add(normalized)
+    provider = _active_codex_provider(_read_codex_config())
+    if provider:
+        key = provider[1].get("env_key")
+        if isinstance(key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
     env["NO_COLOR"] = "1"
     env["CODEX_HOME"] = str(codex_home_path)
     return env
@@ -1167,20 +1193,20 @@ def _resolve_windows_desktop_codex() -> str | None:
     return str(newest)
 
 
-def _prepare_codex_home(target: Path) -> None:
+def _prepare_codex_home(target: Path, *, model_override: str | None = None) -> None:
     """Create an isolated CODEX_HOME that reuses auth but not fragile config."""
     source = _codex_home()
     auth_file = source / "auth.json"
     if auth_file.exists():
         shutil.copy2(auth_file, target / "auth.json")
-    _write_compatible_codex_config(target / "config.toml")
+    _write_compatible_codex_config(target / "config.toml", model_override=model_override)
 
 
 def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def _write_compatible_codex_config(path: Path) -> None:
+def _write_compatible_codex_config(path: Path, *, model_override: str | None = None) -> None:
     config = _read_codex_config()
     lines: list[str] = []
     active_provider = _active_codex_provider(config)
@@ -1192,7 +1218,9 @@ def _write_compatible_codex_config(path: Path) -> None:
     if isinstance(openai_base_url, str) and openai_base_url:
         lines.append(_toml_string("openai_base_url", openai_base_url))
 
-    model = current_ai_model() or normalize_codex_model(str(config.get("model") or ""))
+    model = (current_ai_model() if model_override is None else model_override) or normalize_codex_model(
+        str(config.get("model") or "")
+    )
     if model:
         lines.append(_toml_string("model", model))
 
@@ -1209,7 +1237,7 @@ def _write_compatible_codex_config(path: Path) -> None:
         provider_name, provider = active_provider
         lines.append("")
         lines.append(f"[model_providers.{_toml_key(provider_name)}]")
-        for key in ("name", "base_url", "wire_api", "experimental_bearer_token"):
+        for key in ("name", "base_url", "wire_api", "experimental_bearer_token", "env_key"):
             value = provider.get(key)
             if isinstance(value, str) and value:
                 lines.append(_toml_string(key, value))
