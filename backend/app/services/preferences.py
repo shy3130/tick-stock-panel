@@ -311,40 +311,54 @@ def _allowed_data_providers() -> set[str]:
         return set(_ALLOWED_DATA_PROVIDERS)
 
 
+def _validated_provider(raw: str, pref_key: str) -> str:
+    """数据源偏好白名单校验。非法/已卸载的源回退 tickflow 并告警。
+
+    静默回退曾让「配了 fuyao 却全程走免费档」无从排查 (fuyao 事件的
+    定位难点之一): 回退必须留痕。
+    """
+    if raw in _allowed_data_providers():
+        return raw
+    logger.warning(
+        "数据源偏好 %s=%r 不在可用列表 %s, 回退 tickflow",
+        pref_key, raw, sorted(_allowed_data_providers()))
+    return "tickflow"
+
+
 def get_daily_data_provider() -> str:
     provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "daily_data_provider")
 
 
 def get_adj_factor_provider() -> str:
     # 「跟随日K」(same_as_daily) 特殊值已下线: 存量配置里的旧值按非法值回退 tickflow
     provider = str(load().get("adj_factor_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "adj_factor_provider")
 
 
 def get_minute_data_provider() -> str:
     provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "minute_data_provider")
 
 
 def get_full_minute_data_provider() -> str:
     provider = str(load().get("full_minute_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "full_minute_data_provider")
 
 
 def get_depth5_data_provider() -> str:
     provider = str(load().get("depth5_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "depth5_data_provider")
 
 
 def get_realtime_data_provider() -> str:
     provider = str(load().get("realtime_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "realtime_data_provider")
 
 
 def get_financial_provider() -> str:
     provider = str(load().get("financial_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return _validated_provider(provider, "financial_data_provider")
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
