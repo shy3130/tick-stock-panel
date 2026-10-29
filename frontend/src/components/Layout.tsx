@@ -667,6 +667,8 @@ export function Layout() {
     const fresh = await qc.fetchQuery({
       queryKey: QK.quoteStatus,
       queryFn: api.quoteStatus,
+      // 刚切换到 fuyao 等源时, 全局 staleTime 内仍可能缓存旧源的权限。
+      staleTime: 0,
     })
     if (!fresh.realtime_allowed) {
       toast('当前数据源无实时行情能力, 请先配置数据源', 'error')

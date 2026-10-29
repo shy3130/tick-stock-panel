@@ -373,7 +373,10 @@ function DataSourceStep({ onNext, onBack }: { onNext: () => void; onBack: () => 
       realtime_data_provider: 'fuyao',
       adj_factor_provider: 'fuyao',
     }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.quoteStatus })
+    },
   })
 
   const rows: SourceRow[] = [
