@@ -4922,6 +4922,8 @@ export interface DataStatus {
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string
+  /** 预热/同步/修复期间统计暂不可用或仅为旧缓存, 空值不代表无数据。 */
+  stats_pending?: boolean
   indicators_ready?: boolean
 }
 

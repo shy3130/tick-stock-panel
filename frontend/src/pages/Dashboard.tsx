@@ -20,18 +20,16 @@ import { useDashboardLayout } from '@/components/dashboard/useDashboardLayout'
 import { DEFAULT_LAYOUT, widgetDef, type WidgetCtx } from '@/components/dashboard/registry'
 import { cloneItems, GRID_COLS, type WidgetType } from '@/components/dashboard/layout'
 
-/** 判断是否处于"指标预热中" — 后端 busy 降级会把 status 表统计置 null。 */
-export function isWarmupPending(ds?: DataStatus): boolean {
-  return ds?.indicators_ready === false
+/** 兼容旧后端的预热标志; 同步/自动修复也会使统计暂不可用。 */
+export function isDataStatusPending(ds?: DataStatus): boolean {
+  return ds?.stats_pending === true || ds?.indicators_ready === false
 }
 
 /** 无本地数据判定: enriched/daily 交易日均为 0 才算无数据。
- *  预热中 (indicators_ready=false) 后端 /status 走 busy 降级, stale 缓存为空时
- *  两表返回 null — 那是"未知"而非"无数据", 必须等预热完成再判; 否则升级后
- *  有数据的老用户启动预热期即被误弹"立即获取数据" (v0.3.20 回归)。 */
+ *  预热/同步/修复期间的 null 是未知态, 必须等真实统计就绪再判。 */
 export function resolveHasNoData(ds?: DataStatus): boolean {
   if (!ds) return false
-  if (isWarmupPending(ds)) return false
+  if (isDataStatusPending(ds)) return false
   return (ds.enriched?.trading_days ?? 0) === 0 && (ds.daily?.trading_days ?? 0) === 0
 }
 
@@ -74,11 +72,10 @@ export function Dashboard() {
   }, [dashItems, setDashItems])
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
-  // 预热中每 5s 轮询: 预热完成后 busy 解除, /status 恢复真实聚合,
-  // 前端才能拿到非 null 的 daily/enriched 结束"未知"态 (staleTime 不拦 interval)
+  // 统计暂不可用时持续重查, 同步/自动修复结束后恢复真实统计并停止轮询。
   const dataStatus = useDataStatus({
     staleTime: 60_000,
-    refetchInterval: (q: any) => (isWarmupPending(q.state.data) ? 5_000 : false),
+    refetchInterval: (q: any) => (isDataStatusPending(q.state.data) ? 5_000 : false),
   })
   const overview = useQuery({
     queryKey: QK.overviewMarket(selectedDate),
@@ -110,7 +107,7 @@ export function Dashboard() {
     ?.replace(/（.*?）|\(.*?\)/g, '').trim() || activeProvider
   // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
   // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据;
-  // 预热中两表为 null 时不算无数据 (见 resolveHasNoData)
+  // 统计暂不可用时不算无数据 (见 resolveHasNoData)
   const ds = dataStatus.data
   const hasNoData = resolveHasNoData(ds)
 

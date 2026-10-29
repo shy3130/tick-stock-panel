@@ -114,5 +114,41 @@ def test_status_endpoint_busy_skips_aggregates(monkeypatch, clean_caches, tmp_pa
         monkeypatch.setattr(data_api, f"_safe_aggregate_{fn}", _boom)
     res = data_api.status(req)
     assert res["indicators_ready"] is False
+    assert res["stats_pending"] is True
     assert res["checked_at"]
     assert res["daily"] is None and res["minute"] is None
+
+
+@pytest.mark.parametrize("job_status", ["pending", "running"])
+def test_status_marks_cold_stats_pending_until_job_finishes(
+    monkeypatch, clean_caches, tmp_path, job_status,
+):
+    """预热已完成但同步/修复仍在运行时, null 统计不代表本地无数据。"""
+    for table in ("kline_daily", "kline_daily_enriched"):
+        (tmp_path / table / "date=2026-10-28").mkdir(parents=True)
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        repo=repo, scheduler=None, indicators_ready=True,
+    )))
+    monkeypatch.setattr(job_store, "active_id", lambda: "repair-job")
+    monkeypatch.setattr(job_store, "get", lambda jid: {"status": job_status})
+    calls = []
+
+    def aggregate():
+        calls.append(1)
+        return {"trading_days": 240}
+
+    monkeypatch.setattr(data_api, "_safe_aggregate_daily", lambda repo: aggregate())
+    monkeypatch.setattr(data_api, "_safe_aggregate_enriched", lambda repo: aggregate())
+    busy = data_api.status(req)
+    assert busy["indicators_ready"] is True
+    assert busy["stats_pending"] is True
+    assert busy["daily"] is None and busy["enriched"] is None
+    assert calls == []
+
+    monkeypatch.setattr(job_store, "get", lambda jid: {"status": "succeeded"})
+    ready = data_api.status(req)
+    assert ready["stats_pending"] is False
+    assert ready["daily"]["trading_days"] == 240
+    assert ready["enriched"]["trading_days"] == 240
+    assert len(calls) == 2
