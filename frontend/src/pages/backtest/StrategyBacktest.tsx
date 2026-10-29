@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers, BookmarkPlus, Download, Filter, Star, TrendingUp, CalendarRange } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers, BookmarkPlus, Download, Filter, Star, TrendingUp, CalendarRange, RefreshCw } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -1242,7 +1242,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     }
   }, [backtestTask])
 
-  const handleRun = () => {
+  const handleRun = (force = false) => {
     if (!selectedStrategy || backtestDataUnavailable) return
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
@@ -1277,6 +1277,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
             ...(regimeMinScore !== '' ? { min_score: Number(regimeMinScore) } : {}),
           }
         : null,
+      force,
     })
   }
 
@@ -1296,7 +1297,9 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     mutationFn: () => api.regimeRecompute(regimeGapStart ?? undefined, end || undefined),
     onSuccess: data => {
       toast(`环境数据补算完成 (新增 ${data.computed} 天)，自动重新回测`, 'success')
-      handleRun()
+      // 数据已变, 必须 force: 已失败任务的 error 同样被 5 分钟任务缓存保留,
+      // 不带 force 会命中同参数旧 job 直接重放补算前的报错
+      handleRun(true)
     },
     onError: e => toast(`环境数据补算失败 · ${String((e as Error)?.message || e)}`, 'error'),
   })
@@ -2128,19 +2131,32 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
             停止回测
           </button>
         ) : (
-          <button
-            onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
-            className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
-              bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
-              transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
-              disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
-          >
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/18 ring-1 ring-white/25 transition-transform group-hover:scale-105">
-              <Play className="h-3.5 w-3.5 translate-x-px fill-current" />
-            </span>
-            <span className="text-sm font-semibold tracking-wide">运行回测</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleRun()}
+              disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
+              className="group min-w-0 flex-1 inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
+                bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
+                transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
+                disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/18 ring-1 ring-white/25 transition-transform group-hover:scale-105">
+                <Play className="h-3.5 w-3.5 translate-x-px fill-current" />
+              </span>
+              <span className="text-sm font-semibold tracking-wide">运行回测</span>
+            </button>
+            <button
+              onClick={() => handleRun(true)}
+              disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
+              title="忽略同参数结果缓存 (保留 5 分钟), 强制重新计算"
+              className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-btn border border-border
+                bg-surface px-3 py-2.5 text-sm font-medium text-secondary transition-colors duration-150 ease-smooth
+                hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              强制重跑
+            </button>
+          </div>
         )}
       </section>
 

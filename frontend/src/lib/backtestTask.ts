@@ -214,6 +214,8 @@ export function startBacktest(params: {
   asset_type?: 'stock' | 'etf'
   minute_fill?: boolean
   regime_filter?: { states?: string[]; min_score?: number } | null
+  /** 忽略服务端同参数任务的结果缓存 (5 分钟), 必然重新计算; 重连/取消按 qs 对齐同一任务 */
+  force?: boolean
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -248,6 +250,7 @@ export function startBacktest(params: {
     asset_type: params.asset_type,
     minute_fill: params.minute_fill,
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
+    force: params.force ? 1 : undefined,
   })
 
   // 存 reconnect 信息 (刷新后用) + 上报注册表 (其他设备可接回)

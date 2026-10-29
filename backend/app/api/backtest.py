@@ -514,8 +514,9 @@ def _make_job_key(
     regime_filter: str | None = None,
     position_policy: str | None = None,
     position_policy_params: str | None = None,
+    force: bool = False,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}|{regime_filter}|{position_policy}|{position_policy_params}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}|{regime_filter}|{position_policy}|{position_policy_params}|force={force}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -546,12 +547,15 @@ async def strategy_stream(
     asset_type: str = "stock",
     minute_fill: bool = False,
     regime_filter: str | None = None,
+    force: bool = False,
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
     - 相同参数的任务只启动一次, 多次连接订阅同一个任务
     - 断开连接不会取消任务 (除非显式调用 cancel)
     - 结果保留 5 分钟供重连
+    - force=1: 掺入 job_key 使其不命中已完成任务的缓存, 必然重算
+      (重连/取消仍按 qs 重算同一 key, 语义不变)
 
     事件类型:
       - progress: {day, total, date, equity}
@@ -591,6 +595,7 @@ async def strategy_stream(
         regime_filter=regime_filter,
         position_policy=position_policy,
         position_policy_params=position_policy_params,
+        force=force,
     )
 
     _cleanup_stale_jobs()
@@ -740,6 +745,9 @@ async def strategy_cancel(request: Request):
         # 可选成本参数: 缺省或空串 → None (与 stream 侧 float | None 口径一致, 保证 job_key 对齐)。
         v = _get(key)
         return float(v) if v else None
+    def _get_opt_bool(key: str) -> bool:
+        # 与 FastAPI 查询参数 bool 解析口径一致 ("1"/"true" 为真, 其余为假)
+        return _get(key).lower() in ("1", "true")
     job_key = _make_job_key(
         _get("strategy_id"),
         _get("symbols") or None,
@@ -761,8 +769,11 @@ async def strategy_cancel(request: Request):
         commission_pct=_get_opt_float("commission_pct"),
         stamp_tax_pct=_get_opt_float("stamp_tax_pct"),
         asset_type=_get("asset_type", "stock"),
+        minute_fill=_get_opt_bool("minute_fill"),
+        regime_filter=_get("regime_filter") or None,
         position_policy=_get("position_policy") or None,
         position_policy_params=_get("position_policy_params") or None,
+        force=_get("force") == "1",
     )
     # 持锁读任务表: 与 _cleanup_stale_jobs 的 pop、stream 的写入互斥
     with _jobs_lock:
