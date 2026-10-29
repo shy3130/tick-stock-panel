@@ -690,7 +690,7 @@ async def _probe_codex_cli(*, model: str = "", timeout: float = 90.0) -> str:
 
     旧实现只验 `codex --version` — 命令存在但未登录 (auth.json 缺失) 时
     「测试连接」通过、实际调用全 401。探测与正式调用共用 _run_codex_cli,
-    鉴权/端点/模型问题在测试阶段即暴露。
+    鉴权/端点/模型问题在测试阶段即暴露, 失败信息含登录指引。
     """
     if not codex_cli_available():
         raise RuntimeError("Codex CLI 不可用: 未找到可运行的 codex 命令, 请先安装 Codex CLI")
@@ -945,6 +945,30 @@ def _compact_error_text(text: str) -> str:
     return text[:500]
 
 
+_CODEX_AUTH_FAILURE_RE = re.compile(
+    r"401|unauthorized|not logged in|missing bearer|login required", re.IGNORECASE
+)
+
+
+def _codex_missing_auth_hint() -> str:
+    """auth.json 缺失时的登录指引; 存在则返回空串。
+
+    新版 Codex 凭证可存系统钥匙串 (cli_auth_credentials_store=keyring/auto),
+    Codex Desktop 登录不落 auth.json; 隔离 CODEX_HOME 只复制 auth.json, 这类
+    登录态复制不到, 用户面对裸 401/超时无从下手。
+    """
+    try:
+        if (_codex_home() / "auth.json").exists():
+            return ""
+    except OSError:
+        pass
+    return (
+        "本机 Codex 登录态不可用: ~/.codex/auth.json 不存在 (新版 Codex 凭证可能存在"
+        "系统钥匙串, 隔离运行无法复用)。请在终端执行 codex login, 或 "
+        "printenv OPENAI_API_KEY | codex login --with-api-key 生成 auth.json 后重试"
+    )
+
+
 async def _run_codex_cli(
     messages: Sequence[Message],
     *,
@@ -953,6 +977,7 @@ async def _run_codex_cli(
     model_override: str | None = None,
 ) -> str:
     prompt = _codex_prompt(messages, max_tokens=max_tokens)
+    _sweep_stale_codex_run_dirs()
     run_path = Path(tempfile.mkdtemp(prefix="tickflow-codex-run-"))
     try:
         codex_home_path = run_path / "codex-home"
@@ -985,20 +1010,31 @@ async def _run_codex_cli(
 
         env = _codex_process_env(codex_home_path)
 
-        returncode, stdout, stderr = await asyncio.to_thread(
-            _run_codex_process,
-            args,
-            prompt,
-            env,
-            timeout,
-        )
+        try:
+            returncode, stdout, stderr = await asyncio.to_thread(
+                _run_codex_process,
+                args,
+                prompt,
+                env,
+                timeout,
+            )
+        except RuntimeError as exc:
+            # 调用超时: 无凭证时 codex 会反复重试表现为长时间挂起 — auth.json
+            # 缺失时附登录指引, 与 401 失败路径同一提示。
+            hint = _codex_missing_auth_hint()
+            raise RuntimeError(f"{exc}\n{hint}" if hint else str(exc)) from None
 
         out = _clean_process_text(stdout)
         err = _clean_process_text(stderr)
         final_message = _read_output_file(output_path)
         if returncode != 0:
             detail = err or out or f"exit code {returncode}"
-            raise RuntimeError(f"Codex CLI 调用失败: {detail[-1200:]}")
+            message = f"Codex CLI 调用失败: {detail[-1200:]}"
+            if _CODEX_AUTH_FAILURE_RE.search(detail):
+                hint = _codex_missing_auth_hint()
+                if hint:
+                    message = f"{message}\n{hint}"
+            raise RuntimeError(message)
         result = final_message or out
         if not result:
             raise RuntimeError("Codex CLI 未返回内容")
@@ -1093,6 +1129,32 @@ def _make_writable_and_retry(
         raise exc_info[1] from None
 
 
+_stale_sweep_done = False
+
+
+def _sweep_stale_codex_run_dirs(*, max_age_s: float = 3600.0, force: bool = False) -> None:
+    """清理历史进程遗留的 tickflow-codex-run-* 临时目录 (每进程一次)。
+
+    进程退出/请求取消可能中断 finally 清理, 留下空目录壳长期累积 (实测
+    每次失败调用都可能漏一个)。新任务开跑前扫一遍 tempdir; 只动超过
+    max_age_s 的同前缀目录, 不碰并发进程的活动目录。
+    """
+    global _stale_sweep_done
+    if _stale_sweep_done and not force:
+        return
+    _stale_sweep_done = True
+    try:
+        cutoff = time.time() - max_age_s
+        for path in Path(tempfile.gettempdir()).glob("tickflow-codex-run-*"):
+            try:
+                if path.is_dir() and path.stat().st_mtime < cutoff:
+                    _remove_tree_best_effort(path)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
 def _codex_prompt(messages: Sequence[Message], *, max_tokens: int | None) -> str:
     parts = [
         "You are Tick Stock Panel's local AI provider.",
@@ -1140,6 +1202,8 @@ def _resolve_command(command: str) -> str | None:
         resolved = shutil.which(f"{command}.cmd")
     if not resolved and sys.platform == "win32":
         resolved = _resolve_windows_codex_command(command)
+    if not resolved and sys.platform == "darwin":
+        resolved = _resolve_macos_codex_command()
     return resolved
 
 
@@ -1169,6 +1233,39 @@ def _resolve_windows_codex_command(command: str) -> str | None:
             candidate = directory / name
             if candidate.exists():
                 return str(candidate)
+    return None
+
+
+# macOS GUI 启动的应用只继承最小 PATH (/usr/bin:/bin:...), npm/brew/官方
+# 安装脚本装的 codex 与 ChatGPT.app 内置 CLI 都不在其中 — 与 Windows 的
+# _resolve_windows_desktop_codex 对称, 显式探测常见落位。测试可打桩覆盖。
+_MACOS_SYSTEM_APPLICATIONS = Path("/Applications")
+_MACOS_CODEX_BIN_DIRS = (
+    Path("/opt/homebrew/bin"),
+    Path("/usr/local/bin"),
+)
+
+
+def _resolve_macos_codex_command() -> str | None:
+    """Find Codex CLI in common macOS locations when the process PATH misses it."""
+    candidates: list[Path] = [Path.home() / ".local" / "bin" / "codex"]
+    for bin_dir in _MACOS_CODEX_BIN_DIRS:
+        candidates.append(bin_dir / "codex")
+    # Codex Desktop (ChatGPT.app) 内置 CLI — 与 ~/.codex 登录态配套
+    for apps in (_MACOS_SYSTEM_APPLICATIONS, Path.home() / "Applications"):
+        cli_root = apps / "ChatGPT.app" / "Contents" / "Resources" / "codex-cli"
+        candidates.append(cli_root / "CodexCLI.app" / "Contents" / "MacOS" / "codex")
+        try:
+            if cli_root.is_dir():
+                candidates.extend(sorted(cli_root.glob("*.app/Contents/MacOS/codex")))
+        except OSError:
+            continue
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
     return None
 
 

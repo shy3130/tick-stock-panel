@@ -172,6 +172,7 @@ async def test_codex_probe_uses_draft_model_and_default_without_saved_provider(m
     monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
     monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "saved-other-provider")
     monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
+    monkeypatch.setattr(ai_provider, "_sweep_stale_codex_run_dirs", lambda: None)
     (tmp_path / "config.toml").write_text('model = "local-default"\n')
 
     def fake_process(args, prompt, env, timeout):
