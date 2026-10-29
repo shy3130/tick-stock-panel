@@ -109,3 +109,6 @@ TickFlowStockPanel.app/
 TickFlowStockPanel-macos*.dmg
 TickFlowStockPanel-macos*.zip
 reports/cursor_tickflow_pro_rate_limit_p0.bundle
+
+# 协议变更工作文档 (含贡献者个人信息, 自述不入库 — CONTRIBUTING §8/§14.4)
+relicensing/
