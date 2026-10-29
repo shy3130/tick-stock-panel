@@ -107,6 +107,32 @@ def _last_available_rows(df: pl.DataFrame, cutoff: date) -> pl.DataFrame:
     )
 
 
+def _rescue_legacy_secrets(legacy_dir: Path, data_dir: Path) -> None:
+    """整体迁移被跳过时, 单独捞回新目录缺失的 user_data/secrets.json。
+
+    场景: macOS ≤0.3.6 用户升级后先跑过新版 (新 data 已有行情), 再从废纸篓
+    把旧包数据恢复进新包 — has_new_data 守卫会跳过整目录搬迁, 但 secrets.json
+    (AI/数据源密钥) 是用户重新配置成本最高的文件, 旧有新无时应单独找回。
+    任何异常只记警告, 绝不影响启动。
+    """
+    import shutil
+
+    source = legacy_dir / "user_data" / "secrets.json"
+    dest = data_dir / "user_data" / "secrets.json"
+    if not source.is_file() or dest.exists():
+        return
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not data:
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # copy2 保留源文件权限位 (secrets.json 为 0600)
+        shutil.copy2(source, dest)
+        logger.info("rescued legacy secrets.json %s -> %s", source, dest)
+    except (OSError, ValueError) as e:
+        logger.warning("legacy secrets.json rescue skipped: %s", e)
+
+
 class DataStore:
     """唯一的存储入口 — 进程启动时创建。"""
 
@@ -195,6 +221,8 @@ class DataStore:
                     self.data_dir.rglob("*.jsonl")
                 )
                 if has_new_data:
+                    # 整体搬迁会被守卫跳过, 但密钥文件单独捞回 (见函数 docstring)
+                    _rescue_legacy_secrets(legacy_dir, self.data_dir)
                     logger.info(
                         "legacy data dir %s exists but new %s already has data, skip migration",
                         legacy_dir, self.data_dir,

@@ -7,13 +7,13 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 from app import config as config_mod
 from app.config import _user_data_root
 from app.tickflow.repository import DataStore
-
 
 # ── 路径解析 ─────────────────────────────────────────────────────────
 
@@ -141,3 +141,67 @@ def test_dev_mode_never_migrates(tmp_path, monkeypatch):
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
     assert legacy.exists()
     assert list(new_dir.iterdir()) == []
+
+
+# ── 跳过整体迁移时单独捞回 secrets.json ───────────────────────────────
+
+def _setup_skip_migration(tmp_path):
+    """构造 has_new_data=True 场景: 新目录已有 parquet, 旧包数据还在。"""
+    new_dir = tmp_path / "newdata"
+    (new_dir / "kline_daily_enriched").mkdir(parents=True)
+    (new_dir / "kline_daily_enriched" / "part.parquet").write_bytes(b"x")
+    (new_dir / "user_data").mkdir()
+    bundle_data = tmp_path / "TSP.app" / "Contents" / "MacOS" / "data"
+    _make_real_data(bundle_data)
+    return new_dir, bundle_data
+
+
+def test_migration_rescues_secrets_when_new_has_data(tmp_path, monkeypatch):
+    """整体搬迁被跳过, 但新目录缺失的 secrets.json (密钥) 单独捞回。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text(
+        '{"ai_provider": "codex_cli", "ai_codex_model": "gpt-5.6-sol"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    rescued = new_dir / "user_data" / "secrets.json"
+    assert rescued.exists()
+    assert json.loads(rescued.read_text(encoding="utf-8"))["ai_provider"] == "codex_cli"
+    # 守卫语义不变: 旧目录整体保留, 新目录已有行情不被覆盖
+    assert (bundle_data / "user_data" / "secrets.json").exists()
+    assert (new_dir / "kline_daily_enriched" / "part.parquet").exists()
+
+
+def test_migration_no_rescue_when_dest_secrets_exists(tmp_path, monkeypatch):
+    """新目录已有 secrets.json (用户已重新配置) → 绝不覆盖。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text('{"legacy": 1}', encoding="utf-8")
+    (new_dir / "user_data" / "secrets.json").write_text('{"mine": 1}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert (new_dir / "user_data" / "secrets.json").read_text(encoding="utf-8") == '{"mine": 1}'
+
+
+def test_migration_rescue_skips_invalid_secrets(tmp_path, monkeypatch):
+    """旧 secrets.json 非法/为空 → 跳过捞回, 不制造坏文件。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text("not-json{{", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert not (new_dir / "user_data" / "secrets.json").exists()
