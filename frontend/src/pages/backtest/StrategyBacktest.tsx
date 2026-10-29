@@ -1147,7 +1147,10 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     ? dataStatus.data?.etf_enriched
     : dataStatus.data?.enriched
   const earliestDate = backtestDataStatus?.earliest_date ?? null
-  const backtestDataUnavailable = dataStatus.isSuccess && !earliestDate
+  // 预热/同步/修复期间统计为 null 是未知态 (stats_pending 契约, 同 Dashboard.isDataStatusPending),
+  // 不得误判成"缺数据"禁用回测 — 等真实统计就绪再判
+  const statsPending = dataStatus.data?.stats_pending === true || dataStatus.data?.indicators_ready === false
+  const backtestDataUnavailable = dataStatus.isSuccess && !statsPending && !earliestDate
   const backtestDataLabel = assetType === 'etf' ? 'ETF 指标数据' : '股票指标数据'
 
   const resetConfigFromDetail = (detail: StrategyDetail) => {
