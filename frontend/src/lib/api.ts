@@ -1615,6 +1615,8 @@ export interface MiningLockStatus {
     host?: string
     schema_version?: number
   } | null
+  /** 持有者线索来源: 锁文件内容 / 旧格式锁经操作系统扫描反查 */
+  holder_source?: 'file' | 'os-scan' | null
   holder_alive: boolean
   pid_consistent: boolean
   active_runs: number

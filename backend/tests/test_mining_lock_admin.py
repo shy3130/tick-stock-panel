@@ -25,6 +25,7 @@ from app.services.mining_lock_admin import (
 from app.services.mining_process_lock import (
     MiningProcessLock,
     MiningProcessLockError,
+    locate_lock_holder_pid,
     probe_lock_held,
     read_lock_holder,
 )
@@ -36,6 +37,19 @@ import sys, time
 from app.services.mining_process_lock import MiningProcessLock
 lock = MiningProcessLock(sys.argv[1])
 lock.acquire(role="worker")
+print("HELD", flush=True)
+time.sleep(600)
+"""
+
+# 旧版 (v0.2 时代) 锁写入格式: 只有 b"0", 不含 pid — 升级前启动的残留进程
+# 就是这样持锁的, 新版面板无法从内容定位持有者。
+_HOLDER_SCRIPT_LEGACY = """
+import fcntl, sys, time
+path = sys.argv[1] + "/.mining_process.lock"
+stream = open(path, "a+b")
+stream.write(b"0")
+stream.flush()
+fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
 print("HELD", flush=True)
 time.sleep(600)
 """
@@ -55,6 +69,22 @@ def _spawn_holder(data_dir: Path) -> subprocess.Popen:
     )
     line = proc.stdout.readline()
     assert line.strip() == "HELD", f"外部持锁进程未就绪: {line!r} {proc.stderr.read()}"
+    return proc
+
+
+def _spawn_legacy_holder(data_dir: Path) -> subprocess.Popen:
+    """旧格式 (b"0") 持锁进程: 模拟升级前启动、升级后仍残留的旧版后端。"""
+    env = {**os.environ, "PYTHONPATH": str(_BACKEND_ROOT)}
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _HOLDER_SCRIPT_LEGACY, str(data_dir)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(_BACKEND_ROOT),
+    )
+    line = proc.stdout.readline()
+    assert line.strip() == "HELD", f"旧格式持锁进程未就绪: {line!r} {proc.stderr.read()}"
     return proc
 
 
@@ -302,3 +332,72 @@ def test_lock_endpoints_full_recovery_loop(tmp_path):
         assert "降级" not in resp.json().get("detail", "")
     finally:
         _kill(proc)
+
+
+# ── 旧格式锁的 OS 层面持有者定位 (用户反馈: 升级后挖掘一直不可用) ──────────
+
+
+@_POSIX
+def test_legacy_lock_holder_located_via_os_scan(tmp_path):
+    """旧格式锁 (b"0", 无 pid) 也能从系统层面定位持有者。
+
+    用户场景: 升级前启动的旧版后端进程残留 (仍持有 flock, 内容为旧格式),
+    新版面板无法从内容定位 → 一直提示"请手动结束后端残留进程"。
+    """
+    proc = _spawn_legacy_holder(tmp_path)
+    try:
+        assert read_lock_holder(tmp_path) is None
+        assert probe_lock_held(tmp_path) is True
+
+        located = locate_lock_holder_pid(tmp_path)
+        assert located == proc.pid
+
+        status = lock_status(tmp_path)
+        assert status["held"] is True
+        assert status["holder_source"] == "os-scan"
+        assert status["holder"] is not None
+        assert status["holder"]["pid"] == proc.pid
+        assert status["holder_alive"] is True
+        assert status["force_releasable"] is True, status["reason"]
+    finally:
+        _kill(proc)
+
+
+@_POSIX
+def test_legacy_lock_holder_force_release_takes_over(tmp_path):
+    """定位到旧格式持有者后, 既有的人工确认强制释放流程可完整恢复挖掘。"""
+    proc = _spawn_legacy_holder(tmp_path)
+    try:
+        lock = MiningProcessLock(tmp_path)
+        report = force_release(tmp_path, lock)
+        assert report["released"] is True
+        assert report["terminated_pid"] == proc.pid
+        assert report["reacquired"] is True
+        proc.wait(timeout=10)
+        assert lock_status(tmp_path)["mine"] is True
+        lock.release()
+    finally:
+        _kill(proc)
+
+
+@_POSIX
+def test_legacy_lock_holder_still_refused_while_mining_active(tmp_path):
+    """fail-closed 不放宽: 定位到持有者但仍有进行中挖掘运行/存储刚写入 → 拒绝。"""
+    proc = _spawn_legacy_holder(tmp_path)
+    try:
+        runs = tmp_path / "research" / "mining" / "runs" / "r1"
+        runs.mkdir(parents=True)
+        (runs / "manifest.json").write_text('{"status": "running"}', encoding="utf-8")
+
+        status = lock_status(tmp_path)
+        assert status["holder_source"] == "os-scan"
+        assert status["force_releasable"] is False
+        assert "进行中" in (status["reason"] or "")
+    finally:
+        _kill(proc)
+
+
+def test_locate_returns_none_when_lock_free(tmp_path):
+    """锁未被持有 (无进程打开) 时定位返回 None, 不误报持有者。"""
+    (tmp_path / ".mining_process.lock").write_bytes(b"0")
+    assert locate_lock_holder_pid(tmp_path) is None

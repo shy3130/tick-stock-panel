@@ -378,15 +378,20 @@ function MiningLockBanner() {
             <div className="mt-0.5 text-[11px] leading-4 text-secondary">
               {holder ? (
                 <>
+                  {data.holder_source === 'os-scan' ? '锁文件无持有者信息, 已通过系统扫描定位: ' : ''}
                   持有者 pid {holder.pid}
-                  {holder.role ? ` · ${holder.role === 'worker' ? '挖掘 worker 进程' : '后端实例'}` : ''}
+                  {holder.role === 'worker'
+                    ? ' · 挖掘 worker 进程'
+                    : holder.role === 'app'
+                      ? ' · 后端实例'
+                      : ''}
                   {idleMin != null ? ` · 挖掘存储已静默约 ${idleMin} 分钟` : ''}
                   {data.force_releasable
                     ? ' — 满足陈旧判定, 可强制释放'
                     : ` — 不可强制释放: ${data.reason}`}
                 </>
               ) : (
-                '锁文件为旧格式, 无法定位持有进程 — 请手动结束后端残留进程后重启面板'
+                '锁文件为旧格式且无法定位持有进程 — 请手动结束后端残留进程后重启面板'
               )}
             </div>
           </div>
@@ -721,7 +726,7 @@ export function MiningWorkbench() {
       return { recomputed, job }
     },
     onSuccess: ({ recomputed, job }) => {
-      for (const key of [QK.regimeLatest, QK.regimeCoverage, QK.regimeHistory()]) {
+      for (const key of [QK.regimeLatest, QK.regimeCoverage, QK.regimeHistoryPrefix]) {
         queryClient.invalidateQueries({ queryKey: key })
       }
       toast(recomputed.computed > 0 ? `环境补算完成 · 新增 ${recomputed.computed} 天，重新开始挖掘` : '环境数据已是最新，重新开始挖掘', 'success')
