@@ -205,3 +205,41 @@ def test_migration_rescue_skips_invalid_secrets(tmp_path, monkeypatch):
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
 
     assert not (new_dir / "user_data" / "secrets.json").exists()
+
+
+def test_migration_rescues_preferences_when_new_has_data(tmp_path, monkeypatch):
+    """skip 分支也要捞回 preferences.json: 偏好丢失会让 onboarding_completed
+    回落默认 False, 升级后全屏引导重弹 (「同步过数据却被要求获取数据」)。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "preferences.json").write_text(
+        '{"onboarding_completed": true, "nav_hidden": ["a"]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    rescued = new_dir / "user_data" / "preferences.json"
+    assert rescued.exists()
+    prefs = json.loads(rescued.read_text(encoding="utf-8"))
+    assert prefs["onboarding_completed"] is True
+    # 守卫语义不变: 旧目录整体保留
+    assert (bundle_data / "user_data" / "preferences.json").exists()
+
+
+def test_migration_no_rescue_when_dest_preferences_exists(tmp_path, monkeypatch):
+    """新目录已有 preferences.json (新版已在使用) → 绝不覆盖。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "preferences.json").write_text('{"legacy": true}', encoding="utf-8")
+    (new_dir / "user_data" / "preferences.json").write_text('{"mine": true}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert (new_dir / "user_data" / "preferences.json").read_text(encoding="utf-8") == '{"mine": true}'
