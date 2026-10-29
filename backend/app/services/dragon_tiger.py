@@ -88,9 +88,96 @@ def _boards_of(provider, board_type: str, iso: str | None) -> dict:
         "trade_date": data.get("trade_date"),
         "stock_count": data.get("stock_count"),
         "count": data.get("count"),
-        "stock_items": data.get("stock_items") or [],
-        "hot_money_items": data.get("hot_money_items") or [],
+        "stock_items": normalize_stock_items(data.get("stock_items") or []),
+        "hot_money_items": normalize_hot_money_items(data.get("hot_money_items") or []),
     }
+
+
+_TICKER_RE = re.compile(r"^(\d{6})(?:\.[A-Za-z]{2})?$")
+
+
+def derive_thscode(ticker: object) -> str | None:
+    """由 ticker 推导带市场后缀的 thscode (如 002731 → 002731.SZ)。
+
+    fuyao 对退市整理期股 / B 股返回的 thscode 可能为 null (ticker 有值),
+    不能把 null 透传给前端 (各消费方按 string 契约使用)。规则:
+      6xxxxx / 900xxx (沪B)         → .SH
+      0xxxxx / 3xxxxx / 200xxx(深B)  → .SZ
+      4xxxxx / 8xxxxx (北交所)       → .BJ
+    """
+    if not isinstance(ticker, str):
+        return None
+    raw = ticker.strip()
+    m = _TICKER_RE.match(raw)
+    if not m:
+        return None
+    if "." in raw:
+        return raw
+    code = m.group(1)
+    if code.startswith("900") or code[0] == "6":
+        return f"{code}.SH"
+    if code.startswith("200") or code[0] in ("0", "3"):
+        return f"{code}.SZ"
+    if code[0] in ("4", "8"):
+        return f"{code}.BJ"
+    return None
+
+
+def normalize_stock_items(items: object) -> list[dict]:
+    """榜单个股行规范化: thscode 缺失时由 ticker 推导, 两者都不可用则丢弃并告警。"""
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    dropped: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("thscode")
+        if not isinstance(code, str) or not code.strip():
+            derived = derive_thscode(item.get("ticker"))
+            if derived is None:
+                dropped.append(str(item.get("name") or item.get("ticker") or "?"))
+                continue
+            item = {**item, "thscode": derived}
+        out.append(item)
+    if dropped:
+        logger.warning(
+            "龙虎榜 %d 条标的缺少可识别代码 (thscode/ticker 均不可用), 已跳过: %s",
+            len(dropped), dropped[:5])
+    return out
+
+
+def normalize_hot_money_items(items: object) -> list[dict]:
+    """游资席位行: 席位本身无代码, 但关联股票 rows 必须带可用 thscode。"""
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for seat in items:
+        if not isinstance(seat, dict):
+            continue
+        rows = seat.get("rows")
+        if isinstance(rows, list):
+            seat = {**seat, "rows": normalize_stock_items(rows)}
+        out.append(seat)
+    return out
+
+
+def normalize_payload(payload: dict) -> dict:
+    """规范化整个龙虎榜容器 (新拉取与历史缓存读回共用)。"""
+    for board in ("all", "org"):
+        b = payload.get(board)
+        if isinstance(b, dict):
+            payload[board] = {
+                **b,
+                "stock_items": normalize_stock_items(b.get("stock_items") or []),
+            }
+    hot = payload.get("hot_money")
+    if isinstance(hot, dict):
+        payload["hot_money"] = {
+            **hot,
+            "hot_money_items": normalize_hot_money_items(hot.get("hot_money_items") or []),
+        }
+    return payload
 
 
 def _cache_path(data_dir: Path, d: date_cls) -> Path:
@@ -99,9 +186,11 @@ def _cache_path(data_dir: Path, d: date_cls) -> Path:
 
 def _load_cache(path: Path) -> dict | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    # 旧版本写入的缓存可能已含 thscode=null (fuyao 退市/B股数据), 读回时同样规范化
+    return normalize_payload(data) if isinstance(data, dict) else None
 
 
 def _store_cache(path: Path, payload: dict) -> None:

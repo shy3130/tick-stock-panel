@@ -749,7 +749,8 @@ export interface AiReviewReport {
 
 // ===== 龙虎榜 (fuyao 专有, 复盘页) =====
 export interface DragonTigerStockItem {
-  thscode: string
+  /** 后端已归一 (缺失时由 ticker 推导); 旧缓存/异常数据源可能为 null, 消费方需兜底 */
+  thscode: string | null
   ticker?: string | null
   name?: string | null
   change?: number | null      // 当日涨跌幅 (小数制)
