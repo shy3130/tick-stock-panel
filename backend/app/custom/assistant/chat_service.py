@@ -5,8 +5,9 @@ tools= 调用模型, 文本 delta 逐段推给前端; 模型请求工具时执�
 进入下一轮, 正文继续在同一个占位消息上追加。生成任务与事件消费通过
 asyncio.Queue 并行 — 用户在模型思考/取数期间就能看到足迹事件。
 
-失败语义 fail-closed: 无 Key / Codex CLI(无 tools 协议)在入口直接给
-error 事件, 不做纯文本降级; 工具执行错误按既有契约回填给模型继续。
+Codex CLI 通过结构化输出适配相同的工具循环, 每轮完成后产出正文。
+失败语义 fail-closed: 未配置或供应商协议失败时给 error 事件,
+不做纯文本降级; 工具执行错误按既有契约回填给模型继续。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from typing import Any
 
 from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import tools as assistant_tools
+from app.custom.assistant.codex import stream_codex_round
 from app.custom.assistant.prompt import build_system_prompt
 from app.custom.assistant.streaming import stream_openai_round
 from app.services.ai_provider import (
@@ -66,6 +68,8 @@ def _classify_exception(exc: Exception) -> dict[str, str]:
             "input_too_long",
             f"{text} 可开启新对话或缩短提问后重试。",
         )
+    if "Codex CLI" in text and "超时" in text:
+        return _error_event("timeout", text)
     if "超时" in text or "Timeout" in exc.__class__.__name__ or "连接" in text or "Connection" in exc.__class__.__name__:
         return _error_event("network", "AI 服务连接或超时失败, 请稍后重试或检查 AI Base URL / 网络。")
     return _error_event("model", text or exc.__class__.__name__)
@@ -161,15 +165,7 @@ async def chat_stream(
         yield _line({"type": "done"})
         return
 
-    if is_codex_cli_provider():
-        yield _line(_error_event(
-            "provider",
-            "当前 AI 供应商(Codex CLI)不支持工具调用, AI 助手需要 OpenAI 兼容模型。",
-            _SETTINGS_HINT,
-        ))
-        yield _line({"type": "done"})
-        return
-
+    stream_round = stream_codex_round if is_codex_cli_provider() else stream_openai_round
     truncated, was_truncated = _truncate_history(history)
     if not truncated:
         yield _line(_error_event("model", "对话历史为空, 请先输入问题。"))
@@ -272,7 +268,7 @@ async def chat_stream(
             while True:
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
-                async for event in stream_openai_round(req_messages, schemas, temperature=0.3, timeout=240.0):
+                async for event in stream_round(req_messages, schemas, temperature=0.3, timeout=240.0):
                     if event["type"] == "text":
                         round_text.append(event["delta"])
                         await queue.put({"type": "delta", "content": event["delta"]})

@@ -25,7 +25,6 @@ from app.services.ai_provider import (
     ai_configured,
     current_ai_model,
     current_ai_provider,
-    is_codex_cli_provider,
 )
 from app.services.ndjson_heartbeat import with_heartbeat
 
@@ -99,7 +98,7 @@ def build_router() -> APIRouter:
             "configured": configured,
             "provider": current_ai_provider(),
             "model": current_ai_model(),
-            "supports_tools": configured and not is_codex_cli_provider(),
+            "supports_tools": configured,
         }
 
     @router.get("/suggests")

@@ -312,6 +312,7 @@ const ERROR_TITLES: Record<string, string> = {
   input_too_long: '对话过长',
   rounds: '本轮调用达到上限',
   model: 'AI 服务出错',
+  timeout: 'AI 生成超时',
   network: '网络错误',
 }
 
