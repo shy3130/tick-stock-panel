@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api import definitions as definitions_api
 from app.api import strategy as strategy_api
 from app.factors import store as factor_store
 from app.factors.registry import unregister_factor
@@ -60,6 +61,7 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     loaded = factor_store.load_into_registry(tmp_path)
     app = FastAPI()
     app.include_router(strategy_api.router)
+    app.include_router(definitions_api.router)
     app.state.strategy_engine = StrategyEngine(strategy_dirs=[tmp_path / "strategies" / "custom"])
     yield TestClient(app)
     for fid in loaded:
@@ -128,3 +130,28 @@ def test_apply_rejects_out_of_scope(client: TestClient) -> None:
     )
     assert r.status_code == 400
     assert "不允许的条目" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("legacy_export", [False, True])
+def test_both_export_formats_import_through_current_api(client, tmp_path_factory, monkeypatch, legacy_export):
+    from app.config import settings
+
+    exported = (client.get("/api/strategies/custom_standalone/bundle") if legacy_export else
+                client.post("/api/definitions/resources/export", json={"resources": [{"kind": "strategy", "id": "custom_standalone"}]}))
+    assert exported.status_code == 200
+    destination = tmp_path_factory.mktemp("current_import")
+    monkeypatch.setattr(settings, "data_dir", destination)
+    client.app.state.strategy_engine = StrategyEngine(strategy_dirs=[destination / "strategies/custom"])
+    files = [("files", ("strategy.zip", exported.content, "application/zip"))]
+    preview = client.post("/api/definitions/resources/inspect", files=files)
+    assert preview.status_code == 200
+    body = preview.json()
+    assert not any(entry["issues"] for entry in body["entries"])
+    applied = client.post("/api/definitions/resources/apply", files=files, data={
+        "selected": json.dumps(body["roots"]), "overwrite": "[]", "revision": body["revision"],
+    })
+    assert applied.status_code == 200
+    assert applied.json()["imported"] == 3
+    assert client.app.state.strategy_engine.get("custom_standalone").file_path == destination / "strategies/custom/custom_standalone.py"
+    assert json.loads((destination / "user_data/custom_factors/uf_dep.json").read_text()) == UF_DEP
+    assert json.loads((destination / "user_data/strategy_overrides/custom_standalone.json").read_text()) == {"params": {"n": 5}}

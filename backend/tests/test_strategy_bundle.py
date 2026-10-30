@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import stat
 import zipfile
 from pathlib import Path
 
@@ -276,3 +277,40 @@ def test_bad_format_rejected(bundle_env):
     garbage = b"not a zip"
     with pytest.raises(strategy_bundle.StrategyBundleError):
         strategy_bundle.parse_bundle(garbage)
+
+
+def test_legacy_preview_resolves_dependencies_from_destination(bundle_env, engine, tmp_path_factory, monkeypatch):
+    from app.config import settings
+
+    blob = strategy_bundle.build_bundle(bundle_env, engine, "custom_missing")[0]
+    destination = tmp_path_factory.mktemp("local_dependencies")
+    monkeypatch.setattr(settings, "data_dir", destination)
+    _write(destination / "user_data/custom_factors/uf_gone.json", {**UF_DEP, "id": "uf_gone"})
+    _write(destination / "user_data/custom_signals/gone.json", {**SIG_DEP, "id": "gone", "conditions": [{"left": "close", "op": ">", "right": 0}]})
+    assert strategy_bundle.inspect_bundle(blob)["missing_deps"] == []
+
+
+def test_legacy_import_preserves_per_file_failure_reporting(bundle_env):
+    blob = _bundle_zip({
+        "strategies/custom/custom_standalone.py": STANDALONE.encode(),
+        "user_data/custom_factors/uf_broken.json": b"not json",
+    })
+    (bundle_env / "strategies/custom/custom_standalone.py").unlink()
+    result = strategy_bundle.apply_bundle(blob)
+    categories = {item["key"]: item for item in result["categories"]}
+    assert categories["strategies"]["imported"] == 1
+    assert len(categories["custom_factors"]["failed"]) == 1
+    assert not (bundle_env / "user_data/custom_factors/uf_broken.json").exists()
+
+
+@pytest.mark.parametrize("operation", ["parse_bundle", "inspect_bundle", "apply_bundle"])
+def test_legacy_package_rejects_symlink_entries(bundle_env, operation):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        entry = zipfile.ZipInfo("strategies/custom/custom_standalone.py")
+        entry.create_system = 3
+        entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(entry, STANDALONE)
+        archive.writestr("manifest.json", json.dumps({"format": strategy_bundle.BUNDLE_FORMAT, "version": 1}))
+    with pytest.raises(strategy_bundle.StrategyBundleError, match="符号链接"):
+        getattr(strategy_bundle, operation)(buffer.getvalue())

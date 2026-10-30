@@ -84,7 +84,7 @@ AI 策略 `.py` 未声明发布状态时默认导入为草稿；资源包中明�
 
 资源包只包含策略/调参/信号/因子及策略辅助代码，不包含行情、计算缓存、账号或密钥；全量设备迁移仍使用「配置备份」。依赖识别覆盖评分、进出场信号、叠加条件、组合成员和源码中明确的自定义列引用；动态拼接的列名应通过 `META.required_features` 或 `REQUIRED_FEATURES` 显式声明。
 
-新包使用 `tick-resource-bundle` v1，条目路径沿用配置备份白名单。统一接口位于 `/api/definitions/resources`：GET 查询目录；POST `/export/preview` 预览导出、`/export` 下载、`/inspect` 预览导入、`/apply` 提交导入。旧 `/api/strategies/{id}/bundle` 与旧策略包格式继续兼容。
+新包使用 `tick-resource-bundle` v1，条目路径沿用配置备份白名单。统一接口位于 `/api/definitions/resources`：GET 查询目录；POST `/export/preview` 预览导出、`/export` 下载、`/inspect` 预览导入、`/apply` 提交导入。旧 `/api/strategies/{id}/bundle` 与旧策略包格式继续兼容；旧接口保留默认跳过同名文件、逐文件报告导入结果的行为。
 
 清单由应用在导出 ZIP 时自动生成，用于保存原始选择、版本和依赖信息，不是手工导入的前置条件。无清单 ZIP 按文件内容识别资源；保留标准资源目录时也会保留策略来源、辅助模块与已保存调参。有清单的包仍校验其格式和版本，损坏或不兼容的清单会明确报错。
 

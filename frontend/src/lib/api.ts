@@ -2275,25 +2275,6 @@ export interface ConfigBackupApplyResult {
   reload_hints: Record<string, boolean>
 }
 
-/** 策略包条目预览 (POST /api/strategies/bundle/inspect) */
-export interface StrategyBundleEntry {
-  path: string
-  kind: 'strategies' | 'strategy_overrides' | 'custom_signals' | 'custom_factors'
-  id: string
-  action: 'create' | 'conflict'
-  bytes: number
-}
-
-export interface StrategyBundleInspect {
-  strategy_id: string
-  label: string
-  created_at?: string
-  counts: Record<string, number>
-  warnings: string[]
-  missing_deps: string[]
-  entries: StrategyBundleEntry[]
-}
-
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -4780,31 +4761,6 @@ export const api = {
   /** 获取策略源文件内容 */
   strategyGetSource: (id: string) =>
     request<{ code: string; source: string }>(`/api/strategies/${id}/source`),
-
-  // 策略包 (bundle): 依赖感知的导出/导入 — 策略 .py + 引用的信号/因子定义 + 用户调参。
-  // 导出走浏览器原生下载 (同配置备份直链模式)。
-  strategyBundleExportUrl: (strategyId: string) =>
-    `/api/strategies/${encodeURIComponent(strategyId)}/bundle`,
-
-  strategyBundleInspect: (file: File) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    return request<StrategyBundleInspect>('/api/strategies/bundle/inspect', {
-      method: 'POST',
-      body: fd,
-    })
-  },
-
-  strategyBundleApply: (file: File, allowOverwrite: boolean) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('allow_overwrite', allowOverwrite ? 'true' : 'false')
-    return request<ConfigBackupApplyResult>('/api/strategies/bundle/apply', {
-      method: 'POST',
-      body: fd,
-      timeoutMs: 120_000,
-    })
-  },
 
   strategyBuild: (step: number, payload: Record<string, any>) =>
     request<StrategyBuildResult>(
