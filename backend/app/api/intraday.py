@@ -172,6 +172,11 @@ async def quote_stream(request: Request):
                     }
 
                 # 策略监控完成后, 结果已写入内存缓存; 独立通知只刷新策略个股列表。
+                if "daily_integrity_updated" in data:
+                    yield {
+                        "event": "daily_integrity_updated",
+                        "data": json.dumps({"data_changed": data["daily_integrity_updated"]}),
+                    }
                 if data["strategy_results_updated"]:
                     yield {
                         "event": "strategy_results_updated",

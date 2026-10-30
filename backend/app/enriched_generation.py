@@ -235,6 +235,9 @@ def get_enriched_generation(
     *,
     initialize: bool = True,
 ) -> str:
+    from app.services.daily_health import assert_usable
+
+    assert_usable(data_dir, asset_type, enriched_only=True)
     path = _marker_path(data_dir, asset_type)
     payload = _read_marker(path)
     if payload is None:
@@ -344,11 +347,14 @@ class EnrichedPublication:
         *,
         recover: bool = False,
         claim_wait_s: float = 0.0,
+        purpose: str | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.asset_type = asset_type
         self.recover = recover
         self.claim_wait_s = max(0.0, float(claim_wait_s))
+        # 有边界的局部重算只接管同类中断, 不替其他发布错误地恢复 ready。
+        self.purpose = purpose
         self._publishing = False
         self._changed = False
         self._base_generation: str | None = None
@@ -530,6 +536,7 @@ class EnrichedPublication:
             "publication_id": self._publication_id,
             "owner_pid": os.getpid(),
             "updated_at_ns": now_ns,
+            **({"purpose": self.purpose} if self.purpose is not None else {}),
         })
 
     def _claim_or_verify(self) -> None:
@@ -537,7 +544,7 @@ class EnrichedPublication:
         try:
             current = _read_marker(path)
         except EnrichedGenerationUnavailableError:
-            if not self.recover:
+            if not self.recover or self.purpose is not None:
                 raise
             current = None
         if self._publishing:
@@ -557,6 +564,10 @@ class EnrichedPublication:
                 raise EnrichedGenerationUnavailableError(
                     "another enriched publication is incomplete"
                 )
+            if self.purpose is not None and current.get("purpose") != self.purpose:
+                raise EnrichedGenerationUnavailableError(
+                    "存在其他未完成的指标发布, 请先在数据页重建指标后再修补"
+                )
         generation = None if current is None else current.get("generation")
         if not isinstance(generation, str) or not generation:
             generation = uuid.uuid4().hex
@@ -567,5 +578,6 @@ class EnrichedPublication:
             "publication_id": self._publication_id,
             "owner_pid": os.getpid(),
             "updated_at_ns": time.time_ns(),
+            **({"purpose": self.purpose} if self.purpose is not None else {}),
         })
         self._publishing = True

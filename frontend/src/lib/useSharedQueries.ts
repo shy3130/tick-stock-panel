@@ -42,6 +42,16 @@ export function useSettings() {
   })
 }
 
+/** 自检状态及修补版本。与数据页共用查询, SSE 主动刷新, 全局挂载处轮询兜底。 */
+export function useDailyIntegrity(opts?: { poll?: boolean }) {
+  return useQuery({
+    queryKey: QK.dataIntegrity,
+    queryFn: api.dataIntegrity,
+    staleTime: 10_000,
+    refetchInterval: opts?.poll ? 30_000 : false,
+  })
+}
+
 /** 用户偏好 — Layout / Data / Intraday 共用 */
 export function usePreferences() {
   return useQuery({

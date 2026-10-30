@@ -121,6 +121,7 @@ class QuoteSubscriber:
         self._quote_updated = False
         self._strategy_results_updated = False
         self._depth_updated = False
+        self._daily_integrity_updated: bool | None = None
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
 
@@ -139,6 +140,9 @@ class QuoteSubscriber:
                 "alerts": self._alerts,
                 "reviews": self._reviews,
             }
+            if self._daily_integrity_updated is not None:
+                out["daily_integrity_updated"] = self._daily_integrity_updated
+            self._daily_integrity_updated = None
             self._quote_updated = False
             self._strategy_results_updated = False
             self._depth_updated = False
@@ -169,6 +173,7 @@ class QuoteSubscriber:
                 not self._quote_updated
                 and not self._strategy_results_updated
                 and not self._depth_updated
+                and self._daily_integrity_updated is None
                 and not self._reviews
             ):
                 self._event.clear()
@@ -176,6 +181,11 @@ class QuoteSubscriber:
     def notify_quote(self) -> None:
         with self._lock:
             self._quote_updated = True
+            self._event.set()
+
+    def notify_daily_integrity(self, data_changed: bool) -> None:
+        with self._lock:
+            self._daily_integrity_updated = bool(self._daily_integrity_updated or data_changed)
             self._event.set()
 
     def notify_strategy_results(self) -> None:
@@ -474,6 +484,23 @@ class QuoteService:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
         for sub in self._snapshot_subscribers():
             sub.notify_strategy_results()
+
+    def notify_daily_integrity_updated(self, assets: list[str], *, data_changed: bool) -> None:
+        if data_changed:
+            engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+            affected = set(assets)
+            if "index" in affected:
+                affected.update({"stock", "etf"})
+            if engine is not None:
+                for asset in affected:
+                    engine.invalidate_daily_asset(asset)
+            from app.api.overview import invalidate_overview_cache
+            from app.api.regime import invalidate_regime_cache
+
+            invalidate_overview_cache()
+            invalidate_regime_cache()
+        for sub in self._snapshot_subscribers():
+            sub.notify_daily_integrity(data_changed)
 
     def notify_depth_updated(self) -> None:
         """五档盘口修正完成后调用: 通知 SSE 推送 depth_updated, 触发连板梯队刷新。

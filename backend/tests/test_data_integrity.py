@@ -381,6 +381,21 @@ def test_describe_and_issue_dataclass():
     assert "盘中快照" in describe_issues(issues)
 
 
+def test_describe_issues_identifies_assets_and_separates_missing_from_snapshot():
+    from app.services.data_integrity import describe_issues
+
+    issues = [
+        IntegrityIssue(day=FRIDAY, table="kline_daily", kind="snapshot"),
+        IntegrityIssue(day=FRIDAY, table="kline_etf_daily", kind="missing"),
+        IntegrityIssue(day=FRIDAY, table="kline_index_daily", kind="missing"),
+    ]
+    text = describe_issues(issues)
+    assert "股票日K" in text
+    assert "ETF日K" in text
+    assert "指数日K" in text
+    assert "缺失" in text and "盘中快照" in text
+
+
 # ── 开实时行情门禁 (钩子2) ──────────────────────────────────────────
 
 

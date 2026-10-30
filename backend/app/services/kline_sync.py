@@ -292,6 +292,55 @@ def sync_daily_batch(symbols: list[str],
     return pl.concat(out, how="diagonal_relaxed")
 
 
+def iter_custom_daily_frames(provider, symbols, *, asset_type="stock", **kwargs):
+    """复用流式/单帧插件契约; 旧股票插件可继续省略 asset_type 参数。"""
+    if asset_type != "stock":
+        kwargs["asset_type"] = asset_type
+    stream = getattr(provider, "iter_daily", None)
+    if callable(stream):
+        yield from stream(symbols, **kwargs)
+    else:
+        frame = provider.get_daily(symbols, **kwargs)
+        if not frame.is_empty():
+            yield frame
+
+
+def iter_daily_frames(
+    symbols: list[str], capset: CapabilitySet, *,
+    start_time: datetime, end_time: datetime, asset_type: str = "stock", on_chunk_done=None,
+):
+    """只取标准日K帧, 不写正式数据、不计算指标; 调用方决定校验和发布边界。"""
+    if asset_type not in {"stock", "etf", "index"}:
+        raise ValueError("不支持的日K资产类型")
+    from app.data_providers import custom
+
+    provider_name = preferences.get_daily_data_provider()
+    if provider_name != "tickflow" and custom.provider_has_dataset(provider_name, "daily"):
+        found = False
+        for frame in iter_custom_daily_frames(
+            custom.get_provider(provider_name), symbols, asset_type=asset_type,
+            start_time=start_time, end_time=end_time, on_chunk_done=on_chunk_done,
+        ):
+            if not frame.is_empty():
+                found = True
+                yield frame
+        # 非股票源沿用指数/ETF 原有的「明确不支持时回退」契约。
+        if found or asset_type == "stock":
+            return
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        raise RuntimeError("当前日K数据源不可用, 请检查数据源配置")
+    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH, default_batch=100)
+    failures: list[str] = []
+    frame = sync_daily_batch(
+        symbols, start_time=start_time, end_time=end_time,
+        batch_size=limit.batch, rpm=limit.rpm, on_chunk_done=on_chunk_done, failed_out=failures,
+    )
+    if failures:
+        raise RuntimeError(f"日K获取失败: {', '.join(failures[:10])}")
+    if not frame.is_empty():
+        yield frame
+
+
 def sync_and_persist_daily_batch(
     symbols: list[str],
     repo: KlineRepository,

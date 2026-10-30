@@ -1192,16 +1192,12 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
         if repo is not None:
             try:
                 issues = data_integrity.scan_recent_integrity(repo.store.data_dir)
+                issues = [i for i in issues if i.table in data_integrity.active_daily_tables()]
             except Exception:  # noqa: BLE001
                 issues = []
             earliest = data_integrity.earliest_issue_day(issues)
             if issues and data_integrity.within_auto_repair_window(earliest):
-                symbols = sorted({
-                    s
-                    for i in issues
-                    if i.table == "kline_daily" and i.kind == "snapshot"
-                    for s in i.symbols
-                }) or None
+                symbols = data_integrity._stock_snapshot_symbols(issues)
                 job_id, is_new = data_integrity.launch_integrity_repair(
                     request.app.state, earliest, "realtime_gate", symbols=symbols,
                 )

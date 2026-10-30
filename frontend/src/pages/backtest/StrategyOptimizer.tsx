@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { DailyResultStaleNotice } from '@/components/data/DailyDataHealthNotice'
 import { Play, Square, Trophy, Mountain, GitBranch, CheckCircle2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
 import { fmtPct } from '@/lib/format'
@@ -243,6 +244,7 @@ export function StrategyOptimizer() {
 
         {result && (
           <div className="space-y-4">
+            <DailyResultStaleNotice result={result} />
             {/* ── 冠军卡 ── */}
             {bestRow && result.best_params && (
               <div className="rounded-card border border-accent/30 bg-accent/5 p-3">

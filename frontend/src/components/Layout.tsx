@@ -7,6 +7,7 @@ import { ToastContainer, toast } from '@/components/Toast'
 import { AlertToastContainer } from '@/components/AlertToast'
 import { AiAnalysisHost } from '@/components/financials/AiAnalysisHost'
 import { AiReportBubble } from '@/components/financials/AiReportBubble'
+import { DailyDataHealthNotice } from '@/components/data/DailyDataHealthNotice'
 import { StockAnalysisHost } from '@/components/stock-analysis/StockAnalysisHost'
 import { StockAnalysisBubble } from '@/components/stock-analysis/StockAnalysisBubble'
 import {
@@ -1147,6 +1148,7 @@ export function Layout() {
             与服务连接已断开 · 正在重连
           </div>
         )}
+        <DailyDataHealthNotice />
         <Suspense
           fallback={
             <div className="flex items-center justify-center py-24">

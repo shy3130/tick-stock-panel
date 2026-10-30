@@ -391,6 +391,11 @@ class BacktestEngine:
     # ── 数据加载 ──────────────────────────────────────
 
     def data_generation(self, asset_type: str = "stock") -> str | None:
+        from app.services.daily_health import assert_usable
+
+        root = getattr(getattr(self.repo, "store", None), "data_dir", None)
+        if root is not None:
+            assert_usable(root, asset_type)
         loader = getattr(self.repo, "get_matrix_data_generation", None)
         return loader(asset_type) if callable(loader) else None
 
@@ -403,9 +408,13 @@ class BacktestEngine:
     ) -> str | None:
         """获取 generation; 发布进行中时在超时窗口内轮询, 可被取消事件打断。"""
         deadline = time.monotonic() + timeout_s
+        from app.services.daily_health import DailyIntegrityError
+
         while True:
             try:
                 return self.data_generation(asset_type)
+            except DailyIntegrityError:
+                raise
             except EnrichedGenerationUnavailableError:
                 if cancel_event is not None and cancel_event.is_set():
                     raise

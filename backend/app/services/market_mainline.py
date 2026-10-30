@@ -251,6 +251,15 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
     return result
 
 
+def replace_mainline_range(data_dir: Path, start: date, end: date, kind: str, new_rows: pl.DataFrame) -> None:
+    """历史修正按范围替换: 新结果为空时, 也要移除该范围旧主线。"""
+    path = mainline_path(data_dir)
+    old = pl.read_parquet(path) if path.exists() else pl.DataFrame()
+    kept = old.filter(~((pl.col("kind") == kind) & pl.col("date").is_between(start, end))) if not old.is_empty() else old
+    combined = pl.concat([kept, new_rows], how="diagonal_relaxed").sort(["date", "kind", "rank"])
+    atomic_write_parquet(combined, path)
+
+
 def upsert_mainline_history(data_dir: Path, new_rows: pl.DataFrame) -> None:
     """按 (date, kind) 整日覆盖 upsert; schema 以 new_rows 为权威(同 regime 模式)。"""
     if new_rows.is_empty() or "date" not in new_rows.columns:

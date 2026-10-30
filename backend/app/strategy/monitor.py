@@ -548,7 +548,19 @@ class MonitorRuleEngine:
         供策略页实时回显复用: /api/screener/cached 端点直接读取此内存结果,
         避免对被监控的策略重跑第二遍。无 type=strategy 规则时返回空 dict。
         """
+        if self._data_dir is not None:
+            from app.services.daily_health import DailyIntegrityError, assert_usable
+            try:
+                assert_usable(self._data_dir)
+            except DailyIntegrityError:
+                return {}
         return self._latest_strategy_results
+
+    def invalidate_daily_asset(self, asset_type: str) -> None:
+        """历史价格修正后失效计算快照; 保留告警去重和入选池, 避免重复通知。"""
+        self._active_matrix_snapshots.pop(asset_type, None)
+        if asset_type == "stock":
+            self._latest_strategy_results = {}
 
     def consume_strategy_result_updates(self) -> bool:
         """返回并清除本轮成功写入的股票策略实时结果标记。"""
@@ -607,6 +619,13 @@ class MonitorRuleEngine:
         if not self._rules or df.is_empty():
             return []
 
+        if self._data_dir is not None:
+            from app.services.daily_health import DailyIntegrityError, assert_usable
+            try:
+                assert_usable(self._data_dir, asset_type)
+            except DailyIntegrityError:
+                return []
+
         now = time.time()
         events: list[dict] = []
         # 原子化: reset 轮 (股票轮) 时先把本轮结果写到临时容器, 算完后一次性替换
@@ -654,13 +673,16 @@ class MonitorRuleEngine:
                     params_map=params_map,
                     overrides_map=overrides_map,
                 )
+                from app.services.daily_health import revision
                 from app.strategy.engine import StrategyDataContext
+                data_revision = revision(self._data_dir, asset_type) if self._data_dir is not None else None
                 context = StrategyDataContext(
                     asset_type=asset_type,
                     timeframe="1d",
                     as_of=cn_today(),
                     current=df,
                     cache_key=f"monitor:{asset_type}",
+                    data_generation=data_revision,
                 )
                 try:
                     snapshot = self._strategy_engine.prepare_realtime_matrix(
@@ -681,6 +703,7 @@ class MonitorRuleEngine:
                             current=df,
                             history=history,
                             cache_key=f"monitor:{asset_type}",
+                            data_generation=data_revision,
                         ),
                         matrix_ids,
                         params_map=params_map,

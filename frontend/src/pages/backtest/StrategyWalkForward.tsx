@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { DailyResultStaleNotice } from '@/components/data/DailyDataHealthNotice'
 import { Play, Square, TrendingDown, GitBranch, CheckCircle2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
 import { fmtPct } from '@/lib/format'
@@ -255,6 +256,7 @@ export function StrategyWalkForward() {
           </div>
         )}
 
+        <DailyResultStaleNotice result={result} />
         {!result && !task?.isPending && (
           <EmptyState
             title="滚动样本外检验"

@@ -85,7 +85,8 @@ def test_stock_snapshot_symbols_helper():
                                       symbols=("510300.SH",)),  # ETF 族不并入股票修复
         data_integrity.IntegrityIssue(date(2026, 10, 25), "kline_daily", "missing"),
     ]
-    assert data_integrity._stock_snapshot_symbols(issues) == ["A", "B"]
+    assert data_integrity._stock_snapshot_symbols(issues) is None  # 整日缺失须转全市场修补
+    assert data_integrity._stock_snapshot_symbols(issues[:2]) == ["A", "B"]
     assert data_integrity._stock_snapshot_symbols(issues[1:2]) is None
 
 
@@ -171,6 +172,69 @@ def test_post_repair_check_fails_job_when_issues_remain(tmp_path, monkeypatch):
     assert "完整性仍不通过" in joined
     assert "拉取失败" in joined
     assert "002005.SZ" in joined
+
+
+@pytest.mark.parametrize("manual,source_empty", [(True, False), (False, False), (True, True)])
+def test_etf_repair_fills_missing_days_before_latest_enriched(
+    tmp_path, monkeypatch, manual, source_empty,
+):
+    """ETF 指标缓存较新时, 指定历史修复起点仍须真正传给 ETF 日线同步。"""
+    from app.services import index_sync, preferences
+    from app.tickflow.capabilities import Cap
+
+    today = date(2026, 10, 30)
+    missing = [date(2026, 10, 28), date(2026, 10, 29)]
+    _write_mixed_partition(tmp_path, "kline_etf_daily", date(2026, 10, 27), [
+        ("510300.SH", None, 100.0),
+    ])
+    (tmp_path / "kline_etf_enriched" / "date=2026-10-30").mkdir(parents=True)
+    pipeline, repo, _, _ = _offline_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(pipeline, "cn_today", lambda: today)
+    monkeypatch.setattr(pipeline, "_resolve_universe", lambda *args: ["000001.SZ"])
+    monkeypatch.setattr(pipeline, "run_pipeline", lambda **kwargs: 0)
+    monkeypatch.setattr(data_integrity, "_trading_calendar", lambda: None)
+    monkeypatch.setattr(preferences, "load", lambda: {
+        "pipeline_pull_a_share": False,
+        "pipeline_pull_index": False,
+        "pipeline_pull_etf": True,
+        "daily_data_provider": "fuyao",
+        "adj_factor_provider": "tickflow",
+        "minute_sync_enabled": False,
+        "pipeline_regime_enabled": False,
+    })
+    monkeypatch.setattr(index_sync, "sync_etf_instruments", lambda repo: 0)
+    monkeypatch.setattr(repo, "get_etf_instruments", lambda: pl.DataFrame({"symbol": ["510300.SH"]}))
+    calls = []
+
+    def sync_etf(repo, capset, start_date, end_date, **kwargs):
+        calls.append(start_date.date())
+        if source_empty:
+            return 0
+        written = 0
+        for day in missing:
+            if start_date.date() <= day <= end_date.date():
+                _write_mixed_partition(tmp_path, "kline_etf_daily", day, [
+                    ("510300.SH", None, 100.0),
+                ])
+                written += 1
+        return written
+
+    monkeypatch.setattr(index_sync, "sync_and_persist_etf_daily", sync_etf)
+    capset = SimpleNamespace(has=lambda key: key == Cap.KLINE_DAILY_BATCH)
+
+    if source_empty:
+        with pytest.raises(pipeline.PipelineStageError) as error:
+            pipeline.run_now(repo, capset, override_start_date=missing[0])
+        assert "ETF" in str(error.value)
+        assert "2026-10-28" in str(error.value)
+        assert "数据源拉取失败" not in str(error.value)
+    else:
+        result = pipeline.run_now(
+            repo, capset, override_start_date=missing[0] if manual else None,
+        )
+        assert result["stage_errors"] == []
+        assert data_integrity.scan_recent_integrity(tmp_path, today=today) == []
+    assert calls == [missing[0]]
 
 
 # ── 自动修复退避 ─────────────────────────────────────────────────────

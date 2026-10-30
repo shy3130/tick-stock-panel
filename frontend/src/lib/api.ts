@@ -3798,6 +3798,19 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  dataIntegrity: () => request<{
+    report: IntegrityReport | null
+    blocking_assets?: IntegrityAsset[]
+    data_revisions?: DailyDataRevisions
+  }>('/api/data/integrity'),
+  scanDataIntegrity: (lookbackDays: number, assetTypes: IntegrityAsset[]) =>
+    request<{ job_id: string }>('/api/data/integrity/scan', {
+      method: 'POST', body: JSON.stringify({ lookback_days: lookbackDays, asset_types: assetTypes }),
+    }),
+  repairDataIntegrity: (reportId: string) =>
+    request<{ job_id: string }>('/api/data/integrity/repair', {
+      method: 'POST', body: JSON.stringify({ report_id: reportId }),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
@@ -4903,6 +4916,7 @@ export interface PipelineJob {
   finished_at: string | null
   duration_s: number | null
   result: {
+    integrity_report?: IntegrityReport
     universe_size?: number
     daily_days?: number
     adj_factor_symbols?: number
@@ -4920,6 +4934,37 @@ export interface PipelineJob {
 export type PipelineJobSummary = Omit<PipelineJob, 'log'>
 
 // ===== Data status =====
+export type IntegrityAsset = 'stock' | 'etf' | 'index'
+export type DailyDataRevisions = Partial<Record<IntegrityAsset, string>>
+
+export interface IntegrityReport {
+  version: 1
+  id: string
+  checked_at: string
+  start_date: string
+  end_date: string
+  lookback_days: number
+  asset_types: IntegrityAsset[]
+  status: 'clean' | 'issues' | 'uncertain' | 'empty'
+  repairable_count: number
+  uncertain_count: number
+  no_data_assets: IntegrityAsset[]
+  backup_dir?: string
+  repair_error?: string
+  data_revisions?: DailyDataRevisions
+  issues: {
+    asset_type: IntegrityAsset
+    asset_label: string
+    date: string
+    kind: string
+    kind_label: string
+    reason: string
+    repairable: boolean
+    symbols: string[]
+    symbol_count: number
+  }[]
+}
+
 interface TableStats {
   rows: number
   earliest_date: string | null

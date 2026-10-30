@@ -20,6 +20,7 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable
+from datetime import date
 from datetime import timedelta as _timedelta
 from pathlib import Path
 
@@ -1525,6 +1526,63 @@ def _compute_storage_batches(
     if not parts:
         return _select_storage_cols(raw.head(0))
     return pl.concat(parts, how="diagonal_relaxed", rechunk=False)
+
+
+def recompute_daily_symbols(
+    repo, asset_type: str, *, start: date, symbols: list[str] | None,
+    on_batch_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """修补后按股票重算: 输入使用完整本地原始历史, 只发布 start 起的受影响行。
+
+    复用正式的复权、历史股本、停牌及连板计算, 不用已有 enriched 作原始价格前缀。
+    均线/MACD 等宽指标由现有读取链按新版本重新计算。
+    """
+    from app.services import data_integrity, preferences
+    from app.tickflow.repository import enriched_dirname
+
+    root = Path(repo.store.data_dir)
+    files = repo.daily_repair_files(asset_type)
+    if not files:
+        raise ValueError("没有可用于重算的原始日K")
+    raw_scan = scan_daily_parquet(files, cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
+    selected = sorted(set(symbols)) if symbols is not None else raw_scan.select("symbol").unique().collect()["symbol"].to_list()
+    if not selected:
+        raise ValueError("没有可用于重算的股票")
+    factors = _load_factors(root / ("adj_factor_etf" if asset_type == "etf" else "adj_factor") / "all.parquet") if asset_type != "index" else pl.DataFrame()
+    instruments = repo.get_instruments_asset("stock") if asset_type == "stock" else pl.DataFrame()
+    shares = load_share_history(root) if asset_type == "stock" else pl.DataFrame()
+    batch_size = max(1, min(preferences.get_enriched_batch_size(), 200))
+    publication = EnrichedPublication(root, asset_type, recover=True,
+                                     claim_wait_s=_PUBLICATION_CLAIM_WAIT_S, purpose="daily_repair")
+    written = 0
+    total = (len(selected) + batch_size - 1) // batch_size
+    try:
+        for offset in range(0, len(selected), batch_size):
+            batch = selected[offset:offset + batch_size]
+            raw = raw_scan.filter(pl.col("symbol").is_in(batch)).sort(["symbol", "date"]).collect(engine="streaming")
+            bad = data_integrity.invalid_daily_rows(raw)
+            if not bad.is_empty():
+                first = bad["date"].min()
+                raise ValueError(f"所选股票在 {first} 的原始历史日K仍异常, 未发布指标")
+            enriched = compute_enriched(
+                raw,
+                factors=factors.filter(pl.col("symbol").is_in(batch)) if not factors.is_empty() else factors,
+                instruments=instruments.filter(pl.col("symbol").is_in(batch)) if not instruments.is_empty() else instruments,
+                historical_shares=shares.filter(pl.col("symbol").is_in(batch)) if not shares.is_empty() else shares,
+            )
+            output = _select_storage_cols(enriched.filter(pl.col("date") >= start))
+            written += repo.replace_enriched_rows(asset_type, output, start=start, symbols=batch, publication=publication)
+            publication.heartbeat()
+            if on_batch_done:
+                on_batch_done(offset // batch_size + 1, total)
+        publication.commit()
+    except BaseException:
+        publication.abandon()
+        raise
+    table = enriched_dirname(asset_type)
+    repo.refresh_view("kline_enriched" if asset_type == "stock" else table, str(root / table / "**/*.parquet"))
+    repo.invalidate_enriched_asset(asset_type)
+    return written
 
 
 def run_pipeline(data_dir: Path | None = None,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { DailyResultStaleNotice } from '@/components/data/DailyDataHealthNotice'
 import { motion } from 'framer-motion'
 import { Play, BarChart3, BookmarkPlus, Clock } from 'lucide-react'
 import { api, type FactorColumn, type FactorBacktestResult, type GroupStat } from '@/lib/api'
@@ -377,6 +378,7 @@ export function FactorBacktest({ initialFactorName = 'momentum_20d', autoRun = f
           <LoadingPanel symbolsText={symbols ? `${symbols.split(',').length} 只标的` : '全市场 · 当前区间'} />
         )}
 
+        <DailyResultStaleNotice result={result} assetType={result?.config.asset_type === 'etf' ? 'etf' : 'stock'} />
         {result && !result.error && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}

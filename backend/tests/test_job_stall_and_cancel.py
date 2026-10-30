@@ -97,6 +97,14 @@ def test_progress_updates_heartbeat(tmp_path):
     assert store.get(jid)["last_progress_at"] is not None
 
 
+def test_new_stage_resets_stage_progress(tmp_path):
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid = _make_running_job(store, timeout_s=60)
+    store.progress(jid, "integrity_check", 95, "检查完成", stage_pct=100)
+    store.progress(jid, "sync_daily", 12, "开始修补")
+    assert store.get(jid)["stage_pct"] == 0
+
+
 # ── 协作式取消 ──────────────────────────────────────────────────────────
 
 def test_progress_raises_after_cancel(tmp_path):

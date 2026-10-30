@@ -272,9 +272,9 @@ def test_manual_pipeline_holds_capacity_through_refresh_off_event_loop(capacity,
 
 
 @pytest.mark.parametrize("entry", ["scheduled", "integrity"])
-def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry):
+def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, tmp_path, entry):
     from app.jobs import daily_pipeline
-    from app.services import data_integrity, repair_daily
+    from app.services import data_integrity, integrity_check
 
     store, limiter = capacity
     called = threading.Event()
@@ -284,13 +284,17 @@ def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry
         called.set()
         return {}
 
-    monkeypatch.setattr(repair_daily, "run_repair_daily", compute)
+    def check(*args, **kwargs):
+        compute(*args, **kwargs)
+        return {"repairable_count": 0}
+    monkeypatch.setattr(integrity_check, "run_check", check)
     assert limiter.acquire("normal", timeout=0)
     with ThreadPoolExecutor(max_workers=1) as pool:
         if entry == "scheduled":
             future = pool.submit(daily_pipeline._run_tracked, compute, "test")
         else:
-            state = SimpleNamespace(repo=object(), capabilities=SimpleNamespace(has=lambda _: True))
+            state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+                                    capabilities=SimpleNamespace(has=lambda _: True))
             data_integrity.launch_integrity_repair(state, date(2026, 1, 1), "test")
             future = None
         try:

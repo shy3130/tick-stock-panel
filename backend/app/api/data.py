@@ -8,9 +8,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from app.enriched_generation import EnrichedPublication
 from app.indicators.pipeline import ENRICHED_COLUMNS
@@ -19,6 +20,110 @@ from app.services.pipeline_jobs import job_store
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
+
+
+class IntegrityScanIn(BaseModel):
+    lookback_days: int = Field(default=30, ge=1, le=366)
+    asset_types: list[Literal["stock", "etf", "index"]] | None = Field(default=None, min_length=1, max_length=3)
+
+
+class IntegrityRepairIn(BaseModel):
+    report_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+def _start_integrity_job(request: Request, operation: Callable, *, repair: bool) -> dict:
+    from app.services.pipeline_jobs import (
+        JobCancelledError,
+        release_run_slot,
+        run_with_capacity,
+        try_acquire_run_slot,
+    )
+
+    job_id, is_new = job_store.create()
+    if not is_new:
+        raise HTTPException(status_code=409, detail="已有数据任务正在运行, 请等待完成后再自检或修补")
+
+    def progress(stage, pct, message, **kwargs):
+        job_store.progress(job_id, stage, pct, message, **kwargs)
+
+    def run():
+        qs = getattr(request.app.state, "quote_service", None)
+        with qs.paused() if repair and qs else contextlib.nullcontext():
+            return operation(progress)
+
+    def execute():
+        try:
+            if not try_acquire_run_slot(job_id):
+                job_store.fail(job_id, "已有数据任务尚未结束, 请稍后重试")
+                return
+            report = run_with_capacity(job_id, run)
+            job_store.succeed(job_id, {"integrity_report": report})
+        except JobCancelledError:
+            pass
+        except Exception as exc:
+            logger.exception("日K自检/修补失败: %s", job_id)
+            job_store.fail(job_id, str(exc))
+        finally:
+            release_run_slot(job_id)
+            invalidate_data_cache()
+            qs = getattr(request.app.state, "quote_service", None)
+            notify = getattr(qs, "notify_daily_integrity_updated", None)
+            if callable(notify):
+                from app.services.integrity_check import latest_report
+                report = latest_report(request.app.state.repo.store.data_dir)
+                notify(report["asset_types"] if report else [], data_changed=repair)
+
+    try:
+        threading.Thread(target=execute, daemon=True, name=f"integrity-{job_id}").start()
+    except RuntimeError:
+        job_store.fail(job_id, "无法启动数据自检任务")
+        raise
+    return {"job_id": job_id}
+
+
+@router.get("/integrity")
+def get_integrity_report(request: Request) -> dict:
+    from app.services import daily_health
+    from app.services.integrity_check import latest_report
+
+    root = request.app.state.repo.store.data_dir
+    return {"report": latest_report(root), "blocking_assets": sorted({
+        e["asset_type"] for e in daily_health.snapshot(root)["entries"]
+    }), "data_revisions": {
+        asset: daily_health.revision(root, asset) for asset in daily_health.ASSET_LABELS
+    }}
+
+
+@router.post("/integrity/scan")
+def scan_integrity(body: IntegrityScanIn, request: Request) -> dict:
+    from app.services.integrity_check import run_check
+
+    root = request.app.state.repo.store.data_dir
+    return _start_integrity_job(request, lambda progress: run_check(
+        root, lookback_days=body.lookback_days, asset_types=body.asset_types, on_progress=progress,
+    ), repair=False)
+
+
+@router.post("/integrity/repair")
+def repair_integrity(body: IntegrityRepairIn, request: Request) -> dict:
+    from app.data_providers import custom
+    from app.services import preferences
+    from app.services.integrity_check import latest_report, run_repair
+    from app.tickflow.capabilities import Cap
+
+    state = request.app.state
+    report = latest_report(state.repo.store.data_dir)
+    if report is None or report.get("id") != body.report_id:
+        raise HTTPException(status_code=409, detail="自检报告已变化, 请重新自检后再修补")
+    if not report.get("repairable_count"):
+        raise HTTPException(status_code=400, detail="当前没有可自动修补的问题")
+    provider = preferences.get_daily_data_provider()
+    custom_daily = provider != "tickflow" and custom.provider_has_dataset(provider, "daily")
+    if not custom_daily and not state.capabilities.has(Cap.KLINE_DAILY_BATCH):
+        raise HTTPException(status_code=403, detail="当前日K数据源不可用, 请先检查数据源配置")
+    return _start_integrity_job(request, lambda progress: run_repair(
+        state.repo, state.capabilities, body.report_id, on_progress=progress,
+    ), repair=True)
 
 # ===== 缓存:storage(文件扫描) + 每张表 aggregate 各自缓存 =====
 # 同步期间前端 2s 轮一次 status,每张表 aggregate 全表 count + min/max + distinct
@@ -695,6 +800,7 @@ def _clear_data_impl(request: Request):
 
     repo = request.app.state.repo
     data_dir = repo.store.data_dir
+    from app.services.daily_health import clear_assets
     deleted = 0
     # recover=True: 清空语义就是接管一切 — 外部进程(崩掉的脚本/中断的管道)
     # 残留的 publishing 标记(owner pid 已死)不应永久阻塞清空; 活进程的发布
@@ -733,6 +839,8 @@ def _clear_data_impl(request: Request):
                 publication.abandon()
             raise
 
+    clear_assets(data_dir, {"stock", "etf", "index"})
+    (data_dir / "user_data" / "integrity_report.json").unlink(missing_ok=True)
     # 清除同步历史（内存 + 磁盘 job_store/ 文件夹）
     from app.services.pipeline_jobs import job_store
     job_store.clear()

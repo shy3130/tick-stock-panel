@@ -204,6 +204,11 @@ export function useQuoteStream(
         qc.invalidateQueries({ queryKey: ['screener-cached'] })
       })
 
+      es.addEventListener('daily_integrity_updated', () => {
+        qc.invalidateQueries({ queryKey: QK.dataIntegrity })
+        qc.invalidateQueries({ queryKey: QK.dataStatus })
+      })
+
       es.addEventListener('depth_updated', () => {
         // 五档修正完成: 刷新连板梯队 + 看板封单数据。
         // 不受实时行情开关限制 — 修正轮询独立于行情轮询, 用户开了修正就想看实时封单。

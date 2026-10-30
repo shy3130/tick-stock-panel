@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { DailyResultStaleNotice } from '@/components/data/DailyDataHealthNotice'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers, BookmarkPlus, Download, Filter, Star, TrendingUp, CalendarRange, RefreshCw } from 'lucide-react'
 import {
@@ -2273,6 +2274,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
           </div>
         )}
 
+        <DailyResultStaleNotice result={result} assetType={result?.config.asset_type === 'etf' ? 'etf' : 'stock'} />
         {backtestTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
             <div>{backtestTask.error}</div>

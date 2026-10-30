@@ -50,7 +50,7 @@ def _bare_repo(raw: pl.DataFrame) -> tuple[KlineRepository, dict]:
     repo._enriched_cache_date = None
     repo.get_instruments = lambda: pl.DataFrame()  # type: ignore[method-assign]
     repo.get_historical_shares = lambda: pl.DataFrame()  # type: ignore[method-assign]
-    repo.get_enriched_latest = lambda: (pl.DataFrame(), None)  # type: ignore[method-assign]
+    repo.get_enriched_latest = lambda **kwargs: (pl.DataFrame(), None)  # type: ignore[method-assign]
     calls = {"scan": 0}
 
     def _scan(symbol, start, end, columns):

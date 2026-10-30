@@ -21,6 +21,7 @@ from app.services.backtest import (
     BacktestService,
     VectorbtUnavailable,
 )
+from app.services.daily_health import DailyIntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ def run(req: BacktestRequest, request: Request):
         result = svc.run(cfg)
     except VectorbtUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return asdict(result)
+    return _stamp_daily_data(result)
 
 
 # ================================================================
@@ -184,13 +185,15 @@ def factor_run(req: FactorBacktestRequest, request: Request):
     )
     try:
         result = svc.run(cfg)
+    except DailyIntegrityError:
+        raise
     except EnrichedGenerationUnavailableError as exc:
         # 盘中实时刷新换新 generation, 重试后仍撞上发布 (api/mining.py 同款映射)
         raise HTTPException(
             status_code=400,
             detail="行情数据正在更新(盘中实时刷新), 请稍后重试",
         ) from exc
-    return asdict(result)
+    return _stamp_daily_data(result)
 
 
 class FactorBatchRequest(BaseModel):
@@ -245,12 +248,14 @@ def factor_batch(req: FactorBatchRequest, request: Request):
             slippage_bps=req.slippage_bps,
             asset_type=req.asset_type,
         ))
+    except DailyIntegrityError:
+        raise
     except EnrichedGenerationUnavailableError as exc:
         raise HTTPException(
             status_code=400,
             detail="行情数据正在更新(盘中实时刷新), 请稍后重试",
         ) from exc
-    return asdict(result)
+    return _stamp_daily_data(result)
 
 
 # ================================================================
@@ -443,18 +448,29 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     from app.services.heavy_job_limiter import shared_heavy_job_limiter
 
     with shared_heavy_job_limiter.slot("normal"):
-        return run_worker_task(task)
+        return _stamp_daily_data(run_worker_task(task))
 
 
 # ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
 
-import time
 import hashlib
+import time
+
+
+def _daily_data_revisions() -> dict[str, str]:
+    from app.services.daily_health import ASSET_LABELS, revision
+
+    return {asset: revision(settings.data_dir, asset) for asset in ASSET_LABELS}
+
+
+def _stamp_daily_data(result, revisions=None) -> dict:
+    payload = result if isinstance(result, dict) else asdict(result)
+    return {**payload, "daily_data_revisions": revisions if revisions is not None else _daily_data_revisions()}
 
 
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
-    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts")
+    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "daily_data_revisions")
 
     def __init__(self, key: str):
         self.key = key
@@ -464,6 +480,7 @@ class _BacktestJob:
         self.error: str | None = None
         self.done = False
         self.finish_ts: float = 0.0
+        self.daily_data_revisions = _daily_data_revisions()
 
 
 # 模块级任务表: key -> _BacktestJob
@@ -475,8 +492,11 @@ _JOB_TTL = 300  # 完成后保留 5 分钟
 def _cleanup_stale_jobs():
     """清理过期任务 (完成超过 TTL 的)。全程持 _jobs_lock: 迭代+pop 与其他访问互斥。"""
     now = time.time()
+    revisions = _daily_data_revisions()
     with _jobs_lock:
-        stale = [k for k, j in _running_jobs.items() if j.done and now - j.finish_ts > _JOB_TTL]
+        stale = [k for k, j in _running_jobs.items() if j.done and (
+            now - j.finish_ts > _JOB_TTL or j.daily_data_revisions != revisions
+        )]
         for k in stale:
             _running_jobs.pop(k, None)
 
@@ -504,6 +524,9 @@ def _acquire_or_evict_job(job_key: str, *, force: bool) -> tuple[_BacktestJob, b
 def _finish_job(job: _BacktestJob, *, result=None, error: str | None = None) -> None:
     """Publish the terminal state and proactively drop the reconnect entry after TTL."""
     finished_at = time.time()
+    if result is not None and job.daily_data_revisions != _daily_data_revisions():
+        result = None
+        error = "日K数据已修正, 请重新运行计算"
     with _jobs_lock:
         job.result = result
         job.error = error
@@ -720,7 +743,7 @@ async def strategy_stream(
                         elif error:
                             yield f"event: error\ndata: {json.dumps({'message': error}, ensure_ascii=False)}\n\n"
                         else:
-                            payload = r if isinstance(r, dict) else asdict(r)
+                            payload = _stamp_daily_data(r, job.daily_data_revisions)
                             yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
                     return
 
@@ -1101,7 +1124,7 @@ async def optimize_robust_stream(
                     elif job.cancel_event.is_set():
                         yield f"event: error\ndata: {json.dumps({'message': '优化已取消'}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
-                        yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
+                        yield f"event: done\ndata: {json.dumps(_json_safe(_stamp_daily_data(job.result, job.daily_data_revisions)), ensure_ascii=False, default=str)}\n\n"
                     return
                 tick += 1
                 if tick % 4 == 0 and await request.is_disconnected():
@@ -1315,7 +1338,7 @@ async def walkforward_stream(
                     elif job.cancel_event.is_set():
                         yield f"event: error\ndata: {json.dumps({'message': 'walk-forward 已取消'}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
-                        yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
+                        yield f"event: done\ndata: {json.dumps(_json_safe(_stamp_daily_data(job.result, job.daily_data_revisions)), ensure_ascii=False, default=str)}\n\n"
                     return
                 tick += 1
                 if tick % 4 == 0 and await request.is_disconnected():

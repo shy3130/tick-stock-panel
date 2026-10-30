@@ -32,7 +32,7 @@ import {
 } from '@/lib/useSharedQueries'
 import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
 import { MissingCapChip, routeCap, routeCapUsable, routeProviderDisplay, type RouteCapId } from '@/lib/capability-labels'
-import { QK } from '@/lib/queryKeys'
+import { QK, DAILY_DATA_QUERY_PREFIXES } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/format'
@@ -46,6 +46,7 @@ import { SettingsModal } from '@/components/data/SettingsModal'
 import { ScheduleEditor } from '@/components/data/ScheduleEditor'
 import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
+import { DataIntegrityPanel } from '@/components/data/DataIntegrityPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { FinancialSyncPanel } from '@/components/data/FinancialSyncPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
@@ -290,16 +291,15 @@ export function Data() {
     if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+      qc.invalidateQueries({ queryKey: QK.dataIntegrity })
       // 同步任务结束后 regime 覆盖范围可能变化, 一并刷新画像
       qc.invalidateQueries({ queryKey: QK.regimeCoverage })
       // 同步重写了指数日K/enriched/日K → 失效消费这些数据的查询。
       // 侧边栏指数查询挂在 Layout 常驻不重挂载 (refetchOnWindowFocus 已关),
       // 不失效会一直显示同步前的旧值; 自选相关查询在页面正打开时同理。
-      if (job.data.status === 'succeeded') {
-        qc.invalidateQueries({ queryKey: QK.indexQuotes })
-        qc.invalidateQueries({ queryKey: ['index-daily'] })
-        qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
-        qc.invalidateQueries({ queryKey: ['kline-batch'] })
+      // 失败/取消也可能已经写入部分修补数据; 弹窗关闭时同样刷新消费页。
+      if (!job.data.result?.integrity_report) {
+        qc.invalidateQueries({ predicate: q => DAILY_DATA_QUERY_PREFIXES.has(String(q.queryKey[0])) })
       }
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
@@ -643,11 +643,11 @@ export function Data() {
             </button>
             <button
               onClick={() => setShowRepair(true)}
-              disabled={!hasData || isRunning}
+              disabled={isRunning}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
             >
               <WandSparkles className="h-3.5 w-3.5" />
-              修正数据
+              自检/修补
             </button>
             <div className="w-px h-4 bg-border" />
             <div className="flex items-center gap-1.5">
@@ -1039,13 +1039,24 @@ export function Data() {
 
       <AnimatePresence>
         {showRepair && (
-          <SettingsModal title="日 K · 修正 / 补数据" onClose={() => setShowRepair(false)}>
-            <RepairDailyPanel
+          <SettingsModal title="日K数据自检与修补" width="max-w-3xl" onClose={() => setShowRepair(false)}>
+            <DataIntegrityPanel hasCap={hasDailyBatchCap} isRunning={!!activeJobId}
+              job={job.data}
+              defaultAssets={[
+                ...(prefs.data?.pipeline_pull_a_share !== false ? ['stock' as const] : []),
+                ...(prefs.data?.pipeline_pull_etf ? ['etf' as const] : []),
+                ...(prefs.data?.pipeline_pull_index !== false ? ['index' as const] : []),
+              ]}
+              onStart={id => { setActiveJobId(id); qc.invalidateQueries({ queryKey: QK.pipelineJobs }) }} />
+            <details className="mt-5 border-t border-border pt-4">
+              <summary className="cursor-pointer text-xs text-secondary">手动指定起点修正数据</summary>
+              <div className="mt-4"><RepairDailyPanel
               hasCap={hasDailyBatchCap}
               isRunning={!!activeJobId}
               latestDate={s?.daily?.latest_date ?? null}
               onStart={() => setShowRepair(false)}
-            />
+              /></div>
+            </details>
           </SettingsModal>
         )}
       </AnimatePresence>

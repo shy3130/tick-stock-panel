@@ -323,12 +323,13 @@ class JobStore:
                 if cancelled is not None and cancelled.is_set():
                     raise JobCancelledError(job_id)
                 return
+            previous_stage = j["stage"]
             j["stage"] = stage
             j["progress"] = max(0, min(100, int(pct)))
             j["last_progress_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             if stage_pct is not None:
                 j["stage_pct"] = max(0, min(100, int(stage_pct)))
-            elif j["stage"] != stage:
+            elif previous_stage != stage:
                 j["stage_pct"] = 0
             entry = {
                 "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",

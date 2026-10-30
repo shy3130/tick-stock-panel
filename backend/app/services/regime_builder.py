@@ -546,7 +546,7 @@ def load_regime_history(data_dir: Path) -> pl.DataFrame:
         return pl.DataFrame()
 
 
-def refresh_phase_labels(data_dir: Path) -> int:
+def refresh_phase_labels(data_dir: Path, *, start: date | None = None) -> int:
     """对全量 regime 时序重标情绪周期阶段(冰点/启动/主升/高潮/退潮/修复)。
 
     阶段判定需要完整日序(EMA 平滑 + 持续性确认), 不能在单批内完成,
@@ -564,8 +564,18 @@ def refresh_phase_labels(data_dir: Path) -> int:
     except Exception as e:
         logger.warning("refresh_phase_labels failed: %s", e)
         return 0
+    if start is not None:
+        labeled = pl.concat([df.filter(pl.col("date") < start), labeled.filter(pl.col("date") >= start)], how="diagonal_relaxed").sort("date")
     atomic_write_parquet(labeled, regime_path(data_dir))
     return labeled.height
+
+
+def replace_regime_range(data_dir: Path, start: date, end: date, new_rows: pl.DataFrame) -> None:
+    """历史修正允许删除已不再存在的统计行, 不保留旧的假结果。"""
+    old = load_regime_history(data_dir)
+    kept = old.filter(~pl.col("date").is_between(start, end)) if not old.is_empty() else old
+    combined = pl.concat([kept, new_rows], how="diagonal_relaxed").sort("date")
+    atomic_write_parquet(combined, regime_path(data_dir))
 
 
 def upsert_regime_history(data_dir: Path, new_rows: pl.DataFrame) -> None:
