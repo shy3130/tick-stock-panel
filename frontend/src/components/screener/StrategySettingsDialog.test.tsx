@@ -16,7 +16,10 @@ import type { StrategyDetail } from '@/lib/api'
 const mocks = vi.hoisted(() => ({
   saveConfig: vi.fn(async (_id: string, _payload: Record<string, unknown>) => ({ ok: true })),
   detail: null as unknown,
+  download: vi.fn(),
 }))
+
+vi.mock('@/lib/resourceTransfer', () => ({ downloadResourceBundle: mocks.download }))
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -69,7 +72,7 @@ let root: Root | null = null
 const container = document.createElement('div')
 document.body.appendChild(container)
 
-async function render(props: { onClose?: () => void } = {}) {
+async function render(props: { onClose?: () => void; onSaved?: (limit: number | null) => void } = {}) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   root = createRoot(container)
@@ -77,7 +80,7 @@ async function render(props: { onClose?: () => void } = {}) {
     root!.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
-          <StrategySettingsDialog strategyId="test_strategy" onClose={props.onClose ?? (() => {})} />
+          <StrategySettingsDialog strategyId="test_strategy" onClose={props.onClose ?? (() => {})} onSaved={props.onSaved} />
         </QueryClientProvider>
       </MemoryRouter>,
     )
@@ -88,6 +91,26 @@ async function render(props: { onClose?: () => void } = {}) {
 
 const findButton = (text: string) =>
   [...container.querySelectorAll('button')].find(b => b.textContent?.includes(text))!
+
+it('exports the saved strategy as a dependency ZIP while keeping settings open', async () => {
+  await render()
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="导出策略包"]')!.click())
+  expect(mocks.download).toHaveBeenCalledWith([{ kind: 'strategy', id: 'test_strategy' }], 'tsp-strategy-test_strategy.zip')
+  expect(container.querySelector('[role="dialog"]')).toBeTruthy()
+})
+
+it('keeps unsaved strategy edits in place and requires saving before export', async () => {
+  await render()
+  const input = [...container.querySelectorAll('input')].find(el => el.value === '测试策略')!
+  setNumberInput(input, '未保存的改名')
+  const exportButton = container.querySelector<HTMLButtonElement>('[aria-label="导出策略包"]')!
+  expect(exportButton.disabled).toBe(true)
+  expect(exportButton.title).toContain('请先保存修改')
+  act(() => exportButton.click())
+  expect(mocks.download).not.toHaveBeenCalled()
+  expect(input.value).toBe('未保存的改名')
+  expect(container.textContent).toContain('有未保存的改动')
+})
 
 // 分区页判隐: 页说明段落 → 内层容器 → 页 wrapper
 function pageHidden(introText: string) {
@@ -106,6 +129,7 @@ function setNumberInput(input: HTMLInputElement, v: string) {
 
 beforeEach(() => {
   mocks.saveConfig.mockClear()
+  mocks.download.mockReset().mockResolvedValue(undefined)
   mocks.detail = makeDetail()
 })
 afterEach(() => {

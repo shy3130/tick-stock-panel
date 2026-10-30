@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
-import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2, SlidersHorizontal } from 'lucide-react'
+import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Layers, Plus, Trash2, SlidersHorizontal } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
@@ -14,6 +14,7 @@ import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { ConditionEditor } from '@/components/signals/ConditionEditor'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
+import { StrategyExportButton } from './StrategyExportButton'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -524,17 +525,6 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     } finally { setDeleting(false) }
   }
 
-  const handleDownload = () => {
-    // 策略包导出: 策略 .py + 引用的信号/因子定义 + 用户调参, 换机/分享不丢依赖
-    if (!strategyId) return
-    const a = document.createElement('a')
-    a.href = api.strategyBundleExportUrl(strategyId)
-    a.download = `tsp-strategy-${strategyId}.zip`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
-
   // ===== 左侧导航分区 =====
   const isComposite = detail?.source === 'composite'
   const pages = useMemo(() => {
@@ -563,6 +553,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   return (
     <>
     <Modal
+      active={!editingChildId}
       onClose={() => {
         // 子策略编辑弹窗打开期间(Esc 会同时到达两层的 document 监听), 只关最上层的子编辑
         if (editingChildId) return
@@ -582,15 +573,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
             </div>
             <div className="flex items-center gap-2">
               {detail && (
-                <button
-                  aria-label="导出策略包"
-                  title="导出策略包 (.zip, 含引用的信号/因子定义与调参)"
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-border/60 bg-surface text-xs text-secondary hover:text-accent hover:border-accent/30 transition-colors cursor-pointer"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  导出策略包
-                </button>
+                <StrategyExportButton strategyId={strategyId} disabled={dirtyAny || saving || resetting}
+                  disabledHint="请先保存修改，再导出策略包" className="h-7 w-7 border border-border/60 bg-surface" />
               )}
               <button aria-label="关闭" onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated transition-colors cursor-pointer"><X className="h-4 w-4 text-muted" /></button>
             </div>

@@ -11,7 +11,7 @@ const INPUT_CLS = 'h-8 w-full rounded-input border border-border bg-surface px-2
 function renderStrategyCode(strategyId: string, name: string, factorId: string, direction: 'high' | 'low', description: string): string {
   const assetTypes = '["stock"]'
   return `"""${name}: 由因子库一键生成的单因子排名策略。"""
-from app.strategy.builtin.factor_rank_research import FactorRankResearchMatrixStrategy
+from app.strategy.research.factor_rank_research import FactorRankResearchMatrixStrategy
 
 META = {
     "id": ${JSON.stringify(strategyId)},

@@ -90,6 +90,7 @@ def _signal_lookup(data_dir: Path) -> dict[str, dict]:
         by_key.setdefault(str(sid), sig)
         try:
             by_key.setdefault(custom_signals.resolve_column(sig), sig)
+            by_key.setdefault(custom_signals.intraday_column_name(str(sid)), sig)
         except ValueError:
             continue
     return by_key
@@ -100,7 +101,9 @@ def _match_signal(ref: str, lookup: dict[str, dict]) -> dict | None:
     candidates = [ref]
     if ref.startswith("signal_"):
         candidates.append(ref[len("signal_"):])
-    if ref.startswith(("csg_", "csgi_")):
+    if ref.startswith("csgi_"):
+        candidates.append(ref[5:])
+    elif ref.startswith("csg_"):
         candidates.append(ref[4:])
     elif not ref.startswith(("signal_", "csg_", "csgi_")):
         # 引擎对裸名自动补 signal_ 前缀 (engine._collect_signal_hits 同口径)
@@ -121,17 +124,21 @@ def collect_dependencies(
     + composite 子策略 (递归)。内置因子列/内置信号名不打包 (任何安装自带);
     找不到的自定义引用 (csg_/uf_) 记 warnings, 不阻断导出 — 如实告知。
     """
+    return collect_resources(data_dir, engine, [{"kind": "strategy", "id": strategy_id}])
+
+
+def collect_resources(
+    data_dir: Path, engine: Any, roots: list[dict[str, str]]
+) -> tuple[list[tuple[str, bytes]], BundleSummary]:
+    """多策略/信号/因子共享同一闭包收集器; 文件和共享依赖只收一次。"""
     from app import definitions
     from app.factors import store as factor_store
     from app.strategy import config as strategy_config
 
-    try:
-        sdef = engine.get(strategy_id)
-    except ValueError as e:
-        raise StrategyBundleError(str(e)) from e
-
-    label = str(sdef.meta.get("name") or strategy_id)
-    summary = BundleSummary(strategy_id=strategy_id, label=label)
+    if not roots:
+        raise StrategyBundleError("请至少选择一个资源")
+    strategy_id = roots[0]["id"]
+    summary = BundleSummary(strategy_id=strategy_id, label=strategy_id)
     entries: dict[str, bytes] = {}
 
     factor_defs = {str(d.get("id")): d for d in factor_store.load_all(data_dir)}
@@ -151,6 +158,10 @@ def collect_dependencies(
         entries[f"user_data/custom_factors/{factor_id}.json"] = json.dumps(
             definition, ensure_ascii=False, indent=2
         ).encode("utf-8")
+        if definition.get("kind") == "composite":
+            # 编译后的依赖是已展开的输入列, 仍须保留成员定义本身。
+            for member in definition.get("members", {}):
+                _add_factor_ref(str(member))
         # composite 成员递归在 definition_dependencies 内已展开为列名;
         # 只要是自定义因子就继续收集, 内置列在 _add_factor_ref 里被跳过。
         try:
@@ -181,15 +192,20 @@ def collect_dependencies(
         entries[f"user_data/custom_signals/{sid}.json"] = json.dumps(
             sig, ensure_ascii=False, indent=2
         ).encode("utf-8")
-        for dep in sorted(definitions.definition_dependencies("signal", sig)):
+        deps = definitions.definition_dependencies("signal", sig)
+        if sig.get("timeframe") == "intraday":
+            from app.strategy.intraday_features import INTRADAY_FEATURES
+
+            deps -= frozenset(INTRADAY_FEATURES)
+        for dep in sorted(deps):
             _add_factor_ref(dep)
 
     def _add_strategy(sid: str, root: bool) -> None:
         try:
             child = engine.get(sid)
-        except ValueError:
+        except ValueError as exc:
             if root:
-                raise
+                raise StrategyBundleError(str(exc)) from exc
             summary.warnings.append(f"composite 子策略 {sid} 不存在, 未打包")
             return
         rel = _strategy_rel_path(data_dir, child)
@@ -202,20 +218,52 @@ def collect_dependencies(
         elif rel not in entries:
             path = data_dir / rel
             entries[rel] = path.read_bytes()
+        else:
+            return
+        if root and sid == strategy_id:
+            summary.label = str(child.meta.get("name") or sid)
+
+        # 同目录辅助模块由引擎白名单加载, 必须随策略一起迁移。
+        if rel is not None:
+            for helper in (data_dir / rel).parent.glob("_*.py"):
+                entries[helper.relative_to(data_dir).as_posix()] = helper.read_bytes()
 
         # 因子引用: META.scoring + 模块 SCORING + override 里的 scoring
         factor_refs = {str(k) for k in (child.meta.get("scoring") or {})}
 
         factor_refs.update(child.scoring_columns)
+        factor_refs.update(ref for ref in child.required_features if ref.startswith(("uf_", "cf_", "ext_")))
+        code = entries.get(rel, b"").decode("utf-8") if rel else ""
+        native_signals = child.execution_backend == "matrix_native"
+        code_factors, code_signals = _strategy_refs_from_code(code, include_signal_outputs=not native_signals)
+        factor_refs.update(code_factors)
+        helper_signals: list[str] = []
+        if rel is not None:
+            for helper in (data_dir / rel).parent.glob("_*.py"):
+                helper_factors, helper_signal_refs = _strategy_refs_from_code(helper.read_text(encoding="utf-8"))
+                factor_refs.update(helper_factors)
+                helper_signals.extend(helper_signal_refs)
 
         # 信号引用: 模块常量 + override 增改
-        signal_refs = list(child.entry_signals) + list(child.exit_signals)
+        # 矩阵策略的进出场名称是 compute_signals 输出标签, 不是信号库输入。
+        signal_refs = code_signals + helper_signals
+        if not native_signals:
+            signal_refs += list(child.entry_signals) + list(child.exit_signals)
+        signal_refs.extend(ref for ref in child.required_features if ref.startswith(("csg_", "csgi_", "signal_")))
         override = strategy_config.load_override(data_dir, sid) or {}
-        signal_refs += [str(r) for r in (override.get("entry_signals") or [])]
-        signal_refs += [str(r) for r in (override.get("exit_signals") or [])]
+        if not native_signals:
+            signal_refs += [str(r) for r in (override.get("entry_signals") or [])]
+            signal_refs += [str(r) for r in (override.get("exit_signals") or [])]
         ov_scoring = override.get("scoring")
         if isinstance(ov_scoring, dict):
             factor_refs.update(str(k) for k in ov_scoring)
+        for condition in override.get("overlay_filter") or []:
+            if isinstance(condition, dict):
+                factor_refs.add(str(condition.get("left", "")))
+                right = condition.get("right")
+                if isinstance(right, str) and right.startswith("field:"):
+                    factor_refs.add(right[6:])
+        factor_refs.discard("")
 
         for ref in sorted(factor_refs):
             _add_factor_ref(ref)
@@ -236,10 +284,21 @@ def collect_dependencies(
 
         # composite 子策略递归 (只允许一层, 与引擎非嵌套约束一致)
         if child.composite is not None:
-            for c in child.composite.children:
-                _add_strategy(c.strategy_id, root=False)
+            children = override.get("children")
+            child_ids = [str(c["strategy_id"]) for c in children] if isinstance(children, list) and children else [c.strategy_id for c in child.composite.children]
+            for child_id in child_ids:
+                _add_strategy(child_id, root=False)
 
-    _add_strategy(strategy_id, root=True)
+    for ref in roots:
+        kind, rid = ref["kind"], ref["id"]
+        if kind == "strategy":
+            _add_strategy(rid, root=True)
+        elif kind == "factor" and rid in factor_defs:
+            _add_factor(rid)
+        elif kind == "signal" and rid in signal_lookup:
+            _add_signal(signal_lookup[rid])
+        else:
+            raise StrategyBundleError(f"资源不存在: {kind}:{rid}")
 
     counts: dict[str, int] = {}
     for rel in entries:
@@ -286,7 +345,7 @@ class ParsedBundle:
     entries: list[tuple[str, str, Path]]  # (zip 内路径, 类别, 本机目标绝对路径)
 
 
-def parse_bundle(data: bytes) -> ParsedBundle:
+def parse_bundle(data: bytes, *, allow_resources: bool = False) -> ParsedBundle:
     """校验包形状: ZIP 可读/上限/manifest 合法/条目全部落在 4 类白名单内。"""
     if not data:
         raise StrategyBundleError("空文件")
@@ -301,12 +360,13 @@ def parse_bundle(data: bytes) -> ParsedBundle:
         if len(infos) > MAX_ENTRIES:
             raise StrategyBundleError(f"策略包条目数超过上限 ({len(infos)} > {MAX_ENTRIES})")
         try:
-            manifest = json.loads(zf.read("manifest.json"))
+            manifest = json.loads(_read_entry(zf, "manifest.json"))
         except KeyError as e:
             raise StrategyBundleError("策略包缺少 manifest.json") from e
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise StrategyBundleError(f"manifest.json 解析失败: {e}") from e
-        if not isinstance(manifest, dict) or manifest.get("format") != BUNDLE_FORMAT:
+        formats = {BUNDLE_FORMAT, "tick-resource-bundle"} if allow_resources else {BUNDLE_FORMAT}
+        if not isinstance(manifest, dict) or manifest.get("format") not in formats:
             raise StrategyBundleError("不是本应用的策略包文件")
         if manifest.get("version") != BUNDLE_VERSION:
             raise StrategyBundleError(
@@ -318,7 +378,17 @@ def parse_bundle(data: bytes) -> ParsedBundle:
         data_dir = _data_dir()
         entries: list[tuple[str, str, Path]] = []
         offenders: list[str] = []
+        seen: set[str] = set()
+        total_bytes = 0
+        from app.services.config_backup import MAX_TOTAL_BYTES
+
         for info in infos:
+            if info.filename in seen:
+                raise StrategyBundleError(f"策略包包含重复条目: {info.filename}")
+            seen.add(info.filename)
+            total_bytes += info.file_size
+            if total_bytes > MAX_TOTAL_BYTES:
+                raise StrategyBundleError("资源包解压后的总量超过上限")
             if info.filename == "manifest.json":
                 continue
             rel = _safe_rel(info.filename)
@@ -331,25 +401,27 @@ def parse_bundle(data: bytes) -> ParsedBundle:
             raise StrategyBundleError(
                 "策略包包含不允许的条目 (只允许策略/调参/信号/因子): " + ", ".join(offenders[:5])
             )
-        if not any(kind == "strategies" for _, kind, _ in entries):
+        if manifest.get("format") == BUNDLE_FORMAT and not any(kind == "strategies" for _, kind, _ in entries):
             raise StrategyBundleError("策略包里没有策略文件")
     return ParsedBundle(manifest=manifest, entries=entries)
 
 
-def _strategy_refs_from_code(code: str) -> tuple[set[str], list[str]]:
+def _strategy_refs_from_code(code: str, *, include_signal_outputs: bool = True) -> tuple[set[str], list[str]]:
     """AST 提取策略源码的引用: (因子引用集合, 信号引用列表)。
 
     只看顶层赋值字面量 (META.scoring / SCORING / ENTRY_SIGNALS / EXIT_SIGNALS),
-    与引擎 getattr(mod, …) 同口径; 不执行任何代码。
+    与引擎 getattr(mod, …) 同口径; 不执行任何代码。矩阵策略可排除进出场输出标签,
+    但 REQUIRED_FEATURES、META.required_features 和源码中的显式列输入始终保留。
     """
     factor_refs: set[str] = set()
     signal_refs: list[str] = []
 
     def _collect(target_names: tuple[str, ...], node: ast.AST) -> None:
-        if not isinstance(node, ast.Assign):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             return
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         names = {
-            t.id for t in node.targets if isinstance(t, ast.Name) and t.id in target_names
+            t.id for t in targets if isinstance(t, ast.Name) and t.id in target_names
         }
         if not names:
             return
@@ -361,9 +433,15 @@ def _strategy_refs_from_code(code: str) -> tuple[set[str], list[str]]:
             scoring = value.get("scoring") if isinstance(value, dict) else None
             if isinstance(scoring, dict):
                 factor_refs.update(str(k) for k in scoring)
+            if isinstance(value, dict):
+                for ref in value.get("required_features") or []:
+                    if isinstance(ref, str) and ref.startswith(("uf_", "cf_", "ext_")):
+                        factor_refs.add(ref)
+                    elif isinstance(ref, str) and ref.startswith(("csg_", "csgi_", "signal_")):
+                        signal_refs.append(ref)
         if "SCORING" in names and isinstance(value, dict):
             factor_refs.update(str(k) for k in value)
-        if names & {"ENTRY_SIGNALS", "EXIT_SIGNALS"} and isinstance(value, (list, tuple)):
+        if include_signal_outputs and names & {"ENTRY_SIGNALS", "EXIT_SIGNALS"} and isinstance(value, (list, tuple)):
             signal_refs.extend(str(v) for v in value if v)
 
     try:
@@ -372,6 +450,26 @@ def _strategy_refs_from_code(code: str) -> tuple[set[str], list[str]]:
         return factor_refs, signal_refs
     for node in tree.body:
         _collect(("META", "SCORING", "ENTRY_SIGNALS", "EXIT_SIGNALS"), node)
+    for node in ast.walk(tree):
+        # 明确声明的输入列和代码中的自定义列引用; 不猜测动态拼接的列名。
+        values: list[str] = []
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if targets and any(isinstance(t, ast.Name) and t.id == "REQUIRED_FEATURES" for t in targets):
+            try:
+                value = ast.literal_eval(node.value)
+                if isinstance(value, (set, list, tuple)):
+                    values = [v for v in value if isinstance(v, str)]
+            except (ValueError, SyntaxError):
+                pass
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "col":
+            values.extend(a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "matrix_feature":
+            values.extend(a.value for a in node.args[1:2] if isinstance(a, ast.Constant) and isinstance(a.value, str))
+        for value in values:
+            if value.startswith(("uf_", "cf_", "ext_")):
+                factor_refs.add(value)
+            elif value.startswith(("csg_", "csgi_", "signal_")):
+                signal_refs.append(value)
     return factor_refs, signal_refs
 
 

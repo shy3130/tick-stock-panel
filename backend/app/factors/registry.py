@@ -14,6 +14,8 @@ P1 边界 (诚实声明):
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -303,14 +305,32 @@ _CATALOG: tuple[FactorSpec, ...] = (
 )
 
 _REGISTRY: dict[str, FactorSpec] = {}
+_PREVIEW_REGISTRY: ContextVar[dict[str, FactorSpec] | None] = ContextVar("factor_preview_registry", default=None)
+
+
+@contextmanager
+def isolated_registry():
+    """包预检使用进程注册表的副本; 传入因子不向其他请求/行情线程泄漏。"""
+    snapshot = dict(_REGISTRY)
+    token = _PREVIEW_REGISTRY.set(snapshot)
+    try:
+        yield snapshot
+    finally:
+        _PREVIEW_REGISTRY.reset(token)
+
+
+def _active_registry() -> dict[str, FactorSpec]:
+    preview = _PREVIEW_REGISTRY.get()
+    return _REGISTRY if preview is None else preview
 
 
 def register_factor(spec: FactorSpec) -> None:
     """注册因子; 重复 id 且版本未增时拒绝 (fail-closed)。"""
-    existing = _REGISTRY.get(spec.id)
+    active = _active_registry()
+    existing = active.get(spec.id)
     if existing is not None and existing.version >= spec.version:
         raise ValueError(f"factor id 已注册且版本未提升: {spec.id}")
-    _REGISTRY[spec.id] = spec
+    active[spec.id] = spec
 
 
 for _spec in _CATALOG:
@@ -318,31 +338,33 @@ for _spec in _CATALOG:
 
 
 def get_factor(fid: str) -> FactorSpec | None:
-    return _REGISTRY.get(fid)
+    return _active_registry().get(fid)
 
 
 def unregister_factor(fid: str) -> FactorSpec | None:
     """注销动态注册的因子 (内置目录因子不可注销, fail-closed)。"""
     if any(spec.id == fid for spec in _CATALOG):
         raise ValueError(f"内置因子不可注销: {fid}")
-    return _REGISTRY.pop(fid, None)
+    return _active_registry().pop(fid, None)
 
 
 def _ordered_specs() -> list[FactorSpec]:
     """内置目录顺序在前, 动态注册因子 (custom/composite) 按注册顺序追加。"""
     ordered: list[FactorSpec] = list(_CATALOG)
     known = {spec.id for spec in _CATALOG}
-    ordered.extend(spec for fid, spec in _REGISTRY.items() if fid not in known)
+    ordered.extend(spec for fid, spec in _active_registry().items() if fid not in known)
     return ordered
 
 
 def _ensure_ext_factors() -> None:
     """扩展表字段惰性同步 (配置目录签名幂等); 失败不阻断注册表读取。"""
+    if _PREVIEW_REGISTRY.get() is not None:
+        return
     try:
         from app.factors.ext_factors import ensure_synced
 
         ensure_synced()
-    except Exception:
+    except Exception:  # noqa: BLE001 — 可选扩展同步失败记录 debug, 不影响注册表读取
         import logging
 
         logging.getLogger(__name__).debug("ext factor sync skipped", exc_info=True)
@@ -369,7 +391,7 @@ def factor_dependencies(fids) -> frozenset[str]:
     """递归展开依赖到 enriched base 列; 未知 id 原样保留 (与 scoring_dependencies 历史语义一致)。"""
     resolved: set[str] = set()
     for fid in fids:
-        spec = _REGISTRY.get(str(fid))
+        spec = get_factor(str(fid))
         if spec is None:
             resolved.add(str(fid))
         elif spec.dependencies:

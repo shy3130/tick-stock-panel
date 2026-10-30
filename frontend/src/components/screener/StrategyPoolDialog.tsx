@@ -1,545 +1,140 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
-import { motion, AnimatePresence, Reorder } from 'framer-motion'
-import { X, Plus, GripVertical, Upload, Loader2, Trash2, ListPlus } from 'lucide-react'
-import { api, type StrategyBundleInspect, type StrategyDetail } from '@/lib/api'
-import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
+import { useState, useMemo, useEffect, useCallback } from 'react'
+import { Reorder, useDragControls } from 'framer-motion'
+import { ArrowDown, ArrowUp, Check, GripVertical, Layers, Loader2, Search, X } from 'lucide-react'
+import { Modal } from '@/components/Modal'
+import { api, type StrategyDetail } from '@/lib/api'
+import { cn } from '@/lib/cn'
 
-interface Props {
-  pool: string[]
-  onConfirm: (newPool: string[]) => void
-  onClose: () => void
-}
-
-const SOURCE_CLS: Record<string, string> = {
-  custom: 'bg-amber-400/10 text-amber-400 border-amber-400/30',
-  ai: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  // 叠加策略独立「叠加」分组, 徽标与 StrategyCard 一致用 teal 区分
-  composite: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
-  invalid: 'bg-danger/10 text-danger border-danger/20',
-}
-
-const SOURCE_LABEL: Record<string, string> = {
-  custom: '自定义',
-  ai: 'AI',
-  composite: '叠加',
-  invalid: '失效',
-}
-
-const TF_BADGE_CLS = 'text-[8px] px-1 py-px rounded border leading-tight shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-400'
-
+interface Props { pool: string[]; onConfirm: (newPool: string[]) => void; onClose: () => void }
+const SOURCE_LABEL: Record<string, string> = { custom: '自定义', ai: 'AI', composite: '叠加' }
+const SOURCE_CLS: Record<string, string> = { custom: 'border-amber-400/25 text-amber-500', ai: 'border-purple-500/25 text-purple-400', composite: 'border-teal-500/25 text-teal-500' }
+const BUTTON = 'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-btn border border-border px-2.5 text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
 type SourceTab = 'all' | 'custom' | 'ai' | 'composite'
+const TABS: { id: SourceTab; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'custom', label: '自定义' }, { id: 'ai', label: 'AI' }, { id: 'composite', label: '叠加' }]
 
-const TABS: { id: SourceTab; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'custom', label: '自定义' },
-  { id: 'ai', label: 'AI' },
-  { id: 'composite', label: '叠加' },
-]
-
-function parseMetaId(code: string): string {
-  const m = code.match(/["']id["']\s*:\s*["']([A-Za-z0-9_-]+)["']/)
-  return m ? m[1] : ''
-}
-
-function fileStem(name: string): string {
-  return name.replace(/\.py$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^_+|_+$/g, '')
-}
-
-const BUNDLE_KIND_LABEL: Record<string, string> = {
-  strategies: '策略',
-  strategy_overrides: '调参',
-  custom_signals: '信号',
-  custom_factors: '因子',
+function SelectedRow({ id, strategy, index, count, disabled, resolved, onMove, onRemove }: {
+  id: string; strategy?: StrategyDetail; index: number; count: number; disabled: boolean; resolved: boolean
+  onMove: (from: number, offset: number) => void; onRemove: (id: string) => void
+}) {
+  const controls = useDragControls()
+  const valid = strategy && !strategy.research_only
+  const label = strategy?.name ?? id
+  return <Reorder.Item value={id} dragListener={false} dragControls={controls} data-strategy-id={id}
+    className={cn('flex items-center gap-2 rounded-btn border bg-surface px-2 py-3', valid || !resolved ? 'border-border' : 'border-danger/30 bg-danger/5')}
+    whileDrag={{ zIndex: 1, boxShadow: '0 4px 12px rgba(0,0,0,.2)' }}>
+    <span onPointerDown={event => { if (!disabled) controls.start(event) }} title="拖动排序，也可使用右侧上下移动按钮" className="inline-flex h-8 w-5 shrink-0 touch-none cursor-grab items-center justify-center text-muted active:cursor-grabbing"><GripVertical className="h-4 w-4" /></span>
+    <span className="w-4 shrink-0 text-center text-[10px] tabular-nums text-muted">{index + 1}</span>
+    <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium text-foreground" title={label}>{label}</p><p className="mt-1 truncate text-[10px] text-muted" title={id}>{id}</p>{!valid && resolved && <p className="mt-1 text-[10px] text-danger">失效策略 · 已删除或尚未发布</p>}</div>
+    <div className="flex shrink-0 items-center gap-0.5">
+      <button type="button" aria-label={`上移：${label}`} title="上移" disabled={disabled || index === 0} onClick={() => onMove(index, -1)} className="inline-flex h-8 w-8 items-center justify-center rounded text-muted hover:bg-elevated hover:text-accent disabled:opacity-25"><ArrowUp className="h-3.5 w-3.5" /></button>
+      <button type="button" aria-label={`下移：${label}`} title="下移" disabled={disabled || index === count - 1} onClick={() => onMove(index, 1)} className="inline-flex h-8 w-8 items-center justify-center rounded text-muted hover:bg-elevated hover:text-accent disabled:opacity-25"><ArrowDown className="h-3.5 w-3.5" /></button>
+      <button type="button" aria-label={`移出策略池：${label}`} title="移出策略池，不删除策略" disabled={disabled} onClick={() => onRemove(id)} className="inline-flex h-8 w-8 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger disabled:opacity-25"><X className="h-3.5 w-3.5" /></button>
+    </div>
+  </Reorder.Item>
 }
 
 export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
-  const backdrop = useDialogBackdrop(onClose)
-  // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
-  const [draftPool, setDraftPool] = useState<string[]>(() => [...pool])
+  const [originalPool] = useState<string[]>(() => [...new Set(pool)])
+  const [draftPool, setDraftPool] = useState<string[]>(() => [...originalPool])
+  const [clearedPool, setClearedPool] = useState<string[] | null>(null)
   const [allStrategies, setAllStrategies] = useState<StrategyDetail[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<SourceTab>('all')
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState('')
-  const [importMsg, setImportMsg] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [message, setMessage] = useState('')
+  const [publishError, setPublishError] = useState('')
   const [publishingId, setPublishingId] = useState<string | null>(null)
-  // 策略包 (.zip) 导入: 选文件 → inspect 预览 → 确认 apply
-  const [bundleFile, setBundleFile] = useState<File | null>(null)
-  const [bundlePreview, setBundlePreview] = useState<StrategyBundleInspect | null>(null)
-  const [bundleApplying, setBundleApplying] = useState(false)
-  const [bundleOverwrite, setBundleOverwrite] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-
+  const [activeTab, setActiveTab] = useState<SourceTab>('all')
+  const [search, setSearch] = useState('')
+  const [timeframe, setTimeframe] = useState('all')
+  const [mobilePane, setMobilePane] = useState<'library' | 'selected'>('library')
   const loadStrategies = useCallback(async () => {
-    setLoading(true)
+    setLoading(true); setLoadError('')
     try {
-      // 不按周期过滤: 日线+分钟策略合并展示, 分钟策略以徽章区分
-      // include_research=true 同时拉取 research_only 草稿, 供 AI 标签「草稿」分区展示/发布
-      const d = await api.strategyList(undefined, 'all', true)
-      setAllStrategies(d.strategies)
-    } catch {
-      setAllStrategies([])
-    } finally {
-      setLoading(false)
-    }
+      const data = await api.strategyList(undefined, 'all', true)
+      setAllStrategies(data.strategies); setLoaded(true)
+      return true
+    } catch (error) { setLoadError(error instanceof Error ? error.message : '请检查连接后重试'); return false }
+    finally { setLoading(false) }
   }, [])
-
-  useEffect(() => {
-    loadStrategies()
-  }, [loadStrategies])
-
-  const stratMap = useMemo(() => {
-    const m = new Map<string, StrategyDetail>()
-    allStrategies.forEach(s => m.set(s.id, s))
-    return m
-  }, [allStrategies])
-
-  const validDraft = useMemo(
-    () => draftPool.filter(id => stratMap.has(id)),
-    [draftPool, stratMap]
-  )
-  const invalidPoolCount = draftPool.length - validDraft.length
-
-  const available = useMemo(
-    () => allStrategies.filter(s => !s.research_only && !draftPool.includes(s.id)),
-    [allStrategies, draftPool]
-  )
-
-  // research_only 草稿(AI 来源)单独列出, 供「发布」操作; 不进待选列表。
-  // 发布闸(/{id}/publish)仅接受 source=ai, 非 AI 的 research 项(如内置研究模板
-  // factor_rank_research)混入会渲染出必然失败的「发布」按钮, 故此处排除。
-  const drafts = useMemo(
-    () => allStrategies.filter(s => s.research_only && s.source === 'ai'),
-    [allStrategies]
-  )
-
-  // 按 Tab 分组过滤待选; 叠加策略(composite)独立分组, 不再并入「自定义」
-  const filteredAvailable = useMemo(() => {
-    if (activeTab === 'all') return available
-    return available.filter(s => s.source === activeTab)
-  }, [available, activeTab])
-
-  const handleAdd = useCallback((id: string) => {
-    setDraftPool(prev => prev.includes(id) ? prev : [...prev, id])
-  }, [])
-
-  const handleRemove = useCallback((id: string) => {
-    setDraftPool(prev => prev.filter(x => x !== id))
-  }, [])
-
-  const handleReorder = useCallback((newOrder: string[]) => {
-    setDraftPool(newOrder)
-  }, [])
-
-  // 一键清空已选池 (草稿态, 误点可用「取消」恢复)
-  const handleClearAll = useCallback(() => {
-    setDraftPool([])
-  }, [])
-
-  // 一键加入当前 Tab 分组的全部待选策略
-  const handleAddGroup = useCallback(() => {
-    setDraftPool(prev => {
-      const next = [...prev]
-      for (const s of filteredAvailable) {
-        if (!next.includes(s.id)) next.push(s.id)
-      }
-      return next
-    })
-  }, [filteredAvailable])
-
-  // 发布 research_only 草稿 → 刷新后进入公开列表
-  const handlePublish = useCallback(async (id: string) => {
-    setPublishingId(id); setImportError(''); setImportMsg('')
+  useEffect(() => { void loadStrategies() }, [loadStrategies])
+  useEffect(() => { if (draftPool.length > 0) setClearedPool(null) }, [draftPool.length])
+  const stratMap = useMemo(() => new Map(allStrategies.map(strategy => [strategy.id, strategy])), [allStrategies])
+  const selectedIds = useMemo(() => new Set(draftPool), [draftPool])
+  const ready = loaded && !loading && !loadError
+  const disabled = !ready || publishingId !== null
+  const invalid = ready ? draftPool.filter(id => !stratMap.has(id) || stratMap.get(id)!.research_only) : []
+  const changed = JSON.stringify(draftPool) !== JSON.stringify(originalPool)
+  const publicStrategies = allStrategies.filter(strategy => !strategy.research_only)
+  const catalogCount = allStrategies.filter(strategy => !strategy.research_only || strategy.source === 'ai').length
+  const query = search.trim().toLowerCase()
+  const matches = (strategy: StrategyDetail) => (activeTab === 'all' || strategy.source === activeTab)
+    && (timeframe === 'all' || (strategy.timeframes?.length ? strategy.timeframes : ['1d']).includes(timeframe))
+    && `${strategy.name} ${strategy.id} ${strategy.description}`.toLowerCase().includes(query)
+  const visible = publicStrategies.filter(matches)
+  const drafts = allStrategies.filter(strategy => strategy.research_only && strategy.source === 'ai' && matches(strategy))
+  const available = visible.filter(strategy => !selectedIds.has(strategy.id))
+  const toggle = (id: string) => setDraftPool(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id])
+  const remove = (id: string) => setDraftPool(previous => previous.filter(item => item !== id))
+  const move = (from: number, offset: number) => setDraftPool(previous => {
+    const next = [...previous], to = from + offset
+    if (to < 0 || to >= next.length) return previous
+    ;[next[from], next[to]] = [next[to], next[from]]
+    return next
+  })
+  const publish = async (strategy: StrategyDetail) => {
+    setPublishingId(strategy.id); setPublishError(''); setMessage('')
     try {
-      await api.strategyPublish(id)
-      await loadStrategies()
-      setImportMsg(`已发布: ${id}`)
-    } catch (e: any) {
-      setImportError(String(e?.message ?? '发布失败'))
-    } finally {
-      setPublishingId(null)
-    }
-  }, [loadStrategies])
+      await api.strategyPublish(strategy.id)
+      if (await loadStrategies()) setMessage(`已发布「${strategy.name}」，可勾选加入策略池。`)
+    } catch (error) { setPublishError(error instanceof Error ? error.message : '发布失败，请重试') }
+    finally { setPublishingId(null) }
+  }
 
-  const handleImportFile = useCallback(async (file: File) => {
-    setImportError(''); setImportMsg('')
-    const name = file.name.toLowerCase()
-    if (name.endsWith('.zip')) {
-      // 策略包: 先 inspect 预览, 用户确认后再 apply
-      setBundleFile(file); setBundlePreview(null); setBundleOverwrite(false)
-      setImporting(true)
-      try {
-        setBundlePreview(await api.strategyBundleInspect(file))
-      } catch (e: any) {
-        setBundleFile(null)
-        setImportError(String(e?.message ?? '策略包解析失败'))
-      } finally {
-        setImporting(false)
-      }
-      return
-    }
-    setImporting(true); setImportError(''); setImportMsg('')
-    try {
-      if (!file.name.toLowerCase().endsWith('.py')) throw new Error('只能导入 .py 策略文件或 .zip 策略包')
-      const code = await file.text()
-      const rawId = parseMetaId(code) || fileStem(file.name)
-      if (!rawId) throw new Error('无法识别策略 ID，请检查 META.id 或文件名')
-      const target: 'ai' | 'custom' = rawId.startsWith('ai_') ? 'ai' : 'custom'
-      const strategyId = target === 'ai'
-        ? rawId
-        : (rawId.startsWith('custom_') ? rawId : `custom_${rawId}`)
-      const result = await api.strategySaveCodeV2({
-        strategy_id: strategyId,
-        code,
-        target_source: target,
-        mode: 'create',
-      })
-      await loadStrategies()
-      setActiveTab(result.source === 'ai' ? 'ai' : 'custom')
-      const srcLabel = result.source === 'ai'
-        ? (result.research_only ? 'AI 草稿(发布后可用)' : 'AI 策略')
-        : '自定义策略'
-      setImportMsg(`已导入到${srcLabel}: ${result.strategy_id}`)
-    } catch (e: any) {
-      setImportError(String(e?.message ?? '导入失败'))
-    } finally {
-      setImporting(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }, [loadStrategies])
-
-  const handleBundleApply = useCallback(async () => {
-    if (!bundleFile || !bundlePreview) return
-    setBundleApplying(true); setImportError(''); setImportMsg('')
-    try {
-      const result = await api.strategyBundleApply(bundleFile, bundleOverwrite)
-      const imported = result.categories.reduce((acc, c) => acc + c.imported, 0)
-      const skipped = result.categories.reduce((acc, c) => acc + c.skipped_conflict, 0)
-      const failed = result.categories.reduce((acc, c) => acc + c.failed.length, 0)
-      await loadStrategies()
-      setBundleFile(null); setBundlePreview(null)
-      const parts = [`已导入 ${imported} 个文件`]
-      if (skipped) parts.push(`跳过冲突 ${skipped}`)
-      if (failed) parts.push(`失败 ${failed}`)
-      setImportMsg(`策略包「${bundlePreview.label || bundlePreview.strategy_id}」: ${parts.join(', ')}`)
-    } catch (e: any) {
-      setImportError(String(e?.message ?? '策略包导入失败'))
-    } finally {
-      setBundleApplying(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }, [bundleFile, bundlePreview, bundleOverwrite, loadStrategies])
-
-  return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        {...backdrop}
-      >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-          className="w-[680px] max-h-[78vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
-        >
-          {/* 标题 */}
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-            <span className="text-sm font-medium text-foreground">
-              策略池 <span className="text-muted font-normal text-xs">{validDraft.length} / {allStrategies.length}</span>
-              {invalidPoolCount > 0 && <span className="ml-2 text-[10px] text-danger">{invalidPoolCount} 个失效</span>}
-            </span>
-            <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".py,.zip,text/x-python,text/plain,application/zip"
-                className="hidden"
-                onChange={e => {
-                  const file = e.target.files?.[0]
-                  if (file) void handleImportFile(file)
-                }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={importing}
-                title="导入单个 .py 策略, 或导出的 .zip 策略包 (含信号/因子/调参)"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-accent/30 bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                导入策略
-              </button>
-              <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
-                <X className="h-4 w-4 text-muted" />
-              </button>
-            </div>
-          </div>
-
-          {(importError || importMsg) && (
-            <div className={`mx-4 mt-2 px-3 py-2 rounded-btn border text-[11px] shrink-0 ${importError ? 'border-danger/20 bg-danger/10 text-danger' : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-400'}`}>
-              {importError || importMsg}
-            </div>
-          )}
-
-          {bundlePreview && bundleFile && (
-            <div className="mx-4 mt-2 rounded-btn border border-border bg-elevated/40 p-3 text-[11px] shrink-0">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <span className="font-medium text-foreground">
-                    策略包: {bundlePreview.label || bundlePreview.strategy_id}
-                  </span>
-                  <span className="ml-2 text-muted">
-                    {bundlePreview.entries.length} 个文件
-                    {bundlePreview.created_at ? ` · ${bundlePreview.created_at.slice(0, 10)}` : ''}
-                  </span>
-                </div>
-                <button
-                  onClick={() => { setBundleFile(null); setBundlePreview(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
-                  className="text-muted hover:text-foreground transition-colors cursor-pointer"
-                  aria-label="取消导入策略包"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
-                {bundlePreview.entries.map(e => (
-                  <div key={e.path} className="flex items-center gap-1.5 min-w-0">
-                    <span className={`shrink-0 rounded border px-1 py-px text-[9px] leading-tight ${e.action === 'conflict' ? 'border-amber-400/30 bg-amber-400/10 text-amber-400' : 'border-border bg-surface text-muted'}`}>
-                      {BUNDLE_KIND_LABEL[e.kind] ?? e.kind}
-                    </span>
-                    <span className="truncate text-secondary font-mono">{e.id}</span>
-                    {e.action === 'conflict' && <span className="shrink-0 text-amber-400">已存在</span>}
-                  </div>
-                ))}
-              </div>
-
-              {(bundlePreview.missing_deps.length > 0 || bundlePreview.warnings.length > 0) && (
-                <div className="mt-2 rounded-btn border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 text-amber-400/90 leading-relaxed">
-                  {[...bundlePreview.missing_deps, ...bundlePreview.warnings].slice(0, 6).map((w, i) => (
-                    <div key={i}>· {w}</div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-2.5 flex items-center justify-between">
-                {bundlePreview.entries.some(e => e.action === 'conflict') ? (
-                  <label className="flex items-center gap-1.5 text-muted cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={bundleOverwrite}
-                      onChange={e => setBundleOverwrite(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    覆盖已存在的同名项
-                  </label>
-                ) : <span />}
-                <button
-                  onClick={handleBundleApply}
-                  disabled={bundleApplying}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-btn bg-accent text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 transition-colors cursor-pointer"
-                >
-                  {bundleApplying && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  导入策略包
-                </button>
-              </div>
-            </div>
-          )}
-
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 grid grid-cols-2 gap-0">
-              {/* 左侧: 待选 (Tab 分组) */}
-              <div className="flex flex-col min-h-0 border-r border-border">
-                <div className="flex items-center gap-0.5 px-3 py-2 border-b border-border/60 shrink-0">
-                  {TABS.map(tab => {
-                    const count = tab.id === 'all'
-                      ? available.length
-                      : available.filter(s => s.source === tab.id).length
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`px-2.5 py-1 text-[11px] font-medium rounded-btn transition-colors cursor-pointer ${
-                          activeTab === tab.id
-                            ? 'bg-accent/10 text-accent'
-                            : 'text-muted hover:text-secondary hover:bg-elevated'
-                        }`}
-                      >
-                        {tab.label}
-                        <span className="ml-1 text-[9px] opacity-60">{count}</span>
-                      </button>
-                    )
-                  })}
-                  <button
-                    onClick={handleAddGroup}
-                    disabled={filteredAvailable.length === 0}
-                    title="把当前分组剩余的策略全部加入策略池"
-                    className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-btn text-[10px] text-accent border border-accent/25 bg-accent/8 hover:bg-accent/15 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shrink-0"
-                  >
-                    <ListPlus className="h-3 w-3" />
-                    本组全加
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto px-2 py-2">
-                  {activeTab === 'ai' && drafts.length > 0 && (
-                    <div className="mb-3">
-                      <div className="flex items-center justify-between px-1 mb-1">
-                        <span className="text-[10px] font-medium text-muted">草稿</span>
-                        <span className="text-[9px] text-muted">{drafts.length} 个待发布</span>
-                      </div>
-                      <div className="space-y-0.5">
-                        {drafts.map(s => (
-                          <div
-                            key={s.id}
-                            className="flex items-center gap-2 px-2.5 py-1.5 rounded-btn border border-purple-500/15 bg-purple-500/5"
-                          >
-                            <span className="flex-1 min-w-0">
-                              <span className="text-[12px] text-foreground block truncate">
-                                {s.name} <span className="text-[10px] text-muted font-mono">{s.id}</span>
-                              </span>
-                              <span className="text-[10px] text-muted truncate block">{s.description}</span>
-                            </span>
-                            <button
-                              onClick={() => handlePublish(s.id)}
-                              disabled={publishingId === s.id}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-btn text-[10px] text-purple-400 border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50 transition-colors cursor-pointer shrink-0"
-                            >
-                              {publishingId === s.id && <Loader2 className="h-3 w-3 animate-spin" />}
-                              发布
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {activeTab === 'ai' && drafts.length > 0 && (
-                    <div className="px-1 mb-1 text-[10px] font-medium text-muted">待选</div>
-                  )}
-                  <div className="space-y-0.5">
-                    {filteredAvailable.length === 0 ? (
-                      <div className="flex items-center justify-center h-24 text-[11px] text-muted">
-                        {available.length === 0 ? '全部已加入策略池' : '此分组无待选策略'}
-                      </div>
-                    ) : filteredAvailable.map(s => (
-                      <button
-                        key={s.id}
-                        onClick={() => handleAdd(s.id)}
-                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-btn
-                          hover:bg-accent/8 transition-colors cursor-pointer group text-left"
-                      >
-                        <span className="flex-1 min-w-0">
-                          <span className="text-[12px] text-foreground group-hover:text-accent transition-colors block truncate">
-                            {s.name} <span className="text-[10px] text-muted font-mono">{s.id}</span>
-                          </span>
-                          <span className="text-[10px] text-muted truncate block">{s.description}</span>
-                        </span>
-                        <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[s.source] ?? SOURCE_CLS.custom}`}>
-                          {SOURCE_LABEL[s.source] ?? '自定义'}
-                        </span>
-                        {s.timeframes?.includes('1m') && (
-                          <span className={TF_BADGE_CLS}>分钟</span>
-                        )}
-                        <Plus className="h-3.5 w-3.5 text-muted/40 group-hover:text-accent shrink-0" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* 右侧: 已选 (Reorder.Group 纵向拖拽) */}
-              <div className="flex flex-col min-h-0">
-                <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/60 shrink-0">
-                  <GripVertical className="h-3 w-3 text-muted/50" />
-                  <span className="text-[10px] text-muted">已选 · 上下拖拽排序</span>
-                  <button
-                    onClick={handleClearAll}
-                    disabled={draftPool.length === 0}
-                    title="清空已选策略池 (未点确定前可用「取消」恢复)"
-                    className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-btn text-[10px] text-muted border border-border/60 hover:text-danger hover:border-danger/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shrink-0"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    清空
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto px-2 py-2">
-                  {draftPool.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-[11px] text-muted">
-                      从左侧点击策略添加
-                    </div>
-                  ) : (
-                    <Reorder.Group
-                      axis="y"
-                      values={draftPool}
-                      onReorder={handleReorder}
-                      className="space-y-1"
-                    >
-                      {draftPool.map(id => {
-                        const s = stratMap.get(id)
-                        const src = s?.source ?? 'invalid'
-                        return (
-                          <Reorder.Item
-                            key={id}
-                            value={id}
-                            className="flex items-center gap-2 px-2.5 py-1.5 rounded-btn
-                              bg-accent/8 border border-accent/20
-                              cursor-grab active:cursor-grabbing
-                              hover:bg-accent/15 transition-colors group"
-                            whileDrag={{ scale: 1.02, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}
-                          >
-                            <GripVertical className="h-3.5 w-3.5 text-accent/40 group-hover:text-accent/70 shrink-0" />
-                            <span className="flex-1 min-w-0 text-[12px] text-foreground truncate">
-                              {s?.name ?? id} <span className="text-[10px] text-muted font-mono">{id}</span>
-                            </span>
-                            <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[src] ?? SOURCE_CLS.custom}`}>
-                              {SOURCE_LABEL[src] ?? '自定义'}
-                            </span>
-                            {s?.timeframes?.includes('1m') && (
-                              <span className={TF_BADGE_CLS}>分钟</span>
-                            )}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleRemove(id) }}
-                              className="text-muted/40 hover:text-danger transition-colors cursor-pointer leading-none shrink-0"
-                              title="移除"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </Reorder.Item>
-                        )
-                      })}
-                    </Reorder.Group>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 底部 */}
-          <div className="flex items-center justify-between px-4 py-2 border-t border-border shrink-0">
-            <span className="text-[10px] text-muted">仅策略池中的策略会在扫描时运行</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onClose}
-                className="px-3 py-1 text-xs rounded-btn border border-border text-muted hover:text-foreground hover:border-border/80 transition-colors cursor-pointer"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => { onConfirm(draftPool); onClose() }}
-                className="px-3 py-1 text-xs rounded-btn bg-accent text-white hover:bg-accent/90 transition-colors cursor-pointer"
-              >
-                确定
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
-  )
+  return <Modal ariaLabel="策略池" onClose={() => { if (!publishingId) onClose() }} closeOnBackdrop={!publishingId}
+    panelClassName="flex h-[min(720px,90dvh)] w-[94vw] max-w-[1080px] flex-col overflow-hidden rounded-card border border-border bg-surface shadow-2xl">
+    <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
+      <div><h2 className="flex items-center gap-2 text-sm font-semibold text-foreground"><Layers className="h-4 w-4 text-accent" />策略池</h2><p className="mt-1 text-[11px] leading-5 text-muted">勾选参与扫描的策略，再调整显示顺序。移出策略池不会删除策略。</p></div>
+      <button type="button" aria-label="关闭" disabled={!!publishingId} onClick={onClose} className="rounded-btn p-1.5 text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
+    </header>
+    {loadError && <div role="alert" className="flex shrink-0 items-center gap-3 border-b border-danger/20 bg-danger/5 px-4 py-3 text-xs text-danger"><span className="min-w-0 flex-1 break-words">策略列表加载失败：{loadError}</span><button type="button" onClick={() => void loadStrategies()} className="shrink-0 underline">重试</button></div>}
+    {publishError && <p role="alert" className="shrink-0 border-b border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">发布失败：{publishError}</p>}
+    {message && <p role="status" className="shrink-0 border-b border-border bg-accent/5 px-4 py-2 text-xs text-accent">{message}</p>}
+    {invalid.length > 0 && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/25 bg-warning/5 px-4 py-2 text-[11px] text-warning"><span className="flex-1">已选中 {invalid.length} 项失效策略，移除后才能保存。</span><button type="button" onClick={() => setDraftPool(previous => previous.filter(id => !invalid.includes(id)))} className="underline underline-offset-2">移除失效项</button></div>}
+    <div className="flex shrink-0 border-b border-border px-4 md:hidden" aria-label="策略池视图">{([['library', '策略库'], ['selected', `已选 ${draftPool.length}`]] as const).map(([pane, label]) => <button type="button" key={pane} aria-pressed={mobilePane === pane} onClick={() => setMobilePane(pane)} className={cn('border-b-2 px-3 py-2.5 text-xs font-medium', mobilePane === pane ? 'border-accent text-accent' : 'border-transparent text-secondary')}>{label}</button>)}</div>
+    <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      <section aria-label="策略库" className={cn('min-h-0 min-w-0 flex-col md:flex md:border-r md:border-border', mobilePane === 'library' ? 'flex' : 'hidden')}>
+        <div className="shrink-0 space-y-3 border-b border-border px-4 py-3">
+          <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-semibold text-foreground">策略库 <span className="ml-1 font-normal tabular-nums text-muted">{catalogCount}</span></h3><button type="button" disabled={disabled || !available.length} onClick={() => setDraftPool(previous => [...new Set([...previous, ...available.map(strategy => strategy.id)])])} className="text-[11px] text-accent disabled:opacity-40">加入筛选结果 ({available.length})</button></div>
+          <div className="flex gap-2"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted" /><input aria-label="搜索策略" placeholder="搜索名称、ID 或描述" value={search} onChange={event => setSearch(event.target.value)} className="h-9 w-full rounded-input border border-border bg-base pl-8 pr-3 text-xs focus:border-accent focus:outline-none" /></div><select aria-label="策略周期" value={timeframe} onChange={event => setTimeframe(event.target.value)} className="h-9 rounded-input border border-border bg-base px-2 text-xs text-secondary focus:border-accent focus:outline-none"><option value="all">全部周期</option><option value="1d">日线</option><option value="1m">分钟</option></select></div>
+          <div className="flex flex-wrap gap-1" aria-label="策略来源">{TABS.map(tab => {
+            const count = allStrategies.filter(strategy => (!strategy.research_only || strategy.source === 'ai') && (tab.id === 'all' || strategy.source === tab.id)).length
+            return <button type="button" key={tab.id} aria-pressed={activeTab === tab.id} onClick={() => setActiveTab(tab.id)} className={cn('rounded-btn px-2.5 py-1.5 text-[11px] transition-colors', activeTab === tab.id ? 'bg-accent/10 font-medium text-accent' : 'text-secondary hover:bg-elevated')}>{tab.label}<span className="ml-1.5 tabular-nums text-muted">{count}</span></button>
+          })}</div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {loading && <p role="status" className="flex items-center justify-center gap-2 py-8 text-xs text-muted"><Loader2 className="h-4 w-4 animate-spin" />策略列表加载中…</p>}
+          {!loading && !loadError && !visible.length && !drafts.length && <p className="px-3 py-10 text-center text-xs leading-6 text-muted">{publicStrategies.length || search || activeTab !== 'all' || timeframe !== 'all' ? '没有符合条件的策略，试试其他名称或筛选条件。' : '暂无策略，可先创建或导入策略。'}</p>}
+          <div className="space-y-1">{visible.map(strategy => {
+            const checked = selectedIds.has(strategy.id)
+            return <label key={strategy.id} className={cn('flex cursor-pointer items-start gap-3 rounded-btn border px-3 py-3 transition-colors', checked ? 'border-accent/25 bg-accent/5' : 'border-transparent hover:bg-elevated/60')}>
+              <input type="checkbox" aria-label={`选择策略：${strategy.name}`} checked={checked} disabled={disabled} onChange={() => toggle(strategy.id)} className="mt-1 shrink-0 accent-accent" />
+              <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="min-w-0 break-words text-xs font-medium text-foreground">{strategy.name}</span><span className={cn('rounded border px-1 py-px text-[10px] leading-tight', SOURCE_CLS[strategy.source] ?? SOURCE_CLS.custom)}>{SOURCE_LABEL[strategy.source] ?? strategy.source}</span><span className="text-[10px] text-muted">{strategy.timeframes?.includes('1m') ? '分钟' : '日线'}</span>{checked && <span className="inline-flex items-center gap-1 text-[10px] text-accent"><Check className="h-3 w-3" />已加入</span>}</div><p className="mt-1 break-all text-[10px] text-muted">{strategy.id}</p>{strategy.description && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-secondary" title={strategy.description}>{strategy.description}</p>}</div>
+            </label>
+          })}</div>
+          {drafts.length > 0 && <div className="mt-4 border-t border-border px-2 pt-3"><h4 className="text-[11px] font-medium text-secondary">AI 草稿 · 发布后可加入</h4><p className="mt-1 text-[10px] leading-5 text-muted">发布会立即生效；加入策略池需另行保存。</p><div className="mt-2 space-y-1">{drafts.map(strategy => <div key={strategy.id} className="flex items-center gap-3 rounded-btn border border-purple-500/15 bg-purple-500/5 px-3 py-3"><div className="min-w-0 flex-1"><p className="break-words text-xs text-foreground">{strategy.name}</p><p className="mt-1 break-all text-[10px] text-muted">{strategy.id}</p></div><button type="button" disabled={disabled} onClick={() => void publish(strategy)} className="inline-flex shrink-0 items-center gap-1 rounded-btn border border-purple-500/25 px-2 py-1 text-[11px] text-purple-400 disabled:opacity-40">{publishingId === strategy.id && <Loader2 className="h-3 w-3 animate-spin" />}发布</button></div>)}</div></div>}
+        </div>
+      </section>
+      <section aria-label="已选策略" className={cn('min-h-0 min-w-0 flex-col bg-base/30 md:flex', mobilePane === 'selected' ? 'flex' : 'hidden')}>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 className="text-xs font-semibold text-foreground">已选策略 <span className="ml-1 tabular-nums text-accent">{draftPool.length}</span></h3><p className="mt-1 text-[10px] leading-5 text-muted">拖动排序，或使用上下移动按钮。</p></div>{clearedPool && !draftPool.length
+            ? <button type="button" disabled={disabled} onClick={() => { setDraftPool(clearedPool); setClearedPool(null) }} className="shrink-0 text-[11px] text-accent disabled:opacity-40">撤销清空</button>
+            : <button type="button" disabled={disabled || !draftPool.length} onClick={() => { setClearedPool([...draftPool]); setDraftPool([]) }} className="shrink-0 text-[11px] text-muted hover:text-danger disabled:opacity-40">清空所选</button>}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">{!draftPool.length ? <p className="px-2 py-10 text-center text-xs leading-6 text-muted">尚未选择策略，在策略库勾选后会出现在这里。</p> : <Reorder.Group axis="y" values={draftPool} onReorder={next => { if (!disabled) setDraftPool(next) }} className="space-y-2">{draftPool.map((id, index) => <SelectedRow key={id} id={id} strategy={stratMap.get(id)} index={index} count={draftPool.length} disabled={disabled} resolved={!!ready} onMove={move} onRemove={remove} />)}</Reorder.Group>}</div>
+      </section>
+    </div>
+    <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 sm:px-5">
+      <p className="text-[11px] text-muted" aria-live="polite">已选 <strong className="font-medium tabular-nums text-foreground">{draftPool.length}</strong> 项{changed ? ' · 有未保存的调整' : ' · 未做调整'}</p>
+      <div className="ml-auto flex gap-2"><button type="button" title="还原为打开窗口时的策略池" disabled={!changed || !!publishingId} onClick={() => { setDraftPool([...originalPool]); setClearedPool(null) }} className={BUTTON}>还原</button><button type="button" disabled={!!publishingId} onClick={onClose} className={BUTTON}>取消</button><button type="button" disabled={disabled || !changed || invalid.length > 0} onClick={() => { onConfirm(draftPool); onClose() }} className={cn(BUTTON, 'border-blue-600 bg-blue-600 font-medium text-white hover:bg-blue-700 hover:text-white')}>保存策略池</button></div>
+    </footer>
+  </Modal>
 }

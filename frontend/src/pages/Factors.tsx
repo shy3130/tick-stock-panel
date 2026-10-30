@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { BookmarkCheck, FlaskConical, LibrarySquare, Search } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { ResourceTransferButton } from '@/components/ResourceTransferDialog'
 import { FactorDiscovery } from './backtest/FactorDiscovery'
 import { FactorComposite } from './factors/FactorComposite'
 import { FactorEditor } from './factors/FactorEditor'
@@ -75,7 +76,7 @@ export function Factors() {
         subtitle={<span className="hidden md:inline">{TABS[activeTab].subtitle}</span>}
         className="shrink-0 flex-wrap gap-x-4 gap-y-2 bg-base/95 px-3 lg:flex-nowrap lg:px-5"
         right={(
-          <div className="flex w-full min-w-0 items-center gap-1.5 sm:gap-2 lg:w-auto">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 sm:gap-2 lg:w-auto lg:flex-nowrap">
             <button
               type="button"
               onClick={() => setCandidatesOpen(true)}
@@ -86,8 +87,8 @@ export function Factors() {
               <BookmarkCheck className="h-3.5 w-3.5" />
               <span>候选方案</span>
             </button>
-            <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
-            <nav className="min-w-0 flex-1 overflow-x-auto lg:flex-none" aria-label="因子视图">
+            <span className="hidden h-5 w-px shrink-0 bg-border sm:block" aria-hidden="true" />
+            <nav className="order-last min-w-0 flex-1 basis-full overflow-x-auto sm:order-none sm:basis-auto lg:flex-none" aria-label="因子视图">
               <div className="inline-flex min-w-max items-center gap-0.5 rounded-btn border border-border bg-surface/80 p-0.5">
                 {(Object.keys(TABS) as Tab[]).map(tab => {
                   const mode = TABS[tab]
@@ -111,6 +112,7 @@ export function Factors() {
                 })}
               </div>
             </nav>
+            <ResourceTransferButton kind="factor" className="h-8 w-8" />
           </div>
         )}
       />

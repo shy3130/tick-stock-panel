@@ -8,6 +8,7 @@ import { toast } from '@/components/Toast'
 const BASE = ''
 
 type RequestOptions = RequestInit & {
+  responseType?: 'json' | 'blob'
   /** 为 true 时不弹错误 toast（由调用方自行汇总提示，如多图串行队列） */
   quiet?: boolean
   /** 请求超时毫秒数; null 关闭。默认 30s — 后端依赖 polars, 偶发挂起时无超时
@@ -47,7 +48,7 @@ const COMPUTE_REQUEST_TIMEOUT_MS = 300_000
 const extPullTimeoutMs = (timeoutSeconds?: number) => (timeoutSeconds ?? 30) * 1000 + 10_000
 
 async function request<T>(path: string, init?: RequestOptions): Promise<T> {
-  const { quiet, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...fetchInit } = init ?? {}
+  const { quiet, responseType = 'json', timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...fetchInit } = init ?? {}
   const isFormData = fetchInit.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
@@ -94,7 +95,7 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
     if (res.status !== 401 && !quiet) toast(msg, 'error')
     throw new ApiError(msg, res.status)
   }
-  return res.json() as Promise<T>
+  return (responseType === 'blob' ? res.blob() : res.json()) as Promise<T>
 }
 
 // ===== Capabilities =====
@@ -2225,6 +2226,38 @@ export interface DefinitionsCatalogItem {
   error?: string
 }
 
+export type ResourceKind = 'strategy' | 'signal' | 'factor'
+export interface ResourceRef { kind: ResourceKind; id: string }
+export interface TransferResource extends ResourceRef { label: string; description?: string; source?: string; draft?: boolean }
+export interface ResourceTransferEntry {
+  key: string
+  kind: ResourceKind | 'settings' | 'code'
+  id: string
+  label: string
+  path: string
+  dependencies: string[]
+  local_dependencies: string[]
+  issues: string[]
+  action: 'create' | 'reuse' | 'conflict'
+  draft?: boolean
+  comparison?: { local: string; incoming: string; truncated: boolean } | null
+  referenced_by?: string[]
+}
+export interface ResourceTransferPreview {
+  roots: string[]
+  entries: ResourceTransferEntry[]
+  counts: Record<string, number>
+  revision: string
+}
+export interface ResourceTransferResult {
+  imported: number
+  reused: number
+  counts: Record<ResourceKind, number>
+  resources: string[]
+  changed: string[]
+  drafts?: string[]
+}
+
 /** 导入冒烟结果 (POST /api/definitions/smoke) */
 export interface DefinitionSmokeResult {
   ok: boolean
@@ -3930,6 +3963,28 @@ export const api = {
   },
 
   // ── 统一定义目录 / 导入冒烟 (P4) ──
+  resourcesList: () => request<{ items: TransferResource[] }>('/api/definitions/resources'),
+  resourcesExportPreview: (resources: ResourceRef[], signal?: AbortSignal) =>
+    request<ResourceTransferPreview>('/api/definitions/resources/export/preview', {
+      method: 'POST', body: JSON.stringify({ resources }), signal, quiet: true,
+    }),
+  resourcesExport: (resources: ResourceRef[], revision?: string) =>
+    request<Blob>('/api/definitions/resources/export', {
+      method: 'POST', body: JSON.stringify({ resources, revision }), responseType: 'blob', quiet: true,
+    }),
+  resourcesInspect: (files: File[]) => {
+    const body = new FormData()
+    files.forEach(file => body.append('files', file))
+    return request<ResourceTransferPreview>('/api/definitions/resources/inspect', { method: 'POST', body, quiet: true })
+  },
+  resourcesApply: (files: File[], selected: string[], overwrite: string[], revision: string) => {
+    const body = new FormData()
+    files.forEach(file => body.append('files', file))
+    body.append('selected', JSON.stringify(selected))
+    body.append('overwrite', JSON.stringify(overwrite))
+    body.append('revision', revision)
+    return request<ResourceTransferResult>('/api/definitions/resources/apply', { method: 'POST', body, quiet: true })
+  },
 
   definitionsList: () =>
     request<{ items: DefinitionsCatalogItem[] }>('/api/definitions'),

@@ -256,9 +256,12 @@ def smoke_definition(kind: str, definition: dict) -> dict:
         dependencies = spec.dependencies
         warmup_bars = spec.warmup_bars
 
-    unknown = sorted(
-        dependencies - _known_input_columns() - _ALWAYS_LOADED_COLUMNS
-    )
+    known = _known_input_columns()
+    if kind == "signal" and definition.get("timeframe") == "intraday":
+        from app.strategy.intraday_features import INTRADAY_FEATURES
+
+        known = frozenset(INTRADAY_FEATURES)
+    unknown = sorted(dependencies - known - _ALWAYS_LOADED_COLUMNS)
     if unknown:
         issues.append({"code": "W001", "message": f"依赖列不在已知输入列: {unknown}"})
     return {
