@@ -832,6 +832,59 @@ def test_daily_dump_stale_falls_back_to_api(monkeypatch):
     assert provider._get_client().calls != []
 
 
+@pytest.mark.parametrize("deep_window", [False, True])
+def test_daily_dump_refreshes_cached_release_for_new_trading_days(monkeypatch, tmp_path, deep_window):
+    """常驻进程跨日后须检查新 dump, 不能一直拿旧缓存转逐票历史接口。"""
+    class DailyDumpClient(_FakeHistClient):
+        release = "20261027"
+
+        def __init__(self):
+            super().__init__()
+            self.downloads = []
+
+        def dump_download_url(self, dump_kind):
+            return {"presigned_url": f"https://example.test/releases/{self.release}/daily.parquet"}
+
+        def download_dump(self, dump_kind, dest):
+            self.downloads.append(self.release)
+            last = date(2026, 10, 27) if self.release == "20261027" else date(2026, 10, 29)
+            rows = [
+                _dump_bar("000001.SZ", day, close)
+                for day, close in [
+                    (date(2026, 10, 27), 10.0),
+                    (date(2026, 10, 28), 11.0),
+                    (date(2026, 10, 29), 12.0),
+                ] if day <= last
+            ]
+            _daily10_dump(rows).write_parquet(dest)
+            return dest
+
+    client = DailyDumpClient()
+    provider = _hist_provider(monkeypatch, client, allow_dumps=deep_window)
+    monkeypatch.setattr(fp, "_cache_dir", lambda: tmp_path)
+    if deep_window:
+        _daily10_dump([
+            _dump_bar("000001.SZ", date(2026, 10, 12), 9.0),
+            _dump_bar("000001.SZ", date(2026, 10, 27), 10.0),
+        ]).write_parquet(tmp_path / "daily_k__20261027.parquet")
+
+    first = provider.get_daily(
+        ["000001.SZ"], datetime(2026, 10, 27), datetime(2026, 10, 27)
+    )
+    assert first["date"].to_list() == [date(2026, 10, 27)]
+    client.release = "20261029"
+    refreshed = provider.get_daily(
+        ["000001.SZ"], datetime(2026, 10, 12 if deep_window else 27), datetime(2026, 10, 29)
+    )
+    expected_days = ([date(2026, 10, 12)] if deep_window else []) + [
+        date(2026, 10, 27), date(2026, 10, 28), date(2026, 10, 29),
+    ]
+    assert refreshed["date"].to_list() == expected_days
+    assert refreshed["close"].to_list() == ([9.0] if deep_window else []) + [10.0, 11.0, 12.0]
+    assert client.calls == []
+    assert client.downloads == ["20261027", "20261029"]
+
+
 def test_daily_dump_weekend_end_covered(monkeypatch):
     """end 为周末且紧随 dump 末端 → 自然缺口, 仍走 dump。"""
     provider = _hist_provider(monkeypatch, _FakeHistClient({}))

@@ -358,6 +358,19 @@ class FuyaoProvider:
         self._dump_memo[dump_kind] = df
         return df
 
+    def _daily10_for_window(self, start_d: date, end_d: date) -> pl.DataFrame:
+        """近端缓存覆盖不足时检查新 release, 避免常驻进程永久降级逐票拉取。"""
+        kind = _DAILY10_DUMP_KIND
+        cached = kind in self._dump_memo or kind in self._dump_path_memo
+        dump = self._ensure_dump(kind, "daily_k_10d")
+        if cached and not _dump_covers(dump, start_d, end_d):
+            # 帧和路径必须一起失效, 否则仍会读回旧 release 的磁盘文件。
+            self._dump_memo.pop(kind, None)
+            self._dump_path_memo.pop(kind, None)
+            logger.info("扶摇近端日K缓存未覆盖 [%s ~ %s], 检查最新 dump", start_d, end_d)
+            dump = self._ensure_dump(kind, "daily_k_10d")
+        return dump
+
     def _ensure_daily_big_dump(self, start_d: date | None) -> Path | None:
         """10 年全量日K dump(约 172MB)。要求覆盖窗口起点时校验; 末端缺口由 10d dump 补。
 
@@ -495,7 +508,7 @@ class FuyaoProvider:
 
         if (end_d - start_d).days <= _RECENT_DUMP_DAYS:
             try:
-                dump = self._ensure_dump(_DAILY10_DUMP_KIND, "daily_k_10d")
+                dump = self._daily10_for_window(start_d, end_d)
                 if _dump_covers(dump, start_d, end_d):
                     df = self._daily_from_dump(dump, symset, start_d, end_d)
                     if on_chunk_done:
@@ -518,7 +531,7 @@ class FuyaoProvider:
             tail_start = max(start_d, dump_max + timedelta(days=1))
             if tail_start <= end_d and not _tail_ok(end_d, dump_max):
                 try:
-                    ten = self._ensure_dump(_DAILY10_DUMP_KIND, "daily_k_10d")
+                    ten = self._daily10_for_window(tail_start, end_d)
                     ten_dates = pl.from_epoch(
                         ten["date_ms"].cast(pl.Int64) + _SH_MS, time_unit="ms"
                     ).dt.date()
