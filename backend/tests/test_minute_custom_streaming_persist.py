@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import polars as pl
+import pytest
 
 from app.services import kline_sync
 
@@ -130,3 +131,79 @@ def test_no_segment_path_returns_df_directly(monkeypatch):
     )
     assert len(calls) == 1 and calls[0] == ["600519.SH", "000001.SZ"]
     assert out.height == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_explicit_provider_failure_is_not_reported_as_successful_empty_sync(monkeypatch, streaming):
+    from types import SimpleNamespace
+
+    from app.data_providers.base import ProviderRequestError
+
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(args[0])
+        raise ProviderRequestError("数据源凭据或额度不可用")
+
+    monkeypatch.setattr(kline_sync, "_selected_minute_provider_name", lambda: "example")
+    monkeypatch.setattr(kline_sync, "_resolve_minute_provider", lambda name: (SimpleNamespace(get_minute=fail), False, None))
+    monkeypatch.setattr(kline_sync, "get_client", lambda: pytest.fail("不得跨源请求 TickFlow"))
+    persisted = []
+    with pytest.raises(ProviderRequestError, match="凭据或额度"):
+        kline_sync.sync_minute_batch(["600519.SH", "000001.SZ"], on_segment=persisted.append if streaming else None)
+    assert len(calls) == 1
+    assert persisted == []
+
+
+@pytest.mark.parametrize("days", [20, 365])
+def test_background_minute_sync_marks_provider_denial_as_failed(monkeypatch, tmp_path, days):
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.api import kline as kline_api
+    from app.data_providers.base import ProviderRequestError
+    from app.services import pipeline_jobs
+
+    store = pipeline_jobs.JobStore(store_dir=tmp_path / "jobs")
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+    monkeypatch.setattr(pipeline_jobs, "try_acquire_run_slot", lambda job_id: True)
+    monkeypatch.setattr(pipeline_jobs, "release_run_slot", lambda job_id: None)
+    monkeypatch.setattr(pipeline_jobs, "run_with_capacity", lambda job_id, fn: fn())
+    monkeypatch.setattr(kline_api, "_minute_allowed", lambda capset: True)
+    monkeypatch.setattr("app.tickflow.pools.get_pool", lambda name: ["600519.SH"])
+    monkeypatch.setattr("app.api.data.invalidate_storage_cache", lambda: None)
+    def denied(*args, **kwargs):
+        raise ProviderRequestError("TdxQuant 凭据、接口权限或额度不可用")
+    monkeypatch.setattr(kline_sync, "sync_and_persist_minute", denied)
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path), get_index_symbol_set=lambda: set())
+    async def run():
+        tasks = []
+        create_task = asyncio.create_task
+        def capture(coro):
+            task = create_task(coro)
+            tasks.append(task)
+            return task
+        monkeypatch.setattr(asyncio, "create_task", capture)
+        result = await kline_api.trigger_minute_sync(repo, object(), override_days=days)
+        await tasks[0]
+        return store.get(result["job_id"])
+    result = asyncio.run(run())
+    assert result["status"] == "failed"
+    assert "凭据、接口权限或额度" in result["error"]
+    assert not list(tmp_path.rglob("*.parquet"))
+
+
+def test_provider_request_error_has_readable_http_response():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.data_providers.base import ProviderRequestError
+    from app.main import provider_request_error_handler
+
+    app = FastAPI()
+    app.add_exception_handler(ProviderRequestError, provider_request_error_handler)
+    @app.get("/minute")
+    def minute():
+        raise ProviderRequestError("数据源凭据或额度不可用")
+    response = TestClient(app).get("/minute")
+    assert response.status_code == 502
+    assert response.json() == {"detail": "数据源凭据或额度不可用", "code": "provider_request"}

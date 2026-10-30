@@ -129,6 +129,26 @@ def test_run_worker_exception_reports_stage(monkeypatch, tmp_path, capsys):
     assert progress["stage"] == "exception"
 
 
+def test_run_worker_rejects_explicit_auth_denial_after_reachable_snapshot(monkeypatch, tmp_path, capsys):
+    _patch_worker_env(monkeypatch, tmp_path)
+    import tdxaidata.tdxaidata as tdxmod
+    from tdxaidata import tqs
+
+    class Native:
+        def get_market_snapshot_batch(self, *args):
+            return {"price": 1}
+
+        def get_his_dats(self, *args):
+            return json.dumps({"ErrorId": -1, "Error": "TokenKey Insufficient Or Key Error"})
+
+    monkeypatch.setattr(tdxmod._NativeTdxAiData, "get_instance", classmethod(lambda cls: Native()))
+    monkeypatch.setattr(tqs, "_clean", lambda raw: raw if isinstance(raw, dict) else None)
+    assert probe.run_worker() == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["ok"] is False
+    assert "凭据" in payload["reason"] or "额度" in payload["reason"]
+
+
 def test_desktop_main_dispatches_probe_worker(monkeypatch):
     monkeypatch.setenv("TDX_PROBE_WORKER", "1")
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)

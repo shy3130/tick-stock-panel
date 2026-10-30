@@ -9,13 +9,17 @@ DLL 与运行时 ini 随 wheel 分发。两个实测约束决定本模块的形�
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
+
+from app.data_providers.base import ProviderRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +42,39 @@ LIB_DLL_NAME = _DLL_BY_PLATFORM.get(sys.platform, "libTdxAiData.so")
 LIB_ENV = "TDX_AI_DATA_LIB"  # tdxaidata 读取: 指向 DLL 文件路径
 
 
-class TdxQuantError(RuntimeError):
+class TdxQuantError(ProviderRequestError):
     """tdxaidata 调用失败(网络/参数/协议)。"""
+
+
+class TdxQuantAuthError(TdxQuantError):
+    """服务端明确拒绝凭据或额度; 重试同一请求不能恢复。"""
+
+
+def _raise_response_error(raw, api_key: str = "") -> None:
+    """SDK._clean 会打印并抹掉 ErrorId, 必须在它之前保留失败语义。"""
+    value = raw
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value)
+        except (ValueError, UnicodeDecodeError):
+            return
+    if not isinstance(value, dict):
+        return
+    error_id = value.get("ErrorId")
+    if (error_id is None or str(error_id) == "0") and "error" not in value:
+        return
+    message = str(value.get("Error") or value.get("error") or "未知错误")
+    if api_key:
+        message = message.replace(api_key, "[redacted]")
+    message = re.sub(r"TDX-[\w-]+", "[redacted]", message, flags=re.IGNORECASE)[:200]
+    if re.search(
+        r"tokenkey|unauthori[sz]ed|invalid.*(?:key|token)|(?:key|token).*(?:error|expired)|权限|积分|额度|认证",
+        message, re.IGNORECASE,
+    ):
+        raise TdxQuantAuthError(
+            "TdxQuant 凭据、接口权限或额度不可用，请核对所配置 Key 与通达信后台状态。服务端: " + message
+        )
+    raise TdxQuantError(f"TdxQuant 服务端请求失败: {message}")
 
 
 def package_lib_dir() -> Path:
@@ -156,12 +191,16 @@ class TdxQuantClient:
         last: Exception = TdxQuantError(f"{method} 未知失败")
         for attempt in range(_RETRIES):
             try:
-                out = self._tqs._clean(getattr(self._native_cls.get_instance(), method)(*args))
+                raw = getattr(self._native_cls.get_instance(), method)(*args)
+                _raise_response_error(raw, getattr(self, "api_key", ""))
+                out = self._tqs._clean(raw)
                 if out is not None:
                     return out
                 last = TdxQuantError(f"{method} 返回空数据(第 {attempt + 1} 次)")
                 if attempt + 1 >= _NONE_RETRIES:
                     break
+            except TdxQuantAuthError:
+                raise
             except Exception as exc:  # noqa: BLE001 — 原生 ctypes 层异常类型不可枚举
                 last = TdxQuantError(f"{method}: {exc}")
             time.sleep(_RETRY_SLEEP_S)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.plugins.tdxquant import provider as tdx_provider
-from app.plugins.tdxquant.client import TdxQuantError
+from app.plugins.tdxquant.client import TdxQuantAuthError, TdxQuantError
 
 
 class _FakeClient:
@@ -103,3 +103,12 @@ def test_success_resets_blank_streak():
     p = _provider_with(fake)
     p.get_intraday_latest(symbols=[f"S{i}" for i in range(19)])
     assert p._auth_failed_at is None  # 中间成功一次即清零, 不达熔断阈值
+
+
+@pytest.mark.parametrize("method", ["get_intraday_latest", "get_intraday_batch"])
+def test_explicit_auth_denial_stops_after_first_symbol(method):
+    fake = _FakeClient([TdxQuantAuthError("凭据或额度不可用")] * 50)
+    provider = _provider_with(fake)
+    assert getattr(provider, method)([f"S{i}" for i in range(50)]).is_empty()
+    assert fake.calls == 1
+    assert provider._auth_cooldown_active()

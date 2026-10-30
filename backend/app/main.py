@@ -54,6 +54,7 @@ from app.api import settings as settings_api
 from app.api import upgrade_guard as upgrade_guard_api
 from app.api.routes import router as core_router
 from app.config import settings
+from app.data_providers.base import ProviderRequestError
 from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.extensions.loader import (
     configure_backend_extensions,
@@ -731,6 +732,11 @@ async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> 
 @app.exception_handler(DailyIntegrityError)
 async def daily_integrity_error_handler(request: Request, exc: DailyIntegrityError) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc), "code": "daily_integrity"})
+
+
+@app.exception_handler(ProviderRequestError)
+async def provider_request_error_handler(request: Request, exc: ProviderRequestError) -> JSONResponse:
+    return JSONResponse(status_code=502, content={"detail": str(exc), "code": "provider_request"})
 
 # 生产期静态文件(前端 dist)
 def _register_static_routes(target: FastAPI, static_dir: Path) -> None:

@@ -10,7 +10,8 @@ TDX_AI_DATA_LIB 指向), 结论以 JSON 回传。
     父进程指定的进度文件, 父进程据此定位死点并附退出码, 不再返回"无输出";
   - TDX 会话按 IP 复用: 同 IP 有活跃好 Key 会话时(常驻后端必然如此),
     错误 Key 的日K也能返回 ⇒ "无效 Key 拒绝"不可靠。本探测只验证
-    格式 + 连通性, Key 真伪由首次实拉(test_dataset / 日常轮询)暴露。
+    格式 + 连通性; 服务端明确拒绝凭据/额度时拒绝保存。
+    通过连接探测仍不代表所有数据接口的权限均可用。
 """
 from __future__ import annotations
 
@@ -76,9 +77,17 @@ def run_worker() -> int:
         reachable = False
         for _ in range(3):
             try:
-                if native.get_market_snapshot_batch("600519.SH", "Now"):
+                raw = native.get_market_snapshot_batch("600519.SH", "Now")
+                tc._raise_response_error(raw, key)
+                from tdxaidata import tqs
+
+                if tqs._clean(raw):
                     reachable = True
                     break
+            except tc.TdxQuantAuthError as exc:
+                stage("done", ok=False)
+                print(json.dumps({"ok": False, "reason": str(exc)}))
+                return 0
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(1.2)
@@ -87,7 +96,7 @@ def run_worker() -> int:
             print(json.dumps({"ok": False, "reason": "行情服务器连接失败(网络不可达)"}))
             return 0
 
-        # 日K仅作辅助信号(会话按 IP 复用时错误 Key 也能通过, 不能作拒绝依据)
+        # 日K成功仅作辅助信号(会话按 IP 复用时错误 Key 也能通过), 明确拒绝则保留原因。
         stage("auth")
         aux = ""
         try:
@@ -96,8 +105,13 @@ def run_worker() -> int:
             )
             from tdxaidata import tqs
 
+            tc._raise_response_error(raw, key)
             v = tqs._clean(raw)
             aux = "his_ok" if isinstance(v, dict) and v.get("Date") else "his_empty"
+        except tc.TdxQuantAuthError as exc:
+            stage("done", ok=False)
+            print(json.dumps({"ok": False, "reason": str(exc)}))
+            return 0
         except Exception:  # noqa: BLE001
             aux = "his_exc"
 

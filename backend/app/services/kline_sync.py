@@ -20,7 +20,7 @@ from typing import Any
 
 import polars as pl
 
-from app.data_providers.base import AssetType
+from app.data_providers.base import AssetType, ProviderRequestError
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import CN_TZ, cn_now, cn_today
 from app.services import minute_adjust, preferences
@@ -1112,6 +1112,8 @@ def _try_custom_minute(
             symbols, start_time=start_time, end_time=end_time,
             asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
         )
+    except ProviderRequestError:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "custom minute provider %s call failed; not falling back to TickFlow: %s",

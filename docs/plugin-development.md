@@ -326,7 +326,9 @@ uv run --extra dev python -m ruff check app/plugins/<your_plugin>/ tests/test_<y
   - 提供 `realtime`(五市场全 A 股票池枚举 + 600 只/批快照, 批间失败隔离)、`depth5`(快照自带买卖五档数组, 手口径透传)、`daily`(count 模式单标的拉取, 原始价, volume 股→手, amount 万元→元, `iter_daily` 逐标的流式)、`adj_factor`(事件接口每10股口径 ÷10 转每股 + 本地K线一次配价, 交易所公式推导单事件比值, 涨跌停自检)、`minute`(1m count 模式单标的, 240 根/日, 深度约 40 交易日, datetime=Date+Time 拼北京墙钟 naive, 与日K同口径 股→手/万元→元)、`full_minute`(修复轮 `get_intraday_batch` 当日窗口 + 稳态增量 `get_intraday_latest` 每股最新 N 根; 无批量端点, 全市场一轮 10 分钟量级); 指数快照直接支持(上证指数走 TDX 999999.SH 别名, `get_realtime_indices` 映射); 快照无名称列由维表关联; 未声明 financial → 回退 TickFlow; 清单声明 `billing: points` + `key_manage_url`(商城积分明细入口)
   - `client.py` — 原生层封装(lib 私有物化 + token 注入双 ini + `TDX_AI_DATA_LIB` 指向、空闲首连 "Invalid server response" 重试包装、股票池 12h 缓存)
   - `provider.py` — Provider 实现(快照昨收=LastClose/高低=Max/Min 字段映射、涨跌幅 (Now-LastClose)/LastClose 小数制、RefreshTime 北京墙钟→epoch ms、软失败)
-  - `probe.py` — 候选 Key 探测的独立子进程(原生 DLL 每进程单 Key): 分阶段进度留痕定位原生层死点; 因 TDX 会话按 IP 复用(错误 Key 在活跃会话下也能拉数), 探测语义为格式+连通性而非 Key 真伪, 真伪由首次实拉暴露
+  - `probe.py` — 候选 Key 探测的独立子进程(原生 DLL 每进程单 Key): 分阶段进度留痕定位原生层死点; 服务端明确拒绝凭据或额度时不保存。因 TDX 会话按 IP 复用(错误 Key 在活跃会话下也能拉数), 通过探测仅代表格式与连通性检查通过, 不保证所有数据接口均有权限。
+
+TdxQuant 在 SDK 清理响应前检查服务端错误, 保留错误原因并脱敏; 明确的凭据/额度拒绝不重试, 实时分钟轮立即熔断。历史分钟请求失败会通过 `app.data_providers.base.ProviderRequestError` 传递到任务层并标记失败, 不转换成成功的 0 行或跨源重试; 其他插件也可用该异常显式声明请求失败。带时区的分钟请求窗口在插件边界归一为北京墙钟, 再与原生分钟列比较。正常停牌、休市或窗口内无数据的空结果保留原语义。
 
 ## 路由机制(无需关心, 仅参考)
 
