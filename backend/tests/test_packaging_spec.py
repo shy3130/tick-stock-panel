@@ -37,3 +37,14 @@ def test_spec_declares_builtin_plugin_tdx():
     assert "app.plugins.tdxquant.client" in SPEC_CODE
     assert "app.plugins.tdxquant.probe" in SPEC_CODE
     assert '"plugins" / "tdxquant" / "plugin.yaml"' in SPEC_CODE  # 源路径必须指向现存目录
+
+
+def test_installer_launches_desktop_only_once():
+    """重复 postinstall 条目会同时拉起两个桌面后端。"""
+    text = (REPO_ROOT / "packaging" / "tsp.iss").read_text(encoding="utf-8")
+    section = text.split("[Run]", 1)[1].split("[UninstallRun]", 1)[0]
+    launches = [
+        line for line in section.splitlines()
+        if line.startswith("Filename:") and "{#MyAppExeName}" in line
+    ]
+    assert len(launches) == 1

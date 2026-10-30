@@ -7,8 +7,12 @@
 """
 from __future__ import annotations
 
+import errno
+import os
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +29,65 @@ from app.services.mining_process_lock import MiningProcessLock
 @pytest.fixture()
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
-    return tmp_path
+    yield tmp_path
+    desktop._release_single_instance()
+
+
+def test_single_instance_ignores_unlocked_file_with_live_pid(data_dir):
+    """崩溃残留的 PID 被复用, 没有实际持锁者时仍须允许启动。"""
+    (data_dir / ".desktop.lock").write_text(str(os.getpid()), encoding="utf-8")
+    assert desktop._acquire_single_instance() is True
+
+
+@pytest.mark.parametrize("lock_error", [None, errno.EACCES, errno.EIO])
+def test_single_instance_windows_lock_errors(data_dir, monkeypatch, lock_error):
+    """锁冲突才作为已有实例处理, 磁盘/系统错误须交给启动错误提示。"""
+    opened = []
+
+    def lock(fd, mode, count):
+        assert os.get_inheritable(fd) is False
+        opened.append(fd)
+        if lock_error is not None:
+            raise OSError(lock_error, "locking failed")
+
+    monkeypatch.setattr(
+        desktop, "os", SimpleNamespace(name="nt", set_inheritable=os.set_inheritable)
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(LK_NBLCK=2, locking=lock))
+
+    if lock_error == errno.EIO:
+        with pytest.raises(OSError, match="locking failed"):
+            desktop._acquire_single_instance()
+    else:
+        assert desktop._acquire_single_instance() is (lock_error is None)
+    desktop._release_single_instance()
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])  # 成功、冲突、系统错误三条路径都必须关闭句柄。
+
+
+def test_single_instance_rejects_other_process_then_allows_after_release(data_dir):
+    import subprocess
+
+    script = (
+        "from app.desktop import _acquire_single_instance; "
+        "print(_acquire_single_instance())"
+    )
+
+    def acquire_in_child():
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            env={**os.environ, "DATA_DIR": str(data_dir)},
+            capture_output=True, text=True, timeout=15, check=True,
+        )
+        return result.stdout.strip()
+
+    assert desktop._acquire_single_instance() is True
+    assert acquire_in_child() == "False"
+    desktop._release_single_instance()
+    assert acquire_in_child() == "True"
+    # 子进程没有手动释放; 进程结束仍须自动解锁。
+    assert desktop._acquire_single_instance() is True
 
 
 # ---------- _failed_html ----------
@@ -133,7 +195,33 @@ def test_main_proceeds_when_mining_lock_precheck_conflicts(
 
     assert opened and opened[0].startswith("http://127.0.0.1:")
     assert "启动预检" in caplog.text
-    assert not (tmp_path / ".desktop.lock").exists()
+    assert desktop._acquire_single_instance() is True
+    desktop._release_single_instance()
+
+
+@pytest.mark.parametrize("stage", ["data_dir", "single_instance", "mining_precheck"])
+def test_main_reports_early_startup_errors(data_dir, monkeypatch, stage):
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
+    errors = []
+    monkeypatch.setattr(desktop, "_show_crash", lambda *args: errors.append(args))
+    target = {
+        "data_dir": "_ensure_data_dir_writable",
+        "single_instance": "_acquire_single_instance",
+        "mining_precheck": "_precheck_mining_lock",
+    }[stage]
+
+    def fail():
+        raise PermissionError(f"startup failed at {stage}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desktop, target, fail)
+        assert desktop.main() == 1
+    assert len(errors) == 1
+    assert "TSP 启动失败" in errors[0][0]
+    assert f"startup failed at {stage}" in errors[0][1]
+    assert desktop._acquire_single_instance() is True
 
 
 # ---------- _open_window: pywebview 下载启用 ----------
@@ -142,7 +230,6 @@ def test_open_window_enables_downloads_before_start(monkeypatch):
     """pywebview 5.0+ 默认取消所有文件下载 (Edge WebView2 / WKWebView 一致) —
     必须在 webview.start() 前显式开启 ALLOW_DOWNLOADS, 否则配置备份导出、
     回测 CSV 等 <a download> 直链在桌面版点击无反应 (2026-10-27 用户反馈)。"""
-    import sys
     import types
 
     calls: list[str] = []
@@ -162,3 +249,18 @@ def test_open_window_enables_downloads_before_start(monkeypatch):
 
     assert fake.settings.get("ALLOW_DOWNLOADS") is True
     assert calls == ["set:ALLOW_DOWNLOADS=True", "create_window", "start"]
+
+
+def test_open_window_explicitly_shows_window_after_gui_start(monkeypatch):
+    """Windows 继承 SW_HIDE 时, GUI 就绪后应显式显示主窗口。"""
+    shown = []
+    window = SimpleNamespace(show=lambda: shown.append(True))
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: window,
+        start=lambda func=None, **kwargs: func() if func else None,
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+    assert shown == [True]
