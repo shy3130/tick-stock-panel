@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import yaml
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 _PROVIDERS: dict[str, GenericHTTPProvider] = {}
 _LOAD_ERRORS: list[dict] = []
+# 最近一次 YAML 扫描。None 表示进程内尚未 load_all。
+_SCAN_SUMMARY: dict | None = None
+# 源表、错误和扫描摘要一起换出、一起读出，避免重新加载时配到两轮结果。
+_PUBLISH_LOCK = threading.Lock()
 
 # 内置插件状态: {name: {available, status, runtime, ...}} 供设置页独立分类展示。
 # available=False 的插件不注册进 _PROVIDERS (不可切换), 但记录状态供 UI 显示安装提示。
@@ -44,36 +49,20 @@ def data_sources_dir() -> Path:
     return settings.data_dir / "data_sources"
 
 
-def load_all(path: Path | None = None) -> None:
-    """Load all custom provider YAML files into process memory."""
-    global _PROVIDERS, _LOAD_ERRORS
-    for provider in _PROVIDERS.values():
-        provider.close()
-    _PROVIDERS = {}
-    _LOAD_ERRORS = []
-
-    base = path or data_sources_dir()
-    base.mkdir(parents=True, exist_ok=True)
-    for file in sorted([*base.glob("*.yaml"), *base.glob("*.yml")]):
-        try:
-            config = load_config(file)
-            provider = GenericHTTPProvider(config)
-            errors = provider.validate()
-            if errors:
-                _LOAD_ERRORS.append({"path": str(file), "name": config.name, "errors": errors})
-                provider.close()
-                continue
-            _PROVIDERS[config.name] = provider
-        except Exception as e:  # noqa: BLE001
-            logger.warning("custom data source load failed %s: %s", file, e)
-            _LOAD_ERRORS.append({"path": str(file), "errors": [str(e)]})
-
-    # 内置可选插件 (plugins/ 目录)。与用户 YAML 源独立, 缺依赖只记状态不报错。
-    _load_builtin_plugins()
+def _summary_unlocked() -> dict:
+    """调用方必须已持有 _PUBLISH_LOCK。尚未扫描时目录取当前 data_sources_dir。"""
+    if _SCAN_SUMMARY is None:
+        return {
+            "config_dir": str(data_sources_dir()),
+            "found": 0,
+            "loaded": 0,
+            "skipped": 0,
+        }
+    return dict(_SCAN_SUMMARY)
 
 
-def list_sources() -> list[dict]:
-    """只列出用户自定义 (YAML) 源。内置插件 (builtin=True) 由 list_plugins 独立呈现。"""
+def _user_sources_unlocked() -> list[dict]:
+    """调用方必须已持有 _PUBLISH_LOCK。只含用户 YAML 源。"""
     return [
         {
             "name": provider.name,
@@ -84,6 +73,113 @@ def list_sources() -> list[dict]:
         for provider in _PROVIDERS.values()
         if not getattr(provider, "builtin", False)
     ]
+
+
+def scan_summary() -> dict:
+    """最近一次 YAML 扫描的目录与找到/加载/跳过计数。尚未扫描时目录取当前 data_sources_dir。"""
+    with _PUBLISH_LOCK:
+        return _summary_unlocked()
+
+
+def published_scan() -> tuple[list[dict], list[dict], dict]:
+    """同一次加锁取出用户源、加载错误和扫描摘要。"""
+    with _PUBLISH_LOCK:
+        return _user_sources_unlocked(), list(_LOAD_ERRORS), _summary_unlocked()
+
+
+def _publish_scan(
+    providers: dict[str, GenericHTTPProvider],
+    load_errors: list[dict],
+    summary: dict,
+) -> list[GenericHTTPProvider]:
+    global _PROVIDERS, _LOAD_ERRORS, _SCAN_SUMMARY
+    with _PUBLISH_LOCK:
+        previous = list(_PROVIDERS.values())
+        _PROVIDERS = providers
+        _LOAD_ERRORS = load_errors
+        _SCAN_SUMMARY = summary
+    return previous
+
+
+def _close_providers(providers: list[GenericHTTPProvider]) -> None:
+    """关闭已被替换的客户端。失败只记日志，不能把已经换上的新扫描丢掉。"""
+    for provider in providers:
+        try:
+            provider.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "custom data source close failed %s: %s",
+                getattr(provider, "name", "?"),
+                e,
+            )
+
+
+def load_all(path: Path | None = None) -> None:
+    """Load all custom provider YAML files into process memory."""
+    base = path or data_sources_dir()
+    # 先扫完再替换。mkdir/glob 失败时保留上一轮已加载的源和计数，
+    # 避免「源已清空、摘要仍是旧的或显示找到 0 个」。
+    base.mkdir(parents=True, exist_ok=True)
+    files = sorted([*base.glob("*.yaml"), *base.glob("*.yml")])
+    loaded = 0
+    skipped = 0
+    new_providers: dict[str, GenericHTTPProvider] = {}
+    new_errors: list[dict] = []
+    for file in files:
+        try:
+            config = load_config(file)
+            provider = GenericHTTPProvider(config)
+            errors = provider.validate()
+            if errors:
+                new_errors.append({"path": str(file), "name": config.name, "errors": errors})
+                provider.close()
+                skipped += 1
+                continue
+            replaced = new_providers.get(config.name)
+            if replaced is not None:
+                # 同一次扫描里后出现的文件覆盖先出现的。loaded 只计最终留在表里的源。
+                _close_providers([replaced])
+                new_errors.append({
+                    "path": str(replaced.config.path) if replaced.config.path else "",
+                    "name": config.name,
+                    "errors": [f"同名配置被 {file.name} 覆盖，仅保留后一个文件"],
+                })
+                skipped += 1
+                logger.warning(
+                    "custom data source %s in %s replaced by %s",
+                    config.name,
+                    replaced.config.path,
+                    file,
+                )
+            else:
+                loaded += 1
+            new_providers[config.name] = provider
+        except Exception as e:  # noqa: BLE001
+            logger.warning("custom data source load failed %s: %s", file, e)
+            new_errors.append({"path": str(file), "errors": [str(e)]})
+            skipped += 1
+
+    # 先换上新快照再关旧客户端。close() 抛错时新扫描已经可见，
+    # 不会留下半关闭的旧表，也不会丢掉这次扫到的源。
+    previous = _publish_scan(new_providers, new_errors, {
+        "config_dir": str(base),
+        "found": len(files),
+        "loaded": loaded,
+        "skipped": skipped,
+    })
+    _close_providers(previous)
+    if not files:
+        # 空目录是合法状态（多数用户不用自定义源），但必须打出实际路径。
+        logger.info("custom data sources: no yaml in %s", base)
+
+    # 内置可选插件 (plugins/ 目录)。与用户 YAML 源独立, 缺依赖只记状态不报错。
+    _load_builtin_plugins()
+
+
+def list_sources() -> list[dict]:
+    """只列出用户自定义 (YAML) 源。内置插件 (builtin=True) 由 list_plugins 独立呈现。"""
+    with _PUBLISH_LOCK:
+        return _user_sources_unlocked()
 
 
 def list_plugins() -> list[dict]:
@@ -594,7 +690,8 @@ def _register_one_plugin(manifest: dict) -> None:
         provider_cls = _load_entry(manifest["entry"])
         provider = provider_cls() if isinstance(provider_cls, type) else provider_cls
         provider.builtin = True  # 标记为内置 (list_sources 过滤, 不可被用户编辑/删除)
-        _PROVIDERS[name] = provider
+        with _PUBLISH_LOCK:
+            _PROVIDERS[name] = provider
         logger.info("内置插件 %s 已注册 (runtime=%s)", name, runtime)
     except Exception as e:  # noqa: BLE001
         # 声称可用但 import 失败 → 标记不可用, 避免启动崩溃

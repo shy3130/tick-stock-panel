@@ -13,7 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 此时:
 #   - 只读资源 (tiers.yaml / 前端 dist) 放在 _MEIPASS 内
 #   - 可写用户数据 (data_dir) 放在可执行文件旁的用户目录
-# 非 frozen 模式 (开发/Docker): 保持原有 __file__ 推导, 行为完全不变。
+# 非 frozen 模式 (开发/Docker): 应用根由 project_root_from_config_file 推导。
+# 开发布局 <repo>/backend/app → 仓库根；镜像把包放在 /app/app → 应用根 /app。
+# 再固定向上一级会在容器里落到文件系统根 /，相对 DATA_DIR=./data 就变成 /data。
 _IS_FROZEN = getattr(sys, "frozen", False)
 
 
@@ -56,21 +58,42 @@ def _user_data_root() -> Path:
     return _PROJECT_ROOT / "data"
 
 
+def project_root_from_config_file(config_file: Path) -> Path:
+    """从 config.py 的位置推导应用根，供相对 DATA_DIR 解析。
+
+    开发布局 <repo>/backend/app/config.py → <repo>。
+    Docker 把 backend/app 扁平拷到 /app/app/config.py。再向上三级会落到文件系统根
+    `/`，相对 DATA_DIR=./data（.env.example 的默认值）变成 /data，与镜像挂载
+    /app/data 错位，自定义源 YAML 因此静默扫空（issue #500）。扁平布局的应用根
+    是 app 包的上一级。
+    """
+    app_pkg = Path(config_file).resolve().parent
+    package_parent = app_pkg.parent
+    if package_parent.name == "backend":
+        return package_parent.parent
+    return package_parent
+
+
 def _resource_root() -> Path:
     """只读资源根目录。
 
     frozen: PyInstaller 解压目录 (_MEIPASS)
-    非 frozen: 项目根目录 (源码树)
+    非 frozen: 项目根目录 (源码树 / 容器内 /app)
     """
     if _IS_FROZEN:
         # sys._MEIPASS 是 PyInstaller 注入的解压根
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-    return Path(__file__).resolve().parent.parent.parent
+    return project_root_from_config_file(Path(__file__))
 
 
 def _project_root() -> Path:
-    """项目根目录 (非 frozen 用)。"""
-    return Path(__file__).resolve().parent.parent.parent
+    """项目根目录。
+
+    frozen 保持三级推导：打包后 __file__ 落在 _MEIPASS 内，不能套用 Docker 扁平规则。
+    """
+    if _IS_FROZEN:
+        return Path(__file__).resolve().parent.parent.parent
+    return project_root_from_config_file(Path(__file__))
 
 
 _PROJECT_ROOT = _project_root()
