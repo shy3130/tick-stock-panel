@@ -125,6 +125,8 @@ async def stream_openai_round(
     content_seen = False
     reasoning_seen = False
     reasoning_parts: list[str] = []
+    # 上游显式返回 reasoning_content (哪怕是空串) 时也要在 round_end 里回传该字段。
+    reasoning_field_seen = False
     finish_reason = ""
     calls: dict[int, dict[str, Any]] = {}
     ordered: list[dict[str, Any]] = []
@@ -141,6 +143,8 @@ async def stream_openai_round(
         if delta is None:
             continue
         reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning is not None:
+            reasoning_field_seen = True
         if reasoning:
             reasoning_seen = True
             reasoning_parts.append(str(reasoning))
@@ -191,7 +195,7 @@ async def stream_openai_round(
             "finish_reason": finish_reason,
         }
         # DeepSeek 思考模式: 带 tools 的后续请求缺了这一轮的 reasoning_content 会被 400。
-        if reasoning_parts:
+        if reasoning_field_seen:
             end["reasoning_content"] = "".join(reasoning_parts)
         yield end
         return

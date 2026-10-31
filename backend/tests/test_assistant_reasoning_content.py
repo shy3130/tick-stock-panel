@@ -83,11 +83,24 @@ async def test_stream_round_end_without_reasoning_has_no_key(monkeypatch: pytest
     assert "reasoning_content" not in events[-1]
 
 
-async def test_chat_service_sends_reasoning_content_back(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_round_end_keeps_empty_reasoning_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 上游显式返回空串时也要保留字段, 与"未返回该字段"区分开。
+    events = await _events(monkeypatch, [
+        _chunk({"reasoning_content": ""}),
+        _chunk({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                "function": {"name": "list_strategies", "arguments": "{}"}}]},
+               finish_reason="tool_calls"),
+    ])
+
+    assert events[-1]["reasoning_content"] == ""
+
+
+@pytest.mark.parametrize("reasoning", ["先看看有哪些策略", ""])
+async def test_chat_service_sends_reasoning_content_back(monkeypatch: pytest.MonkeyPatch, reasoning: str) -> None:
     captured: list[list[dict[str, Any]]] = []
     script = [
         {"tool_calls": [{"id": "call_1", "name": "list_strategies", "arguments": "{}"}],
-         "reasoning_content": "先看看有哪些策略"},
+         "reasoning_content": reasoning},
         {"text": "你有 3 个策略"},
     ]
 
@@ -97,7 +110,7 @@ async def test_chat_service_sends_reasoning_content_back(monkeypatch: pytest.Mon
         if step.get("text"):
             yield {"type": "text", "delta": step["text"]}
         end = {"type": "round_end", "tool_calls": step.get("tool_calls", []), "finish_reason": "stop"}
-        if step.get("reasoning_content"):
+        if "reasoning_content" in step:
             end["reasoning_content"] = step["reasoning_content"]
         yield end
 
@@ -115,15 +128,16 @@ async def test_chat_service_sends_reasoning_content_back(monkeypatch: pytest.Mon
     assert [json.loads(line) for line in lines if '"error"' in line] == []
     assistant_msg = captured[1][-2]
     assert assistant_msg["role"] == "assistant"
-    assert assistant_msg["reasoning_content"] == "先看看有哪些策略"
+    assert assistant_msg["reasoning_content"] == reasoning
 
 
-async def test_tool_loop_sends_reasoning_content_back(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("reasoning", ["先跑一次回测", ""])
+async def test_tool_loop_sends_reasoning_content_back(monkeypatch: pytest.MonkeyPatch, reasoning: str) -> None:
     replies = [
         ChatCompletionMessage.model_validate({
             "role": "assistant",
             "content": None,
-            "reasoning_content": "先跑一次回测",
+            "reasoning_content": reasoning,
             "tool_calls": [{"id": "call_1", "type": "function",
                             "function": {"name": "run_backtest", "arguments": "{}"}}],
         }),
@@ -147,5 +161,5 @@ async def test_tool_loop_sends_reasoning_content_back(monkeypatch: pytest.Monkey
         execute_tool=fake_execute,
     )
 
-    assert messages[1]["reasoning_content"] == "先跑一次回测"
+    assert messages[1]["reasoning_content"] == reasoning
     assert "reasoning_content" not in messages[3]
