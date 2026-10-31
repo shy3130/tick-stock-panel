@@ -115,11 +115,118 @@ def test_missing_dir_returns_empty(tmp_path):
     assert r["scanned_dates"] == 0
 
 
+def _zero_activity(minute_dir: Path, trade_date: str, symbol: str) -> None:
+    part = minute_dir / f"date={trade_date}" / "part.parquet"
+    df = pl.read_parquet(part).with_columns(
+        pl.when(pl.col("symbol") == symbol).then(0.0).otherwise(pl.col(c)).alias(c)
+        for c in ("volume", "amount")
+    )
+    df.write_parquet(part)
+
+
+def _write_daily(daily_dir: Path, trade_date: str, symbol: str, volume: float) -> None:
+    part = daily_dir / f"date={trade_date}" / "part.parquet"
+    part.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"symbol": [symbol], "volume": [volume], "amount": [volume * 10]}).write_parquet(part)
+
+
+@pytest.mark.parametrize("count", [171, 23])
+def test_zero_activity_residue_is_separate_from_real_gaps(tmp_path, count):
+    """停牌残留不会被合并补拉清除, 不能把它反复列为可补齐缺口。"""
+    minute_dir, daily_dir = tmp_path / "kline_minute", tmp_path / "kline_daily"
+    day = "2026-10-20"
+    _write_partition(minute_dir, day, _full_day("002731.SZ")[:count] + _full_day("600519.SH")[:100])
+    _zero_activity(minute_dir, day, "002731.SZ")
+    _write_daily(daily_dir, day, "600519.SH", 1000)
+
+    r = scan_minute_gaps(minute_dir, today=_BJ, now_hm=(20, 0))
+
+    assert [g["symbol"] for g in r["gaps"]] == ["600519.SH"]
+    assert r["gaps"][0]["actual_bars"] == 100
+    assert r["inactive_symbol_days"] == 1
+    assert r["summary_by_date"][0]["gap_symbols"] == 1
+
+
+@pytest.mark.parametrize("daily_state", ["traded", "missing", "unknown", "corrupt", "empty"])
+def test_zero_activity_is_still_a_gap_without_daily_support(tmp_path, daily_state):
+    """日线有成交或无法核对时保留告警, 不用零成交量掩盖真实数据缺失。"""
+    minute_dir, daily_dir = tmp_path / "kline_minute", tmp_path / "kline_daily"
+    day = "2026-10-20"
+    _write_partition(minute_dir, day, _full_day("002731.SZ")[:171])
+    _zero_activity(minute_dir, day, "002731.SZ")
+    if daily_state != "missing":
+        _write_daily(daily_dir, day, "002731.SZ", 1000)
+        part = daily_dir / f"date={day}" / "part.parquet"
+        if daily_state == "unknown":
+            pl.read_parquet(part).with_columns(
+                pl.lit(None).cast(pl.Float64).alias("volume"), pl.lit(0.0).alias("amount"),
+            ).write_parquet(part)
+        elif daily_state == "corrupt":
+            part.write_bytes(b"not parquet")
+        elif daily_state == "empty":
+            pl.read_parquet(part).head(0).write_parquet(part)
+
+    r = scan_minute_gaps(minute_dir, today=_BJ, now_hm=(20, 0))
+
+    assert len(r["gaps"]) == 1
+    assert r["inactive_symbol_days"] == 0
+
+
+@pytest.mark.parametrize("activity", ["volume", "amount", "unknown_volume", "missing_amount"])
+def test_partial_day_with_activity_or_unknown_fields_keeps_gap(tmp_path, activity):
+    minute_dir, daily_dir = tmp_path / "kline_minute", tmp_path / "kline_daily"
+    day = "2026-10-20"
+    _write_partition(minute_dir, day, _full_day("002731.SZ")[:171])
+    _zero_activity(minute_dir, day, "002731.SZ")
+    part = minute_dir / f"date={day}" / "part.parquet"
+    df = pl.read_parquet(part)
+    if activity == "missing_amount":
+        df = df.drop("amount")
+    else:
+        column = "volume" if activity == "unknown_volume" else activity
+        value = None if activity == "unknown_volume" else 1.0
+        df = df.with_columns(
+            pl.when(pl.col("datetime") == df["datetime"][0]).then(value).otherwise(pl.col(column)).alias(column)
+        )
+    df.write_parquet(part)
+    _write_daily(daily_dir, day, "600519.SH", 1000)
+
+    r = scan_minute_gaps(minute_dir, today=_BJ, now_hm=(20, 0))
+
+    assert len(r["gaps"]) == 1
+    assert r["gaps"][0]["actual_bars"] == 171
+    assert r["inactive_symbol_days"] == 0
+
+
 # ---------- /api/kline/minute 的 local_partial 返回 ----------
 
 def _fake_req(repo):
     state = type("S", (), {"repo": repo})()
     return type("R", (), {"app": type("A", (), {"state": state})()})()
+
+
+def test_gap_api_exposes_inactive_days_without_changing_source_data(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.api import kline as kline_api
+
+    minute_dir, daily_dir = tmp_path / "kline_minute", tmp_path / "kline_daily"
+    day = "2026-10-20"
+    _write_partition(minute_dir, day, _full_day("002731.SZ")[:171])
+    _zero_activity(minute_dir, day, "002731.SZ")
+    _write_daily(daily_dir, day, "600519.SH", 1000)
+    part = minute_dir / f"date={day}" / "part.parquet"
+    before = part.read_bytes()
+    monkeypatch.setattr(kline_api, "cn_now", lambda: _dt.datetime(2026, 10, 23, 20))
+    monkeypatch.setattr(kline_api, "cn_today", lambda: _BJ)
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+
+    result = kline_api.get_minute_gaps(_fake_req(repo), symbols="002731.SZ", dates=day, limit=500)
+
+    assert result["gaps"] == []
+    assert result["complete_dates"] == []
+    assert result["inactive_symbol_days"] == 1
+    assert part.read_bytes() == before
 
 
 def test_get_minute_returns_partial_instead_of_dropping(tmp_path, monkeypatch):

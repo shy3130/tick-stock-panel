@@ -1384,8 +1384,31 @@ async def sync_minute(request: Request):
     )
 
 
-async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=None) -> dict:
-    """触发分钟K同步/向前扩展后台任务(HTTP 端点与 AI 助手共用同一条触发路径)。"""
+@router.post("/repair_minute_gaps")
+async def repair_minute_gaps(request: Request, body: dict):
+    """定向批量补拉缺口标的, 返回现有管道任务 ID; 不承诺源窗口外的缺口可补齐。"""
+    from app.services.minute_gaps import MAX_GAP_ROWS
+
+    symbols = body.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        raise HTTPException(status_code=400, detail="symbols 必须是非空标的列表")
+    if len(symbols) > MAX_GAP_ROWS:
+        raise HTTPException(status_code=400, detail=f"一次最多补拉 {MAX_GAP_ROWS} 只标的")
+    if any(not isinstance(symbol, str) or not symbol.strip() for symbol in symbols):
+        raise HTTPException(status_code=400, detail="标的代码必须是非空字符串")
+    symbols = list(dict.fromkeys(symbol.strip() for symbol in symbols))
+    repo = request.app.state.repo
+    if any(repo.resolve_asset_type(symbol) != "stock" for symbol in symbols):
+        raise HTTPException(status_code=400, detail="分钟缺口补拉仅支持股票, ETF 和指数请使用各自的数据入口")
+    return await trigger_minute_sync(
+        repo, request.app.state.capabilities, override_days=10, repair_symbols=symbols,
+    )
+
+
+async def trigger_minute_sync(
+    repo, capset, *, override_days=None, extend_flag=None, repair_symbols: list[str] | None = None,
+) -> dict:
+    """复用分钟同步的分块落盘、容量限制和取消机制; 缺口补拉限定标的且强制回溯。"""
     import asyncio
 
     from app.api.data import invalidate_storage_cache
@@ -1397,14 +1420,17 @@ async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=N
         try_acquire_run_slot,
     )
     from app.services.preferences import get_minute_sync_days
-    from app.tickflow.capabilities import Cap
     from app.tickflow.pools import get_pool
 
     if not _minute_allowed(capset):
+        if repair_symbols is not None:
+            raise HTTPException(status_code=403, detail="当前分钟数据源不可用, 请先在设置中配置可用数据源")
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
     # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
     job_id, is_new = job_store.create(long_running=True)
     if not is_new:
+        if repair_symbols is not None:
+            raise HTTPException(status_code=409, detail="已有数据任务正在运行, 请等待完成后再批量补拉")
         return {"status": "reused", "job_id": job_id}
 
     async def task() -> None:
@@ -1417,20 +1443,23 @@ async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=N
             job_store.progress(job_id, stage, pct, msg)
 
         try:
-            progress("sync_minute", 5, "解析标的池…")
-            # 标的池 = instruments 维表 + 自选 (单一来源, 不拉 CN_Equity_A/SW1 池)
-            universe: set[str] = set(get_pool("watchlist"))
-            inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
-            if inst_path.exists():
-                try:
-                    import polars as pl
-                    inst = pl.read_parquet(inst_path, columns=["symbol"])
-                    universe.update(inst["symbol"].to_list())
-                except Exception:  # noqa: BLE001
-                    pass
-            # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute
-            index_set = repo.get_index_symbol_set()
-            universe = sorted({s for s in universe if s not in index_set})
+            progress("sync_minute", 5, "准备补拉缺口标的…" if repair_symbols is not None else "解析标的池…")
+            if repair_symbols is not None:
+                universe = repair_symbols
+            else:
+                # 标的池 = instruments 维表 + 自选 (单一来源, 不拉 CN_Equity_A/SW1 池)
+                all_symbols = set(get_pool("watchlist"))
+                inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
+                if inst_path.exists():
+                    try:
+                        import polars as pl
+                        inst = pl.read_parquet(inst_path, columns=["symbol"])
+                        all_symbols.update(inst["symbol"].to_list())
+                    except Exception:  # noqa: BLE001
+                        pass
+                # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute
+                index_set = repo.get_index_symbol_set()
+                universe = sorted(s for s in all_symbols if s not in index_set)
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
             days = override_days if override_days else get_minute_sync_days()
@@ -1440,22 +1469,37 @@ async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=N
             def _on_chunk(done: int, total: int, seg_label: str) -> None:
                 # 进度映射: 10% (标的池解析完) → 95%, 留 5% 给写入+刷新
                 pct = 10 + int((done / max(total, 1)) * 85)
-                progress("sync_minute", pct, f"拉取分钟K… {done}/{total} 批 [{seg_label}]")
+                action = "补拉缺口分钟K" if repair_symbols is not None else "拉取分钟K"
+                progress("sync_minute", pct, f"{action}… {done}/{total} 批 [{seg_label}]")
 
             def _run():
-                return kline_sync.sync_and_persist_minute(
-                    universe, repo, capset, days=days,
-                    extend_backward=extend_backward,
-                    on_chunk_done=_on_chunk,
-                )
+                from app.jobs.daily_pipeline import _refresh_single_view
+
+                try:
+                    if repair_symbols is not None:
+                        progress("sync_minute", 10, f"补拉 {len(universe)} 只缺口标的的分钟K…")
+                    return kline_sync.sync_and_persist_minute(
+                        universe, repo, capset, days=days,
+                        extend_backward=extend_backward,
+                        force_full_days=repair_symbols is not None,
+                        on_chunk_done=_on_chunk,
+                    )
+                finally:
+                    if repair_symbols is not None:
+                        # 补拉分块已写入的数据在失败/取消后也要可见, 刷新仍占用原执行槽。
+                        _refresh_single_view(repo, "kline_minute")
 
             written = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
+            if repair_symbols is None:
+                from app.jobs.daily_pipeline import _refresh_single_view
 
-            # 刷新视图
-            from app.jobs.daily_pipeline import _refresh_single_view
-            _refresh_single_view(repo, "kline_minute")
+                _refresh_single_view(repo, "kline_minute")
 
-            progress("done", 100, f"分钟 K 同步完成,{written} 行")
+            message = (
+                f"缺口分钟补拉完成, 写入 {written} 行; 是否补齐以体检结果为准"
+                if repair_symbols is not None else f"分钟 K 同步完成,{written} 行"
+            )
+            progress("done", 100, message)
             job_store.succeed(job_id, {"minute_rows": written, "universe_size": len(universe)})
             invalidate_storage_cache()
         except JobCancelledError:

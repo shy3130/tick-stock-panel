@@ -174,6 +174,8 @@ def test_in_process_backtests_share_capacity(capacity, monkeypatch, kind):
     ("/api/kline/rebuild_enriched", {}, "app.indicators.pipeline", "run_pipeline", 3),
     ("/api/kline/sync_minute", {"days": 1},
      "app.services.kline_sync", "sync_and_persist_minute", 3),
+    ("/api/kline/repair_minute_gaps", {"symbols": ["600000.SH"]},
+     "app.services.kline_sync", "sync_and_persist_minute", 3),
 ])
 def test_api_jobs_wait_before_computing(
     capacity, monkeypatch, tmp_path, endpoint, body, module_name, function_name, result,
@@ -205,6 +207,7 @@ def test_api_jobs_wait_before_computing(
         clear_cache=lambda: None,
         refresh_cache=lambda: None,
         get_index_symbol_set=lambda: set(),
+        resolve_asset_type=lambda _: "stock",
         # rebuild_enriched 收尾经 repo.refresh_view 重建视图 (不再直连 db.execute)
         refresh_view=lambda *args, **kwargs: True,
     )

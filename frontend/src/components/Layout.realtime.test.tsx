@@ -19,6 +19,7 @@ vi.mock('@/lib/api', () => ({ api: {
   watchlistList: vi.fn(async () => ({ symbols: [] })),
   watchlistEnriched: vi.fn(async () => ({ rows: [] })),
   pipelineJobs: vi.fn(async () => ({ active_id: null, items: [] })),
+  dataIntegrity: vi.fn(async () => ({ report: null, blocking_assets: [], data_revisions: {} })),
   alertsList: vi.fn(async () => ({ total: 0 })),
   quoteStatus: vi.fn(),
   updateRealtimeQuotes: vi.fn(async (enabled: boolean) => ({
@@ -99,4 +100,23 @@ it('当前源已不可用时不复用旧可用状态开启', async () => {
   expect(api.quoteStatus).toHaveBeenCalled()
   expect(api.updateRealtimeQuotes).not.toHaveBeenCalled()
   expect(toast).toHaveBeenCalledWith(expect.stringContaining('数据源'), 'error')
+})
+
+it.each(['succeeded', 'failed'] as const)('离开数据页后, 分钟补拉 %s 仍刷新体检和分钟缓存', async status => {
+  vi.mocked(api.pipelineJobs).mockResolvedValue({ active_id: null, jobs: [{
+    id: 'repair-job', status, stage: status === 'succeeded' ? 'done' : 'sync_minute', progress: 100,
+    stage_pct: 100, started_at: null, finished_at: null, duration_s: 1,
+    result: status === 'succeeded' ? { minute_rows: 480, universe_size: 2 } : null,
+    error: status === 'failed' ? '部分补拉失败' : null,
+  }] })
+  const keys = [QK.minuteGaps, QK.minuteBatch(), QK.klineMinute('600000.SH', '2026-10-20'), QK.klineMinuteRange('600000.SH', 10)]
+  keys.forEach(key => client.setQueryData(key, {}))
+  const unaffected = QK.indexMinute('000001.SH', '2026-10-20')
+  client.setQueryData(unaffected, {})
+  await act(async () => root.render(
+    <MemoryRouter><QueryClientProvider client={client}><Layout /></QueryClientProvider></MemoryRouter>,
+  ))
+  await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+  keys.forEach(key => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
+  expect(client.getQueryState(unaffected)?.isInvalidated).toBe(false)
 })

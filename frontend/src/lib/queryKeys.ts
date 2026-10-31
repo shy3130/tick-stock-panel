@@ -14,6 +14,11 @@ export const DAILY_DATA_QUERY_PREFIXES = new Set([
   'regime-history', 'regime-latest', 'regime-states', 'regime-coverage', 'regime-phases', 'regime-mainline',
 ])
 
+/** 分钟落盘补拉后的体检与直接消费查询, 不影响日K/财务或独立的指数分钟数据。 */
+export const MINUTE_DATA_QUERY_PREFIXES = new Set([
+  'minute-gaps', 'minute-batch', 'kline-minute', 'kline-minute-range',
+])
+
 export const QK = {
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,

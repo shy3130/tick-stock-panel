@@ -10,6 +10,8 @@
 - 实盘落盘常见 241 根 (含 09:30 与 15:00 两个边界) 或 238~241 浮动的少量差异,
   因此与 /api/kline/minute 的 is_complete 同口径: >= expected * 0.9 视为完整。
 - 当日 (北京今天) 按已开盘分钟数折算 expected, 避免把盘中正常进度误报为缺口。
+- 整日成交量/额均为零且本地日线没有成交的记录单独计数, 不把停牌残留当作缺口。
+  日线缺失、读失败或成交字段未知时保留原判定, 避免掩盖真实缺失。
 """
 from __future__ import annotations
 
@@ -73,6 +75,28 @@ def _expected_bars_for(trade_date: _date, today: _date, now_hm: tuple[int, int])
     return FULL_DAY_BARS
 
 
+def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
+    """用同日股票日线核对成交; None 表示无法核对, 不能排除零成交分钟记录。"""
+    part = daily_dir / f"date={date_str}" / "part.parquet"
+    if not part.exists():
+        return None
+    try:
+        if not {"symbol", "volume", "amount"}.issubset(pl.read_parquet_schema(part)):
+            return None
+        daily = pl.read_parquet(part, columns=["symbol", "volume", "amount"])
+        if daily.is_empty():
+            return None
+        daily = daily.with_columns(pl.col(c).cast(pl.Float64, strict=False) for c in ("volume", "amount"))
+        # 非零或未知字段都不能作为「无成交」依据。零成交分钟在正常交易日也会出现,
+        # 因而只在标的整日零成交、且日线没有相反证据时排除该标的日。
+        return set(daily.filter(
+            (pl.col("volume") != 0).fill_null(True) | (pl.col("amount") != 0).fill_null(True)
+        )["symbol"].to_list())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("分钟体检日线核对失败 %s: %s", part, e)
+        return None
+
+
 def scan_minute_gaps(
     minute_dir: Path,
     *,
@@ -90,6 +114,7 @@ def scan_minute_gaps(
         return {
             "status": "ok", "scanned_dates": 0, "scanned_symbols": 0,
             "complete_dates": [], "gaps": [], "summary_by_date": [], "truncated": False,
+            "inactive_symbol_days": 0,
         }
 
     symbol_set = set(symbols) if symbols else None
@@ -99,6 +124,7 @@ def scan_minute_gaps(
     scanned_dates = 0
     scanned_symbols: set[str] = set()
     complete_dates: list[str] = []
+    inactive_symbol_days = 0
     truncated = False
 
     for part in sorted(minute_dir.glob("date=*/part.parquet")):
@@ -113,7 +139,9 @@ def scan_minute_gaps(
         if expected <= 0:
             continue   # 未开盘的当日分区不判定
         try:
-            df = pl.read_parquet(part, columns=["symbol", "datetime"])
+            schema = pl.read_parquet_schema(part)
+            activity_columns = [c for c in ("volume", "amount") if c in schema]
+            df = pl.read_parquet(part, columns=["symbol", "datetime", *activity_columns])
         except Exception as e:  # noqa: BLE001
             logger.warning("分钟分区读取失败 %s: %s", part, e)
             continue
@@ -127,11 +155,29 @@ def scan_minute_gaps(
                 continue
         scanned_symbols.update(df["symbol"].unique().to_list())
 
-        agg = df.group_by("symbol").agg(
+        aggregations = [
             pl.len().alias("n"),
             pl.col("datetime").min().alias("first"),
             pl.col("datetime").max().alias("last"),
-        )
+        ]
+        if len(activity_columns) == 2:
+            aggregations.append(
+                pl.all_horizontal(
+                    (pl.col(c).cast(pl.Float64, strict=False) == 0).fill_null(False)
+                    for c in activity_columns
+                ).all().alias("zero_activity")
+            )
+        agg = df.group_by("symbol").agg(aggregations)
+        if "zero_activity" in agg.columns and agg["zero_activity"].any():
+            daily_active = _daily_active_symbols(minute_dir.parent / "kline_daily", date_str)
+            if daily_active is not None:
+                inactive = agg.filter(
+                    pl.col("zero_activity") & ~pl.col("symbol").is_in(list(daily_active))
+                )["symbol"].to_list()
+                inactive_symbol_days += len(inactive)
+                agg = agg.filter(~pl.col("symbol").is_in(inactive))
+        if agg.is_empty():
+            continue  # 无成交记录不标记为完整交易日, 也没有可补齐的分钟缺口
         threshold = expected * COMPLETE_RATIO
         bad = agg.filter(pl.col("n") < threshold)
         if bad.is_empty():
@@ -165,6 +211,7 @@ def scan_minute_gaps(
         "status": "ok",
         "scanned_dates": scanned_dates,
         "scanned_symbols": len(scanned_symbols),
+        "inactive_symbol_days": inactive_symbol_days,
         "complete_dates": sorted(complete_dates),
         "gaps": [g.to_dict() for g in gaps],
         "summary_by_date": sorted(by_date.values(), key=lambda c: c["date"]),

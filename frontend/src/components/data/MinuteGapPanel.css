@@ -1,0 +1,82 @@
+/* 按面板实际可用宽度切换, 同时兼容侧栏、窄窗口和应用内界面缩放。 */
+.minute-gap-list {
+  container-type: inline-size;
+}
+
+.minute-gap-columns {
+  display: none;
+}
+
+.minute-gap-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.minute-gap-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.minute-gap-metrics {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+.minute-gap-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.minute-gap-repair {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+@container (min-width: 42rem) {
+  .minute-gap-columns,
+  .minute-gap-row {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 1fr) 6.25rem 5.5rem 4rem 7rem 5rem;
+    align-items: center;
+    column-gap: 0.75rem;
+  }
+
+  .minute-gap-identity,
+  .minute-gap-metrics {
+    display: contents;
+  }
+
+  .minute-gap-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  .minute-gap-metric {
+    align-items: flex-end;
+  }
+
+  .minute-gap-range {
+    align-items: flex-start;
+  }
+
+  .minute-gap-repair {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: end;
+  }
+}
