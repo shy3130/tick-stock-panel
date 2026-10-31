@@ -28,6 +28,8 @@ import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
 import type { FrontendExtension } from '@/extensions/types'
 import { IconPaper } from '@/components/BrandIcons'
+import { StrategyExecutionPanel } from './StrategyExecutionPanel'
+import { executionApi, executionListKey } from './executionClient'
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
   market: '即时',
@@ -188,7 +190,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
   const [stampQian, setStampQian] = useState(defaults.stampQian)
   const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
   const [name, setName] = useState('')
-  // 自动执行策略 (可选): 创建后立即绑一条自动跟单规则, 策略/监控规则触发信号时按下方参数自动下单
+  // 事件跟单（兼容，可选）: 创建后立即绑一条自动跟单规则, 策略/监控规则触发信号时按下方参数自动下单
   const [autoKind, setAutoKind] = useState<'strategy' | 'rule'>('strategy')
   const [autoId, setAutoId] = useState('')
   const [autoName, setAutoName] = useState('')
@@ -322,12 +324,12 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
         </div>
       </div>
 
-      {/* 自动执行策略 (可选): 创建即绑定, 信号触发自动下单 */}
+      {/* 事件跟单（兼容，可选）: 创建即绑定, 信号触发自动下单 */}
       <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <Zap className="h-3.5 w-3.5 text-warning" />
-          <span className="text-xs font-medium text-secondary">自动执行策略 (可选)</span>
-          <span className="text-[10px] text-muted">创建后立即生效 · 信号触发按参数自动下单</span>
+          <span className="text-xs font-medium text-secondary">事件跟单（兼容，可选）</span>
+          <span className="text-[10px] text-muted">旧通知事件模式；回测参数快照请在创建后绑定</span>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <div className="flex gap-1">
@@ -1523,6 +1525,8 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   })
 
   const rows = cmpQ.data?.accounts ?? []
+  const executionQ = useQuery({ queryKey: executionListKey, queryFn: executionApi.list, enabled: rows.length > 0, refetchInterval: 60_000, retry: false })
+  const executionByAccount = new Map(executionQ.data?.bindings.map(b => [b.account, b]))
   // 收益口径固定排序: 统计卡「收益最高」与净值叠加「收益前 8 名」不受表头排序影响
   const byPnl = useMemo(() => [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9)), [rows])
   const sorted = useMemo(() => {
@@ -1696,6 +1700,9 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                             <td className="py-2">
                               <div className="flex items-center gap-1.5">
                                 <span className="max-w-44 truncate text-xs font-medium">{r.name}</span>
+                                {executionByAccount.has(r.account) && <span className="max-w-36 truncate rounded-full bg-accent/10 px-1.5 py-px text-[9px] leading-4 text-accent" title={executionByAccount.get(r.account)!.message}>
+                                  {executionByAccount.get(r.account)!.name} · {executionByAccount.get(r.account)!.enabled ? '参数跟单' : '已暂停'}
+                                </span>}
                                 {r.status === 'frozen' && <span className="rounded-full bg-warning/15 px-1.5 py-px text-[9px] leading-4 text-warning">冻结</span>}
                                 {(r.auto_rules ?? []).slice(0, 2).map((ar, j) => (
                                   <span
@@ -1911,7 +1918,7 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
       <div className="max-h-[86vh] overflow-y-auto p-5">
         <div className="flex items-center gap-2">
           <GitCompare className="h-4 w-4 text-accent" />
-          <h3 id="arena-create-title" className="text-sm font-semibold text-foreground">批量创建对比账户</h3>
+          <h3 id="arena-create-title" className="text-sm font-semibold text-foreground">批量创建对比账户（旧事件模式）</h3>
           <span className="text-[10px] text-muted">同本金 · 同费率 · 同跟单参数 — 口径一致由构造保证</span>
         </div>
 
@@ -2467,8 +2474,13 @@ function AccountPanel({ acc, name, onDeleted }: { acc: string; name?: string; on
 
           {/* 右列: 下单 + 自动跟单 + 策略对比 */}
           <div className="space-y-4">
+            <StrategyExecutionPanel key={acc} account={acc} />
             <OrderForm acc={acc} holdings={holdings} onDone={invalidateAll} />
-            <AutoRulesPanel acc={acc} />
+            <details className="rounded-card border border-border bg-surface p-3">
+              <summary className="cursor-pointer text-xs text-muted">旧事件跟单（兼容保留）</summary>
+              <p className="my-2 text-[11px] leading-relaxed text-muted">旧规则按监控通知与池进出事件执行，不使用回测参数快照。策略买卖点跟单请使用上方入口，同一账户请只启用一种方式。</p>
+              <AutoRulesPanel acc={acc} />
+            </details>
             <CandidateCompareCard paper={{
               total_return_pct: nav.length >= 2 && nav[0].nav > 0 ? (nav[nav.length - 1].nav / nav[0].nav - 1) * 100 : null,
               annual_pct: nav.length >= 2 && nav[0].nav > 0
