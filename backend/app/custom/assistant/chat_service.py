@@ -268,12 +268,14 @@ async def chat_stream(
             while True:
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
+                reasoning_content: str | None = None
                 async for event in stream_round(req_messages, schemas, temperature=0.3, timeout=240.0):
                     if event["type"] == "text":
                         round_text.append(event["delta"])
                         await queue.put({"type": "delta", "content": event["delta"]})
                     elif event["type"] == "round_end":
                         tool_calls = event.get("tool_calls") or []
+                        reasoning_content = event.get("reasoning_content")
 
                 if not tool_calls:
                     if not round_text and not text_seen:
@@ -319,6 +321,9 @@ async def chat_stream(
                 if round_text:
                     assistant_message["content"] = "".join(round_text)
                     text_seen = True
+                # DeepSeek 思考模式要求工具轮的 reasoning_content 原样回传, 否则下一轮 400。
+                if reasoning_content is not None:
+                    assistant_message["reasoning_content"] = reasoning_content
                 req_messages.append(assistant_message)
 
                 for call in tool_calls:

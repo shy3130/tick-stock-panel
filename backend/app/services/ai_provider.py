@@ -424,6 +424,10 @@ async def generate_ai_text_with_tools(
         }
         if message.content:
             assistant["content"] = message.content
+        # DeepSeek 思考模式要求工具轮的 reasoning_content 原样回传, 否则下一轮 400。
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning is not None:
+            assistant["reasoning_content"] = reasoning
         req_messages.append(assistant)
 
         for tc in tool_calls:

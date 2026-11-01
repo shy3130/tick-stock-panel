@@ -13,6 +13,8 @@ tool_calls 分片, 流结束时统一返回本轮结果, 由 chat_service 决定
   本轮结束; tool_calls 非空表示模型请求工具, 元素形如
   {"id", "name", "arguments"(JSON 字符串)}, 上游附带 extra_content 时
   (如 Gemini 的 thought_signature) 另有 "extra_content" 键, 需原样回传。
+  有工具调用且上游流出了思考内容 (DeepSeek 思考模式的 reasoning_content) 时
+  另带 "reasoning_content" 键, 下一轮必须随 assistant 消息原样回传。
 """
 from __future__ import annotations
 
@@ -122,6 +124,9 @@ async def stream_openai_round(
 
     content_seen = False
     reasoning_seen = False
+    reasoning_parts: list[str] = []
+    # 上游显式返回 reasoning_content (哪怕是空串) 时也要在 round_end 里回传该字段。
+    reasoning_field_seen = False
     finish_reason = ""
     calls: dict[int, dict[str, Any]] = {}
     ordered: list[dict[str, Any]] = []
@@ -137,8 +142,12 @@ async def stream_openai_round(
         delta = getattr(choice, "delta", None)
         if delta is None:
             continue
-        if getattr(delta, "reasoning_content", None):
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning is not None:
+            reasoning_field_seen = True
+        if reasoning:
             reasoning_seen = True
+            reasoning_parts.append(str(reasoning))
 
         text = getattr(delta, "content", None)
         if text:
@@ -180,11 +189,15 @@ async def stream_openai_round(
             await asyncio.to_thread(close)
 
     if calls:
-        yield {
+        end: dict[str, Any] = {
             "type": "round_end",
             "tool_calls": ordered,
             "finish_reason": finish_reason,
         }
+        # DeepSeek 思考模式: 带 tools 的后续请求缺了这一轮的 reasoning_content 会被 400。
+        if reasoning_field_seen:
+            end["reasoning_content"] = "".join(reasoning_parts)
+        yield end
         return
 
     if finish_reason in _LENGTH_FINISH_REASONS:
