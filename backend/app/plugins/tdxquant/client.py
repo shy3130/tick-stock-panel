@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -282,29 +283,41 @@ class TdxQuantClient:
         """单标的除权事件, 每行 {Date 'YYYYMMDD', Type, Bonus, ShareBonus,
         AllotPrice, Allotment} — 金额/比例均为**每 10 股**口径(Bonus=10派X元)。
         """
-        start = f"{start_d:%Y-%m-%d}" if start_d else ""
-        end = f"{end_d:%Y-%m-%d}" if end_d else ""
-        try:
-            out = self._tqs.get_divid_factors(code, start, end)
-        except Exception as exc:  # SDK 内部异常类型不可枚举
-            raise TdxQuantError(f"get_divid_factors({code}): {exc}") from exc
-        if isinstance(out, list):
-            return out
-        # 环境装有 pandas 时 SDK 返回 DataFrame, 归一为 list[dict]。
-        # 注意 Date 会成为 DataFrame 索引(同 get_market_data 的日期索引惯例),
-        # reset_index 后若列名漂移, 把首列恢复为 'Date'。
-        to_dict = getattr(out, "to_dict", None)
-        reset_index = getattr(out, "reset_index", None)
-        if callable(to_dict) and callable(reset_index):
+        start = f"{start_d:%Y-%m-%d} 00:00:00" if start_d else ""
+        end = f"{end_d:%Y-%m-%d} 00:00:00" if end_d else ""
+        # SDK get_divid_factors 会把 _clean 拒绝的服务端错误和正常无事件
+        # 都变成空 DataFrame。与日K共用原生重试/错误检查，避免丢失原因；
+        # 使用同一 get_cw_data 端点及 SDK 1.2.2 的四列顺序，单位不变。
+        out = self._raw("get_cw_data", str(code).strip(), start, end)
+        if not isinstance(out, dict):
+            raise TdxQuantError(f"get_cw_data({code}) 返回异常结构: {type(out)!r}")
+        if not out:
+            return []
+        dates, values, types = out.get("Date"), out.get("Value"), out.get("Type", [])
+        if (not all(isinstance(v, list) for v in (dates, values, types))
+                or len(dates) != len(values)):
+            raise TdxQuantError(f"get_cw_data({code}) Date/Value/Type 列结构异常")
+        records = []
+        fields = ("Bonus", "AllotPrice", "ShareBonus", "Allotment")
+        for i, item in enumerate(values):
+            date_key = "".join(c for c in str(dates[i]).strip() if c.isdigit())[:8]
             try:
-                records = reset_index().to_dict("records")
-                if isinstance(records, list) and records:
-                    if "Date" not in records[0]:
-                        first_key = next(iter(records[0]))
-                        if first_key not in ("Type", "Bonus", "AllotPrice", "ShareBonus", "Allotment"):
-                            for row in records:
-                                row["Date"] = row.pop(first_key)
-                    return records
-            except Exception:  # noqa: BLE001 — 转换失败按结构异常处理
-                pass
-        raise TdxQuantError(f"get_divid_factors({code}) 返回异常结构: {type(out)!r}")
+                event_date = datetime.strptime(date_key, "%Y%m%d").date() if len(date_key) == 8 else None
+            except ValueError:
+                event_date = None
+            if event_date is None or (start_d and event_date < start_d) or (end_d and event_date > end_d):
+                continue  # SDK 同样过滤无效日期及服务端未裁剪的窗口外事件。
+            if item is None:
+                item = []
+            if not isinstance(item, list):
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 结构异常")
+            padded = item + [0] * max(0, 4 - len(item))
+            try:
+                amounts = [float(v or 0) for v in padded[:4]]
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 含无效数值") from exc
+            if not all(math.isfinite(v) for v in amounts):
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 含非有限数值")
+            records.append({"Date": date_key, "Type": types[i] if i < len(types) else "",
+                            **dict(zip(fields, amounts, strict=True))})
+        return records

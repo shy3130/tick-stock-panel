@@ -586,7 +586,9 @@ class TdxQuantProvider:
                 events = client.divid_factors(symbol, start_d, end_d + timedelta(days=_ADJ_FUTURE_DAYS))
             except TdxQuantError as e:
                 logger.warning("TdxQuant 除权事件 %s 拉取失败: %s", symbol, e)
-                events = []
+                # 失败不能当作「该股无除权」；由任务层标记失败，整轮不写入
+                # 不完整因子，也避免权限/额度异常后继续请求其余数千只。
+                raise
             events = [ev for ev in events if _compact_date(ev.get("Date")) is not None]
             if events:
                 events.sort(key=lambda ev: str(ev.get("Date")))
@@ -610,7 +612,7 @@ class TdxQuantProvider:
             raw = client.his_dats(symbol, end_d, _bars_for_window((end_d - start_d).days))
         except TdxQuantError as e:
             logger.warning("TdxQuant 除权配价 %s 日K失败: %s", symbol, e)
-            return {}
+            raise
         out: dict[date, float] = {}
         dates = raw.get("Date") or []
         closes = raw.get("Close") or []
