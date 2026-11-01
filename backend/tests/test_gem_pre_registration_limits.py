@@ -76,3 +76,36 @@ def test_backtest_lock_matrix_marks_pre_registration_gem_ten_percent_limit_up():
     )
     assert up[1, 0] == 1
     assert down[1, 0] == 0
+
+
+def test_upgrade_does_not_reuse_pre_reform_matrix_cache(tmp_path, monkeypatch):
+    from app import price_limits
+    from app.backtest import matrix
+
+    root = tmp_path / "market"
+    dates = [date(2020, 8, 20), BEFORE]
+    for day, close in zip(dates, [10.0, 11.0], strict=True):
+        partition = root / f"date={day.isoformat()}"
+        partition.mkdir(parents=True)
+        pl.DataFrame({
+            "symbol": ["300750.SZ"], "date": [day],
+            "open": [close], "high": [close], "low": [close], "close": [close],
+            "raw_close": [close], "volume": [1000.0],
+        }).write_parquet(partition / "part.parquet")
+    kwargs = {
+        "field_columns": {"raw_close", "price_limit_pct"},
+        "instruments": pl.DataFrame({"symbol": ["300750.SZ"], "name": ["宁德时代"]}),
+        "cache_root": tmp_path / "cache",
+    }
+    # Build a genuine v4 cache using the old rule: all ChiNext dates use 20%.
+    with monkeypatch.context() as old:
+        old.setattr(matrix, "_DIRECT_MATRIX_LOADER_VERSION", 4)
+        old.setattr(price_limits, "GEM_20PCT_LIMIT_START_DATE", date.min)
+        legacy = matrix.load_market_data_matrix_from_parquet(root, dates[0], dates[-1], **kwargs)
+    assert legacy.field("price_limit_pct")[1, 0] == pytest.approx(0.20)
+    assert legacy.limit_up_locked[1, 0] == 0
+
+    upgraded = matrix.load_market_data_matrix_from_parquet(root, dates[0], dates[-1], **kwargs)
+    assert upgraded.field("price_limit_pct")[1, 0] == pytest.approx(0.10)
+    assert upgraded.limit_up_locked[1, 0] == 1
+    assert upgraded.cache_path != legacy.cache_path
