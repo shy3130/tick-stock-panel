@@ -91,7 +91,7 @@ LOG_LEVEL=INFO        # DEBUG | INFO | WARNING | ERROR
 ## 数据
 
 ```ini
-DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
+DATA_DIR=./data       # Parquet / DuckDB 数据存储目录。相对路径按应用根解析；Docker 镜像内为 /app/data
 ```
 
 整个 `data/` 目录都不纳入 git —— 行情 K线、财务、自选、回测、监控记录,乃至概念/行业扩展数据,全部是程序运行时生成/拉取的用户数据。

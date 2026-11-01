@@ -15,6 +15,8 @@ docker run -d --name tsp -p 3018:3018 -v ${PWD}/data:/app/data ghcr.io/shy3130/t
 # 打开 http://localhost:3018
 ```
 
+自定义数据源 YAML 放在宿主机 `./data/data_sources/`，对应容器内 `/app/data/data_sources`。数据卷必须挂到 `/app/data`，不要挂到 `/data`。使用 `--env-file .env` 时，`.env` 中的 `DATA_DIR=./data` 会按应用根解析为 `/app/data`，与上面的挂载一致。启动日志会打印实际扫描目录；该目录下没有 YAML 时会有一条 info 日志。重新加载接口同时返回 `config_dir`、`found`、`loaded`、`skipped`。
+
 - 需要配置时:从 `.env.example` 复制出 `.env`,命令里加 `--env-file .env`。
 - 自定义数据源等服务跑在宿主机、容器内需通过 `host.docker.internal` 访问时,Linux 的 `docker run` 要在命令里加 `--add-host=host.docker.internal:host-gateway`(Docker Desktop 的 macOS/Windows 默认已可解析;方式 B 的 compose 已在 `extra_hosts` 配好),否则报 `Name or service not known`。
 - 镜像默认不含 `legacy-cpu` / `backtest` extras —— 老 CPU(无 AVX2)或需要 vectorbt 回测时,请用方式 B 通过 `BACKEND_EXTRAS` 自构建。
