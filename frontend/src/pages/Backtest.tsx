@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { BookmarkCheck, FlaskConical, ShieldCheck } from 'lucide-react'
+import { BookmarkCheck, FlaskConical, Info, ShieldCheck } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { ResearchCandidatesDialog } from './backtest/ResearchCandidatesDialog'
 import { RobustnessValidation } from './backtest/RobustnessValidation'
@@ -112,6 +112,13 @@ export function Backtest() {
       />
 
       <main className="min-h-0 flex-1 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
+        <p role="note" aria-label="回测说明" className="mb-3 flex items-start gap-2 rounded-btn border border-border/60 bg-surface px-3 py-2 text-xs leading-5 text-secondary">
+          <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          <span>
+            回测曲线与收益指标基于历史数据和模拟假设，
+            <strong className="font-medium text-foreground">不代表未来实际收益</strong>，不构成投资建议。
+          </span>
+        </p>
         {activeTab === 'strategy' && (
           <StrategyBacktest
             loadCandidate={pendingLoad}
