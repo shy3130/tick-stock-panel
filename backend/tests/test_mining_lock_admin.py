@@ -301,6 +301,47 @@ def test_lock_endpoints_free_lock(tmp_path):
     assert "未被持有" in resp.json()["detail"]
 
 
+def test_lock_endpoint_recognizes_own_lock_when_metadata_read_is_denied(tmp_path, monkeypatch):
+    """Windows forbids a second handle from reading the locked first byte."""
+    client = _api_client(tmp_path, acquired=True)
+    lock = client.app.state.mining_process_lock
+    lock.acquire()
+    original_read = Path.read_bytes
+
+    def read_bytes(path):
+        if path == lock.path:
+            raise PermissionError("locked byte is unreadable through another handle")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr("app.services.mining_lock_admin.locate_lock_holder_pid", lambda _: None)
+    try:
+        body = client.get("/api/backtest/mining/lock").json()
+        assert body["held"] is True
+        assert body["mine"] is True
+        assert body["holder"]["pid"] == os.getpid()
+        assert body["force_releasable"] is False
+        assert "当前后端" in body["reason"]
+        refused = client.post("/api/backtest/mining/lock/force-release")
+        assert refused.status_code == 409
+        assert "当前后端" in refused.json()["detail"]
+        assert lock.acquired is True
+    finally:
+        lock.release()
+
+
+def test_lock_endpoint_does_not_treat_startup_flag_as_current_ownership(tmp_path, monkeypatch):
+    client = _api_client(tmp_path, acquired=True)
+    monkeypatch.setattr("app.services.mining_lock_admin.probe_lock_held", lambda _: True)
+    monkeypatch.setattr("app.services.mining_lock_admin.read_lock_holder", lambda _: None)
+    monkeypatch.setattr("app.services.mining_lock_admin.locate_lock_holder_pid", lambda _: None)
+    body = client.get("/api/backtest/mining/lock").json()
+    assert body["held"] is True
+    assert body["mine"] is False
+    assert body["holder"] is None
+    assert body["force_releasable"] is False
+
+
 @_POSIX
 def test_lock_endpoints_full_recovery_loop(tmp_path):
     proc = _spawn_holder(tmp_path)

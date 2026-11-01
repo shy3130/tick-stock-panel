@@ -169,7 +169,10 @@ def get_lock_status(request: Request) -> dict[str, Any]:
     """挖掘锁诊断: 持有者线索 + 是否允许强制释放 (fail-closed 判定)。"""
     from app.services.mining_lock_admin import lock_status
 
-    return lock_status(request.app.state.repo.store.data_dir)
+    return lock_status(
+        request.app.state.repo.store.data_dir,
+        lock=getattr(request.app.state, "mining_process_lock", None),
+    )
 
 
 @router.post("/lock/force-release")
