@@ -34,11 +34,16 @@ def _memory_snapshot() -> dict:
     import psutil
 
     vm = psutil.virtual_memory()
+    from app.services.memory_budget import memory_budget
+
+    budget = memory_budget(vm)
     snap: dict[str, object] = {
         "rss_bytes": psutil.Process().memory_info().rss,
         "system_total_bytes": vm.total,
         "system_available_bytes": vm.available,
         "system_used_pct": vm.percent,
+        "effective_total_bytes": budget.total_bytes,
+        "effective_available_bytes": budget.available_bytes,
     }
     cg = Path("/sys/fs/cgroup")
     if _read_cgroup_int(cg / "memory.current") is not None:

@@ -29,8 +29,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from datetime import time as dt_time
+from pathlib import Path
 
 import polars as pl
 
@@ -308,6 +309,7 @@ class QuoteService:
         # prev 不早于本时段开盘时计算
         self._volume_delta: dict[str, tuple[float, float]] = {}
         self._volume_delta_span_s: float = 0.0
+        self._etf_history_cache: tuple[tuple, pl.DataFrame] | None = None
 
     # ================================================================
     # 生命周期
@@ -339,6 +341,7 @@ class QuoteService:
             self._thread = None
         if thread:
             thread.join(timeout=10)
+        self._etf_history_cache = None
         # 此处不持久化关闭: lifespan shutdown (容器停止/重启) 也调用 stop,
         # 持久化 False 会让每次重启后实时行情都变关闭、需手动再开。
         # 持久化语义归 disable() (用户主动关闭)。
@@ -431,6 +434,7 @@ class QuoteService:
     def set_repo(self, repo) -> None:
         """注入 KlineRepository, 用于实时落盘。"""
         self._repo = repo
+        self._etf_history_cache = None
 
     def set_app_state(self, app_state) -> None:
         """注入 FastAPI app.state, 用于获取 strategy_monitor 等单例。"""
@@ -1889,6 +1893,45 @@ class QuoteService:
     # enriched 增量计算
     # ================================================================
 
+    @staticmethod
+    def _etf_history_files(root: Path, today: date) -> tuple:
+        # Daily storage uses date partitions. Probe only the existing 150-day
+        # warmup horizon, so old years and today's repeated writes cost no scan.
+        files = []
+        for offset in range(150, 0, -1):
+            folder = root / f"date={today - timedelta(days=offset)}"
+            for path in sorted(folder.glob("*.parquet")):
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                files.append((str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+        return tuple(files)
+
+    def _etf_live_history(self, today: date, columns: list[str]) -> pl.DataFrame | None:
+        root = self._repo.store.data_dir / "kline_etf_daily"
+        files = self._etf_history_files(root, today)
+        if not files:
+            self._etf_history_cache = None
+            return None  # Preserve the original empty-history fallback.
+        key = (str(root), today, files)
+        cached = self._etf_history_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        frame = guarded_collect(
+            scan_daily_parquet([entry[0] for entry in files])
+            .select(columns)
+            .filter((pl.col("date") >= today - timedelta(days=150)) & (pl.col("date") != today))
+            .sort(["symbol", "date"]),
+            priority="background",
+        )
+        # A bounded immutable input cache only: formulas, adjustment factors and
+        # signals are still evaluated on each tick by the original pipeline.
+        self._etf_history_cache = None
+        if frame.estimated_size() <= 64 * 1024**2 and files == self._etf_history_files(root, today):
+            self._etf_history_cache = (key, frame)
+        return frame
+
     def _flush_live_enriched(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame = None, asset_type: str = "stock", merge: bool = False) -> None:
         """增量计算今天的 enriched: 用昨天的递推状态 + 今天 OHLCV → 只算今天 5500 行。
 
@@ -1955,13 +1998,16 @@ class QuoteService:
                 table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
-                hist_df = guarded_collect(
-                    scan_daily_parquet(daily_glob)
-                    # 多读一段自然日, 再按交易日计数确定窗口起点 (长假前后 90 个自然日不足 60 个交易日)
-                    .filter(pl.col("date") >= cutoff - timedelta(days=60))
-                    .sort(["symbol", "date"]),
-                    priority="background",
-                )
+                hist_df = self._etf_live_history(today, ohlcv_cols) if asset_type == "etf" else None
+                if hist_df is None:
+                    hist_df = guarded_collect(
+                        scan_daily_parquet(daily_glob)
+                        # 多读一段自然日, 再按交易日计数确定窗口起点 (长假前后 90 个自然日不足 60 个交易日)
+                        .filter(pl.col("date") >= cutoff - timedelta(days=60))
+                        .select(ohlcv_cols)
+                        .sort(["symbol", "date"]),
+                        priority="background",
+                    )
                 if hist_df.is_empty():
                     return
 

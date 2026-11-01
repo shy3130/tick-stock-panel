@@ -265,6 +265,9 @@ def _read_ext_dataframe(
     snapshot_date: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    *,
+    columns: list[str] | None = None,
+    required_columns: list[str] | None = None,
 ) -> tuple[pl.DataFrame, str | None]:
     """读取扩展表数据。
 
@@ -275,13 +278,24 @@ def _read_ext_dataframe(
     """
     cfg_dir = data_dir / "ext_data" / config.id
 
+    def collect(lf: pl.LazyFrame) -> pl.DataFrame:
+        if columns:
+            available = lf.collect_schema().names()
+            keep = [c for c in columns if c in available]
+            required = required_columns or []
+            # Preserve full-row fallback for unknown output fields, and retain
+            # the original validation/errors for unknown filter/sort fields.
+            if keep and all(c in available for c in required):
+                lf = lf.select(list(dict.fromkeys([*keep, *required])))
+        return lf.collect()
+
     if config.mode == "snapshot":
         if start_date or end_date:
             raise HTTPException(400, "快照模式无历史分区, 不支持日期范围查询")
         path = cfg_dir / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), None
-        return pl.read_parquet(path), _latest_sync_date(config, data_dir)
+        return collect(pl.scan_parquet(path)), _latest_sync_date(config, data_dir)
 
     base = cfg_dir / "timeseries"
     if not base.exists():
@@ -292,7 +306,7 @@ def _read_ext_dataframe(
         path = base / f"date={day}" / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), day
-        return pl.read_parquet(path), day
+        return collect(pl.scan_parquet(path)), day
 
     partitions = sorted(
         d for d in base.iterdir()
@@ -317,21 +331,22 @@ def _read_ext_dataframe(
         # 没有它, 范围合并后消费方无法区分行来自哪一天。
         frames = []
         for d in selected:
-            f = pl.read_parquet(d / "part.parquet")
+            f = pl.scan_parquet(d / "part.parquet")
+            names = f.collect_schema().names()
             day = d.name[5:]
-            if "date" not in f.columns:
+            if "date" not in names:
                 f = f.with_columns(pl.lit(day).alias("date"))
-            elif "data_date" not in f.columns:
+            elif "data_date" not in names:
                 f = f.with_columns(pl.lit(day).alias("data_date"))
             frames.append(f)
         # diagonal: 各分区 schema 可能不一致 (配置中途加字段 → 早期分区少列),
         # 缺列自动补 null 并取超类型; 单分区时无需 concat
         df = pl.concat(frames, how="diagonal") if len(frames) > 1 else frames[0]
-        return df, f"{selected[0].name[5:]}..{selected[-1].name[5:]}"
+        return collect(df), f"{selected[0].name[5:]}..{selected[-1].name[5:]}"
 
     latest = partitions[-1]
     latest_date = latest.name[5:]
-    return pl.read_parquet(latest / "part.parquet"), latest_date
+    return collect(pl.scan_parquet(latest / "part.parquet")), latest_date
 
 
 def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
@@ -636,17 +651,26 @@ def list_rows(
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
 
     data_dir = _data_dir(request)
-    df, active_date = _read_ext_dataframe(config, data_dir, snapshot_date, start_date, end_date)
+    requested = [c.strip() for c in (columns or "").split(",") if c.strip()]
+    tf = config.pull.time_field if config.pull else None
+    required = [entry.partition(":")[0].strip() for entry in (filter or [])]
+    if sort:
+        required.append(sort.partition(":")[0].strip())
+    if tf:
+        required.append(tf)
+    df, active_date = _read_ext_dataframe(
+        config, data_dir, snapshot_date, start_date, end_date,
+        columns=["symbol", "code", "name", *requested] if requested else None,
+        required_columns=required,
+    )
     df = _with_instrument_name(df, data_dir)
     # 日内序列表: 按时间列升序, 保证分页/截断取到的是最早的盘
-    tf = config.pull.time_field if config.pull else None
     if tf and tf in df.columns:
         df = df.sort(tf)
     df = _apply_row_filters(df, filter)
     df = _apply_row_sort(df, sort)
     total = len(df)
     df = df.slice(offset, limit)
-    requested = [c.strip() for c in (columns or "").split(",") if c.strip()]
     if requested:
         keep = [c for c in ["symbol", "code", "name", *requested] if c in df.columns]
         if keep:

@@ -5,6 +5,7 @@ import math
 import re
 import threading
 import time
+from concurrent.futures import Future
 from datetime import date
 from typing import Any
 
@@ -24,6 +25,8 @@ _cache_ts: float = 0.0
 # 缓存跨线程读写锁: market_overview 在 FastAPI 线程池读, invalidate 在数据刷新线程清,
 # 无锁会读到撕裂/过期状态。用模块级 Lock 守护 check-then-set 与 clear。
 _cache_lock = threading.Lock()
+_cache_generation = 0
+_inflight: dict[tuple[int, str], Future] = {}
 
 
 def invalidate_overview_cache() -> None:
@@ -31,11 +34,12 @@ def invalidate_overview_cache() -> None:
 
     清除数据后调用, 避免看板在 TTL 窗口内继续返回旧的聚合结果。
     """
-    global _cache, _cache_key, _cache_ts
+    global _cache, _cache_key, _cache_ts, _cache_generation
     with _cache_lock:
         _cache = None
         _cache_key = None
         _cache_ts = 0.0
+        _cache_generation += 1
 
 
 _DIMENSION_SEP = re.compile(r"[、,，;；|/\s]+")
@@ -363,16 +367,35 @@ def _build_overview(request: Request, as_of: date | None = None) -> dict:
 def market_overview(request: Request, as_of: date | None = None):
     """总览页单次请求聚合数据，避免前端拉全市场明细后再计算。"""
     global _cache, _cache_key, _cache_ts
-    now = time.time()
+    now = time.monotonic()
     cache_key = as_of.isoformat() if as_of else "latest"
     # 读缓存持锁, 避免与 invalidate 的 clear 竞态读到撕裂状态
     with _cache_lock:
         if _cache is not None and _cache_key == cache_key and (now - _cache_ts) < _CACHE_TTL:
             return _cache
-    # 装配在锁外进行 (耗时), 允许并发未命中时各自构建, 不长时间持锁串行化请求
-    data = _build_overview(request, as_of)
+        generation = _cache_generation
+        flight_key = (generation, cache_key)
+        flight = _inflight.get(flight_key)
+        leader = flight is None
+        if leader:
+            flight = Future()
+            _inflight[flight_key] = flight
+    if not leader:
+        return flight.result()
+    # Both computation and follower waits stay outside the cache lock.
+    try:
+        data = _build_overview(request, as_of)
+    except BaseException as exc:
+        with _cache_lock:
+            _inflight.pop(flight_key, None)
+        flight.set_exception(exc)
+        raise
     with _cache_lock:
-        _cache = data
-        _cache_key = cache_key
-        _cache_ts = now
+        # A refresh may have invalidated this build while it was running.
+        if generation == _cache_generation:
+            _cache = data
+            _cache_key = cache_key
+            _cache_ts = now
+        _inflight.pop(flight_key, None)
+    flight.set_result(data)
     return data

@@ -33,9 +33,9 @@ _MEMORY_POLL_S = 5.0
 def _memory_admission_ok() -> bool:
     if _HEAVY_MIN_AVAILABLE_BYTES <= 0:
         return True
-    import psutil
+    from app.services.memory_budget import memory_budget
 
-    return psutil.virtual_memory().available >= _HEAVY_MIN_AVAILABLE_BYTES
+    return memory_budget().available_bytes >= _HEAVY_MIN_AVAILABLE_BYTES
 
 
 class HeavyJobLimitTimeoutError(TimeoutError):
