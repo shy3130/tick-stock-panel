@@ -42,6 +42,15 @@ describe('packToExtension: 契约校验与转换', () => {
 })
 
 describe('loadRuntimePageExtensions', () => {
+  it('整包页面必须属于已就绪的配套后端，不能注册其他扩展 ID', async () => {
+    const rec = recorder()
+    await loadRuntimePageExtensions({
+      fetchList: async () => [{ id: 'package:demo.backend', managed_by: 'demo.backend', enabled: true }],
+      importModule: async () => ({ default: pack() }),
+      loadInto: rec.loadInto,
+    })
+    await expect(rec.calls[0]['runtime:package:demo.backend']()).rejects.toThrow('配套后端')
+  })
   it('只加载已启用页面插件, loader 键带 runtime: 前缀且完成契约转换', async () => {
     const rec = recorder()
     await loadRuntimePageExtensions({

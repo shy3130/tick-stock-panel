@@ -373,7 +373,7 @@ function CapabilityRoutingSection() {
 
 /** 插件 API Key 配置区块 (嵌入插件详情卡, 不再独立成卡)。
  *  先探后存: 后端用候选 Key 实探一次, 无效不落盘; secrets.json 优先于 .env。 */
-function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
+export function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
   const qc = useQueryClient()
   const [keyInput, setKeyInput] = useState('')
   const [revealing, setRevealing] = useState(false)

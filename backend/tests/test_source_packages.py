@@ -137,6 +137,18 @@ def test_same_version_collision_and_preview_digest(isolated):
         packages.install(bundle("2.0.0"), "0" * 64)
 
 
+def test_pending_replacement_preview_rejects_stale_install_state(isolated):
+    install(bundle())
+    next_data = bundle("3.0.0")
+    preview, _ = packages.inspect_archive(next_data)
+    install(bundle("2.0.0"))
+    with pytest.raises(ValueError, match="状态已变化"):
+        packages.install(next_data, preview["digest"], preview["revision"])
+    current, _ = packages.inspect_archive(next_data)
+    assert current["installed_version"] == "1.0.0"
+    assert current["pending_version"] == "2.0.0"
+
+
 @pytest.mark.parametrize("filename", ["../escape.py", "/escape.py", "a\\b.py", "a/../b.py", "CON.py", "client.PY", "x.dll", "a./b.py"])
 def test_archive_paths_and_payload_limits(isolated, filename):
     with pytest.raises(ValueError):

@@ -30,6 +30,8 @@ class PagePackMeta:
     uploaded_at: float = 0.0
     # 前端试载/注册失败的错误信息; 空串表示未出错
     error: str = ""
+    managed_by: str = ""
+    version: str = ""
 
 
 def _sha256_file(path: Path) -> str:

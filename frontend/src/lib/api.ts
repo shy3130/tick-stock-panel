@@ -2089,7 +2089,42 @@ export interface SourcePackagePreview {
   digest: string
   errors: string[]
   installed_version: string | null
+  pending_version?: string | null
+  revision?: string
 }
+
+export interface ExtensionPackagePreview {
+  manifest: { id: string; display_name?: string; version: string; author?: string; description?: string; backend: string; frontend?: string }
+  digest: string
+  revision: string
+  errors: string[]
+  files: string[]
+  installed_version: string | null
+  pending_version?: string | null
+}
+
+export interface ManagedExtensionPackage {
+  id: string
+  name: string
+  version?: string | null
+  pending_version?: string | null
+  previous_version?: string | null
+  runtime_version?: string | null
+  enabled: boolean
+  frontend?: boolean
+  status: string
+  error: string
+  pending_remove?: boolean
+  failed_version?: string | null
+  revision?: string
+}
+
+export type ImportCenterPreview =
+  | { kind: 'resources'; preview: ResourceTransferPreview }
+  | { kind: 'backup'; preview: ConfigBackupInspect }
+  | { kind: 'source'; preview: SourcePackagePreview }
+  | { kind: 'extension'; preview: ExtensionPackagePreview }
+  | { kind: 'page'; preview: { filename: string; size: number; digest: string; source: boolean; suggested_id: string } }
 
 export interface PluginDataSourceItem {
   can_test?: boolean
@@ -2536,6 +2571,8 @@ export interface RuntimePagePack {
   sha256: string
   uploaded_at: number
   error: string
+  managed_by?: string
+  version?: string
 }
 
 // ===== 升级保护 (二次开发) =====
@@ -2774,15 +2811,44 @@ export const api = {
     }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
+  importCenterInspect: (files: File[]) => {
+    const body = new FormData()
+    files.forEach(file => body.append('files', file))
+    return request<ImportCenterPreview>('/api/import-center/inspect', { method: 'POST', body, quiet: true, timeoutMs: 120_000 })
+  },
+  extensionPackages: () => request<ManagedExtensionPackage[]>('/api/extension-packages'),
+  installExtensionPackage: (file: File, digest: string, revision: string) => {
+    const body = new FormData()
+    body.append('file', file); body.append('digest', digest); body.append('revision', revision); body.append('trusted', 'true')
+    return request<{ id: string; message: string }>('/api/extension-packages/install', { method: 'POST', body, quiet: true })
+  },
+  extensionPackageFrontend: (file: File, digest: string) => {
+    const body = new FormData()
+    body.append('file', file); body.append('digest', digest); body.append('trusted', 'true')
+    return request<Blob>('/api/extension-packages/frontend', { method: 'POST', body, responseType: 'blob', quiet: true })
+  },
+  manageExtensionPackage: (id: string, action: string, revision?: string) =>
+    request<{ id: string; message: string }>('/api/extension-packages/' + encodeURIComponent(id) + '/manage', {
+      method: 'POST', body: JSON.stringify({ action, revision }), quiet: true,
+    }),
+  importCenterInstallPage: (file: File, id: string, digest: string, overwrite: boolean) => {
+    const body = new FormData()
+    body.append('file', file); body.append('id', id); body.append('digest', digest)
+    body.append('trusted', 'true'); body.append('overwrite', String(overwrite))
+    return request<RuntimePagePack>('/api/import-center/page', { method: 'POST', body, quiet: true, timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS })
+  },
+  importCenterProjectPage: (namespace: string, id: string, overwrite: boolean) =>
+    request<RuntimePagePack>('/api/import-center/project', { method: 'POST', body: JSON.stringify({ namespace, id, overwrite, trusted: true }), quiet: true, timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS }),
   inspectSourcePackage: (file: File) => {
     const body = new FormData()
     body.append('file', file)
     return request<SourcePackagePreview>('/api/custom/source-packages/inspect', { method: 'POST', body, quiet: true })
   },
-  installSourcePackage: (file: File, digest: string) => {
+  installSourcePackage: (file: File, digest: string, revision?: string) => {
     const body = new FormData()
     body.append('file', file)
     body.append('digest', digest)
+    if (revision) body.append('revision', revision)
     return request<{ name: string; message: string }>('/api/custom/source-packages/install', { method: 'POST', body, quiet: true, timeoutMs: 120_000 })
   },
   manageSourcePackage: (name: string, action: string) =>

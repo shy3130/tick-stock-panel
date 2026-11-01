@@ -7,32 +7,25 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-import importlib.metadata
-import io
 import json
-import platform
 import re
 import shutil
 import sqlite3
-import stat
 import sys
 import tempfile
 import types
-import zipfile
 from contextlib import contextmanager
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import yaml
-from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from app import __version__
 from app.config import settings
 from app.services.fs_utils import atomic_write_text
+from app.services.package_archive import MAX_EXPANDED as MAX_EXPANDED
+from app.services.package_archive import MAX_UPLOAD as MAX_UPLOAD
+from app.services.package_archive import compatibility, read_code_archive
 
-MAX_UPLOAD = 20 * 1024 * 1024
-MAX_EXPANDED = 80 * 1024 * 1024
 NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:[a-zA-Z0-9.+-]*)\Z")
 ENTRY = re.compile(r"[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*\Z")
@@ -136,69 +129,8 @@ def validate_manifest(doc: dict):
         raise ValueError("外部安装的插件不能隐藏卡片")
 
 
-def compatibility(doc: dict) -> list[str]:
-    errors = []
-    for field, current in (("requires_app", __version__), ("requires_python", platform.python_version())):
-        if doc.get(field) and Version(current) not in SpecifierSet(str(doc[field])):
-            errors.append(f"{field}: 需要 {doc[field]}，当前 {current}")
-    platforms = doc.get("platforms", ["any"])
-    current = f"{sys.platform}-{platform.machine().lower()}"
-    if not isinstance(platforms, list) or not all(isinstance(x, str) for x in platforms):
-        raise ValueError("platforms 必须是字符串列表")
-    if "any" not in platforms and current not in platforms:
-        errors.append(f"运行平台不匹配，当前 {current}")
-    requirements = doc.get("requires", [])
-    if not isinstance(requirements, list):
-        raise ValueError("requires 必须是依赖列表")
-    for item in requirements:
-        req = Requirement(item)
-        if req.url:
-            raise ValueError("requires 不接受 URL 或安装脚本")
-        if req.marker and not req.marker.evaluate():
-            continue
-        try:
-            installed = importlib.metadata.version(req.name)
-            if installed not in req.specifier:
-                errors.append(f"依赖 {req.name} 版本不匹配：{installed}")
-        except importlib.metadata.PackageNotFoundError:
-            errors.append(f"缺少依赖 {req.name}（不会自动修改主程序环境）")
-    return errors
-
-
 def inspect_archive(data: bytes) -> tuple[dict, dict[str, bytes]]:
-    if len(data) > MAX_UPLOAD:
-        raise ValueError("插件包超过 20 MiB")
-    files = {}
-    folded = set()
-    total = 0
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            if len(archive.infolist()) > 1000:
-                raise ValueError("插件包条目超过 1000")
-            for info in archive.infolist():
-                name = info.filename
-                parts = PurePosixPath(name).parts
-                if (not parts or name.startswith("/") or "\\" in name or ":" in name
-                        or any(p in (".", "..") or p.endswith((".", " ")) for p in parts)
-                        or PurePosixPath(name).as_posix() != name.rstrip("/")
-                        or any(p.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(10)], *[f"LPT{i}" for i in range(10)]} for p in parts)):
-                    raise ValueError("插件包包含非法路径")
-                if stat.S_IFMT(info.external_attr >> 16) not in (0, stat.S_IFREG, stat.S_IFDIR):
-                    raise ValueError("插件包不允许符号链接或特殊文件")
-                if name.casefold().rstrip("/") in folded:
-                    raise ValueError("插件包包含重复或大小写冲突的路径")
-                folded.add(name.casefold().rstrip("/"))
-                if info.is_dir():
-                    continue
-                total += info.file_size
-                if total > MAX_EXPANDED or info.file_size > MAX_UPLOAD:
-                    raise ValueError("插件包解压大小超限")
-                # Executable/native payloads need a separately verified distribution.
-                if PurePosixPath(name).suffix.lower() not in (".py", ".yaml", ".yml", ".json", ".txt", ".md", ".csv"):
-                    raise ValueError("首版支持源码包；不接收原生库、wheel、脚本或可执行文件")
-                files[name] = archive.read(info)
-    except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as exc:
-        raise ValueError("无法读取 ZIP 插件包") from exc
+    files = read_code_archive(data)
     if "plugin.yaml" not in files or len(files["plugin.yaml"]) > 64 * 1024:
         raise ValueError("包根目录需要 plugin.yaml（最大 64 KiB）")
     doc = yaml.safe_load(files["plugin.yaml"])
@@ -225,6 +157,8 @@ def inspect_archive(data: bytes) -> tuple[dict, dict[str, bytes]]:
     if state and doc["version"] in state["hashes"] and state["hashes"][doc["version"]] != digest:
         raise ValueError("相同版本已有不同内容，请提升版本号")
     return {"manifest": doc, "digest": digest, "errors": errors,
+            "pending_version": state.get("pending") if state else None,
+            "revision": hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest(),
             "installed_version": state["active"] if state else None}, files
 
 
@@ -286,12 +220,14 @@ def build_provider(doc: dict):
     return provider, "已就绪"
 
 
-def install(data: bytes, digest: str) -> dict:
+def install(data: bytes, digest: str, revision: str | None = None) -> dict:
     from . import loader
     with mutation():
         preview, files = inspect_archive(data)
         if preview["digest"] != digest:
             raise ValueError("插件包与预览不一致，请重新预览")
+        if revision is not None and preview["revision"] != revision:
+            raise ValueError("插件状态已变化，请重新预览")
         if preview["errors"]:
             raise ValueError("；".join(preview["errors"]))
         doc = preview["manifest"]

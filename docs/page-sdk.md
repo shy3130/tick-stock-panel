@@ -1,6 +1,6 @@
 # 页面插件开发指南 (Page Pack SDK v1)
 
-页面插件是**运行时可挂载的页面产物**：把页面打包成单文件 ES 模块（`extension.js`），在「设置 → 页面插件」上传，刷新后即成为完整页面——自动注册路由、侧栏入口，可在菜单设置里排序/隐藏。本地 dev、生产构建、桌面端三种运行形态一致生效，宿主无需重新构建。
+页面插件是**运行时可挂载的页面产物**：把页面打包成单文件 ES 模块（`extension.js`），在「设置 → 导入与备份」上传，刷新后即成为完整页面——自动注册路由、侧栏入口，可在菜单设置里排序/隐藏。本地 dev、生产构建、桌面端三种运行形态一致生效，宿主无需重新构建。
 
 ## 快速开始
 
@@ -9,7 +9,7 @@ cp -r frontend/page-pack-template my-pack && cd my-pack
 pnpm install && pnpm build      # → dist/extension.js
 ```
 
-打开宿主「设置 → 页面插件」→ 填 ID（字母/数字/下划线）→ 选择 `dist/extension.js` → 上传并校验 → 刷新页面。
+打开宿主「设置 → 导入与备份」→ 选择 `dist/extension.js` → 预览页面标识（字母/数字/下划线）、确认来源及同名替换 → 导入并校验 → 刷新页面。
 
 ## 产物契约 (apiVersion 1)
 
@@ -70,3 +70,5 @@ export default extension
 | 页面插件（运行时产物） | 免重建挂载、独立分发 | 本文档 |
 | 源码级扩展 `frontend/src/custom/<ns>/extension.tsx` | 随宿主一起构建维护、可用全部核心模块 | `docs/secondary-development.md` §3 |
 | 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 扩展页面 |
+
+配套后台扩展可使用 [前后端完整包](extension-packages.md)；单独上传 JS/TSX 只导入前端页面。

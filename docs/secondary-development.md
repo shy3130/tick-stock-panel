@@ -20,12 +20,13 @@
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
+- 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
 - 当前前端插槽：`layout.navigation.extra`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
 - 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
 - 因子平台与策略线的既有桥接（已实现，二开时直接复用、勿重复实现）：因子库一键生成单因子排名策略（`GenerateFactorStrategyDialog` → `custom_factor_*`）；策略触发器引用因子条件信号（`AddFactorSignalDialog`，`csg_f_*`）；自定义信号 AI 提示词含因子分组（`custom_signals_ai.py`）；策略回测因子归因（`strategy.py` 的 `factor_attribution`，覆盖 `meta.scoring` 非空的策略）。
 - 旧策略包格式与接口（兼容保留）：按依赖闭包打包策略 `.py` + 引用的自定义信号/因子定义 + 用户调参（叠加策略含子策略）。`app/services/strategy_bundle.py` 只保留兼容入口，实际实现统一位于 `app/services/resource_bundle.py`；新旧接口共用依赖闭包、ZIP 安全校验、打包与资源预检，旧导入复用 `config_backup.apply_archive` 的校验/逐条写盘/冒烟管线，缺失依赖在旧预览中只作预警。包内仅允许策略/调参/信号/因子四类，其他路径 400 拒绝。API：`GET /api/strategies/{id}/bundle`、`POST /api/strategies/bundle/inspect|apply`；当前页面入口使用下述统一资源传输。
-- 统一资源传输（已实现）：策略、因子、信号页各使用一个 `ResourceTransferButton` 图标，在当前页打开 `ResourceTransferDialog`；`kind` 限定主资源列表类型，依赖统一展示并自动携带。多文件识别后优先选择同类型原始项，没有此类型原始项时允许从混合包提取该类型定义；确认冲突后只提交所选项及其依赖。`StrategyExportButton` 与弹窗共用 `downloadResourceBundle`，单个策略和批量导出均下载 ZIP，包含所需因子、信号与已保存调参。处理期间禁用关闭，关闭后重开重置临时状态。服务层 `app/services/resource_bundle.py` 统一收集多资源依赖闭包，复用备份路径/原子写与定义编译；新包格式 `tick-resource-bundle` v1，兼容旧策略包。预览通过 `registry.isolated_registry()` 在请求上下文副本内检查同包因子，不向实时线程泄漏定义；新导入链路预检后整批提交，写入/注册/重载失败回滚，区别于旧备份接口的逐条容错语义。API 位于 `/api/definitions/resources`，详见 [策略文档](strategy.md#资源导入与批量导出)。
+- 统一资源传输（已实现）：策略、因子、信号页各使用一个 `ResourceTransferButton` 图标，进入「设置 → 导入与备份」；`kind` 透传资源选择上下文，依赖统一展示并自动携带，批量导出复用 `ResourceTransferDialog`。多文件识别后优先选择同类型原始项，没有此类型原始项时允许从混合包提取该类型定义；确认冲突后只提交所选项及其依赖。`StrategyExportButton` 与弹窗共用 `downloadResourceBundle`，单个策略和批量导出均下载 ZIP，包含所需因子、信号与已保存调参。处理期间禁用关闭，关闭后重开重置临时状态。服务层 `app/services/resource_bundle.py` 统一收集多资源依赖闭包，复用备份路径/原子写与定义编译；新包格式 `tick-resource-bundle` v1，兼容旧策略包。预览通过 `registry.isolated_registry()` 在请求上下文副本内检查同包因子，不向实时线程泄漏定义；新导入链路预检后整批提交，写入/注册/重载失败回滚，区别于旧备份接口的逐条容错语义。API 位于 `/api/definitions/resources`，详见 [策略文档](strategy.md#资源导入与批量导出)。
 - 模拟盘「绑定即评估」（已实现，`app/strategy/paper_watch.py`）：账户绑定策略（自动跟单规则 `match_kind=strategy`）即自动进入实时评估循环——引擎内存态注入合成规则（`paper_watch:{strategy_id}`，不落盘、不进监控页），事件照常喂 `paper_auto.on_rule_events`。同步幂等且与真监控规则去重（同策略已有启用中的监控规则则不注入，避免重复事件）；`set_rules` 是全量覆盖，故监控规则任何保存后都会重注入。合成规则的信号是沙盒信号：只驱动模拟盘下单，不进 SSE 告警/系统通知/webhook/留痕（`quote_service` 按 `is_paper_watch_event` 分流）。
 
 尚未实现、只能在真实需求出现后增加的能力：

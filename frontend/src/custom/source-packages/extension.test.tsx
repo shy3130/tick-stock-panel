@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
@@ -18,7 +19,7 @@ const preview = { manifest: { name: 'demo', display_name: '演示源', version: 
 async function render(element = <InstallDialog onClose={mocks.close} onInstalled={mocks.done} />) {
   root = createRoot(node)
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () => root.render(<QueryClientProvider client={qc}>{element}</QueryClientProvider>))
+  await act(async () => root.render(<MemoryRouter><QueryClientProvider client={qc}>{element}</QueryClientProvider></MemoryRouter>))
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
 }
 const button = (label: string) => [...node.querySelectorAll('button')].find(el => el.textContent === label)!
@@ -64,12 +65,11 @@ it('blocks escape and closing during installation; failure stays in the dialog',
   expect(node.querySelector('[role="alert"]')?.textContent).toBe('加载失败')
   expect(mocks.done).not.toHaveBeenCalled()
 })
-it('reopening the installer clears the previous file and preview', async () => {
+it('the data-source install entry points to the unified import center', async () => {
   await render(<PackageInstaller refresh={mocks.done} selectSource={vi.fn()} />)
-  await click(button('安装插件')); await choose(); await click(button('取消'))
-  await click(button('安装插件'))
-  expect(node.textContent).not.toContain('静态兼容检查通过')
-  expect(button('确认安装').disabled).toBe(true)
+  const entry = node.querySelector<HTMLAnchorElement>('a')!
+  expect(entry.textContent).toContain('安装插件')
+  expect(entry.getAttribute('href')).toBe('/settings?tab=import&kind=source')
 })
 it('only selected routing fields are changed', async () => {
   await render(<PackageActions plugin={plugin} refresh={mocks.done} />)

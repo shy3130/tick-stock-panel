@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Package, X, Upload, Loader2 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type SourcePackagePreview } from '@/lib/api'
@@ -9,20 +10,18 @@ import type { FrontendExtension, FrontendSlotContextMap } from '@/extensions/typ
 
 const button = 'inline-flex items-center justify-center gap-1.5 rounded-btn border border-border px-3 py-1.5 text-xs hover:bg-elevated disabled:opacity-50'
 
-export function PackageInstaller({ refresh, selectSource }: FrontendSlotContextMap['settings.data-sources.toolbar']) {
-  const [open, setOpen] = useState(false)
-  return <>
-    <button
-      type="button"
-      aria-haspopup="dialog"
-      className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn border border-accent/20 bg-accent/10 px-3 text-xs font-medium text-blue-700 transition-colors hover:border-accent/40 hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface dark:text-blue-400"
-      onClick={() => setOpen(true)}
-    >
-      <Package size={14} aria-hidden="true" />
-      安装插件
-    </button>
-    {open && <InstallDialog onClose={() => setOpen(false)} onInstalled={name => { refresh(); selectSource(name); setOpen(false) }} />}
-  </>
+export function PackageInstaller(_context: FrontendSlotContextMap['settings.data-sources.toolbar']) {
+  return <Link to="/settings?tab=import&kind=source"
+    className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn border border-accent/20 bg-accent/10 px-3 text-xs font-medium text-blue-700 hover:bg-accent/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent dark:text-blue-400">
+    <Package size={14} aria-hidden="true" />安装插件
+  </Link>
+}
+
+function PackageManagementLink({ plugin }: FrontendSlotContextMap['settings.data-sources.detail-actions']) {
+  if (plugin.origin !== 'external') return null
+  return <Link to={'/settings?tab=import&view=installed&selected=' + encodeURIComponent('source:' + plugin.name)} className="mt-4 inline-flex min-h-9 items-center gap-2 rounded-btn border border-border px-3 py-2 text-xs text-accent hover:bg-elevated">
+    <Package size={14} aria-hidden="true" />管理插件版本与能力
+  </Link>
 }
 
 export function InstallDialog({ onClose, onInstalled }: { onClose: () => void; onInstalled: (name: string) => void }) {
@@ -106,7 +105,7 @@ export function PackageActions({ plugin, refresh }: FrontendSlotContextMap['sett
       {plugin.previous_version && <button disabled={busy} className={button} onClick={() => setConfirm('rollback')}>回退到 {plugin.previous_version}</button>}
       {plugin.pending_version && <button disabled={busy} className={button} onClick={() => void run('cancel-update')}>取消待生效更新</button>}
       <button disabled={busy} className={`${button} text-danger`} onClick={() => setConfirm('remove')}>卸载插件</button>
-      <span className="self-center text-muted">更新版本：使用右上角“安装插件”上传新包</span>
+      <span className="self-center text-muted">更新版本：在“导入文件”上传新包</span>
     </div>}
     {error && <p role="alert" className="text-danger">{error}</p>}
     {routing && <RoutingDialog plugin={plugin} onClose={() => setRouting(false)} onSaved={() => { refresh(); setRouting(false) }} />}
@@ -166,6 +165,6 @@ export default {
   id: 'official.source-packages', apiVersion: 1,
   slots: [
     { name: 'settings.data-sources.toolbar', id: 'install', component: PackageInstaller },
-    { name: 'settings.data-sources.detail-actions', id: 'manage', component: PackageActions },
+    { name: 'settings.data-sources.detail-actions', id: 'manage', component: PackageManagementLink },
   ],
 } satisfies FrontendExtension

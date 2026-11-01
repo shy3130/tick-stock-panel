@@ -60,6 +60,7 @@ export interface RuntimePageMeta {
   label?: string
   path?: string
   error?: string
+  managed_by?: string
 }
 
 /** 产物分发 URL: 同源相对路径, dev(vite 代理)/生产(后端直挂)/桌面端一致。 */
@@ -167,7 +168,11 @@ export async function loadRuntimePageExtensions(opts: LoadRuntimeOptions = {}): 
     const url = runtimeBundleUrl(page.id)
     loaders[`runtime:${page.id}`] = () => {
       const impl = importModule ? importModule(url) : import(/* @vite-ignore */ url)
-      return impl.then(m => ({ default: packToExtension(m.default) }))
+      return impl.then(m => {
+        const extension = packToExtension(m.default)
+        if (page.managed_by && extension.id !== page.managed_by) throw new Error('页面与配套后端的扩展 ID 不一致')
+        return { default: extension }
+      })
     }
   }
   if (Object.keys(loaders).length === 0) return

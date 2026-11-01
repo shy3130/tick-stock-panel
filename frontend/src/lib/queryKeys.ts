@@ -20,6 +20,7 @@ export const MINUTE_DATA_QUERY_PREFIXES = new Set([
 ])
 
 export const QK = {
+  extensionPackages: ['extension-packages'] as const,
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,
   settings:       ['settings'] as const,

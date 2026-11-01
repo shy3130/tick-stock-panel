@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -232,20 +233,11 @@ it('close and Escape cannot interrupt a pending file operation', async () => {
   expect(mocks.close).toHaveBeenCalledTimes(1)
 })
 
-it('the single page icon opens the correct dialog and reopening discards the prior selection', async () => {
+it('the resource entry opens the unified center with its resource context', async () => {
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   root = createRoot(container)
-  await act(async () => root!.render(<QueryClientProvider client={qc}><ResourceTransferButton kind="factor" /></QueryClientProvider>))
-  const opener = container.querySelector<HTMLButtonElement>('[aria-label="因子导入与导出"]')!
-  expect(container.querySelectorAll('button')).toHaveLength(1)
-  await click(opener)
-  expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('因子导入与导出')
-  await click(document.querySelector<HTMLElement>('[role="tab"][aria-selected="false"]')!)
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
-  await click(checkbox('选择因子：动量因子'))
-  await click(button('取消'))
+  await act(async () => root!.render(<MemoryRouter><QueryClientProvider client={qc}><ResourceTransferButton kind="factor" /></QueryClientProvider></MemoryRouter>))
+  const opener = container.querySelector<HTMLAnchorElement>('[aria-label="因子导入与导出"]')!
+  expect(opener.getAttribute('href')).toBe('/settings?tab=import&kind=factor')
   expect(document.querySelector('[role="dialog"]')).toBeNull()
-  await click(opener)
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('导入因子')
-  expect(document.querySelector('[aria-label="选择资源文件"]')).toBeTruthy()
 })

@@ -66,11 +66,11 @@ async def inspect(file: Annotated[UploadFile, File()]):
 
 
 @router.post("/install")
-async def install(file: Annotated[UploadFile, File()], digest: str = Form(...)):
+async def install(file: Annotated[UploadFile, File()], digest: str = Form(...), revision: str | None = Form(None)):
     from starlette.concurrency import run_in_threadpool
     data = await read_upload(file)
     try:
-        return await run_in_threadpool(packages.install, data, digest)
+        return await run_in_threadpool(packages.install, data, digest, revision)
     except (ValueError, OSError, TypeError, yaml.YAMLError) as exc:
         raise HTTPException(400, str(exc)) from exc
 

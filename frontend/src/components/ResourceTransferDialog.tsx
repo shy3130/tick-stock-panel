@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
+import { refreshResourceQueries } from '@/lib/importCenter'
 import { Modal } from '@/components/Modal'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, PackageOpen, ArrowLeft, Check, ChevronDown, Download, FileArchive, Link2, Loader2, Search, Upload, X } from 'lucide-react'
@@ -15,27 +17,24 @@ const BUTTON = 'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rou
 const PRIMARY = cn(BUTTON, 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:text-white')
 
 export function ResourceTransferButton({ kind, className }: { kind: ResourceKind; className?: string }) {
-  const [open, setOpen] = useState(false)
-  const label = `${KIND_LABEL[kind]}导入与导出`
-  return <>
-    <button type="button" aria-label={label} title={label} onClick={() => setOpen(true)}
-      className={cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-btn border border-border bg-surface text-secondary transition-colors hover:border-accent/40 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent', className)}>
-      <PackageOpen className="h-3.5 w-3.5" />
-    </button>
-    {open && <ResourceTransferDialog kind={kind} onClose={() => setOpen(false)} />}
-  </>
+  const label = KIND_LABEL[kind] + '导入与导出'
+  return <Link to={'/settings?tab=import&kind=' + kind} aria-label={label} title={label}
+    className={cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-btn border border-border bg-surface text-secondary transition-colors hover:border-accent/40 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent', className)}>
+    <PackageOpen className="h-3.5 w-3.5" />
+  </Link>
 }
 
 interface Props {
   kind: ResourceKind
   initialMode?: Mode
+  exportOnly?: boolean
   onClose: () => void
 }
 
 /** 各页共用同一份传输逻辑, 主列表只展示当前页类型, 依赖统一预览。 */
-export function ResourceTransferDialog({ kind, initialMode = 'import', onClose }: Props) {
+export function ResourceTransferDialog({ kind, initialMode = 'import', exportOnly = false, onClose }: Props) {
   const qc = useQueryClient()
-  const [mode, setMode] = useState<Mode>(initialMode)
+  const [mode, setMode] = useState<Mode>(exportOnly ? 'export' : initialMode)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [overwrite, setOverwrite] = useState<Set<string>>(new Set())
@@ -124,10 +123,7 @@ export function ResourceTransferDialog({ kind, initialMode = 'import', onClose }
     try {
       const applied = await api.resourcesApply(files, [...selected], conflicts.filter(entry => overwrite.has(entry.key)).map(entry => entry.key), preview.revision)
       setResult(applied)
-      const keys = [QK.resourceCatalog, QK.definitions, QK.customSignals, QK.customSignalsOptions, QK.factorColumns,
-        QK.factorLibrary('all').slice(0, 1), QK.screenerStrategies().slice(0, 1), QK.strategyDetail('').slice(0, 1),
-        QK.screenerCached().slice(0, 1), QK.screener, QK.monitorRuleOptions, QK.watchlist, QK.strategyLinkOptions().slice(0, 1)]
-      await Promise.allSettled(keys.map(queryKey => qc.invalidateQueries({ queryKey })))
+      await refreshResourceQueries(qc)
     } catch (err) { setError(err instanceof Error ? err.message : '导入失败，请重新预览') }
     finally { setBusy(false) }
   }
@@ -150,7 +146,7 @@ export function ResourceTransferDialog({ kind, initialMode = 'import', onClose }
         <button type="button" aria-label="关闭" disabled={busy} onClick={onClose} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-btn text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
       </header>
       <div className="flex shrink-0 gap-5 border-b border-border px-4 sm:px-5" role="tablist" aria-label="资源传输方式">
-        {([['import', `导入${KIND_LABEL[kind]}`], ['export', '批量导出']] as const).map(([value, label]) => (
+        {([['import', `导入${KIND_LABEL[kind]}`], ['export', '批量导出']] as const).filter(([value]) => !exportOnly || value === 'export').map(([value, label]) => (
           <button key={value} type="button" role="tab" aria-selected={mode === value} disabled={busy} onClick={() => changeMode(value)}
             className={`border-b-2 py-3 text-xs font-medium transition-colors ${mode === value ? 'border-accent text-accent' : 'border-transparent text-secondary hover:text-foreground'}`}>{label}</button>
         ))}

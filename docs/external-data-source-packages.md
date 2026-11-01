@@ -1,13 +1,13 @@
 # 外部数据源插件安装
 
-外部安装是数据源插件机制的新入口：开发者发布 ZIP，用户在「设置 → 数据源 → 安装插件」安装，随后点击新卡片填写 API Key、验证并选择接管的数据能力。无需为每个源改前端或重新发布主程序。
+外部安装是数据源插件机制的新入口：开发者发布 ZIP，用户在「设置 → 导入与备份」安装（原数据源页「安装插件」会跳转到此），随后点击新卡片填写 API Key、验证并选择接管的数据能力。无需为每个源改前端或重新发布主程序。
 
 ## 使用流程
 
-1. 点击数据源区域右上角的小盒子「安装插件」，选择或拖入 ZIP。
+1. 打开「设置 → 导入与备份」，选择或拖入 ZIP；数据源页的小盒子入口仍可使用。
 2. 查看名称、作者声明、版本、能力和兼容检查结果。预览不会执行包内 Python。
 3. 确认信任来源后安装。Python 插件与后端同权限，可读取数据和凭据；这不是沙箱。
-4. 安装后自动选中新卡片。需要 Key 时显示「待配置 API Key」，有效 Key 才保存到现有 `user_data/secrets.json`；运行时初始化失败恢复原凭据和实例。
+4. 安装完成后点击「查看已安装扩展」，在数据源详情中继续配置。需要 Key 时显示「待配置 API Key」，有效 Key 才保存到现有 `user_data/secrets.json`；运行时初始化失败恢复原凭据和实例。
 5. 在详情区「选择启用能力」勾选需要接管的能力，确认当前源到新源的变化。仅修改勾选项；安装、配置 Key 都不会自动切换路由。
 6. 插件提供 `test_dataset` 时可以逐项试拉；未提供时显示「未检测」。验证 Key 不代表全部接口都有权限，试拉可能消耗供应商额度。
 
@@ -74,7 +74,7 @@ requires: []                   # 现有宿主发行包版本约束，例如 'htt
 
 - 数据源加载器负责外置目录发现、包入口解析、统一注册和受控实例释放；原有服务继续通过 `get_provider` / `provider_has_dataset` 取数。
 - 安装管理通过 `app/custom/source_packages` 的后端扩展注册，不修改主应用路由入口。
-- 前端管理位于 `src/custom/source-packages`，使用两个正式插槽：`settings.data-sources.toolbar`（`refresh`、`selectSource`）和 `settings.data-sources.detail-actions`（`plugin`、`refresh`）。这些是本次新增的已实现契约。
+- 统一页面复用 `src/custom/source-packages` 的管理与能力选择组件。数据源页通过两个正式插槽跳转到统一入口：`settings.data-sources.toolbar`（`refresh`、`selectSource`）和 `settings.data-sources.detail-actions`（`plugin`、`refresh`）。这些是本次新增的已实现契约。
 - 数据源列表、Key、试拉、路由 API 和查询缓存复用原实现，不建立另一套数据服务。
 
 新增管理端点：

@@ -111,6 +111,13 @@ class BackendExtensionRegistry:
         )
         self._frozen = True
 
+    def mutable_copy(self) -> BackendExtensionRegistry:
+        """Stage an optional package without mutating the published snapshot."""
+        registry = BackendExtensionRegistry()
+        registry._extension_ids = self._extension_ids.copy()
+        registry._notification_formatters = self._notification_formatters.copy()
+        return registry
+
     def notification_formatters(
         self,
     ) -> tuple[RegisteredImplementation[NotificationFormatter], ...]:
