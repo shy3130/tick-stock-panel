@@ -29,7 +29,8 @@ import pyarrow.dataset as pads
 from app.backtest.minute_trigger import build_minute_exit_reference
 from app.backtest.numba_runtime import run_numba_parallel
 from app.price_limits import (
-    MAIN_BOARD_ST_LIMIT_CHANGE_DATE,
+    numpy_gem_pre_registration_vector,
+    numpy_limit_pct_for_date,
     numpy_limit_pct_vectors,
     numpy_limit_price,
     write_numpy_price_limit_matrix,
@@ -2198,15 +2199,14 @@ def _limit_lock_matrices(
     up_locked.fill(0)
     down_locked.fill(0)
     legacy_pct, current_pct = numpy_limit_pct_vectors(symbols, names)
+    pre_gem_pct = numpy_gem_pre_registration_vector(symbols, legacy_pct, names)
 
     previous_close = np.full(shape[1], np.nan, dtype=np.float64)
     previous_raw = np.full(shape[1], np.nan, dtype=np.float64)
     previous_adjustment = np.full(shape[1], np.nan, dtype=np.float64)
     for time_id in range(shape[0]):
-        limit_pct = (
-            legacy_pct
-            if trading_dates[time_id] < MAIN_BOARD_ST_LIMIT_CHANGE_DATE
-            else current_pct
+        limit_pct = numpy_limit_pct_for_date(
+            trading_dates[time_id], pre_gem_pct, legacy_pct, current_pct,
         )
         present = seen[time_id]
         current_close = close[time_id].astype(np.float64, copy=False)
