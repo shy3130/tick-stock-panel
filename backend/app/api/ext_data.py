@@ -31,6 +31,7 @@ from app.services.ext_data import (
     infer_fields_from_df,
     parse_upload_file,
     rows_to_parquet,
+    run_ext_data_io,
     write_ext_parquet,
 )
 from app.services.ext_pull import _request_json, fetch_and_ingest, pull_scheduler
@@ -979,6 +980,10 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 async def _write_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> None:
+    await run_ext_data_io(_copy_upload_capped, file, dest, max_bytes)
+
+
+def _copy_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> None:
     """分块把上传文件写入 dest, 累计超过 max_bytes 立即拒绝(413)。
 
     避免一次性 `await file.read()` 把整个文件读入内存(大文件可能触发高内存占用、
@@ -987,7 +992,7 @@ async def _write_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> 
     total = 0
     with dest.open("wb") as f:
         while True:
-            chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+            chunk = file.file.read(_UPLOAD_CHUNK_BYTES)
             if not chunk:
                 break
             total += len(chunk)
@@ -1004,6 +1009,10 @@ async def upload_data(
     snapshot_date: str | None = None,
 ):
     """上传 CSV/Excel 文件写入扩展数据。"""
+    return await run_ext_data_io(_upload_data, request, config_id, file, snapshot_date)
+
+
+def _upload_data(request: Request, config_id: str, file: UploadFile, snapshot_date: str | None):
     store = _store(request)
     config = store.get(config_id)
     if not config:
@@ -1018,7 +1027,7 @@ async def upload_data(
     tmp_dir = Path(tempfile.mkdtemp())
     tmp_path = tmp_dir / f"upload{suffix}"
     try:
-        await _write_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
+        _copy_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
 
         # 直接读取文件，不做列重命名
         if suffix == ".csv":
@@ -1243,7 +1252,7 @@ async def test_pull(request: Request, config_id: str):
 async def run_pull(request: Request, config_id: str):
     """手动触发一次拉取并写入。"""
     store = _store(request)
-    config = store.get(config_id)
+    config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
     if not config.pull or not config.pull.url:
@@ -1251,26 +1260,26 @@ async def run_pull(request: Request, config_id: str):
 
     try:
         n, d = await fetch_and_ingest(config, _data_dir(request))
-        _refresh_views(request)
+        await run_ext_data_io(_refresh_views, request)
         # 写回执行状态, 让前端"上次执行"面板立即反映
-        updated = store.get(config_id)
+        updated = await run_ext_data_io(store.get, config_id)
         if updated and updated.pull:
             from datetime import datetime, timezone
             updated.pull.last_run = datetime.now(timezone.utc).isoformat()
             updated.pull.last_status = "success"
             updated.pull.last_message = f"{n} rows @ {d}"
             updated.pull.last_rows = n
-            store.upsert(updated)
+            await run_ext_data_io(store.upsert, updated)
         return {"status": "ok", "rows": n, "date": d}
     except Exception as e:
         # 失败也写回状态, 记录错误信息
-        failed = store.get(config_id)
+        failed = await run_ext_data_io(store.get, config_id)
         if failed and failed.pull:
             from datetime import datetime, timezone
             failed.pull.last_run = datetime.now(timezone.utc).isoformat()
             failed.pull.last_status = "error"
             failed.pull.last_message = str(e)[:200]
-            store.upsert(failed)
+            await run_ext_data_io(store.upsert, failed)
         raise HTTPException(400, f"拉取失败: {e}") from e
 
 
@@ -1287,7 +1296,7 @@ async def backfill_history_ep(
     查询)。幂等 —— 已存在的分区跳过, 失败单日不中断, 结果逐项返回。
     """
     store = _store(request)
-    config = store.get(config_id)
+    config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
     try:
@@ -1302,7 +1311,7 @@ async def backfill_history_ep(
         result = await backfill_history(config, _data_dir(request), start_d, end_d)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    _refresh_views(request)
+    await run_ext_data_io(_refresh_views, request)
     return {"status": "ok", **result}
 
 
@@ -1471,6 +1480,10 @@ async def detect_fields(
     返回 symbol_candidates（数据匹配 000001.SZ 格式的列）和
     code_candidates（数据匹配 6位纯数字的列）。
     """
+    return await run_ext_data_io(_detect_fields, file)
+
+
+def _detect_fields(file: UploadFile):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in (".csv", ".xlsx", ".xls"):
         raise HTTPException(400, "仅支持 CSV / Excel 文件")
@@ -1478,7 +1491,7 @@ async def detect_fields(
     tmp_dir = Path(tempfile.mkdtemp())
     tmp_path = tmp_dir / f"upload{suffix}"
     try:
-        await _write_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
+        _copy_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
 
         # 直接读取，不要求 symbol 列
         if suffix == ".csv":

@@ -28,11 +28,13 @@ import polars as pl
 
 from app.config import settings
 from app.enriched_generation import (
+    EnrichedGenerationSnapshot,
     EnrichedGenerationUnavailableError,
     EnrichedPublication,
     bump_enriched_generation,
     enriched_publication_incomplete,
     get_enriched_generation,
+    get_enriched_generation_snapshot,
 )
 from app.market_time import cn_today
 from app.parquet import scan_enriched_parquet
@@ -452,6 +454,7 @@ class KlineRepository:
         self._enriched_history_cache: pl.DataFrame | None = None  # ~100万行
         self._enriched_history_start: date | None = None
         self._enriched_history_generation: str | None = None
+        self._enriched_history_snapshot: tuple[pl.DataFrame, EnrichedGenerationSnapshot] | None = None
         self._index_instruments_cache: pl.DataFrame | None = None
         self._etf_enriched_cache: pl.DataFrame | None = None
         self._etf_enriched_cache_date: date | None = None
@@ -656,6 +659,7 @@ class KlineRepository:
         self._enriched_history_cache = None
         self._enriched_history_start = None
         self._enriched_history_generation = None
+        self._enriched_history_snapshot = None
         self._live_agg_cache = None
         self._live_agg_cache_date = None
         self._live_agg_check_date = None
@@ -719,7 +723,8 @@ class KlineRepository:
         """
         try:
             started = time.perf_counter()
-            refresh_generation = self.get_matrix_data_generation("stock")
+            refresh_snapshot = self.get_enriched_generation_snapshot("stock")
+            refresh_generation = refresh_snapshot.generation
             logger.info("enriched refresh start")
 
             step = time.perf_counter()
@@ -799,6 +804,7 @@ class KlineRepository:
                     self._enriched_history_cache = df_full
                     self._enriched_history_start = df_full["date"].min()
                     self._enriched_history_generation = refresh_generation
+                    self._enriched_history_snapshot = (df_full, refresh_snapshot)
                     logger.info("enriched 历史缓存: %d rows, %s ~ %s",
                                 len(df_full), self._enriched_history_start, latest)
 
@@ -822,6 +828,7 @@ class KlineRepository:
                                 how="diagonal_relaxed",
                             ).sort(["symbol", "date"])
                             self._enriched_history_cache = df_full
+                            self._enriched_history_snapshot = (df_full, refresh_snapshot)
                             self._enriched_cache = repaired_today
                             df_today = repaired_today
                         logger.info("enriched 缓存已计算: %d 只, 日期 %s (即时计算)", len(df_today), latest)
@@ -1416,10 +1423,14 @@ class KlineRepository:
         data_dir = getattr(getattr(self, "store", None), "data_dir", None)
         if data_dir is not None:
             try:
-                current_generation = self.get_matrix_data_generation("stock")
+                current = self.get_enriched_generation_snapshot("stock")
             except EnrichedGenerationUnavailableError:
                 return None
-            if self._enriched_history_generation != current_generation:
+            snapshot = self._enriched_history_snapshot
+            if snapshot is not None and snapshot[0] is cache:
+                if snapshot[1].through(end) != current.through(end):
+                    return None
+            elif self._enriched_history_generation != current.generation:
                 return None
         if cache is None or cache.is_empty() or "date" not in cache.columns:
             return None
@@ -2228,6 +2239,9 @@ class KlineRepository:
         """Return the stable generation for managed enriched readers."""
         return get_enriched_generation(self.store.data_dir, asset_type)
 
+    def get_enriched_generation_snapshot(self, asset_type: str = "stock") -> EnrichedGenerationSnapshot:
+        return get_enriched_generation_snapshot(self.store.data_dir, asset_type)
+
     def _bump_matrix_data_generation(self, asset_type: str) -> str:
         return bump_enriched_generation(self.store.data_dir, asset_type)
 
@@ -2466,7 +2480,7 @@ class KlineRepository:
         """只失效本次资产的运行时快照; 下次读取按新版本懒加载。"""
         if asset_type == "stock":
             for name in ("_enriched_cache", "_enriched_cache_date", "_enriched_history_cache",
-                         "_enriched_history_start", "_enriched_history_generation", "_live_agg_cache",
+                         "_enriched_history_start", "_enriched_history_generation", "_enriched_history_snapshot", "_live_agg_cache",
                          "_live_agg_cache_date", "_live_agg_check_date"):
                 setattr(self, name, None)
         elif asset_type in {"etf", "index"}:

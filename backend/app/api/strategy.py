@@ -17,6 +17,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.services.ndjson_heartbeat import with_heartbeat
@@ -992,7 +993,7 @@ async def inspect_strategy_bundle(file: UploadFile = _BUNDLE_FILE):
     """导入预览: 条目清单 (create/conflict) + 缺失依赖预警, 不落盘。"""
     data = await file.read()
     try:
-        return _bundle_service().inspect_bundle(data)
+        return await run_in_threadpool(_bundle_service().inspect_bundle, data)
     except _bundle_service().StrategyBundleError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1003,6 +1004,10 @@ async def apply_strategy_bundle(
 ):
     """导入策略包: 复用配置备份的校验/写盘/导入即冒烟/热重载管线。"""
     data = await file.read()
+    return await run_in_threadpool(_apply_strategy_bundle, request, data, allow_overwrite)
+
+
+def _apply_strategy_bundle(request: Request, data: bytes, allow_overwrite: bool):
     service = _bundle_service()
     try:
         result = service.apply_bundle(data, allow_overwrite=allow_overwrite)

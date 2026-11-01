@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Signals } from '@/custom/signals/extension'
+import { Signals } from '@/custom/signals/Page'
 import { ConditionEditor } from '@/components/signals/ConditionEditor'
 import { ExtensionBoundary } from '@/extensions/ExtensionBoundary'
 

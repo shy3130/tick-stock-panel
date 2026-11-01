@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { loadRuntimePageExtensions, packToExtension, runtimeBundleUrl, type PagePackExtension, type RuntimePageMeta } from './runtime'
 import type { FrontendExtensionModule } from './types'
 
@@ -42,6 +42,32 @@ describe('packToExtension: 契约校验与转换', () => {
 })
 
 describe('loadRuntimePageExtensions', () => {
+  it('页面脚本不响应时仍完成启动，隔离故障且不迟到注册', async () => {
+    vi.resetModules()
+    const registry = await import('./registry')
+    let finish!: (value: { default: PagePackExtension }) => void
+    const pending = new Promise<{ default: PagePackExtension }>(resolve => { finish = resolve })
+    try {
+      await Promise.race([
+        loadRuntimePageExtensions({
+          fetchList: async () => [{ id: 'slow', enabled: true }, { id: 'ok', enabled: true }],
+          importModule: url => url.includes('/slow/') ? pending : Promise.resolve({ default: pack() }),
+          loadInto: registry.loadFrontendExtensions,
+          timeoutMs: 10,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('启动被页面脚本阻塞')), 250)),
+      ])
+      registry.finalizeFrontendExtensions(new Set())
+      expect(registry.getFrontendExtensionRoutes().map(r => r.path)).toEqual(['/demo-hello'])
+      expect(registry.getFrontendExtensionLoadErrors()).toEqual([
+        expect.objectContaining({ source: 'runtime:slow', error: 'timeout' }),
+      ])
+    } finally {
+      finish({ default: pack({ id: 'late.page' }) })
+    }
+    await pending
+    expect(registry.getFrontendExtensionRoutes()).toHaveLength(1)
+  })
   it('整包页面必须属于已就绪的配套后端，不能注册其他扩展 ID', async () => {
     const rec = recorder()
     await loadRuntimePageExtensions({

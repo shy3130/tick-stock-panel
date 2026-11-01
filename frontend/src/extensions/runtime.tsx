@@ -168,7 +168,7 @@ export async function loadRuntimePageExtensions(opts: LoadRuntimeOptions = {}): 
     const url = runtimeBundleUrl(page.id)
     loaders[`runtime:${page.id}`] = () => {
       const impl = importModule ? importModule(url) : import(/* @vite-ignore */ url)
-      return impl.then(m => {
+      return withTimeout(impl, timeoutMs).then(m => {
         const extension = packToExtension(m.default)
         if (page.managed_by && extension.id !== page.managed_by) throw new Error('页面与配套后端的扩展 ID 不一致')
         return { default: extension }

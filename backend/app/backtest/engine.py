@@ -436,6 +436,17 @@ class BacktestEngine:
                 "enriched data changed while the snapshot was being read"
             )
 
+    def _range_cache_generation(self, asset_type: str, end: date, expected: str | None) -> str | None:
+        loader = getattr(self.repo, "get_enriched_generation_snapshot", None)
+        if not callable(loader) or expected is None:
+            return expected
+        snapshot = loader(asset_type)
+        if snapshot.generation != expected:
+            raise EnrichedGenerationUnavailableError(
+                "enriched data changed while the snapshot was being read"
+            )
+        return snapshot.through(end)
+
     def load_panel(
         self,
         symbols: list[str] | None,
@@ -457,16 +468,19 @@ class BacktestEngine:
                 if expected is not None
                 else self.data_generation(asset_type)
             )
-            panel = self._cache.get_or_compute(
-                symbols,
-                start,
-                end,
-                columns,
-                self._load_panel_inner,
-                asset_type=asset_type,
-                generation=generation,
-            )
             try:
+                # Cache identity follows the consumed prefix. The global generation
+                # still guards the read, including in-progress/partial publications.
+                cache_generation = self._range_cache_generation(asset_type, end, generation)
+                panel = self._cache.get_or_compute(
+                    symbols,
+                    start,
+                    end,
+                    columns,
+                    self._load_panel_inner,
+                    asset_type=asset_type,
+                    generation=cache_generation,
+                )
                 self.assert_data_generation(asset_type, generation)
             except EnrichedGenerationUnavailableError:
                 if attempt + 1 >= attempts:
@@ -670,6 +684,9 @@ class BacktestEngine:
         attempts = 2
         for attempt in range(attempts):
             try:
+                cache_generation = self._range_cache_generation(
+                    asset_type, coverage_end or end, source_generation,
+                )
                 market = load_market_data_matrix_from_parquet(
                     parquet_root,
                     start,
@@ -685,7 +702,7 @@ class BacktestEngine:
                     profile_generation=(
                         cache_profile.generation if cache_profile is not None else "request"
                     ),
-                    source_generation=source_generation,
+                    source_generation=cache_generation,
                     cancel_event=cancel_event,
                 )
                 self.assert_data_generation(asset_type, source_generation)

@@ -91,10 +91,16 @@ function registerExtension(extension: FrontendExtension) {
 export async function loadFrontendExtensions(
   modules: Record<string, () => Promise<FrontendExtensionModule>>,
 ) {
-  for (const source of Object.keys(modules).sort()) {
+  const sources = Object.keys(modules).sort()
+  // Fetch concurrently, then register in source order so duplicate-ID winners
+  // and error ordering remain deterministic regardless of network timing.
+  const loaded = await Promise.allSettled(sources.map(source => Promise.resolve().then(modules[source])))
+  for (const [index, source] of sources.entries()) {
     let extension: FrontendExtension | undefined
     try {
-      extension = (await modules[source]()).default
+      const result = loaded[index]
+      if (result.status === 'rejected') throw result.reason
+      extension = result.value.default
       if (!extension) throw new Error('模块必须 default export FrontendExtension')
       registerExtension(extension)
     } catch (error) {

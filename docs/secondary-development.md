@@ -164,6 +164,8 @@ const extension: FrontendExtension = {
 
 完整前端模板位于 [`frontend/src/custom/_template/extension.tsx.example`](../frontend/src/custom/_template/extension.tsx.example)。
 
+较大的页面应让 `extension.tsx` 只保留路由、导航与轻量组件，使用 `React.lazy(() => import('./Page').then(m => ({ default: m.Page })))` 注册页面组件；路由宿主已有 `Suspense`。源码模块并发加载、按路径排序注册，冲突处理顺序不变。运行时页面插件清单与各脚本均有加载超时，单个脚本失败只禁用该扩展；契约仍为 v1。
+
 ### 3.4 前端禁止事项
 
 - 不直接在多个组件中拼接后端 URL，统一使用 `frontend/src/lib/api.ts` 或未来公开客户端。

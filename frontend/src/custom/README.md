@@ -1,9 +1,10 @@
 # 前端扩展目录
 
-每个子目录一个 `extension.tsx`，**单文件即完整扩展**（页面组件 + 路由 + 导航注册在同一个文件里），构建时自动发现挂载，无需修改核心路由和导航文件：
+每个子目录一个 `extension.tsx` 注册清单，构建时自动发现挂载，无需修改核心路由和导航文件。清单保持轻量：路由与导航同步注册，页面实现放在同目录的 `Page.tsx`，使用 `React.lazy` 按访问加载：
 
 ```text
 frontend/src/custom/<namespace>/extension.tsx
+frontend/src/custom/<namespace>/Page.tsx
 ```
 
 - **摘除**：删除目录即整体卸载该页面；**导入**：把目录复制进来重新构建即可。
@@ -11,7 +12,7 @@ frontend/src/custom/<namespace>/extension.tsx
 
 ## 目录现状
 
-官方扩展页面全部以单文件扩展形式落在本目录（id 前缀 `official.`）：
+官方扩展页面落在本目录（id 前缀 `official.`），整目录可独立摘除或导入。旧的单文件扩展仍兼容，但其全部依赖会参与启动加载。
 
 | 目录 | 页面 |
 | --- | --- |

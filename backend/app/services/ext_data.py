@@ -1,21 +1,55 @@
 """扩展数据服务 — 配置管理 + 文件解析 + Parquet 存储。"""
 from __future__ import annotations
 
+import asyncio
 import codecs
 import copy
 import json
 import logging
 import re
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
+import anyio
 import polars as pl
 
 from app.market_time import cn_now, cn_today
 from app.services.fs_utils import atomic_write_parquet, atomic_write_text
 
 logger = logging.getLogger(__name__)
+
+# Preserve the serial read/merge/write order previously provided by the event
+# loop, without blocking it or multiplying peak memory for simultaneous imports.
+_EXT_IO_LIMITER = anyio.CapacityLimiter(1)
+_EXT_IO_TASKS: set[asyncio.Task] = set()
+
+
+def _ext_io_done(task: asyncio.Task) -> None:
+    _EXT_IO_TASKS.discard(task)
+    if not task.cancelled():
+        task.exception()  # A disconnected request may no longer await its result.
+
+
+async def run_ext_data_io(func, *args, **kwargs):
+    cancelled = threading.Event()
+
+    def run():
+        if not cancelled.is_set():
+            return func(*args, **kwargs)
+
+    # Raw asyncio cancellation otherwise releases AnyIO's limiter while its
+    # worker is still writing. Keep the limiter owned until the worker finishes;
+    # queued cancelled requests skip their work, running imports clean up in situ.
+    task = asyncio.create_task(anyio.to_thread.run_sync(run, limiter=_EXT_IO_LIMITER))
+    _EXT_IO_TASKS.add(task)
+    task.add_done_callback(_ext_io_done)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled.set()
+        raise
 
 # ---------------------------------------------------------------------------
 # 配置模型

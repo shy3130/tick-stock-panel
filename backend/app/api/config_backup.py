@@ -9,6 +9,7 @@ import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from app.data_providers.custom import loader as custom_loader
 from app.services import config_backup
@@ -59,7 +60,7 @@ async def inspect_backup(file: UploadFile = _UPLOAD_FILE) -> dict:
     """解析备份给出预览 (类别/数量/冲突), 不写任何文件。"""
     data = await _read_upload(file)
     try:
-        return config_backup.inspect_archive(data)
+        return await run_in_threadpool(config_backup.inspect_archive, data)
     except config_backup.ConfigBackupError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -72,6 +73,10 @@ async def apply_backup(
     categories: str = Form(""),
 ) -> dict:
     data = await _read_upload(file)
+    return await run_in_threadpool(_apply_backup, request, data, allow_overwrite, categories)
+
+
+def _apply_backup(request: Request, data: bytes, allow_overwrite: bool, categories: str) -> dict:
     try:
         result = config_backup.apply_archive(
             data,

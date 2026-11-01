@@ -20,6 +20,7 @@ from app.services.ext_data import (
     ExtConfigStore,
     PullConfig,
     rows_to_parquet,
+    run_ext_data_io,
 )
 
 logger = logging.getLogger(__name__)
@@ -470,8 +471,8 @@ async def fetch_and_ingest(
     rows = await fetch_rows_for_date(config, day, data_dir)
     if not rows:
         raise ValueError("提取到的行数为 0")
-    n = rows_to_parquet(
-        rows, config, data_dir, snapshot_date=day,
+    n = await run_ext_data_io(
+        rows_to_parquet, rows, config, data_dir, snapshot_date=day,
         keep_strategy_cache=keep_strategy_cache,
     )
     return n, day.isoformat()
@@ -530,7 +531,7 @@ async def _backfill_history(
 
     from app.services.dragon_tiger import _local_trading_days
 
-    days = [d for d in _local_trading_days(data_dir) if start <= d <= end]
+    days = [d for d in await run_ext_data_io(_local_trading_days, data_dir) if start <= d <= end]
     if not days:
         raise ValueError("范围内无本地交易日 (需先同步日K以确定交易日历)")
 
@@ -549,7 +550,7 @@ async def _backfill_history(
             if not rows:
                 empty += 1  # 该日无数据 (服务端未归档), 不是错误
             else:
-                rows_written += rows_to_parquet(rows, config, data_dir, snapshot_date=d)
+                rows_written += await run_ext_data_io(rows_to_parquet, rows, config, data_dir, snapshot_date=d)
                 fetched += 1
         except httpx.HTTPStatusError as e:
             if _status_code(e) == 404:
@@ -574,7 +575,7 @@ async def _backfill_history(
                     if not rows:
                         empty += 1
                     else:
-                        rows_written += rows_to_parquet(rows, config, data_dir, snapshot_date=d)
+                        rows_written += await run_ext_data_io(rows_to_parquet, rows, config, data_dir, snapshot_date=d)
                         fetched += 1
                 except Exception as e2:
                     if _status_code(e2) == 404:  # 退避重试后无该日快照 → 同样视为无数据
@@ -758,15 +759,15 @@ class PullScheduler:
             fresh.pull.last_status = "success"
             fresh.pull.last_message = f"{n} rows @ {d}"
             fresh.pull.last_rows = n
-            store.upsert(fresh, keep_strategy_cache=True)
+            await run_ext_data_io(store.upsert, fresh, keep_strategy_cache=True)
             logger.info("PullScheduler: %s success, %d rows", fresh.id, n)
         except Exception as e:
-            fresh2 = store.get(fresh.id)
+            fresh2 = await run_ext_data_io(store.get, fresh.id)
             if fresh2 and fresh2.pull:
                 fresh2.pull.last_run = datetime.now(timezone.utc).isoformat()
                 fresh2.pull.last_status = "error"
                 fresh2.pull.last_message = str(e)[:200]
-                store.upsert(fresh2, keep_strategy_cache=True)
+                await run_ext_data_io(store.upsert, fresh2, keep_strategy_cache=True)
             logger.warning("PullScheduler: %s error: %s", fresh.id, e)
 
     async def _run_daily_at(self, config_id: str, store: ExtConfigStore, hhmm: str) -> None:
@@ -781,7 +782,7 @@ class PullScheduler:
         就是完整日程)。
         """
         while self._running:
-            fresh = store.get(config_id)
+            fresh = await run_ext_data_io(store.get, config_id)
             if (
                 not fresh or not fresh.pull or not fresh.pull.enabled
                 or fresh.pull.schedule_time != hhmm
@@ -798,10 +799,10 @@ class PullScheduler:
             nxt = _next_scheduled_target(now, hhmm, fresh.pull)
             # 预告下次运行时间 (UTC ISO, 与间隔制同口径), 供前端展示
             nxt_iso = nxt.astimezone(UTC).isoformat()
-            latest = store.get(config_id)
+            latest = await run_ext_data_io(store.get, config_id)
             if latest and latest.pull and latest.pull.next_run != nxt_iso:
                 latest.pull.next_run = nxt_iso
-                store.upsert(latest, keep_strategy_cache=True)
+                await run_ext_data_io(store.upsert, latest, keep_strategy_cache=True)
             await asyncio.sleep(
                 min(_DAILY_POLL_SECONDS, max((nxt - now).total_seconds(), 1.0))
             )
@@ -820,7 +821,7 @@ class PullScheduler:
             chunk = min(_DAILY_POLL_SECONDS, remaining)
             await asyncio.sleep(chunk)
             remaining -= chunk
-            fresh = store.get(config_id)
+            fresh = await run_ext_data_io(store.get, config_id)
             if not fresh or not fresh.pull or not fresh.pull.enabled:
                 return
             if fresh.pull.schedule_time or max(fresh.pull.schedule_minutes * 60, 60) != interval:
@@ -838,7 +839,7 @@ class PullScheduler:
             while self._running:
                 # 每轮重读最新配置 — 用户可能修改了 url / interval / enabled
                 store = ExtConfigStore(self._data_dir)
-                fresh = store.get(config.id)
+                fresh = await run_ext_data_io(store.get, config.id)
                 if not fresh or not fresh.pull or not fresh.pull.enabled:
                     break
                 pull = fresh.pull
@@ -852,7 +853,7 @@ class PullScheduler:
                     fresh.pull.last_run = datetime.now(timezone.utc).isoformat()
                     fresh.pull.last_status = "skipped"
                     fresh.pull.last_message = "不在拉取时间窗口内"
-                    store.upsert(fresh, keep_strategy_cache=True)
+                    await run_ext_data_io(store.upsert, fresh, keep_strategy_cache=True)
                     logger.info("PullScheduler: %s skipped (outside time window)", config.id)
                     interval = max(pull.schedule_minutes * 60, 60)
                     await self._sleep_interval_reloading(config.id, store, interval)
@@ -865,12 +866,12 @@ class PullScheduler:
                 interval = max(pull.schedule_minutes * 60, 60)  # 至少 60s
                 # 预告下次运行时间, 供前端展示
                 next_dt = datetime.now(UTC).timestamp() + interval
-                latest = store.get(config.id)
+                latest = await run_ext_data_io(store.get, config.id)
                 if latest and latest.pull:
                     latest.pull.next_run = datetime.fromtimestamp(
                         next_dt, tz=UTC
                     ).isoformat()
-                    store.upsert(latest, keep_strategy_cache=True)
+                    await run_ext_data_io(store.upsert, latest, keep_strategy_cache=True)
 
                 await self._sleep_interval_reloading(config.id, store, interval)
                 if not self._running:
