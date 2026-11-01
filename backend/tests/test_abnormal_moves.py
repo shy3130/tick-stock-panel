@@ -311,12 +311,14 @@ def test_build_overview_weekend_does_not_double_count_last_session(monkeypatch) 
 
 def test_build_overview_cache_date_today_no_double_count() -> None:
     """cache_date >= 今天时不再叠加实时涨跌 (避免重复计入)。"""
+    from app.services import abnormal_moves as am
+
     with _hist_cache_lock:
         _hist_cache.clear()
 
     class _TodayRepo(_FakeRepo):
         def get_enriched_latest(self):
-            return self._df, date.today()
+            return self._df, am.cn_today()
 
     df = pl.DataFrame(
         {
@@ -336,12 +338,14 @@ def test_build_overview_cache_date_today_no_double_count() -> None:
 
 def test_build_overview_negative_side_stricter_threshold() -> None:
     """严重异动负向阈值更严 (10日-50%/30日-70%), 跌方向更早触发。"""
+    from app.services import abnormal_moves as am
+
     with _hist_cache_lock:
         _hist_cache.clear()
 
     class _TodayRepo(_FakeRepo):
         def get_enriched_latest(self):
-            return self._df, date.today()
+            return self._df, am.cn_today()
 
     df = pl.DataFrame(
         {
