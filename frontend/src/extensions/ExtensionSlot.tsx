@@ -1,3 +1,4 @@
+import type { ComponentType } from 'react'
 import type { FrontendSlotContextMap, FrontendSlotName } from './types'
 import { getFrontendSlotRegistrations } from './registry'
 import { ExtensionBoundary } from './ExtensionBoundary'
@@ -12,7 +13,8 @@ export function ExtensionSlot<K extends FrontendSlotName>({ name, context, compa
   const registrations = getFrontendSlotRegistrations(name)
   if (registrations.length === 0) return null
   return registrations.map(registration => {
-    const SlotComponent = registration.component
+    // Registrations were selected by this exact slot name; preserve the context correlation.
+    const SlotComponent = registration.component as ComponentType<FrontendSlotContextMap[K]>
     return (
       <ExtensionBoundary
         key={`${registration.extensionId}:${registration.id}`}

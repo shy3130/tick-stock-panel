@@ -2033,7 +2033,22 @@ export interface DataSourceItem {
 }
 
 /** 内置可选插件数据源 (plugins/ 目录, 需手动装依赖) */
+export interface SourcePackagePreview {
+  manifest: { name: string; display_name?: string; version: string; author?: string; description?: string; datasets: string[] }
+  digest: string
+  errors: string[]
+  installed_version: string | null
+}
+
 export interface PluginDataSourceItem {
+  can_test?: boolean
+  origin?: 'builtin' | 'external'
+  version?: string
+  enabled?: boolean
+  pending_version?: string | null
+  previous_version?: string | null
+  pending_remove?: boolean
+  update_error?: string | null
   name: string
   display_name: string
   datasets: string[]
@@ -2109,6 +2124,7 @@ export interface DataSourcesResponse {
 }
 
 export interface DataSourceTestResult {
+  error?: string
   provider: string
   dataset: string
   rows: number
@@ -2707,6 +2723,21 @@ export const api = {
     }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
+  inspectSourcePackage: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<SourcePackagePreview>('/api/custom/source-packages/inspect', { method: 'POST', body, quiet: true })
+  },
+  installSourcePackage: (file: File, digest: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('digest', digest)
+    return request<{ name: string; message: string }>('/api/custom/source-packages/install', { method: 'POST', body, quiet: true, timeoutMs: 120_000 })
+  },
+  manageSourcePackage: (name: string, action: string) =>
+    request<{ name: string; message: string }>(`/api/custom/source-packages/${encodeURIComponent(name)}/manage`, {
+      method: 'POST', body: JSON.stringify({ action }), quiet: true,
+    }),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
   capabilityMatrix: () => request<CapabilityMatrix>('/api/settings/capability-matrix'),
   dataSource: (name: string) => request<CustomSourceConfig>(`/api/settings/data-sources/${encodeURIComponent(name)}`),

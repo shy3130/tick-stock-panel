@@ -457,7 +457,7 @@ def test_save_plugin_key_valid_persists_and_rescans(monkeypatch):
     monkeypatch.setattr(
         settings_api.secrets_store, "mask", lambda key, prefix=4, suffix=4: "abcd••••wxyz"
     )
-    monkeypatch.setattr(custom_sources, "load_all", lambda: reloaded.append(1))
+    monkeypatch.setattr(custom_sources, "refresh_plugin", lambda name: reloaded.append(name))
     monkeypatch.setattr(
         custom_sources, "list_plugins", lambda: [{"name": "fuyao", "available": True}]
     )
@@ -465,7 +465,7 @@ def test_save_plugin_key_valid_persists_and_rescans(monkeypatch):
     assert out["ok"] is True
     assert saved == {"fuyao_api_key": "good-key"}  # 字段名与 provider.SECRETS_FIELD 一致
     assert out["plugin_available"] is True
-    assert reloaded == [1]  # 保存后重扫, 插件即刻可用
+    assert reloaded == ["fuyao"]  # 只刷新当前插件，不关闭其他数据源
 
 
 def test_clear_plugin_key(monkeypatch):
@@ -475,7 +475,7 @@ def test_clear_plugin_key(monkeypatch):
     cleared: list = []
     monkeypatch.setattr(custom_sources, "is_builtin", lambda n: n == "fuyao")
     monkeypatch.setattr(settings_api.secrets_store, "clear", lambda *keys: cleared.extend(keys))
-    monkeypatch.setattr(custom_sources, "load_all", lambda: None)
+    monkeypatch.setattr(custom_sources, "refresh_plugin", lambda name: None)
     monkeypatch.setattr(
         custom_sources, "list_plugins", lambda: [{"name": "fuyao", "available": False}]
     )

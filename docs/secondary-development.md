@@ -36,6 +36,10 @@
 
 AI 在开始任务前必须通过代码搜索确认能力是否已经实现。找不到定义和测试时，应把示例视为设计规范，不得虚构导入路径或调用结果。
 
+## 外部数据源包安装（已实现）
+
+外置 Provider 源码包、版本状态与加载生命周期由原数据源加载器统一管理；上传/安装/版本管理 API 由 `app/custom/source_packages` 扩展注册。前端新增 `settings.data-sources.toolbar` 和 `settings.data-sources.detail-actions` 插槽，复用现有卡片、Key 和能力路由。完整契约及边界见 [外部数据源插件安装](external-data-source-packages.md)。
+
 ## 2. 二次开发分级
 
 按升级风险从低到高选择实现方式：

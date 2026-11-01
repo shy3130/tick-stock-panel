@@ -1,10 +1,19 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import type { PluginDataSourceItem } from '@/lib/api'
 import type { BrandIconProps } from '@/components/BrandIcons'
 
 export const FRONTEND_EXTENSION_API_VERSION = 1 as const
 
 export interface FrontendSlotContextMap {
+  'settings.data-sources.toolbar': {
+    refresh: () => void
+    selectSource: (name: string) => void
+  }
+  'settings.data-sources.detail-actions': {
+    plugin: PluginDataSourceItem
+    refresh: () => void
+  }
   'layout.navigation.extra': {
     collapsed: boolean
     pathname: string
@@ -32,12 +41,12 @@ export interface FrontendSlotContextMap {
 
 export type FrontendSlotName = keyof FrontendSlotContextMap
 
-export type FrontendSlotRegistration<K extends FrontendSlotName = FrontendSlotName> = {
+export type FrontendSlotRegistration<K extends FrontendSlotName = FrontendSlotName> = K extends FrontendSlotName ? {
   name: K
   id: string
   order?: number
   component: ComponentType<FrontendSlotContextMap[K]>
-}
+} : never
 
 export interface FrontendExtensionRoute {
   id: string

@@ -32,6 +32,7 @@ dependencies = [
     "apscheduler>=3.10",
     # Config
     "pyyaml>=6.0",
+    "packaging>=24.0",          # 外部插件版本与依赖兼容范围
     "python-dotenv>=1.0",
     # AI(可选,但默认装上)
     "openai>=1.66",               # OpenAI 兼容适配器复用 openai SDK; 1.66+ 提供 Responses API

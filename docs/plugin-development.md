@@ -9,6 +9,10 @@
 > 无代码接入(纯 HTTP YAML 配置)请看 [custom-data-source.md](./custom-data-source.md),
 > 两种方式遵循同一套内部数据契约。
 
+## 外部安装
+
+现在可通过「设置 → 数据源 → 安装插件」上传独立源码 ZIP。外部包格式、版本管理、兼容范围和模板见 [外部数据源插件安装](external-data-source-packages.md)。现有内置目录方式继续兼容。
+
 ## 快速上手
 
 一个插件 = 一个目录 + 一个 `plugin.yaml` 清单:
@@ -64,7 +68,7 @@ TickFlow 的「先探后存」语义:
 | `python` | 纯 Python 依赖, `pip install` | akshare、tushare |
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
 
-`runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
+内置插件的 `runtime` 决定依赖安装方式，实际就绪检测由 `check` 函数负责。外部源码包只检查依赖兼容性，不执行 pip/npm 安装。
 
 ### check 函数
 
