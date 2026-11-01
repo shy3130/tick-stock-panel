@@ -32,6 +32,8 @@ from app.services.ndjson_heartbeat import with_heartbeat
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=20000)
+    reasoning_content: str | None = None
+    reasoning_context: str | None = Field(default=None, max_length=64)
 
 
 class AssistantContext(BaseModel):
@@ -73,7 +75,7 @@ def build_router() -> APIRouter:
 
         async def gen():
             async for line in with_heartbeat(chat_stream(
-                history=[m.model_dump() for m in req.messages],
+                history=[m.model_dump(exclude_none=True) for m in req.messages],
                 context=context,
                 engine=engine,
                 data_dir=data_dir,

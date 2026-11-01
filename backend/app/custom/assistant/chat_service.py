@@ -28,6 +28,7 @@ from app.services.ai_provider import (
     ai_configured,
     current_ai_context_window,
     current_ai_max_output_tokens,
+    current_reasoning_context_key,
     is_codex_cli_provider,
 )
 
@@ -75,13 +76,19 @@ def _classify_exception(exc: Exception) -> dict[str, str]:
     return _error_event("model", text or exc.__class__.__name__)
 
 
-def _truncate_history(history: list[dict[str, str]]) -> tuple[list[dict[str, str]], bool]:
+def _truncate_history(
+    history: list[dict[str, str]], *, reasoning_context: str | None = None,
+) -> tuple[list[dict[str, str]], bool]:
     """保留最近 N 条消息; 返回 (截断后历史, 是否发生了截断)。"""
-    clean = [
-        {"role": item["role"], "content": str(item.get("content") or "")}
-        for item in history
-        if item.get("role") in {"user", "assistant"} and str(item.get("content") or "").strip()
-    ]
+    clean = []
+    for item in history:
+        if item.get("role") not in {"user", "assistant"} or not str(item.get("content") or "").strip():
+            continue
+        message = {"role": item["role"], "content": str(item["content"])}
+        if (item["role"] == "assistant" and isinstance(item.get("reasoning_content"), str)
+                and item.get("reasoning_context") in (None, reasoning_context)):
+            message["reasoning_content"] = item["reasoning_content"]
+        clean.append(message)
     if len(clean) <= _MAX_HISTORY_MESSAGES:
         return clean, False
     start = len(clean) - _MAX_HISTORY_MESSAGES
@@ -97,7 +104,7 @@ def _estimate_input_tokens(messages: list[dict[str, Any]]) -> int:
     """与核心 ai_provider 相同口径的粗估: 中文 1 字 1 token, 其余 4 字符 1 token。"""
     total = 0
     for message in messages:
-        text = str(message.get("content") or "")
+        text = str(message.get("content") or "") + str(message.get("reasoning_content") or "")
         cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         total += cjk + (len(text) - cjk) // 4 + 1
     return max(1, total)
@@ -166,7 +173,8 @@ async def chat_stream(
         return
 
     stream_round = stream_codex_round if is_codex_cli_provider() else stream_openai_round
-    truncated, was_truncated = _truncate_history(history)
+    reasoning_context = current_reasoning_context_key()
+    truncated, was_truncated = _truncate_history(history, reasoning_context=reasoning_context)
     if not truncated:
         yield _line(_error_event("model", "对话历史为空, 请先输入问题。"))
         yield _line({"type": "done"})
@@ -261,11 +269,11 @@ async def chat_stream(
 
     async def run() -> None:
         try:
-            _guard_input_budget(req_messages)
             text_seen = False
             tool_rounds = 0
             round_checkpoint = _round_checkpoint()
             while True:
+                _guard_input_budget(req_messages)
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
                 reasoning_content: str | None = None
@@ -276,6 +284,12 @@ async def chat_stream(
                     elif event["type"] == "round_end":
                         tool_calls = event.get("tool_calls") or []
                         reasoning_content = event.get("reasoning_content")
+
+                if reasoning_content is not None:
+                    await queue.put({
+                        "type": "assistant_context", "reasoning_content": reasoning_content,
+                        "reasoning_context": reasoning_context,
+                    })
 
                 if not tool_calls:
                     if not round_text and not text_seen:

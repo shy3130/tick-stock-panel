@@ -42,7 +42,7 @@ export interface ToolCallRecord {
 
 export type ChatMessage =
   | { id: string; role: 'user'; content: string; ts: number }
-  | { id: string; role: 'assistant'; content: string; ts: number; streaming: boolean }
+  | { id: string; role: 'assistant'; content: string; ts: number; streaming: boolean; reasoningContent?: string; reasoningContext?: string }
   | { id: string; role: 'footprint'; calls: ToolCallRecord[]; ts: number }
   | { id: string; role: 'error'; kind: string; message: string; hint?: string; ts: number }
   | { id: string; role: 'notice'; content: string; ts: number }
@@ -228,7 +228,14 @@ function isTextMessage(m: ChatMessage): m is Extract<ChatMessage, { role: 'user'
 function buildHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
   return messages
     .filter(isTextMessage)
-    .map(m => ({ role: m.role, content: m.content }))
+    .map(m => {
+      const message: ChatHistoryMessage = { role: m.role, content: m.content }
+      if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+        message.reasoning_content = m.reasoningContent
+        message.reasoning_context = m.reasoningContext
+      }
+      return message
+    })
 }
 
 /** 一轮生成中的滚动游标: 当前正在写入的足迹卡与正文段。
@@ -313,6 +320,16 @@ function rotateTurn(cursor: TurnCursor) {
 
 function applyEvent(event: AssistantEvent, cursor: TurnCursor) {
   switch (event.type) {
+    case 'assistant_context':
+      // Provider state belongs to the completed text segment, before a tool
+      // rotates it. It is persisted for follow-ups and never rendered as text.
+      patchSessionById(cursor.sessionId, session => ({
+        ...session,
+        messages: session.messages.map(m => m.id === cursor.assistantId && m.role === 'assistant'
+          ? { ...m, reasoningContent: event.reasoning_content, reasoningContext: event.reasoning_context }
+          : m),
+      }))
+      break
     case 'tool_call':
       // 工具调用就地把之前的正文封口, 卡片插在它被调用的位置
       rotateTurn(cursor)

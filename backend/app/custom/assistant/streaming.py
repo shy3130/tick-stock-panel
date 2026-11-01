@@ -13,8 +13,8 @@ tool_calls 分片, 流结束时统一返回本轮结果, 由 chat_service 决定
   本轮结束; tool_calls 非空表示模型请求工具, 元素形如
   {"id", "name", "arguments"(JSON 字符串)}, 上游附带 extra_content 时
   (如 Gemini 的 thought_signature) 另有 "extra_content" 键, 需原样回传。
-  有工具调用且上游流出了思考内容 (DeepSeek 思考模式的 reasoning_content) 时
-  另带 "reasoning_content" 键, 下一轮必须随 assistant 消息原样回传。
+  上游提供了思考内容 (DeepSeek 思考模式的 reasoning_content) 时另带该键,
+  包括最终回答轮; 下一轮必须随 assistant 消息原样回传。
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from app.services.ai_provider import (
     current_openai_reasoning_effort,
     is_responses_protocol,
     normalize_openai_base_url,
+    prepare_tool_messages,
 )
 
 # 部分推理型模型把整段预算花在 reasoning_content 上, 以 200 + length 结束。
@@ -105,12 +106,16 @@ async def stream_openai_round(
     model = current_ai_model()
     kwargs = _build_kwargs(temperature)
     kwargs["tools"] = list(tools)
+    req_messages = prepare_tool_messages(
+        messages, model=model,
+        base_url=secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
+    )
 
     while True:
         try:
             stream = await client.chat.completions.create(
                 model=model,
-                messages=[dict(m) for m in messages],
+                messages=req_messages,
                 stream=True,
                 **kwargs,
             )
@@ -206,4 +211,7 @@ async def stream_openai_round(
         if reasoning_seen:
             raise RuntimeError("AI 仅返回推理内容, 未生成正文; 请检查模型配置或改用非推理模型")
         raise RuntimeError("AI 服务未返回正文内容; 请检查模型配置或稍后重试")
-    yield {"type": "round_end", "tool_calls": [], "finish_reason": finish_reason}
+    end = {"type": "round_end", "tool_calls": [], "finish_reason": finish_reason}
+    if reasoning_field_seen:
+        end["reasoning_content"] = "".join(reasoning_parts)
+    yield end
