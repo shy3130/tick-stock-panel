@@ -468,6 +468,20 @@ def _stamp_daily_data(result, revisions=None) -> dict:
     return {**payload, "daily_data_revisions": revisions if revisions is not None else _daily_data_revisions()}
 
 
+@router.get("/strategy/runs/{run_id}/evidence")
+def strategy_run_evidence(run_id: str):
+    from app.backtest.evidence import load_evidence
+
+    try:
+        return load_evidence(settings.data_dir, run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail="该回测没有版本记录，旧结果可重新回测生成") from exc
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, detail="暂时无法读取回测版本记录") from exc
+
+
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
     __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "daily_data_revisions")

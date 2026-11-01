@@ -235,7 +235,7 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         kind = task["kind"]
         if kind == "backtest":
             config = _decode_backtest_config(task["config"])
-            result = asdict(service.run(config, _progress, cancel_event))
+            result = asdict(service.run_with_evidence(config, _progress, cancel_event))
         elif kind == "robust_optimize":
             from app.backtest.robust_optimizer import RobustOptimizeService
 

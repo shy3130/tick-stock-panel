@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import polars as pl
@@ -135,6 +135,7 @@ class MinuteSignalReplayer:
         symbols: list[str] | None = None,
         progress_cb: Callable[[dict], None] | None = None,
         cancel_event=None,
+        evidence=None,
     ) -> MinuteReplayResult:
         t0 = time.perf_counter()
         result = MinuteReplayResult()
@@ -158,6 +159,7 @@ class MinuteSignalReplayer:
         replay_days = [day for day in panel_dates if start <= day <= end]
         result.skipped_days = [day for day in replay_days if day not in minute_day_set]
         total = len(minute_days)
+        audit_days = evidence.minute_sample_days(minute_days) if evidence is not None else set()
 
         # 逐标的的 T-1 原始收盘/复权收盘查表 (涨停价与复权折算用)。
         prev_raw_close: dict[str, float] = {}
@@ -179,6 +181,8 @@ class MinuteSignalReplayer:
             if history.is_empty():
                 result.skipped_days.append(day)
                 continue
+            if evidence is not None:
+                evidence.record_frame(f"minute_replay/{day}", history)
 
             # 日线窗口: 截至 T-1 的完成态日K (index of last panel date < day)。
             prior = [d for d in panel_dates if d < day]
@@ -222,6 +226,15 @@ class MinuteSignalReplayer:
                 # 单日执行失败 (如窗口缺列) 记为跳过, 不中断整个回放。
                 result.skipped_days.append(day)
                 continue
+
+            if evidence is not None and day in audit_days:
+                evidence.check_minute(
+                    history, run_result,
+                    lambda variant, context=context: self.strategy_engine.run(
+                        strategy.meta.get("id", ""), replace(context, history=variant),
+                        pool, params, overrides,
+                    ),
+                )
 
             result.replayed_days += 1
             result.strategy_matches += len(run_result.rows)

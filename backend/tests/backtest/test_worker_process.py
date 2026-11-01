@@ -161,6 +161,10 @@ def test_spawn_worker_returns_compact_result_and_memory_metrics(tmp_path):
 
     assert result["error"] is None
     assert result["stats"]["execution_backend"] == "matrix_native"
+    from app.backtest.evidence import load_evidence
+
+    assert result["evidence"]["lookahead"]["status"] == "passed"
+    assert load_evidence(data_dir, result["run_id"]) == result["evidence"]
     worker = result["stats"]["worker"]
     assert worker["peak_rss_bytes"] > 0
     assert worker["serialized_result_bytes"] > 0
