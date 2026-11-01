@@ -196,6 +196,100 @@ def test_validate_code_rejects_missing_strategy_entrypoint():
     assert result["error"] == "找不到策略入口函数 filter() 或 filter_history()"
 
 
+# ── 回归: 执行后端与入口函数必须匹配 ─────────────────────────────
+# 生成器此前只检查「有 filter 或 filter_history 之一」, 不检查后端匹配;
+# LLM 生成 EXECUTION_BACKEND = "python_history_legacy" + filter() 时
+# 生成阶段放行, 保存时 engine.reload() 才报
+# "python_history_legacy strategy must declare only filter_history" 并回滚。
+
+
+def _backend_code(backend: str, functions: str) -> str:
+    return f'''import polars as pl
+
+META = {{"id": "backend_mismatch", "params": [], "scoring": {{}}}}
+EXECUTION_BACKEND = "{backend}"
+
+{functions}
+'''
+
+
+def test_validate_code_rejects_legacy_backend_with_filter():
+    code = _backend_code(
+        "python_history_legacy",
+        'def filter(df: pl.DataFrame, params: dict) -> pl.Expr:\n'
+        '    return pl.lit(True)\n',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "filter_history" in result["error"]
+    assert AIStrategyGenerator.needs_structural_repair(result) is True
+
+
+def test_validate_code_rejects_legacy_backend_with_both_entrypoints():
+    code = _backend_code(
+        "python_history_legacy",
+        'def filter(df: pl.DataFrame, params: dict) -> pl.Expr:\n'
+        '    return pl.lit(True)\n'
+        '\n'
+        'def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:\n'
+        '    return df\n',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "filter_history" in result["error"]
+
+
+def test_validate_code_rejects_polars_backend_with_filter_history():
+    code = _backend_code(
+        "polars_expr",
+        'def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:\n'
+        '    return df\n',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "polars_expr" in result["error"]
+    assert AIStrategyGenerator.needs_structural_repair(result) is True
+
+
+def test_validate_code_accepts_matched_backend_entrypoints():
+    legacy = _backend_code(
+        "python_history_legacy",
+        'def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:\n'
+        '    return df\n',
+    )
+    polars = _backend_code(
+        "polars_expr",
+        'def filter(df: pl.DataFrame, params: dict) -> pl.Expr:\n'
+        '    return pl.lit(True)\n',
+    )
+
+    assert AIStrategyGenerator().validate_code(legacy)["valid"] is True
+    assert AIStrategyGenerator().validate_code(polars)["valid"] is True
+
+
+def test_validate_code_rejects_meta_declared_legacy_backend_with_filter():
+    from app.strategy.ai_generator import AIStrategyGenerator as _AISG
+
+    code = (
+        'import polars as pl\n\n'
+        'META = {"id": "meta_backend", "params": [], "scoring": {},'
+        ' "execution_backend": "python_history_legacy"}\n\n'
+        'def filter(df: pl.DataFrame, params: dict) -> pl.Expr:\n'
+        '    return pl.lit(True)\n'
+    )
+
+    result = _AISG().validate_code(code)
+
+    assert result["valid"] is False
+    assert "filter_history" in result["error"]
+
+
 def test_validate_code_accepts_matrix_strategy_entrypoint():
     from app.strategy.ai_generator import AIStrategyGenerator
 

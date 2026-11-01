@@ -50,6 +50,16 @@ _FENCED_CODE_RE = re.compile(
 )
 _POLARS_ENTRYPOINT_ERROR = "找不到策略入口函数 filter() 或 filter_history()"
 _MATRIX_ENTRYPOINT_ERROR = "找不到 Matrix 策略入口 MATRIX_STRATEGY"
+# 后端与入口函数不匹配: engine 加载期会拒绝 (ValueError), 生成期必须提前拦下,
+# 否则保存时才报 "strategy reload failed" 并回滚。报错需提示改法, 供 repair 提示词引用。
+_LEGACY_FILTER_MISMATCH_ERROR = (
+    "python_history_legacy 后端只能定义 filter_history()，不得定义 filter()；"
+    "若无需历史窗口请改用 EXECUTION_BACKEND = \"polars_expr\" + filter()"
+)
+_POLARS_HISTORY_MISMATCH_ERROR = (
+    "polars_expr 后端只能定义 filter()，不得定义 filter_history()；"
+    "若需要历史窗口请改用 EXECUTION_BACKEND = \"python_history_legacy\" + filter_history()"
+)
 
 _POLARS_SCORING_FIELDS = frozenset(
     name
@@ -237,14 +247,23 @@ def _strategy_execution_backend(tree: ast.Module, meta: dict | None = None) -> s
 
 def _strategy_entrypoint_error(code: str, meta: dict | None = None) -> str | None:
     tree = ast.parse(code)
-    if _strategy_execution_backend(tree, meta) == "matrix_native":
+    backend = _strategy_execution_backend(tree, meta)
+    if backend == "matrix_native":
         return None if _top_level_assignment(tree, "MATRIX_STRATEGY") else _MATRIX_ENTRYPOINT_ERROR
-    has_polars_entrypoint = any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in {"filter", "filter_history"}
+    entrypoints = {
+        node.name
         for node in tree.body
-    )
-    return None if has_polars_entrypoint else _POLARS_ENTRYPOINT_ERROR
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    has_filter = "filter" in entrypoints
+    has_history = "filter_history" in entrypoints
+    if backend == "python_history_legacy":
+        if not has_history:
+            return _LEGACY_FILTER_MISMATCH_ERROR if has_filter else _POLARS_ENTRYPOINT_ERROR
+        return _LEGACY_FILTER_MISMATCH_ERROR if has_filter else None
+    if not has_filter:
+        return _POLARS_HISTORY_MISMATCH_ERROR if has_history else _POLARS_ENTRYPOINT_ERROR
+    return _POLARS_HISTORY_MISMATCH_ERROR if has_history else None
 
 
 class AIStrategyGenerator:
@@ -356,6 +375,8 @@ class AIStrategyGenerator:
         return error.startswith("解析META失败:") or error in {
             _POLARS_ENTRYPOINT_ERROR,
             _MATRIX_ENTRYPOINT_ERROR,
+            _LEGACY_FILTER_MISMATCH_ERROR,
+            _POLARS_HISTORY_MISMATCH_ERROR,
         } or error.startswith(("META.params", "META.scoring"))
 
     @staticmethod
@@ -404,9 +425,14 @@ class AIStrategyGenerator:
                 '保留 EXECUTION_BACKEND = "matrix_native"，定义 MATRIX_STRATEGY，'
                 "不得添加 filter() 或 filter_history()"
             )
+        elif backend == "python_history_legacy":
+            entrypoint_requirement = (
+                '保留 EXECUTION_BACKEND = "python_history_legacy"，'
+                "定义 filter_history()，删除 filter()"
+            )
         else:
             entrypoint_requirement = (
-                "保留原执行后端，并定义对应的 filter() 或 filter_history()"
+                '保留 EXECUTION_BACKEND = "polars_expr"，定义 filter()，删除 filter_history()'
             )
         prompt = f"""上一次生成的策略代码未通过结构校验。
 

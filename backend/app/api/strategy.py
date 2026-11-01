@@ -810,6 +810,13 @@ def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRe
     AIStrategyGenerator._validate_safety(code)
     meta = AIStrategyGenerator._extract_meta(code)
     AIStrategyGenerator._validate_meta_semantics(code, meta)
+    # 后端与入口函数匹配性: engine.reload 会拒绝 (如 python_history_legacy + filter),
+    # 这里提前给出可读错误, 不必等写盘后 reload 失败回滚。
+    from app.strategy.ai_generator import _strategy_entrypoint_error
+
+    entrypoint_error = _strategy_entrypoint_error(code, meta)
+    if entrypoint_error:
+        raise ValueError(entrypoint_error)
     return {"code": code, "meta": meta}
 
 
