@@ -320,10 +320,52 @@ def _normalize_selection(categories: Iterable[str] | None) -> frozenset[str] | N
     return frozenset(k for k in categories if k in _CATEGORY_LABELS)
 
 
+def _backup_secrets(data_dir: Path) -> dict[str, Any]:
+    """备份生效的凭据, 包含环境变量后备值, 不回写源设备或复制整个 .env。"""
+    from app import secrets_store
+    from app.data_providers.custom import loader
+    from app.services.ext_data import ext_api_key_field, get_ext_api_key
+
+    payload = secrets_store.load()
+    tickflow_key = secrets_store.get_tickflow_key()
+    if tickflow_key:
+        payload["tickflow_api_key"] = tickflow_key
+    ai_key = secrets_store.get_ai_key()
+    if ai_key:
+        payload["ai_api_key"] = ai_key
+        # 仅带 Key 而漏掉服务地址/模型, 在新设备上仍无法按原配置使用。
+        for field in (
+            "ai_provider", "ai_protocol", "ai_base_url", "ai_model",
+            "ai_codex_command", "ai_codex_reasoning_effort", "ai_user_agent",
+        ):
+            payload[field] = secrets_store.get_ai_config(field)
+        from app.config import settings
+
+        for field in ("ai_max_output_tokens", "ai_context_window", "ai_round_checkpoint"):
+            payload[field] = secrets_store.get_ai_config_int(field, getattr(settings, field))
+
+    # 插件清单声明 Key 的环境变量名, 不依赖某个供应商或插件是否装好依赖。
+    for plugin in loader.list_plugins():
+        env_name = plugin.get("api_key_env")
+        if not env_name:
+            continue
+        field = f"{plugin['name'].lower()}_api_key"
+        key = secrets_store.get_env_backed_secret(field, env_name)
+        if key:
+            payload[field] = key
+    for path in sorted((data_dir / "ext_data").glob("*/config.json")):
+        config_id = path.parent.name
+        if _NAME_RE.fullmatch(config_id):
+            key = get_ext_api_key(config_id)
+            if key:
+                payload[ext_api_key_field(config_id)] = key
+    return payload
+
+
 def build_backup(*, categories: Iterable[str] | None = None) -> tuple[bytes, str]:
     """打包用户配置, 返回 (zip 字节, 建议文件名)。
 
-    categories=None 导出全部 (不含密钥); 显式包含 "secrets" 才打包密钥。
+    categories=None 导出全部 (不含密钥); 显式包含 "secrets" 才打包当前生效密钥。
     """
     selected = _normalize_selection(categories)
     include_secrets = selected is not None and "secrets" in selected
@@ -348,9 +390,9 @@ def build_backup(*, categories: Iterable[str] | None = None) -> tuple[bytes, str
             zf.writestr(rel, payload)
             counts[category] = counts.get(category, 0) + 1
         if include_secrets:
-            secrets_path = data_dir / "user_data" / "secrets.json"
-            if secrets_path.is_file():
-                zf.writestr("user_data/secrets.json", secrets_path.read_bytes())
+            secrets_payload = _backup_secrets(data_dir)
+            if secrets_payload:
+                zf.writestr("user_data/secrets.json", json.dumps(secrets_payload, ensure_ascii=False, indent=2))
                 counts["secrets"] = counts.get("secrets", 0) + 1
         manifest = {
             "format": BACKUP_FORMAT,

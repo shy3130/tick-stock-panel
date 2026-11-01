@@ -25,14 +25,14 @@ const CATEGORY_OPTIONS: { key: string; label: string; desc: string; sensitive?: 
   { key: 'lots',               label: '批量持仓',       desc: '批量交易持仓记录' },
   { key: 'paper',              label: '模拟盘账户',     desc: '账户 / 持仓 / 成交台账' },
   { key: 'research_candidates', label: '挖掘候选',      desc: '挖掘入选清单' },
-  { key: 'data_sources',       label: '自定义数据源',   desc: '数据源连接配置' },
+  { key: 'data_sources',       label: '自定义数据源',   desc: '连接配置；API Key 需另选“密钥”' },
   { key: 'analysis_menus',     label: '分析菜单',       desc: '自定义分析入口' },
   { key: 'ext_pages',          label: '扩展页面',       desc: '自定义页面插件 (含可执行代码)' },
   { key: 'ext_data',           label: '扩展数据集配置', desc: '不含数据本体与 Key' },
   { key: 'sound_packs',        label: '语音包',         desc: '自定义提示音' },
   { key: 'history',            label: '历史记录',       desc: '告警历史与助手会话' },
-  { key: 'preferences',        label: '偏好设置',       desc: '界面与通知偏好 (脱敏)' },
-  { key: 'secrets',            label: '密钥',           desc: 'AI Key / 数据源 Key / Webhook Secret', sensitive: true },
+  { key: 'preferences',        label: '偏好设置',       desc: '界面与通知偏好' },
+  { key: 'secrets',            label: '密钥（API Key）', desc: '当前生效的 AI / 数据源 / 扩展数据 Key 及通知密钥', sensitive: true },
   { key: 'auth',               label: '访问凭证',       desc: '访问密码与会话 — 导入后原密码在本机生效', sensitive: true },
 ]
 
@@ -76,7 +76,7 @@ function CardHeader({ icon, title, subtitle, children }: {
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
+    <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2.5">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-btn bg-accent/10 text-accent">
           {icon}
@@ -213,9 +213,15 @@ export function SettingsBackupPanel() {
           </a>
         </CardHeader>
 
+        {!exportSel.has('secrets') && (
+          <p role="status" className="mt-2.5 text-xs leading-relaxed text-secondary">
+            当前备份不含 API Key。换机恢复时，请勾选下方“密钥（API Key）”。
+          </p>
+        )}
+
         {/* 备份内容选择 */}
         <div className="mt-3 rounded-btn border border-border/70 bg-elevated/25 p-2.5">
-          <div className="mb-1.5 flex items-center justify-between px-0.5">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-0.5">
             <div className="flex items-center gap-2 text-[11px] font-medium text-secondary">
               备份内容
               <span className={`rounded-full px-1.5 py-px text-[10px] ${
@@ -224,12 +230,12 @@ export function SettingsBackupPanel() {
                 已选 {exportSel.size} / {CATEGORY_OPTIONS.length}
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[11px]">
+            <div className="flex shrink-0 items-center gap-2 text-[11px]">
               <button
                 onClick={() => setExportSel(new Set(DEFAULT_EXPORT_KEYS))}
-                className="text-muted transition-colors hover:text-accent"
+                className="whitespace-nowrap text-muted transition-colors hover:text-accent"
               >
-                全选
+                全选普通配置
               </button>
               <span className="text-border">·</span>
               <button

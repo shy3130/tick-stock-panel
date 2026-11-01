@@ -103,15 +103,25 @@ def src_env(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_store_caches():
+def _reset_store_caches(monkeypatch):
     """preferences/secrets 是 mtime 签名缓存, 换 data_dir 前后都要清, 防串台。"""
+    from app.config import settings
+    from app.data_providers.custom import loader
     from app.services import preferences
 
-    preferences._invalidate_cache()
-    yield
+    # 导出生效配置时不能读到开发机的凭据或已加载插件。
+    for field, info in type(settings).model_fields.items():
+        if field.startswith("ai_") or field == "tickflow_api_key":
+            monkeypatch.setattr(settings, field, info.default)
+    monkeypatch.setattr(loader, "list_plugins", lambda: [])
+    monkeypatch.delenv("EXT_EXT1_API_KEY", raising=False)
     preferences._invalidate_cache()
     import app.secrets_store as secrets_store
 
+    secrets_store._cache = None
+    secrets_store._cache_sig = None
+    yield
+    preferences._invalidate_cache()
     secrets_store._cache = None
     secrets_store._cache_sig = None
 
@@ -190,6 +200,126 @@ def test_export_with_secrets_keeps_plaintext(src_env):
     assert rule["webhook_url"] == "https://hook/secret"
     manifest = json.loads(entries["manifest.json"])
     assert manifest["include_secrets"] is True
+
+
+def test_export_includes_env_keys_without_secrets_file(src_env, monkeypatch):
+    from app.config import settings
+
+    path = src_env / "user_data" / "secrets.json"
+    path.unlink()
+    monkeypatch.setattr(settings, "ai_api_key", "test-env-ai-key")
+    monkeypatch.setattr(settings, "tickflow_api_key", "test-env-tickflow-key")
+    monkeypatch.setattr(settings, "ai_base_url", "https://example.test/v1")
+    monkeypatch.setattr(settings, "ai_model", "test-env-model")
+    monkeypatch.setenv("UNRELATED_BACKUP_TEST_SECRET", "must-not-export")
+
+    entries = _zip_entries(config_backup.build_backup(categories={"secrets"})[0])
+    saved = json.loads(entries["user_data/secrets.json"])
+    assert saved["ai_api_key"] == "test-env-ai-key"
+    assert saved["tickflow_api_key"] == "test-env-tickflow-key"
+    assert saved["ai_base_url"] == "https://example.test/v1"
+    assert saved["ai_model"] == "test-env-model"
+    assert "must-not-export" not in entries["user_data/secrets.json"].decode()
+    assert set(entries) == {"manifest.json", "user_data/secrets.json"}
+    assert not path.exists()  # 导出不能回写源设备的密钥文件
+
+
+def test_export_without_configured_keys_has_no_secrets_entry(src_env):
+    (src_env / "user_data" / "secrets.json").unlink()
+    data, _ = config_backup.build_backup(categories={"secrets"})
+    assert set(_zip_entries(data)) == {"manifest.json"}
+    assert config_backup.inspect_archive(data)["has_secrets"] is False
+
+
+@pytest.mark.parametrize("stored_key", ["test-local-key", ""])
+def test_export_resolves_plugin_and_ext_keys_with_store_priority(src_env, monkeypatch, stored_key):
+    from app.config import settings
+    from app.data_providers.custom import loader
+
+    path = src_env / "user_data" / "secrets.json"
+    path.write_text(json.dumps({
+        "ai_api_key": stored_key,
+        "tickflow_api_key": stored_key,
+        "sample_api_key": stored_key,
+        "ext_ext1_api_key": stored_key,
+        "ai_base_url": "https://local.test/v1",
+        "ai_round_checkpoint": 0,
+        "local_only": "keep",
+    }), encoding="utf-8")
+    original = path.read_bytes()
+    monkeypatch.setattr(settings, "ai_api_key", "test-fallback-key")
+    monkeypatch.setattr(settings, "tickflow_api_key", "test-fallback-key")
+    monkeypatch.setattr(settings, "ai_base_url", "https://fallback.test/v1")
+    monkeypatch.setattr(loader, "list_plugins", lambda: [
+        {"name": "sample", "api_key_env": "SAMPLE_BACKUP_API_KEY", "available": False},
+        {"name": "no_key"},
+    ])
+    monkeypatch.setenv("SAMPLE_BACKUP_API_KEY", "test-fallback-key")
+    monkeypatch.setenv("EXT_EXT1_API_KEY", "test-fallback-key")
+
+    entries = _zip_entries(config_backup.build_backup(categories={"secrets"})[0])
+    saved = json.loads(entries["user_data/secrets.json"])
+    for key in ("ai_api_key", "tickflow_api_key", "sample_api_key", "ext_ext1_api_key"):
+        assert saved[key] == (stored_key or "test-fallback-key")
+    assert saved["ai_base_url"] == "https://local.test/v1"
+    assert saved["ai_round_checkpoint"] == 0
+    assert saved["local_only"] == "keep"
+    assert path.read_bytes() == original
+
+
+def test_api_env_key_backup_restores_on_new_device(src_env, tmp_path_factory, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app import secrets_store
+    from app.api.config_backup import router
+    from app.config import settings
+    from app.data_providers.custom import loader
+    from app.services.ext_data import get_ext_api_key
+
+    (src_env / "user_data" / "secrets.json").unlink()
+    monkeypatch.setattr(settings, "ai_api_key", "test-env-ai")
+    monkeypatch.setattr(settings, "tickflow_api_key", "test-env-tickflow")
+    monkeypatch.setattr(settings, "ai_base_url", "https://backup.test/v1")
+    monkeypatch.setattr(settings, "ai_model", "backup-test-model")
+    monkeypatch.setattr(loader, "list_plugins", lambda: [
+        {"name": "sample", "api_key_env": "SAMPLE_BACKUP_API_KEY"},
+    ])
+    monkeypatch.setenv("SAMPLE_BACKUP_API_KEY", "test-env-plugin")
+    monkeypatch.setenv("EXT_EXT1_API_KEY", "test-env-ext")
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        for params in ({}, {"categories": "preferences"}, {"categories": "auth"}):
+            response = client.get("/api/config-backup/export", params=params)
+            assert response.status_code == 200
+            assert "user_data/secrets.json" not in _zip_entries(response.content)
+
+        response = client.get("/api/config-backup/export", params={"categories": "secrets"})
+        assert response.status_code == 200
+        archive = response.content
+        root = _fresh_env(tmp_path_factory, monkeypatch)
+        monkeypatch.setattr(settings, "ai_api_key", "")
+        monkeypatch.setattr(settings, "tickflow_api_key", "")
+        monkeypatch.setattr(settings, "ai_base_url", "https://new-device.test/v1")
+        monkeypatch.setattr(settings, "ai_model", "new-device-model")
+        monkeypatch.delenv("SAMPLE_BACKUP_API_KEY")
+        monkeypatch.delenv("EXT_EXT1_API_KEY")
+        files = {"file": ("backup.zip", archive, "application/zip")}
+        preview = client.post("/api/config-backup/inspect", files=files)
+        assert preview.status_code == 200
+        assert preview.json()["has_secrets"] is True
+        restored = client.post("/api/config-backup/apply", files=files, data={"categories": "secrets"})
+        assert restored.status_code == 200
+        assert restored.json()["secrets_merged"] is True
+
+    assert secrets_store.get_ai_key() == "test-env-ai"
+    assert secrets_store.get_tickflow_key() == "test-env-tickflow"
+    assert secrets_store.get_ai_config("ai_base_url") == "https://backup.test/v1"
+    assert secrets_store.get_ai_config("ai_model") == "backup-test-model"
+    assert secrets_store.get_env_backed_secret("sample_api_key", "SAMPLE_BACKUP_API_KEY") == "test-env-plugin"
+    assert get_ext_api_key("ext1") == "test-env-ext"
+    assert (root / "user_data" / "secrets.json").is_file()
 
 
 def test_inspect_reports_counts_conflicts_and_secrets(src_env):
