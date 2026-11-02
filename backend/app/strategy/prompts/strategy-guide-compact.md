@@ -4,11 +4,11 @@
 
 ## 必须遵守
 
-1. Polars/历史策略限用 `polars/datetime`；矩阵策略限用 `numpy/app.backtest.matrix`。
+1. Polars/历史/分钟策略限用 `polars/datetime`；矩阵策略限用 `numpy/app.backtest.matrix`。
 2. AI 策略位于 `data/strategies/ai/`，`META.id` 用指定的 `ai_` ID。
 3. 禁止文件读写和 `open/exec/eval/__import__/getattr/…` 等危险调用；含 `__x__` 的名字/字符串(含拼接)与 `pl.os/np.lib` 等模块句柄一律禁用。
 4. `META.params` 只放可调项：必填 `id/label/type/default`；数值项加 `min/max/step`，select 加 `options`。
-5. `META.scoring` 只用真实数值字段或 `ma20_bias`，权重和为 1.0。
+5. `META.scoring` 使用真实数值字段或 `ma20_bias`；分钟策略可用函数返回的数值列，非空时权重和为 1.0。
 6. `ENTRY_SIGNALS/EXIT_SIGNALS` 只选相关信号，无匹配项可为空。
 7. `RULES` 用中文列出至少 3 条核心逻辑。
 8. 优先 Polars 向量化，避免逐行循环。
@@ -140,7 +140,38 @@ anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) els
 # 之后才能: pl.col("date") == anchor_date  或  pl.col("date") > anchor_date
 ```
 
-## 常用字段
+## minute_filter 分钟策略
+
+分钟条件使用独立入口，当前仅支持 A 股。输入是当日分钟 K 窗口，列为
+`symbol/datetime/open/high/low/close/volume/amount`，按 `symbol/datetime` 排序。
+datetime 是北京时间墙钟，volume 为手，amount 为元，价格沿用仓库的复权口径。
+
+```python
+import polars as pl
+
+META = {
+    "id": "ai_minute_example", "name": "分钟示例", "asset_types": ["stock"],
+    "timeframes": ["1m"], "params": [], "scoring": {}, "basic_filter": {"enabled": False},
+}
+EXECUTION_BACKEND = "minute_filter"
+ENTRY_SIGNALS = []
+EXIT_SIGNALS = []
+
+def filter_minute_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
+    return df.sort(["symbol", "datetime"]).group_by("symbol").agg(
+        close=pl.col("close").last(), last_datetime=pl.col("datetime").last(),
+    )
+```
+
+- 返回每标的一行，含 symbol、close、last_datetime；条件公式在函数内计算。
+- 单分钟涨幅用本分钟收盘/上一分钟收盘-1；前20分钟均量用 volume.shift(1).rolling_mean(20)，分组后计算，不含当前根。
+- 窗口按标的、交易日、上下午会话分组；不足根数、零基准或缺口时不触发。
+- 运行数据可能含未完成分钟，实盘需按北京时间过滤当前分钟；回测只能使用触发时刻及以前的数据。
+- 日线指标不在分钟帧中。需要日线条件时声明 META.daily_history_bars（1..250），入口增加关键字参数 daily=None；由引擎注入日线窗口。
+- 分钟 scoring 可引用函数返回的数值列，权重仍须和为1；不要直接使用分钟帧没有的日线评分字段。
+- 编写分钟策略、单次执行与持续监控是不同入口。持续分钟策略提醒目前尚未接入监控中心，保存或运行成功不表示已开始自动监听。
+
+## 日线常用字段
 
 通用：`symbol`, `date`, `name`
 

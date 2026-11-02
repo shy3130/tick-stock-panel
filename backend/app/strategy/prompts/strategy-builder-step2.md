@@ -20,11 +20,11 @@
 
 ## 你应该做的事
 
-- 增/删/改参数 → 更新 META["params"]，同步修改当前执行后端对应的 `filter()`、`filter_history()` 或 `MATRIX_STRATEGY`
+- 增/删/改参数 → 更新 META["params"]，同步修改当前执行后端对应的 `filter()`、`filter_history()` 或 `MATRIX_STRATEGY`；分钟策略使用 `filter_minute_history()`
 - 调整信号 → 更新 ENTRY_SIGNALS / EXIT_SIGNALS
 - 修改止损/持有 → 更新 STOP_LOSS / MAX_HOLD_DAYS
-- 调整评分 → 更新 META["scoring"]；只使用真实数值字段或受控虚拟字段 `ma20_bias`，权重总和保持 1.0
-- 修改筛选逻辑 → 更新唯一公式；新增历史回溯时切换为 `python_history_legacy` + `filter_history()`，移除回溯时切回 `polars_expr` + `filter()`，不得同时保留两套公式
+- 调整评分 → 更新 META["scoring"]；日线使用真实数值字段或 `ma20_bias`，分钟使用函数返回的数值列，非空权重总和保持 1.0
+- 修改筛选逻辑 → 更新唯一公式；日线策略新增历史回溯时切换为 `python_history_legacy` + `filter_history()`，移除回溯时切回 `polars_expr` + `filter()`；分钟策略叠加日线条件时用 `daily_history_bars` 与 `daily` 注入，不得改成日线入口
 
 ## 规则
 
@@ -38,3 +38,4 @@
 8. **输出前自我检查**：完整通读修改后的代码，确认 Python 语法正确、括号匹配、引号闭合、缩进一致。有错误直接修正再输出。
 9. 直接输出完整 Python 代码
 10. 历史代码中的 `ALERTS` 已废弃，输出时删除；实时提醒由监控中心统一管理
+11. 分钟策略保留 `EXECUTION_BACKEND = "minute_filter"`、`timeframes=["1m"]` 与 `filter_minute_history`；分钟窗口不可改写为日线窗口。

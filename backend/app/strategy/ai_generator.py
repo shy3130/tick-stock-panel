@@ -28,13 +28,13 @@ _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的�
 1. 只创建这一个策略文件：只生成一个 .py 文件，绝不创建多文件、不拆分模块、不跨文件引用
 2. 绝不触碰项目源码：不要写任何会修改 backend/、docs/、frontend/ 等现有文件的代码；不要 import os/sys/pathlib 等文件系统模块
 3. 策略只落在自己的目录：AI 生成的策略只属于 data/strategies/ai/，文件名/ID 用 ai_ 前缀；不要引用 app/strategy/ 下的任何项目文件
-4. polars 策略只 import polars 和 datetime；matrix_native 策略只允许 import numpy 以及 from app.backtest.matrix import 所需矩阵协议和算子
+4. Polars/历史/分钟策略只 import polars 和 datetime；matrix_native 策略只允许 import numpy 以及 from app.backtest.matrix import 所需矩阵协议和算子
 
 要求:
 1. 用户可能调整的策略阈值通过 META["params"] 暴露，每项使用 id/label/type/default/min/max/step（type 支持 float/int/bool/select/date/string）；公式常数、固定窗口边界、布尔开关不必强行参数化
 2. 遵循指南中的文件结构，但优先贴合用户规则，不要为了套模板歪曲策略含义
 3. ENTRY_SIGNALS/EXIT_SIGNALS 根据策略逻辑自行选择匹配的信号列，不要照搬示例
-4. scoring 权重根据策略核心逻辑定制，总和 = 1.0；键只能使用指南中的真实数值字段或受控虚拟评分字段 ma20_bias，不得创造条件名称作为评分列
+4. scoring 权重根据策略核心逻辑定制，总和 = 1.0；日线键使用真实数值字段或 ma20_bias，分钟键可使用 filter_minute_history 返回的数值列，不得创造未输出的评分列
 5. 优先使用 Polars 表达式、窗口函数、聚合和 with_columns/filter 实现，避免逐行/逐股 Python 循环；只有表达式难以描述的复杂状态机才使用 partition_by/to_dicts
 6. 直接输出Python代码，不要输出其他内容
 7. 元数据必须使用模块顶层的 META = {...} 或 META: dict = {...}，不得省略或改名；并且必须定义所选执行后端要求的策略入口
@@ -50,6 +50,7 @@ _FENCED_CODE_RE = re.compile(
 )
 _POLARS_ENTRYPOINT_ERROR = "找不到策略入口函数 filter() 或 filter_history()"
 _MATRIX_ENTRYPOINT_ERROR = "找不到 Matrix 策略入口 MATRIX_STRATEGY"
+_MINUTE_ENTRYPOINT_ERROR = "分钟策略必须只定义 filter_minute_history() 入口"
 
 _POLARS_SCORING_FIELDS = frozenset(
     name
@@ -237,8 +238,17 @@ def _strategy_execution_backend(tree: ast.Module, meta: dict | None = None) -> s
 
 def _strategy_entrypoint_error(code: str, meta: dict | None = None) -> str | None:
     tree = ast.parse(code)
-    if _strategy_execution_backend(tree, meta) == "matrix_native":
+    backend = _strategy_execution_backend(tree, meta)
+    if backend == "matrix_native":
         return None if _top_level_assignment(tree, "MATRIX_STRATEGY") else _MATRIX_ENTRYPOINT_ERROR
+    if backend == "minute_filter":
+        if (meta or {}).get("timeframes") != ["1m"]:
+            return '分钟策略 META.timeframes 必须为 ["1m"]'
+        entries = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+        if "filter_minute_history" not in entries or entries & {"filter", "filter_history"} \
+                or _top_level_assignment(tree, "MATRIX_STRATEGY"):
+            return _MINUTE_ENTRYPOINT_ERROR
+        return None
     has_polars_entrypoint = any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name in {"filter", "filter_history"}
@@ -250,8 +260,9 @@ def _strategy_entrypoint_error(code: str, meta: dict | None = None) -> str | Non
 class AIStrategyGenerator:
     """AI 策略生成器"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, execution_backend: str | None = None) -> None:
         self._guide_cache: str | None = None
+        self._execution_backend = execution_backend
 
     def _get_guide(self) -> str:
         if self._guide_cache is None:
@@ -324,6 +335,10 @@ class AIStrategyGenerator:
                 "error": f"解析META失败: {e}",
             }
 
+        backend = _strategy_execution_backend(ast.parse(code), meta)
+        if self._execution_backend in {"minute_filter", "matrix_native"} and backend != self._execution_backend:
+            return {"code": code, "meta": meta, "valid": False,
+                    "error": f"生成结果执行后端必须保持为 {self._execution_backend}"}
         entrypoint_error = _strategy_entrypoint_error(code, meta)
         if entrypoint_error:
             return {
@@ -356,7 +371,8 @@ class AIStrategyGenerator:
         return error.startswith("解析META失败:") or error in {
             _POLARS_ENTRYPOINT_ERROR,
             _MATRIX_ENTRYPOINT_ERROR,
-        } or error.startswith(("META.params", "META.scoring"))
+            _MINUTE_ENTRYPOINT_ERROR,
+        } or error.startswith(("META.params", "META.scoring", "生成结果执行后端", "分钟策略 META.timeframes"))
 
     @staticmethod
     def _validate_meta_semantics(code: str, meta: dict) -> None:
@@ -383,7 +399,7 @@ class AIStrategyGenerator:
             raise ValueError("META.scoring 权重总和必须为 1.0")
 
         backend = _strategy_execution_backend(ast.parse(code), meta)
-        if backend == "python_history_legacy":
+        if backend in {"python_history_legacy", "minute_filter"}:
             return
         allowed = _MATRIX_SCORING_FIELDS if backend == "matrix_native" else _POLARS_SCORING_FIELDS
         unknown = sorted(set(scoring) - set(allowed))
@@ -396,13 +412,25 @@ class AIStrategyGenerator:
     async def repair_code(self, code: str, error: str) -> dict:
         """Ask the model once for a complete replacement after a structural error."""
         try:
-            backend = _strategy_execution_backend(ast.parse(code))
+            tree = ast.parse(code)
+            try:
+                meta = self._extract_meta(code)
+            except ValueError:
+                meta = None
+            backend = _strategy_execution_backend(tree, meta)
         except SyntaxError:
             backend = "polars_expr"
+        if self._execution_backend in {"minute_filter", "matrix_native"}:
+            backend = self._execution_backend
         if backend == "matrix_native":
             entrypoint_requirement = (
                 '保留 EXECUTION_BACKEND = "matrix_native"，定义 MATRIX_STRATEGY，'
                 "不得添加 filter() 或 filter_history()"
+            )
+        elif backend == "minute_filter":
+            entrypoint_requirement = (
+                '保留 EXECUTION_BACKEND = "minute_filter" 和 timeframes=["1m"]，'
+                "只定义 filter_minute_history(df, params)，不得添加 filter() 或 filter_history()"
             )
         else:
             entrypoint_requirement = (

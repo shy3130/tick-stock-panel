@@ -7,7 +7,6 @@ services.tool_catalog 做工具目录 + 回测桥。
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -53,6 +52,8 @@ class AIStrategyIterator:
         *,
         engine,
         data_dir: str,
+        execution_backend: str | None = None,
+        repo=None,
     ) -> dict[str, Any]:
         """执行有界迭代, 返回:
         {
@@ -62,7 +63,10 @@ class AIStrategyIterator:
             "final_meta": dict,
         }
         """
-        generator = AIStrategyGenerator()
+        generator = (
+            AIStrategyGenerator(execution_backend=execution_backend)
+            if execution_backend else AIStrategyGenerator()
+        )
         tools = tool_catalog.build_tool_schemas()
 
         # 1. 生成 v1 (复用现有单次生成 + 结构修复)
@@ -83,7 +87,7 @@ class AIStrategyIterator:
             full = await generate_ai_text_with_tools(
                 self._iteration_messages(generator, current_code, prompt, draft_id),
                 tools,
-                execute_tool=self._make_execute_tool(engine, data_dir),
+                execute_tool=self._make_execute_tool(engine, data_dir, repo=repo),
                 max_rounds=_CYCLE_TOOL_BUDGET,
                 temperature=0.3,
                 max_tokens=None,
@@ -122,7 +126,7 @@ class AIStrategyIterator:
 
         # 循环耗尽且末轮是改进版时, final 版从未被回测, 补一次作为末行证据
         if not final_backtested:
-            final_stats = await self._backtest_final(data_dir, draft_id)
+            final_stats = await self._backtest_final(data_dir, draft_id, engine=engine, repo=repo)
             rounds.append({
                 "round": len(rounds) + 1,
                 "stats": final_stats,
@@ -136,13 +140,14 @@ class AIStrategyIterator:
             "final_meta": current_meta,
         }
 
-    async def _backtest_final(self, data_dir: str, draft_id: str) -> dict | None:
+    async def _backtest_final(self, data_dir: str, draft_id: str, *, engine=None, repo=None) -> dict | None:
         """对最终版草稿补一次回测, 返回精简 stats; 失败返回 None (末行证据尽力而为)。"""
         try:
-            result = await asyncio.to_thread(
-                tool_catalog.run_backtest, data_dir, strategy_id=draft_id
+            payload = await tool_catalog.execute_tool(
+                tool_catalog.RUN_BACKTEST, {"strategy_id": draft_id},
+                engine=engine, repo=repo, data_dir=data_dir,
             )
-            return result.get("stats")
+            return payload["result"].get("stats") if payload["ok"] else None
         except Exception:  # noqa: BLE001 — 末行证据不强依赖回测成功
             return None
 
@@ -188,9 +193,9 @@ class AIStrategyIterator:
             {"role": "user", "content": user},
         ]
 
-    def _make_execute_tool(self, engine, data_dir: str):
+    def _make_execute_tool(self, engine, data_dir: str, *, repo=None):
         async def _execute(name: str, args: dict) -> dict:
-            return await tool_catalog.execute_tool(name, args, engine=engine, data_dir=data_dir)
+            return await tool_catalog.execute_tool(name, args, engine=engine, repo=repo, data_dir=data_dir)
 
         return _execute
 
