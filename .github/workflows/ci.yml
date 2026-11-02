@@ -67,6 +67,8 @@ jobs:
     name: Windows mining lock recovery
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
     defaults:
       run:
         working-directory: backend

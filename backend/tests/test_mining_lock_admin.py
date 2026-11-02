@@ -7,10 +7,12 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import psutil
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -35,11 +37,11 @@ from app.services.mining_process_lock import (
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 _HOLDER_SCRIPT = """
-import sys, time
+import os, sys, time
 from app.services.mining_process_lock import MiningProcessLock
 lock = MiningProcessLock(sys.argv[1])
 lock.acquire(role="worker")
-print("HELD", flush=True)
+print(f"HELD {os.getpid()}", flush=True)
 time.sleep(600)
 """
 
@@ -70,7 +72,10 @@ def _spawn_holder(data_dir: Path) -> subprocess.Popen:
         cwd=str(_BACKEND_ROOT),
     )
     line = proc.stdout.readline()
-    assert line.strip() == "HELD", f"外部持锁进程未就绪: {line!r} {proc.stderr.read()}"
+    assert line.startswith("HELD "), f"外部持锁进程未就绪: {line!r} {proc.stderr.read()}"
+    # Windows venv launchers may have a different PID from the Python process
+    # executing the script. Verify termination against the script's own identity.
+    proc.holder_process = psutil.Process(int(line.split()[1]))
     return proc
 
 
@@ -87,10 +92,14 @@ def _spawn_legacy_holder(data_dir: Path) -> subprocess.Popen:
     )
     line = proc.stdout.readline()
     assert line.strip() == "HELD", f"旧格式持锁进程未就绪: {line!r} {proc.stderr.read()}"
+    proc.holder_process = psutil.Process(proc.pid)
     return proc
 
 
 def _kill(proc: subprocess.Popen) -> None:
+    # Keep the original Process object so cleanup also checks for PID reuse.
+    with suppress(psutil.NoSuchProcess):
+        proc.holder_process.kill()
     if proc.poll() is None:
         proc.kill()
     proc.wait(timeout=10)
@@ -223,7 +232,7 @@ def test_force_release_kills_external_holder_and_takes_over(tmp_path):
         lock = MiningProcessLock(tmp_path)
         report = force_release(tmp_path, lock)
         assert report["released"] is True
-        assert report["terminated_pid"] == proc.pid
+        assert report["terminated_pid"] == proc.holder_process.pid
         assert report["reacquired"] is True
         assert lock.acquired is True
         proc.wait(timeout=10)
@@ -359,7 +368,7 @@ def test_lock_endpoints_full_recovery_loop(tmp_path):
         assert resp.status_code == 200
         assert resp.json() == {
             "released": True,
-            "terminated_pid": proc.pid,
+            "terminated_pid": proc.holder_process.pid,
             "reacquired": True,
         }
         proc.wait(timeout=10)
@@ -599,7 +608,8 @@ def test_force_release_rechecks_confirmed_pid(tmp_path):
     client = _api_client(tmp_path, acquired=False)
     try:
         response = client.post(
-            "/api/backtest/mining/lock/force-release", json={"expected_pid": proc.pid + 1},
+            "/api/backtest/mining/lock/force-release",
+            json={"expected_pid": proc.holder_process.pid + 1},
         )
         assert response.status_code == 409
         assert "持有者已变化" in response.json()["detail"]
