@@ -470,6 +470,46 @@ def test_pid_probe_is_read_only(monkeypatch):
     assert admin._pid_alive(-1) is False
 
 
+@pytest.mark.parametrize("external_owner", [False, True], ids=["own-lock", "other-instance"])
+def test_opening_workbench_only_reads_lock_status(tmp_path, monkeypatch, external_owner):
+    """The workbench's initial GET and subsequent polls must never signal a process."""
+    from app.services import mining_lock_admin as admin
+
+    client = _api_client(tmp_path, acquired=not external_owner)
+    lock = client.app.state.mining_process_lock
+    proc = _spawn_holder(tmp_path) if external_owner else None
+    if proc is None:
+        lock.acquire()
+    send_signal = Mock()
+    monkeypatch.setattr(
+        admin, "os", SimpleNamespace(name=os.name, getpid=os.getpid, kill=send_signal),
+    )
+    run_dir = tmp_path / "research" / "mining" / "runs" / "live"
+    run_dir.mkdir(parents=True)
+    manifest = run_dir / "manifest.json"
+    original = b'{"status": "running"}'
+    manifest.write_bytes(original)
+    try:
+        for _ in range(5):
+            response = client.get("/api/backtest/mining/lock")
+            assert response.status_code == 200
+            status = response.json()
+            assert status["held"] is True
+            assert status["mine"] is (not external_owner)
+            assert status["holder_alive"] is True
+            assert status["active_runs"] == 1
+            assert status["force_releasable"] is False
+        send_signal.assert_not_called()
+        assert manifest.read_bytes() == original
+        assert lock.acquired is (not external_owner)
+        if proc is not None:
+            assert proc.holder_process.is_running()
+    finally:
+        lock.release()
+        if proc is not None:
+            _kill(proc)
+
+
 def test_recover_endpoint_acquires_free_lock_and_recovers_orphans_once(tmp_path):
     from app.services.mining_manager import MiningJobManager
 
