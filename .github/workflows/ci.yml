@@ -84,5 +84,6 @@ jobs:
       - name: 原生 Windows 锁、进程、接管和桌面启动回归
         run: >-
           uv run pytest tests/test_mining_process_lock.py
-          tests/test_mining_lock_admin.py tests/test_main_mining_lifespan.py
+          tests/test_mining_lock_admin.py tests/test_mining_lock_http.py
+          tests/test_main_mining_lifespan.py
           tests/test_desktop_startup.py -q
