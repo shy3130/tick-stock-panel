@@ -61,7 +61,7 @@ def build_step1(
 
 输出要求：
 1. 严格遵循系统提示中的策略文件结构和安全限制。
-2. 严格使用指定执行后端；matrix_native 只定义 MATRIX_STRATEGY，polars_expr 只定义 filter()。若 polars 规则确需历史窗口，改用 python_history_legacy + filter_history()。
+2. 严格使用指定执行后端；matrix_native 只定义 MATRIX_STRATEGY，polars_expr 只定义 filter()。若 polars 规则确需日线历史窗口，改用 python_history_legacy + filter_history()。minute_filter 只定义 filter_minute_history(df, params)，timeframes 必须为 ["1m"]。
 3. META 必须声明 asset_types 和 timeframes，并生成完整执行与交易元数据。
 4. 只输出 Python 代码。"""
 

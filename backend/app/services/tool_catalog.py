@@ -90,7 +90,7 @@ def build_tool_schemas() -> list[dict[str, Any]]:
         _function_schema(
             LIST_DATA_CAPABILITIES,
             "检索可用的数据源能力目录 (日K/除权/实时/分钟/五档/财务/全量分钟等)。"
-            "返回能力 id、中文名、说明与 TickFlow 档位要求, 用于判断可用数据范围。",
+            "返回能力 id、中文名、说明、当前生效 source 与实际可用状态 usable，用于判断可用数据范围。",
             {
                 "type": "object",
                 "properties": {},
@@ -123,7 +123,7 @@ def build_tool_schemas() -> list[dict[str, Any]]:
                     "asset_type": {
                         "type": "string",
                         "enum": ["stock", "etf"],
-                        "description": "资产类型; 缺省 stock",
+                        "description": "资产类型; 缺省按策略声明选择，多资产策略优先 stock",
                     },
                 },
                 "required": ["strategy_id"],
@@ -180,8 +180,11 @@ def list_strategies(engine) -> dict[str, Any]:
 
 
 def list_data_capabilities() -> dict[str, Any]:
-    """序列化数据源能力目录: capabilities.py 的 CAPABILITY_REGISTRY 精简视图。"""
-    from app.data_providers.capabilities import CAPABILITY_REGISTRY
+    """返回能力目录及当前生效数据源的可用状态。"""
+    from app.data_providers.capabilities import CAPABILITY_REGISTRY, resolve_capability_sources
+    from app.tickflow import policy
+
+    routing = {row["id"]: row for row in resolve_capability_sources(policy.base_tier_name())}
 
     capabilities = [
         {
@@ -189,10 +192,23 @@ def list_data_capabilities() -> dict[str, Any]:
             "label": cap["label"],
             "desc": cap["desc"],
             "tf_tier": cap["tf_tier"],
+            **routing.get(cap["id"], {}),
         }
         for cap in CAPABILITY_REGISTRY
     ]
     return {"capabilities": capabilities}
+
+
+def resolve_strategy_target(strategy, *, asset_type: str | None = None,
+                            timeframe: str | None = None) -> tuple[str, str]:
+    """缺省参数遵循策略声明，多资产/周期策略优先保持 stock/1d。"""
+    assets = strategy.meta.get("asset_types", ["stock"])
+    periods = strategy.meta.get("timeframes", ["1d"])
+    asset = asset_type or ("stock" if "stock" in assets else assets[0])
+    period = timeframe or ("1d" if "1d" in periods else periods[0])
+    if asset not in assets or period not in periods:
+        raise ValueError(f"策略不支持资产/周期 {asset}/{period}，支持 {assets}/{periods}")
+    return asset, period
 
 
 def run_backtest(
@@ -203,13 +219,15 @@ def run_backtest(
     start: str | None = None,
     end: str | None = None,
     asset_type: str = "stock",
+    strategy=None,
+    repo=None,
 ) -> dict[str, Any]:
     """回测工具桥: 复用 StrategyBacktestConfig + make_worker_task/run_worker_task。
 
     同步阻塞 (spawn 子进程), 由 execute_tool 用 asyncio.to_thread 调用。
     返回 {"strategy_id", "start", "end", "stats": 精简白名单键}。
     """
-    from app.backtest.strategy import StrategyBacktestConfig
+    from app.backtest.strategy import StrategyBacktestConfig, validate_minute_backtest_coverage
     from app.backtest.worker import make_worker_task, run_worker_task
     from app.services.heavy_job_limiter import shared_heavy_job_limiter
 
@@ -218,6 +236,8 @@ def run_backtest(
     start_date = (
         date.fromisoformat(start) if start else end_date - timedelta(days=_DEFAULT_BACKTEST_DAYS)
     )
+    if strategy is not None:
+        validate_minute_backtest_coverage(strategy, repo, start_date, asset_type)
 
     cfg = StrategyBacktestConfig(
         strategy_id=strategy_id,
@@ -250,6 +270,7 @@ async def execute_tool(
     args: dict[str, Any],
     *,
     engine=None,
+    repo=None,
     data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """按 name 分发执行, 返回 {"ok": bool, "result": ... | "error": str}。
@@ -285,6 +306,13 @@ async def execute_tool(
                     available = ""
                 hint = f"; 可用策略: {available}" if available else "; 可先用 list_strategies 查询"
                 return {"ok": False, "error": f"策略 {strategy_id} 不存在{hint}"}
+            asset_type = args.get("asset_type") or "stock"
+            strategy = None
+            if engine is not None:
+                strategy = engine.get(strategy_id)
+                asset_type, _ = resolve_strategy_target(
+                    strategy, asset_type=args.get("asset_type"),
+                )
             result = await asyncio.to_thread(
                 run_backtest,
                 data_dir,
@@ -292,7 +320,9 @@ async def execute_tool(
                 params=args.get("params"),
                 start=args.get("start"),
                 end=args.get("end"),
-                asset_type=args.get("asset_type") or "stock",
+                asset_type=asset_type,
+                strategy=strategy,
+                repo=repo,
             )
         else:
             return {"ok": False, "error": f"未知工具: {name}"}
