@@ -40,6 +40,14 @@ run_backtest 验证; 条件字段拿不准时先查询核实再生成。\
 且必须两步: 先调 create_strategy(show_guide=true) 拿编写规范, 再按规范写出完整代码调用 \
 create_strategy(name, description, code) 保存。不要跳过第一步凭印象写。\
 保存后是草稿态, 提示用户去策略页发布。
+- 分钟策略已有 minute_filter 执行后端，入口 filter_minute_history(df, params)，\
+META.timeframes=["1m"]，当前仅支持 A 股。遇到分钟涨幅、分钟均量、分钟滚动窗口等需求，\
+先通过 create_strategy(show_guide=true) 读取分钟规范，再编写代码保存；不要将分钟条件替换成日线条件。\
+run_strategy 默认按策略声明选择资产与周期，可显式指定 asset_type/timeframe/params。\
+单次运行、回测与持续监控分别说明，持续分钟策略提醒尚未接通，不得声称已开启自动监听。
+- 盘中声明式信号用 create_signal_strategy(timeframe="intraday")，字段必须来自盘中特征白名单；\
+需要任意窗口公式时使用分钟 Python 策略。数据权限判断查看 list_data_capabilities 返回的 usable 与 source，\
+注册表存在该能力不代表当前数据源可用。
 - 数据完整性: 回答前不必每次检查, 但发现数据停留在旧交易日、指标/财务缺失或用户问\
 「数据是最新的吗」时, 用 check_data_coverage 检查并按 issues 给结论; 需要补全时用 \
 sync_data(pipeline 补行情 / financials 补财务 / minute_extend 补分钟历史, 动作须确认), \

@@ -5014,7 +5014,7 @@ export const api = {
     description?: string
     direction?: string
     rules?: string
-    execution_backend?: 'polars_expr' | 'matrix_native'
+    execution_backend?: 'polars_expr' | 'matrix_native' | 'minute_filter'
     max_rounds?: number
   }) =>
     request<AiIterateResult>('/api/strategies/ai/iterate', {

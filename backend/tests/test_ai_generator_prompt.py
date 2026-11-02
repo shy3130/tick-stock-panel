@@ -13,7 +13,7 @@ def test_ai_strategy_generator_uses_compact_guide():
 
     assert "AI 策略生成精简指南" in guide
     assert "策略示例" not in guide
-    assert len(guide) < 5000
+    assert len(guide) < 7000
 
 
 def test_build_step1_keeps_user_prompt_compact():

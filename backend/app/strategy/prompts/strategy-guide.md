@@ -160,6 +160,18 @@ anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) els
 # 之后才能: pl.col("date") == anchor_date  或  pl.col("date") > anchor_date
 ```
 
+### 一分钟策略（minute_filter）
+
+分钟条件使用 `EXECUTION_BACKEND = "minute_filter"`、`META.asset_types = ["stock"]` 与 `META.timeframes = ["1m"]`，唯一入口为 `filter_minute_history(df, params) -> pl.DataFrame`。不要同时定义日线入口。
+
+- 输入为当日窗口，含 `symbol/datetime/open/high/low/close/volume/amount`，按 `symbol/datetime` 排序。`datetime` 为北京时间墙钟，成交量为手，成交额为元，价格使用仓库复权口径。
+- 每标的返回一行，至少包含 `symbol/close/last_datetime`。函数内可生成数值列用于 `META.scoring`，非空权重之和仍为 1。
+- 单分钟涨幅使用本根收盘相对上一根收盘；前 N 分钟均量用 `shift(1)` 后的滚动均值。窗口按标的、交易日和上下午会话隔离，数据缺口、根数不足或零基准不触发，实盘排除当前未完成分钟。
+- 需要日线条件时声明 `META.daily_history_bars`（1..250），入口增加 `*, daily=None`。日线字段不会自动出现在分钟帧中。
+- 单次运行读取本地分钟数据，回测需有相应历史覆盖。持续分钟策略提醒尚未接通策略监控中心，保存后不会自动开始监听。
+
+最小代码见 [AI 精简指南的分钟策略章节](strategy-guide-compact.md#minute_filter-分钟策略)，内置 AI 入口与边界见 [AI 策略迭代指南](../../../../docs/strategy-iteration.md#内置-ai-的策略能力与边界)。
+
 ## 3. 常用指标列（参考，可直接使用）
 
 以下列可直接引用。使用 `filter_history()` 或其他无法静态解析的 Python 逻辑时，必须声明最终依赖的公开字段，基础 OHLCV 和指标中间列不需要声明：
