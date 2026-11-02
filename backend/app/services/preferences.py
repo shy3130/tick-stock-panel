@@ -303,6 +303,33 @@ def set_minute_batch_symbols(size: int) -> int:
     return size
 
 
+# ===== 回测/优化 worker RSS 上限 (GiB) =====
+# 环境变量 TICK_WORKER_RSS_LIMIT_BYTES 仍是更高优先级的部署级覆盖 (见
+# app/backtest/worker.py 的解析顺序); 这里只承接设置页的界面化配置。
+_BACKTEST_RSS_LIMIT_GIB_DEFAULT = 6
+_BACKTEST_RSS_LIMIT_GIB_MAX = 64
+
+
+def get_backtest_worker_rss_limit_gib() -> int:
+    """回测/优化独立 worker 的 RSS 上限 (GiB)。默认 6, 范围 [0, 64], 0 = 不限制。
+
+    单位是 GiB 而非字节: 界面与报错文案均以 GiB 呈现, 换算只发生在
+    worker.py 的字节级解析处, 避免两套单位并存。
+    """
+    raw = load().get("backtest_worker_rss_limit_gib", _BACKTEST_RSS_LIMIT_GIB_DEFAULT)
+    try:
+        gib = int(raw)
+    except (TypeError, ValueError):
+        gib = _BACKTEST_RSS_LIMIT_GIB_DEFAULT
+    return max(0, min(_BACKTEST_RSS_LIMIT_GIB_MAX, gib))
+
+
+def set_backtest_worker_rss_limit_gib(gib: int) -> int:
+    gib = max(0, min(_BACKTEST_RSS_LIMIT_GIB_MAX, int(gib)))
+    save({"backtest_worker_rss_limit_gib": gib})
+    return gib
+
+
 def _allowed_data_providers() -> set[str]:
     try:
         from app.data_providers import custom as custom_sources

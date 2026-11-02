@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload, MemoryStick } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import type { UpgradeGuardCategory } from '@/lib/api'
@@ -27,6 +27,10 @@ import {
 } from '@/lib/voiceBroadcast'
 import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, getPageZoom, setPageZoom } from '@/lib/pageZoom'
+
+// 回测 worker RSS 内存上限 (GiB) 界面范围; 与后端 BacktestWorkerRssLimitIn 校验一致
+const BACKTEST_RSS_LIMIT_GIB_MIN = 0
+const BACKTEST_RSS_LIMIT_GIB_MAX = 64
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
@@ -150,6 +154,15 @@ export function SettingsSystemPanel() {
     mutationFn: (size: number) => api.updateMinuteBatchSymbols(size),
     onSuccess: ({ minute_batch_symbols }) => {
       setKlineBatchLimits({ minute: minute_batch_symbols })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
+
+  // 回测内存上限: worker 每任务启动时从后端读取, 保存后下一个回测/优化任务即生效
+  const saveBacktestRssLimit = useMutation({
+    mutationFn: (gib: number) => api.updateBacktestWorkerRssLimit(gib),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.preferences })
     },
     onError: (e: Error) => toast(e.message || '保存失败', 'error'),
@@ -469,6 +482,32 @@ export function SettingsSystemPanel() {
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
         <div className="flex items-center gap-2 mb-4">
+          <MemoryStick className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">性能与内存</h3>
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-muted mb-3">
+          回测 / 稳健优化 / 因子挖掘在独立进程运行，内存超过上限会被中止并提示
+          （避免把整机拖入卡顿）。保存后对新发起的任务生效，无需重启。
+        </p>
+
+        <BatchSymbolsRow
+          label="回测内存上限"
+          desc="默认 6 · 0 = 不限制"
+          min={BACKTEST_RSS_LIMIT_GIB_MIN}
+          max={BACKTEST_RSS_LIMIT_GIB_MAX}
+          value={prefs?.backtest_worker_rss_limit_gib ?? 6}
+          saving={saveBacktestRssLimit.isPending}
+          onSave={(gib) => saveBacktestRssLimit.mutate(gib)}
+          warnAt={16}
+          warnText="上限超过物理内存时会触发系统交换（swap），回测速度反而断崖式下降；内存不足时优先缩小回测时间范围/标的数量。"
+          unit="GiB"
+          rangeUnit="GiB"
+        />
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
           <Trash2 className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">缓存</h3>
         </div>
@@ -746,6 +785,8 @@ function BatchSymbolsRow({
   onSave,
   warnAt,
   warnText,
+  unit = '只/批',
+  rangeUnit = '只',
 }: {
   label: string
   desc: string
@@ -756,6 +797,10 @@ function BatchSymbolsRow({
   onSave: (size: number) => void
   warnAt: number
   warnText: string
+  /** 值药丸的单位后缀; 默认「只/批」, 回测内存等场景传 'GiB' */
+  unit?: string
+  /** 范围提示「可设 min–max …」的单位后缀 */
+  rangeUnit?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(String(value))
@@ -785,7 +830,7 @@ function BatchSymbolsRow({
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm text-foreground">{label}</div>
-          <div className="text-[11px] text-muted">{desc} · 可设 {min}–{max} 只</div>
+          <div className="text-[11px] text-muted">{desc} · 可设 {min}–{max} {rangeUnit}</div>
         </div>
         {editing ? (
           <div className="flex shrink-0 items-center gap-1.5">
@@ -825,7 +870,7 @@ function BatchSymbolsRow({
                        text-foreground tabular-nums hover:border-accent/50 transition-colors"
             title="点击修改"
           >
-            {value} 只/批
+            {value} {unit}
           </button>
         )}
       </div>

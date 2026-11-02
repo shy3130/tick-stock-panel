@@ -1,9 +1,12 @@
 """#516 内存保护 — /health 可观测性、重任务内存准入、worker RSS 上限配置。"""
 from __future__ import annotations
 
+import json
 import threading
+from types import SimpleNamespace
 
 import psutil
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -86,3 +89,126 @@ def test_process_rss_bytes_for_invalid_pid():
 
     assert _process_rss_bytes(None) == 0
     assert _process_rss_bytes(999999999) == 0
+
+
+# ── 回测 worker RSS 上限: 设置页偏好 + 环境变量解析 ──────────────────
+
+
+@pytest.fixture()
+def _isolated_prefs(tmp_path, monkeypatch):
+    """preferences.json 指向临时文件, 避免读写真实 data 目录。"""
+    from app.services import preferences
+
+    path = tmp_path / "preferences.json"
+    monkeypatch.setattr(preferences, "_path", lambda: path)
+    preferences._invalidate_cache()
+    yield path
+    preferences._invalidate_cache()
+
+
+def test_backtest_rss_limit_pref_roundtrip_and_clamp(_isolated_prefs):
+    from app.services import preferences
+
+    assert preferences.get_backtest_worker_rss_limit_gib() == 6  # 缺省默认
+
+    assert preferences.set_backtest_worker_rss_limit_gib(8) == 8
+    assert preferences.get_backtest_worker_rss_limit_gib() == 8
+    assert json.loads(_isolated_prefs.read_text(encoding="utf-8"))[
+        "backtest_worker_rss_limit_gib"
+    ] == 8
+
+    # 越界钳制: 0 是合法值 (不限制), 负数按 0、超上限按 64 收口
+    assert preferences.set_backtest_worker_rss_limit_gib(-3) == 0
+    assert preferences.set_backtest_worker_rss_limit_gib(999) == 64
+
+    # 手改 JSON 出现非法值时自愈回默认
+    _isolated_prefs.write_text(
+        json.dumps({"backtest_worker_rss_limit_gib": "abc"}), encoding="utf-8"
+    )
+    preferences._invalidate_cache()
+    assert preferences.get_backtest_worker_rss_limit_gib() == 6
+
+
+def test_effective_rss_limit_env_beats_preference(monkeypatch, _isolated_prefs):
+    from app.backtest import worker
+    from app.services import preferences
+
+    preferences.set_backtest_worker_rss_limit_gib(8)
+    monkeypatch.setenv("TICK_WORKER_RSS_LIMIT_BYTES", str(2 * 1024**3))
+    assert worker._effective_rss_limit_bytes() == 2 * 1024**3  # 环境变量优先
+
+
+def test_effective_rss_limit_uses_preference_without_env(monkeypatch, _isolated_prefs):
+    from app.backtest import worker
+    from app.services import preferences
+
+    monkeypatch.delenv("TICK_WORKER_RSS_LIMIT_BYTES", raising=False)
+    preferences.set_backtest_worker_rss_limit_gib(8)
+    assert worker._effective_rss_limit_bytes() == 8 * 1024**3
+
+
+def test_effective_rss_limit_unlimited_and_default(monkeypatch, _isolated_prefs):
+    from app.backtest import worker
+    from app.services import preferences
+
+    monkeypatch.delenv("TICK_WORKER_RSS_LIMIT_BYTES", raising=False)
+    assert worker._effective_rss_limit_bytes() == 6 * 1024**3  # 均未设置 → 默认
+
+    # 偏好 0 = 不限制
+    preferences.set_backtest_worker_rss_limit_gib(0)
+    assert worker._effective_rss_limit_bytes() == 0
+
+    # 环境变量 0 = 不限制 (保持原 env 语义)
+    monkeypatch.setenv("TICK_WORKER_RSS_LIMIT_BYTES", "0")
+    assert worker._effective_rss_limit_bytes() == 0
+
+    # 环境变量显式设置但非法 → 回退内置默认, 不回落偏好
+    monkeypatch.setenv("TICK_WORKER_RSS_LIMIT_BYTES", "not-a-number")
+    assert worker._effective_rss_limit_bytes() == 6 * 1024**3
+
+
+def test_update_backtest_worker_rss_limit_endpoint(_isolated_prefs):
+    from app.api.settings import (
+        BacktestWorkerRssLimitIn,
+        get_preferences,
+        update_backtest_worker_rss_limit,
+    )
+    from app.services import preferences
+
+    result = update_backtest_worker_rss_limit(BacktestWorkerRssLimitIn(gib=8))
+    assert result == {"backtest_worker_rss_limit_gib": 8}
+    assert preferences.get_backtest_worker_rss_limit_gib() == 8
+    # GET /preferences 同步暴露该字段, 供设置页回显
+    assert get_preferences()["backtest_worker_rss_limit_gib"] == 8
+
+
+def test_backtest_worker_rss_limit_request_model_rejects_out_of_range():
+    from pydantic import ValidationError
+
+    from app.api.settings import BacktestWorkerRssLimitIn
+
+    with pytest.raises(ValidationError):
+        BacktestWorkerRssLimitIn(gib=-1)
+    with pytest.raises(ValidationError):
+        BacktestWorkerRssLimitIn(gib=65)
+
+
+def test_worker_checks_memory_configuration_before_spawning(monkeypatch, tmp_path):
+    """偏好读取失败时不得遗留一个没有监管的 worker。"""
+    from app.backtest import worker
+
+    started = []
+    context = SimpleNamespace(
+        Queue=object,
+        Event=object,
+        Process=lambda **kwargs: SimpleNamespace(start=lambda: started.append(True)),
+    )
+    monkeypatch.setattr(worker.mp, "get_context", lambda _method: context)
+
+    def unavailable():
+        raise PermissionError("preferences unavailable")
+
+    monkeypatch.setattr(worker, "_effective_rss_limit_bytes", unavailable)
+    with pytest.raises(PermissionError, match="preferences unavailable"):
+        worker.run_worker_task({"kind": "backtest", "data_dir": str(tmp_path), "config": {}})
+    assert started == []
