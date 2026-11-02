@@ -5,9 +5,12 @@ import os
 import socket
 import subprocess
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
+
+import psutil
 
 
 class MiningProcessLockError(RuntimeError):
@@ -87,7 +90,9 @@ class MiningProcessLock:
             stream.seek(0)
             stream.truncate()
             stream.write(
-                (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+                # Byte 0 remains the Windows lock byte. JSON after it can be read
+                # through a separate handle; leading whitespace also keeps old readers compatible.
+                (" " + json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
             )
             stream.flush()
             os.fsync(stream.fileno())
@@ -97,13 +102,16 @@ class MiningProcessLock:
 
 
 def holder_payload(role: str) -> dict:
-    return {
+    payload = {
         "schema_version": _LOCK_SCHEMA_VERSION,
         "pid": os.getpid(),
         "started_at": datetime.now(UTC).isoformat(),
         "role": role,
         "host": socket.gethostname(),
     }
+    with suppress(psutil.Error):
+        payload["process_started_at"] = psutil.Process().create_time()
+    return payload
 
 
 def read_lock_holder(data_dir: Path | str) -> dict | None:
@@ -116,7 +124,13 @@ def read_lock_holder(data_dir: Path | str) -> dict | None:
     try:
         raw = path.read_bytes()
     except OSError:
-        return None
+        try:
+            # Buffered reads may include the locked first byte even after seek(1).
+            with path.open("rb", buffering=0) as stream:
+                stream.seek(1)
+                raw = stream.read()
+        except OSError:
+            return None
     try:
         value = json.loads(raw.decode("utf-8", errors="replace"))
     except (UnicodeError, json.JSONDecodeError):
@@ -236,16 +250,15 @@ def probe_lock_held(data_dir: Path | str) -> bool:
         return False
     try:
         os.set_inheritable(stream.fileno(), False)
-        _try_lock_file(stream)
-    except MiningProcessLockError:
-        return True
-    except OSError:
-        # 无法探测时按未持锁处理, 让真正的 acquire 路径给出准确错误
-        return False
-    try:
-        _unlock_file(stream)
-    except OSError:
-        pass
+        try:
+            _try_lock_file(stream)
+        except MiningProcessLockError:
+            return True
+        except OSError:
+            # 真正的 acquire 路径负责报告权限等错误。
+            return False
+        with suppress(OSError):
+            _unlock_file(stream)
     finally:
         stream.close()
     return False

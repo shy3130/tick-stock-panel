@@ -143,7 +143,10 @@ async def _application_lifespan(app: FastAPI):
     from app.services.mining_manager import MiningJobManager
 
     mining_manager = MiningJobManager(store.data_dir)
-    recovered_mining_runs = mining_manager.recover_interrupted()
+    # A degraded instance must never rewrite another owner's live run manifests.
+    recovered_mining_runs = (
+        mining_manager.recover_interrupted() if app.state.mining_lock_acquired else 0
+    )
     app.state.mining_manager = mining_manager
     if recovered_mining_runs:
         logger.warning("recovered %d interrupted mining runs", recovered_mining_runs)

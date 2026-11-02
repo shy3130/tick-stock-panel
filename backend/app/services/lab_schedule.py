@@ -14,11 +14,12 @@ logger = logging.getLogger(__name__)
 def run_scheduled_lab(app_state: Any) -> dict[str, Any]:
     """收盘管道成功后依次触发周度挖掘与每日守护复验 (各自独立防重)。"""
     from app.services.guardian_schedule import run_daily_guardian
+    from app.services.mining_lock_admin import ensure_mining_lock
     from app.services.mining_schedule import run_weekly_mining
 
     results: dict[str, Any] = {"mining": None, "guardian": None}
     try:
-        if not getattr(app_state, "mining_lock_acquired", True):
+        if not ensure_mining_lock(app_state):
             # 降级模式 (挖掘锁被其他进程占用): 跳过周度挖掘而不是报错,
             # 守护复验不受影响
             logger.warning("scheduled lab mining skipped: mining lock unavailable")
