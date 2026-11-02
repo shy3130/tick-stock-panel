@@ -16,7 +16,8 @@ import { INVALIDATE_KEYS, SettingsBackupPanel } from './Backup'
 
 const BUTTON = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-btn border border-border bg-surface px-3 py-2 text-xs font-medium text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45 sm:min-h-9'
 const PRIMARY = cn(BUTTON, 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:text-white')
-const INPUT = 'min-h-11 w-full min-w-0 rounded-input border border-border bg-base px-3 py-2 text-base text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent sm:min-h-9 sm:text-sm'
+// 16px 用 text-[16px]: 主题色有 base, text-base 会生成 color 规则让文字变成背景色 (见 tailwind.config.ts)
+const INPUT = 'min-h-11 w-full min-w-0 rounded-input border border-border bg-base px-3 py-2 text-[16px] leading-6 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent sm:min-h-9 sm:text-sm'
 const KIND = { strategy: '策略', factor: '因子', signal: '信号', settings: '调参', code: '辅助模块' }
 const TYPE = { resources: '策略与定义资源', backup: '配置备份', source: '数据源插件', extension: '后端扩展', page: '页面插件', project: '项目源码页面' }
 type Review = ImportCenterPreview | { kind: 'project'; preview: { namespace: string } }
