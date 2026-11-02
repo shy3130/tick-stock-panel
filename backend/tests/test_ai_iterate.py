@@ -168,10 +168,14 @@ def test_execute_list_data_capabilities(monkeypatch):
         CAPABILITY_REGISTRY=[
             {"id": "daily", "label": "日K", "desc": "d", "tf_tier": 0},
         ],
+        resolve_capability_sources=lambda tier: [
+            {"id": "daily", "source": "demo", "usable": True},
+        ],
     )
     result = asyncio.run(tool_catalog.execute_tool("list_data_capabilities", {}))
     assert result["ok"] is True
     assert result["result"]["capabilities"][0]["id"] == "daily"
+    assert result["result"]["capabilities"][0]["usable"] is True
 
 
 class _FakeEngine:
@@ -317,7 +321,7 @@ def test_iterate_final_backtest_appended(monkeypatch):
     monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
     monkeypatch.setattr(it, "generate_ai_text_with_tools", _fake_tool_loop(call_log))
 
-    async def fake_final_backtest(self, data_dir, draft_id):
+    async def fake_final_backtest(self, data_dir, draft_id, **kwargs):
         return {"sharpe": 2.0}
 
     monkeypatch.setattr(AIStrategyIterator, "_backtest_final", fake_final_backtest)

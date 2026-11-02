@@ -383,18 +383,14 @@ def _guard_minute_strategy_backtest(
         return
     if s is None or s.execution_backend != "minute_filter":
         return
-    if asset_type != "stock":
-        raise HTTPException(400, detail="分钟策略回测当前仅支持 A 股 (stock)")
-    earliest = request.app.state.repo.earliest_minute_date()
-    if earliest is None or start < earliest:
-        have = f"最早到 {earliest}, " if earliest else ""
-        raise HTTPException(
-            400,
-            detail=(
-                f"本地分钟K{have}无法覆盖回测起始日 {start}。"
-                "请先用「扩展分钟K历史」拉取更多数据, 或缩小回测区间"
-            ),
+    from app.backtest.strategy import validate_minute_backtest_coverage
+
+    try:
+        validate_minute_backtest_coverage(
+            s, request.app.state.repo, start, asset_type,
         )
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
 
 
 @router.post("/strategy/run")

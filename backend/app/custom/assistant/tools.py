@@ -665,18 +665,35 @@ def _run_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             available = ""
         hint = f"; 可用策略: {available}" if available else "; 可先用 list_strategies 查询"
         raise ValueError(f"策略 {strategy_id} 不存在{hint}")
-    svc = ScreenerService(repo)
+    strategy = ctx.engine.get(strategy_id)
+    asset_type, timeframe = tool_catalog.resolve_strategy_target(
+        strategy, asset_type=args.get("asset_type"), timeframe=args.get("timeframe"),
+    )
+    if timeframe == "1m" and asset_type != "stock":
+        raise ValueError("分钟策略当前仅支持 A 股 (stock)")
+    svc = ScreenerService(repo, asset_type=asset_type)
     as_of = svc.latest_date()
     if as_of is None:
         raise ValueError("本地暂无行情数据, 无法执行策略。")
     overrides = load_override(ctx.data_dir, strategy_id) or {} if ctx.data_dir else {}
+    current = None
+    if timeframe == "1m":
+        minute_day = repo.latest_minute_date_global()
+        if minute_day is None:
+            raise ValueError("本地无分钟K数据，请先同步分钟K或开启盘中分钟刷新")
+        # 日线可能尚未收盘，基础信息取已存在的日线快照，分钟窗口取最新分钟分区。
+        current = svc._load_enriched_for_date(min(as_of, minute_day))
+        as_of = minute_day
     context = svc.build_strategy_context(
         ctx.engine, as_of, [strategy_id], overrides_map={strategy_id: overrides},
+        timeframe=timeframe, current=current, params_map={strategy_id: args.get("params") or {}},
     )
-    result = ctx.engine.run(strategy_id, context, overrides=overrides or None)
+    result = ctx.engine.run(strategy_id, context, overrides=overrides or None, params=args.get("params"))
     rows = [_clean_obj(r) for r in (getattr(result, "rows", None) or [])][:30]
     return {
         "strategy_id": strategy_id,
+        "asset_type": asset_type,
+        "timeframe": timeframe,
         "as_of": _clean_value(getattr(result, "as_of", as_of)),
         "total": int(getattr(result, "total", 0) or 0),
         "elapsed_ms": round(float(getattr(result, "elapsed_ms", 0.0) or 0.0)),
@@ -841,18 +858,25 @@ def _create_signal_strategy(args: dict[str, Any], ctx: ToolContext) -> dict[str,
         "kind": kind,
         "conditions": conditions,
         "enabled": True,
-        "timeframe": "daily",
-        "min_bars": 0,
+        "timeframe": str(args.get("timeframe") or "daily"),
+        "min_bars": int(args.get("min_bars") or 0),
     }
     try:
         custom_signals.validate(sig)
     except ValueError as exc:
-        raise ValueError(f"{exc}。{_SIGNAL_FIELD_HINT}") from exc
+        from app.strategy.intraday_features import INTRADAY_FEATURES
+
+        hint = (
+            "盘中可用字段: " + ", ".join(INTRADAY_FEATURES)
+            if sig["timeframe"] == "intraday" else _SIGNAL_FIELD_HINT
+        )
+        raise ValueError(f"{exc}。{hint}") from exc
     custom_signals.save_one(ctx.data_dir, sig)
     _invalidate_custom_signals(ctx.data_dir, ctx.repo)
     return {
         "created": True,
-        "signal": {"id": sig["id"], "name": name, "kind": kind, "conditions": conditions},
+        "signal": {"id": sig["id"], "name": name, "kind": kind, "conditions": conditions,
+                   "timeframe": sig["timeframe"], "min_bars": sig["min_bars"]},
         "note": "已写入信号库并默认启用, 可在「信号库」页面查看/编辑/删除; 创建成功后可让用户在策略里引用。",
     }
 
@@ -1376,6 +1400,9 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
 
 
 def _local_tool_schemas() -> list[dict[str, Any]]:
+    from app.strategy.intraday_features import INTRADAY_FEATURES
+
+    intraday_fields = "/".join(INTRADAY_FEATURES)
     return [
         _schema(
             "get_stock_quote",
@@ -1470,8 +1497,12 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
         ),
         _schema(
             "run_strategy",
-            "以最新交易日报酬面执行一个策略并返回命中标的列表(≤30 行)。strategy_id 可先用 list_strategies 查询。",
-            {"strategy_id": {"type": "string", "description": "策略 id"}},
+            "执行已保存策略并返回命中列表(≤30 行)。默认按策略声明选择资产/周期，分钟策略读取最新分钟分区。"
+            "这是单次筛选，持续分钟策略提醒尚未接通；日线监控需另行配置。strategy_id 可先用 list_strategies 查询。",
+            {"strategy_id": {"type": "string", "description": "策略 id"},
+             "asset_type": {"type": "string", "enum": ["stock", "etf"], "description": "默认按策略声明选择"},
+             "timeframe": {"type": "string", "enum": ["1d", "1m"], "description": "默认按策略声明选择"},
+             "params": {"type": "object", "description": "本次运行的参数覆盖，不改已保存参数"}},
             ["strategy_id"],
         ),
         _schema(
@@ -1498,10 +1529,15 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
             "字段如 close/open/high/low/volume/change_pct/turnover_rate/ma5/ma10/ma20/ma60/"
             "macd_dif/macd_dea/macd_hist/boll_upper/boll_lower/kdj_k/kdj_d/kdj_j/rsi_6/rsi_14/"
             "vol_ratio_5d/high_60d/low_60d/momentum_5d 等; 上穿/下穿用天数偏移表达"
-            "(如 close>field:ma20 且 1 日前 close<=field:ma20 即金叉)。",
+            "(如 close>field:ma20 且 1 日前 close<=field:ma20 即金叉)。"
+            f"timeframe=intraday 时仅使用 {intraday_fields}，"
+            "额外支持 cross_up/cross_down，不支持日期偏移。"
+            "任意分钟滚动公式请用 create_strategy 创建 minute_filter 策略。",
             {
                 "name": {"type": "string", "description": "信号名称, 简洁中文 (如 放量突破20日线)"},
                 "kind": {"type": "string", "enum": ["entry", "exit", "both"], "description": "entry=入场信号, exit=出场信号, both=两者"},
+                "timeframe": {"type": "string", "enum": ["daily", "intraday"], "description": "默认 daily；盘中信号用 intraday"},
+                "min_bars": {"type": "integer", "minimum": 0, "maximum": 240, "description": "盘中信号最少已完成分钟根数"},
                 "conditions": {
                     "type": "array",
                     "maxItems": 8,
@@ -1510,7 +1546,7 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
                         "type": "object",
                         "properties": {
                             "left": {"type": "string", "description": "左字段名 (白名单内)"},
-                            "op": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="], "description": "比较运算符"},
+                            "op": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!=", "cross_up", "cross_down"], "description": "cross_up/cross_down 仅用于盘中信号"},
                             "right": {"type": "string", "description": "数字 (如 1.5) 或字段引用 'field:字段名'"},
                             "leftDays": {"type": "integer", "description": "左字段取 N 个交易日前 (0-60, 默认 0)"},
                             "rightDays": {"type": "integer", "description": "右字段取 N 个交易日前 (仅 right 为字段时有效, 默认 0)"},
@@ -1527,6 +1563,7 @@ def _local_tool_schemas() -> list[dict[str, Any]]:
             "① 先调用 create_strategy(show_guide=true) 获取策略编写规范 "
             "(META 字段/信号函数契约/示例代码), 不要跳过这步凭印象写; "
             "② 严格按规范写出完整策略 Python 源码后, 调用 create_strategy(name, description, code) 保存。"
+            "支持分钟策略 minute_filter（timeframes=['1m']，filter_minute_history）与日线策略，"
             "适用于声明式信号表达不了的复杂逻辑 (多因子评分、自定义列、跨日时序)。"
             "简单思路优先用 create_signal_strategy。保存后为 research_only 草稿态, 需用户在策略页发布才生效。",
             {
@@ -1631,6 +1668,7 @@ async def execute_assistant_tool(name: str, args: dict[str, Any], ctx: ToolConte
         name,
         args,
         engine=ctx.engine,
+        repo=ctx.repo,
         data_dir=str(ctx.data_dir) if ctx.data_dir else None,
     )
 
