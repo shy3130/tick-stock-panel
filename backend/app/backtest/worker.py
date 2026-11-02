@@ -41,8 +41,24 @@ def _env_int(name: str, default: int) -> int:
 # worker RSS 上限 (issue #516): 超限 terminate 并返回明确错误, 而不是把整机
 # 拖进 swap/内存节流假死。默认 6GiB; 0 = 不限制。刻意不用 RLIMIT_AS ——
 # polars/numpy 的虚拟内存映射远大于实际 RSS, AS 上限会大量误杀。
-_WORKER_RSS_LIMIT_BYTES = _env_int("TICK_WORKER_RSS_LIMIT_BYTES", 6 * 1024**3)
 _RSS_CHECK_INTERVAL_S = 2.0
+
+
+def _effective_rss_limit_bytes() -> int:
+    """本次任务生效的 worker RSS 上限 (字节)。
+
+    优先级: 环境变量 TICK_WORKER_RSS_LIMIT_BYTES 显式设置时最高 (部署级覆盖,
+    含 0=不限制, 非法值回退内置默认); 否则用设置页偏好 (GiB, 0=不限制)。
+    每任务解析一次而非模块导入时求值 —— 设置页保存后对下一个回测/优化任务
+    即生效, 无需重启; 且运行中任务的上限保持确定, 不受中途改设置影响。
+    """
+    raw = os.environ.get("TICK_WORKER_RSS_LIMIT_BYTES", "").strip()
+    if raw:
+        return _env_int("TICK_WORKER_RSS_LIMIT_BYTES", 6 * 1024**3)
+    # 函数内导入: spawn 子进程会重导入本模块, 保持模块级 import 轻量
+    from app.services import preferences
+
+    return preferences.get_backtest_worker_rss_limit_gib() * 1024**3
 
 
 def _process_rss_bytes(pid: int | None) -> int:
@@ -323,6 +339,7 @@ def run_worker_task(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run one complete task in a spawned process and wait for deterministic exit."""
+    rss_limit_bytes = _effective_rss_limit_bytes()
     context = mp.get_context("spawn")
     events = context.Queue()
     process_cancel = context.Event()
@@ -359,24 +376,25 @@ def run_worker_task(
                         "backtest worker did not stop within 5 seconds after cancellation"
                     )
             if (
-                _WORKER_RSS_LIMIT_BYTES > 0
+                rss_limit_bytes > 0
                 and now - last_rss_check >= _RSS_CHECK_INTERVAL_S
             ):
                 last_rss_check = now
                 # getattr: 测试替身进程可能没有 pid 属性, 缺失时按 0 处理 (不触发)
                 rss = _process_rss_bytes(getattr(process, "pid", None))
-                if rss > _WORKER_RSS_LIMIT_BYTES:
+                if rss > rss_limit_bytes:
                     logger.error(
                         "backtest worker rss %.2f GiB exceeds limit %.2f GiB, terminating",
-                        rss / 1024**3, _WORKER_RSS_LIMIT_BYTES / 1024**3,
+                        rss / 1024**3, rss_limit_bytes / 1024**3,
                     )
                     process.terminate()
                     process.join(timeout=5.0)
                     raise BacktestWorkerError(
-                        f"回测任务内存超过上限 {_WORKER_RSS_LIMIT_BYTES / 1024**3:.1f}GiB"
+                        f"回测任务内存超过上限 {rss_limit_bytes / 1024**3:.1f}GiB"
                         f" (当前 {rss / 1024**3:.1f}GiB), 已中止。"
-                        "可缩小回测时间范围/标的数量, 或用环境变量 "
-                        "TICK_WORKER_RSS_LIMIT_BYTES 调整上限 (0=不限制)。"
+                        "可在 设置 → 系统设置 → 性能与内存 调高「回测内存上限」"
+                        "(0 = 不限制), 或缩小回测时间范围/标的数量。"
+                        "(环境变量 TICK_WORKER_RSS_LIMIT_BYTES 优先于界面设置)"
                     )
             try:
                 message = events.get(timeout=0.1)

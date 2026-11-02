@@ -2417,6 +2417,8 @@ export interface Preferences {
   daily_batch_symbols: number
   /** minute-batch 单请求标的数上限, 同时是前端分块大小 */
   minute_batch_symbols: number
+  /** 回测/优化 worker RSS 内存上限 (GiB), 0 = 不限制 (系统设置 → 性能与内存) */
+  backtest_worker_rss_limit_gib: number
   limit_ladder_monitor_enabled: boolean
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
@@ -3232,6 +3234,11 @@ export const api = {
     request<{ minute_batch_symbols: number }>('/api/settings/preferences/minute-batch-symbols', {
       method: 'PUT',
       body: JSON.stringify({ size }),
+    }),
+  updateBacktestWorkerRssLimit: (gib: number) =>
+    request<{ backtest_worker_rss_limit_gib: number }>('/api/settings/preferences/backtest-worker-rss-limit', {
+      method: 'PUT',
+      body: JSON.stringify({ gib }),
     }),
 
   // 声效语音包 (自定义提示音, data/sound_packs)
