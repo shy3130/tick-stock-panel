@@ -17,14 +17,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
-import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.services.mining_jobs import ACTIVE_RUN_STATUSES
+import psutil
+
+from app.services.mining_jobs import ACTIVE_RUN_STATUSES, MiningRunStoreError
 from app.services.mining_process_lock import (
     MiningProcessLock,
     MiningProcessLockError,
@@ -40,10 +41,64 @@ logger = logging.getLogger(__name__)
 STALE_AFTER_SECONDS = 600.0
 _TERMINATE_GRACE_SECONDS = 6.0
 _RELEASE_WAIT_SECONDS = 5.0
+_RECOVERY_LOCK = threading.RLock()
 
 
 class MiningLockAdminError(ValueError):
     """强制释放被拒绝 (fail-closed), message 即拒绝原因。"""
+
+
+def _finish_takeover(app_state: Any, lock: MiningProcessLock) -> None:
+    """Only a new lock owner may recover orphaned runs; never repeat on live runs."""
+    try:
+        manager = getattr(app_state, "mining_manager", None)
+        if manager is not None:
+            manager.recover_interrupted()
+    except (MiningRunStoreError, OSError) as exc:
+        app_state.mining_lock_acquired = False
+        lock.release()
+        raise MiningLockAdminError("已获取锁，但恢复任务状态失败，请检查数据目录权限后重试") from exc
+    app_state.mining_lock_acquired = True
+
+
+def ensure_mining_lock(app_state: Any) -> bool:
+    """Recover a free lock without terminating processes or deleting lock files."""
+    with _RECOVERY_LOCK:
+        lock = getattr(app_state, "mining_process_lock", None)
+        if lock is None:
+            # Keep the existing contract for embedded API users without the app lifespan.
+            return bool(getattr(app_state, "mining_lock_acquired", True))
+        if lock.acquired:
+            app_state.mining_lock_acquired = True
+            return True
+        app_state.mining_lock_acquired = False
+        try:
+            lock.acquire()
+        except MiningProcessLockError:
+            return False
+        except OSError as exc:
+            raise MiningLockAdminError("无法获取挖掘锁，请检查数据目录权限后重试") from exc
+        _finish_takeover(app_state, lock)
+        return True
+
+
+def check_and_recover(app_state: Any) -> dict[str, Any]:
+    with _RECOVERY_LOCK:
+        lock = getattr(app_state, "mining_process_lock", None)
+        if lock is None:
+            raise MiningLockAdminError("挖掘锁状态不可用")
+        ensure_mining_lock(app_state)
+        return lock_status(app_state.repo.store.data_dir, lock=lock)
+
+
+def force_release_for_app(app_state: Any, *, expected_pid: int | None = None) -> dict[str, Any]:
+    with _RECOVERY_LOCK:
+        lock = getattr(app_state, "mining_process_lock", None)
+        if lock is None:
+            raise MiningLockAdminError("挖掘锁状态不可用")
+        result = force_release(app_state.repo.store.data_dir, lock, expected_pid=expected_pid)
+        _finish_takeover(app_state, lock)
+        return result
 
 
 def lock_status(
@@ -70,14 +125,21 @@ def lock_status(
         # 让这类锁也能走人工确认的强制释放, 而不是让用户手动猜进程。
         located_pid = locate_lock_holder_pid(data_dir)
         if located_pid is not None:
-            holder = {"pid": located_pid, "role": "unknown"}
-            holder_source = "os-scan"
-    mine = owns_lock or (held and bool(holder) and holder.get("pid") == pid)
+            try:
+                created_at = psutil.Process(located_pid).create_time()
+            except psutil.Error:
+                pass  # Unverifiable identity must not enable process termination.
+            else:
+                holder = {"pid": located_pid, "role": "unknown", "process_started_at": created_at}
+                holder_source = "os-scan"
+    mine = owns_lock if lock is not None else (held and bool(holder) and holder.get("pid") == pid)
     holder_pid = holder.get("pid") if holder else None
-    holder_alive = _pid_alive(holder_pid) if holder_pid else False
+    holder_alive = bool(mine) or (_pid_alive(holder_pid) if holder_pid else False)
     pid_consistent = (
-        _pid_matches_start_time(holder_pid, holder.get("started_at"))
-        if holder_alive
+        _pid_matches_start_time(
+            holder_pid, holder.get("started_at"), holder.get("process_started_at"),
+        )
+        if holder_alive and not mine
         else True
     )
     active_runs = _count_active_runs(data_dir)
@@ -114,6 +176,7 @@ def force_release(
     lock: MiningProcessLock,
     *,
     stale_after: float = STALE_AFTER_SECONDS,
+    expected_pid: int | None = None,
 ) -> dict[str, Any]:
     """终止陈旧持有者并让本进程接管锁; 任何不满足条件的情况直接拒绝。"""
     status = lock_status(data_dir, lock=lock, stale_after=stale_after)
@@ -122,6 +185,22 @@ def force_release(
     if lock.acquired:
         raise MiningLockAdminError("当前进程已持有挖掘锁")
     target_pid = int(status["holder"]["pid"])
+    if expected_pid is not None and expected_pid != target_pid:
+        raise MiningLockAdminError("挖掘锁持有者已变化，请重新检查后确认")
+    if target_pid == os.getpid():
+        raise MiningLockAdminError("不能终止当前后端进程")
+
+    try:
+        process = psutil.Process(target_pid)
+        created_at = process.create_time()
+    except psutil.Error as exc:
+        raise MiningLockAdminError("无法核验持有者进程，请重新检查") from exc
+    recorded = status["holder"].get("process_started_at")
+    if recorded is not None:
+        if not isinstance(recorded, (int, float)) or not abs(created_at - recorded) <= 0.01:
+            raise MiningLockAdminError("持有者进程已变化，请重新检查后确认")
+    elif created_at > datetime.fromisoformat(status["holder"]["started_at"]).timestamp() + 1:
+        raise MiningLockAdminError("持有者进程已变化，请重新检查后确认")
 
     logger.warning(
         "强制释放挖掘锁: 终止持有者 pid=%s (持有于 %s, 存储静默 %ss)",
@@ -129,7 +208,7 @@ def force_release(
         status["holder"].get("started_at"),
         status["store_idle_seconds"],
     )
-    _terminate_pid(target_pid)
+    _terminate_process(process)
     if not _wait_condition(
         lambda: (not _pid_alive(target_pid)) or (not probe_lock_held(data_dir)),
         _TERMINATE_GRACE_SECONDS + _RELEASE_WAIT_SECONDS,
@@ -167,14 +246,14 @@ def _classify(
         return False, "锁由当前后端持有"
     if not holder_known:
         return False, (
-            "锁文件为旧格式或不可读, 且无法从系统层面定位持有进程 — "
-            "请手动结束后端残留进程后重启面板"
+            "暂时无法确认占用进程，可能是旧版实例或系统限制读取。"
+            "请正常退出其他面板实例，再点击“检查并恢复挖掘”"
         )
     if not holder_alive:
         # 内核会在进程退出时释放 flock, 理论上到不了这里; 防御性兜底
         return False, "持有者进程已不存在, 锁应已释放 — 请刷新状态"
     if not pid_consistent:
-        return False, "持有者 pid 已被其他进程复用, 拒绝自动终止 — 请手动确认"
+        return False, "无法核验持有者身份或 pid 已被复用，请重新检查；不会自动终止进程"
     if active_runs:
         return False, f"仍有 {active_runs} 个进行中的挖掘运行, 不能终止持有者"
     if store_idle is not None and store_idle < stale_after:
@@ -188,45 +267,21 @@ def _classify(
 def _pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
+    # os.kill(pid, 0) sends a console event on Windows; psutil uses read-only OS queries.
+    return psutil.pid_exists(pid)
+
+
+def _pid_matches_start_time(pid: int, started_at: Any, process_started_at: Any = None) -> bool:
+    """Verify process identity on every platform, including after late lock acquisition."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        actual = psutil.Process(pid).create_time()
+        if process_started_at is not None:
+            return isinstance(process_started_at, (int, float)) and abs(actual - process_started_at) <= 0.01
+        # Legacy started_at records lock acquisition, which can be long after process start.
+        recorded = datetime.fromisoformat(started_at).timestamp()
+        return actual <= recorded + 1
+    except (psutil.Error, OSError, TypeError, ValueError):
         return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _pid_matches_start_time(pid: int, started_at: Any) -> bool:
-    """POSIX 下比对进程实际启动时间与锁内记录, 排除 pid 复用误杀。
-
-    无法获取 (Windows / ps 不可用 / 记录缺失) 时返回 True —
-    该信号只是附加保险, 主判定靠「无活跃 run + 存储静默」。
-    """
-    if os.name != "posix" or not isinstance(started_at, str):
-        return True
-    try:
-        recorded = datetime.fromisoformat(started_at)
-    except ValueError:
-        return True
-    try:
-        output = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "lstart="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.strip()
-        actual = datetime.strptime(output, "%a %b %d %H:%M:%S %Y")
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return True
-    if recorded.tzinfo is not None:
-        # ps lstart 是本地时间墙钟; 统一成同口径再比
-        recorded = recorded.astimezone().replace(tzinfo=None)
-    # ps 的 lstart 无亚秒精度, 放宽到 120s
-    return abs((actual - recorded).total_seconds()) <= 120
 
 
 def _runs_dir(data_dir: Path | str) -> Path:
@@ -265,13 +320,14 @@ def _store_idle_seconds(data_dir: Path | str, *, now: float) -> float | None:
     return max(0.0, now - latest)
 
 
-def _terminate_pid(pid: int) -> None:
+def _terminate_process(process: psutil.Process) -> None:
     try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+        # psutil checks for PID reuse before signalling/terminating this process.
+        process.terminate()
+    except psutil.NoSuchProcess:
         return
-    except PermissionError as exc:
-        raise MiningLockAdminError(f"无权限终止持有者 pid={pid}") from exc
+    except psutil.AccessDenied as exc:
+        raise MiningLockAdminError(f"无权限终止持有者 pid={process.pid}") from exc
 
 
 def _wait_condition(condition, timeout: float) -> bool:

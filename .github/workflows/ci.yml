@@ -62,3 +62,25 @@ jobs:
 
       - name: 构建 (tsc + vite)
         run: pnpm build
+
+  windows-mining-lock:
+    name: Windows mining lock recovery
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: 设置 Python
+        run: uv python install 3.12
+      - name: 安装依赖
+        run: uv sync --extra dev --frozen
+      - name: 原生 Windows 锁、进程、接管和桌面启动回归
+        run: >-
+          uv run pytest tests/test_mining_process_lock.py
+          tests/test_mining_lock_admin.py tests/test_main_mining_lifespan.py
+          tests/test_desktop_startup.py -q
