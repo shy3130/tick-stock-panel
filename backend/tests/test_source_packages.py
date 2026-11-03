@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -42,7 +43,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(packages, "_started", set())
     monkeypatch.setattr(secrets_store, "_cache", None)
     monkeypatch.setattr(secrets_store, "_cache_sig", None)
-    monkeypatch.setattr(preferences, "load", lambda: {})
+    monkeypatch.setattr(preferences, "_cache", None)
+    monkeypatch.setattr(preferences, "_cache_sig", None)
     return tmp_path
 
 
@@ -92,6 +94,36 @@ def test_install_routes_and_reload_keeps_instance(isolated):
     loader.load_all()
     assert loader.get_provider("demo_source") is provider
     assert loader.list_plugins()[0]["origin"] == "external"
+
+
+def test_plugin_link_labels_and_markdown_survive_install_and_restart(isolated):
+    from app.api.settings import router as settings_router
+
+    fields = {
+        "homepage": "https://example.com/docs", "homepage_label": "使用文档",
+        "key_manage_url": "https://example.com/account", "key_manage_label": "获取个人 Key",
+        "description": "## 连接说明\n使用 **个人 Key**。",
+        "usage_notes": ["阅读 [文档](https://example.com/docs)。"],
+    }
+    data = bundle(**fields)
+    preview, _ = packages.inspect_archive(data)
+    assert all(preview["manifest"][key] == value for key, value in fields.items())
+    install(data)
+    cold_restart()
+    app = FastAPI()
+    app.include_router(settings_router)
+    with TestClient(app) as client:
+        response = client.get("/api/settings/data-sources")
+    assert response.status_code == 200
+    plugin = next(p for p in response.json()["plugins"] if p["name"] == "demo_source")
+    assert all(plugin[key] == value for key, value in fields.items())
+
+
+@pytest.mark.parametrize("field", ["homepage_label", "key_manage_label"])
+@pytest.mark.parametrize("value", [123, [], "x" * 201])
+def test_plugin_link_labels_require_short_text(isolated, field, value):
+    with pytest.raises(ValueError, match=field):
+        packages.inspect_archive(bundle(**{field: value}))
 
 
 def test_key_first_probe_then_save_and_only_refresh_target(isolated):
@@ -198,6 +230,148 @@ def test_disable_uninstall_blocks_all_routing_references(isolated, monkeypatch):
     assert not loader.names()
     assert not packages.directory("demo_source").exists()
     assert secrets_store.load()["demo_source_api_key"] == "keep-me"
+
+
+def test_confirmed_uninstall_resets_only_its_routes_and_preserves_keys(isolated):
+    from app.data_providers.capabilities import CAPABILITY_REGISTRY
+
+    install(bundle())
+    routes = {cap["field"]: "demo_source" for cap in CAPABILITY_REGISTRY if cap["field"]}
+    routes["daily_data_provider"] = "other_source"
+    routes["depth5_data_provider"] = "DEMO_SOURCE"
+    preferences.save({**routes, "realtime_quotes_enabled": False})
+    secrets_store.save({"demo_source_api_key": "keep-me"})
+
+    result = packages.manage("demo_source", "remove", reset_routes=True)
+
+    expected = {cap["field"]: cap["default"] for cap in CAPABILITY_REGISTRY if cap["field"]}
+    expected["daily_data_provider"] = "other_source"
+    assert preferences.load() == {**expected, "realtime_quotes_enabled": False}
+    assert "恢复默认" in result["message"]
+    assert packages.read_state("demo_source")["remove"]
+    with pytest.raises(ProviderRequestError):
+        loader.get_provider("demo_source").get_realtime()
+    cold_restart()
+    assert not loader.names()
+    assert not packages.directory("demo_source").exists()
+    assert secrets_store.load()["demo_source_api_key"] == "keep-me"
+
+
+def test_uninstall_restores_installation_when_routing_write_fails(isolated, monkeypatch):
+    install(bundle())
+    preferences.save({"realtime_data_provider": "demo_source"})
+    before = packages.read_state("demo_source")
+    provider = loader.get_provider("demo_source")
+
+    def fail_write(_updates):
+        raise OSError("preferences are read-only")
+
+    monkeypatch.setattr(preferences, "save", fail_write)
+    with pytest.raises(OSError, match="read-only"):
+        packages.manage("demo_source", "remove", reset_routes=True)
+    assert packages.read_state("demo_source") == before
+    assert preferences.load()["realtime_data_provider"] == "demo_source"
+    assert provider.get_realtime()[0]["last"] == 1
+
+
+def test_uninstall_keeps_routes_when_installation_write_fails(isolated, monkeypatch):
+    install(bundle())
+    preferences.save({"depth5_data_provider": "demo_source"})
+    before = packages.read_state("demo_source")
+
+    def fail_write(_name, _state):
+        raise OSError("plugin state is read-only")
+
+    monkeypatch.setattr(packages, "write_state", fail_write)
+    with pytest.raises(OSError, match="read-only"):
+        packages.manage("demo_source", "remove", reset_routes=True)
+    assert preferences.load()["depth5_data_provider"] == "demo_source"
+    assert packages.read_state("demo_source") == before
+    assert loader.get_provider("demo_source").get_realtime()[0]["last"] == 1
+
+
+def test_uninstall_restores_routes_and_provider_when_refresh_fails(isolated, monkeypatch):
+    install(bundle())
+    preferences.save({"realtime_data_provider": "demo_source"})
+    before = packages.read_state("demo_source")
+    original_refresh = loader.refresh_plugin
+    calls = 0
+
+    def fail_once(name):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("cannot refresh plugin")
+        return original_refresh(name)
+
+    monkeypatch.setattr(loader, "refresh_plugin", fail_once)
+    with pytest.raises(ValueError, match="cannot refresh"):
+        packages.manage("demo_source", "remove", reset_routes=True)
+    assert packages.read_state("demo_source") == before
+    assert preferences.get_realtime_data_provider() == "demo_source"
+    assert loader.get_provider("demo_source").get_realtime()[0]["last"] == 1
+
+
+def test_management_api_accepts_confirmed_route_reset_and_refreshes_capabilities(isolated, monkeypatch):
+    from app.tickflow import policy
+
+    monkeypatch.setattr("app.services.auth.is_configured", lambda: False)
+    sentinel = object()
+    monkeypatch.setattr(policy, "detect_capabilities", lambda: sentinel)
+    install(bundle())
+    preferences.save({"realtime_data_provider": "demo_source"})
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
+        refused = client.post("/api/custom/source-packages/demo_source/manage", json={"action": "remove"})
+        assert refused.status_code == 400
+        result = client.post("/api/custom/source-packages/demo_source/manage", json={"action": "remove", "reset_routes": True})
+        assert result.status_code == 200
+        assert preferences.get_realtime_data_provider() == "tickflow"
+        assert app.state.capabilities is sentinel
+
+
+def test_cannot_route_back_to_a_plugin_pending_uninstall(isolated):
+    from fastapi import HTTPException
+
+    from app.api.settings import DataProvidersIn, update_data_providers
+
+    install(bundle())
+    packages.manage("demo_source", "remove")
+    with pytest.raises(HTTPException, match="等待卸载"):
+        update_data_providers(DataProvidersIn(realtime_data_provider="demo_source"), SimpleNamespace())
+    assert "realtime_data_provider" not in preferences.load()
+
+
+def test_uninstall_serializes_with_a_concurrent_routing_request(isolated, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.settings import DataProvidersIn, update_data_providers
+
+    install(bundle())
+    preferences.save({"realtime_data_provider": "demo_source"})
+    saving, finish = threading.Event(), threading.Event()
+    original_save = preferences.save
+
+    def delayed_save(updates):
+        saving.set()
+        assert finish.wait(3)
+        return original_save(updates)
+
+    monkeypatch.setattr(preferences, "save", delayed_save)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        removal = executor.submit(packages.manage, "demo_source", "remove", reset_routes=True)
+        assert saving.wait(3)
+        routing = executor.submit(
+            update_data_providers,
+            DataProvidersIn(realtime_data_provider="demo_source"),
+            SimpleNamespace(),
+        )
+        finish.set()
+        removal.result(timeout=3)
+        with pytest.raises(HTTPException, match="等待卸载"):
+            routing.result(timeout=3)
+    assert preferences.get_realtime_data_provider() == "tickflow"
 
 
 def test_handle_delays_close_until_stream_consumed():

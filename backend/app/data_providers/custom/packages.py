@@ -116,6 +116,9 @@ def validate_manifest(doc: dict):
     for key in ("display_name", "description", "api_key_env", "homepage", "key_manage_url", "author", "billing", "billing_note", "install_hint"):
         if key in doc and (not isinstance(doc[key], str) or len(doc[key]) > 4000):
             raise ValueError(f"{key} 必须是文本且不超过 4000 字符")
+    for key in ("homepage_label", "key_manage_label"):
+        if key in doc and (not isinstance(doc[key], str) or len(doc[key]) > 200):
+            raise ValueError(f"{key} 必须是文本且不超过 200 字符")
     if doc.get("api_key_env") and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", doc["api_key_env"]):
         raise ValueError("api_key_env 必须是大写环境变量名")
     for key in ("homepage", "key_manage_url"):
@@ -283,19 +286,34 @@ def referenced_by(name: str) -> list[str]:
     from app.data_providers.capabilities import CAPABILITY_REGISTRY
     from app.services import preferences
     prefs = preferences.load()
-    return [cap["label"] for cap in CAPABILITY_REGISTRY if cap["field"] and prefs.get(cap["field"]) == name]
+    return [cap["label"] for cap in CAPABILITY_REGISTRY if cap["field"] and str(prefs.get(cap["field"], "")).lower() == name]
 
 
-def manage(name: str, action: str) -> dict:
+def manage(name: str, action: str, *, reset_routes: bool = False) -> dict:
+    from app.data_providers.capabilities import CAPABILITY_REGISTRY
+    from app.services import preferences
+
     from . import loader
-    with mutation():
+    with mutation(), preferences.mutation():
         state = read_state(name)
         if not state:
             raise ValueError("外部插件不存在")
+        original_state = state.copy()
+        original_routes = {}
+        route_updates = {}
+        if reset_routes and action != "remove":
+            raise ValueError("只有卸载操作可以同时恢复能力的默认来源")
         if action in ("disable", "remove"):
             refs = referenced_by(name)
-            if refs:
+            if refs and not reset_routes:
                 raise ValueError(f"请先切换这些能力的数据源：{'、'.join(refs)}")
+        if reset_routes:
+            prefs = preferences.load()
+            for cap in CAPABILITY_REGISTRY:
+                field = cap["field"]
+                if field and str(prefs.get(field, "")).lower() == name:
+                    original_routes[field] = prefs[field]
+                    route_updates[field] = cap["default"]
         if action == "rollback":
             if not state.get("previous"):
                 raise ValueError("没有可回退版本")
@@ -312,11 +330,30 @@ def manage(name: str, action: str) -> dict:
         else:
             raise ValueError("不支持的插件操作")
         write_state(name, state)
+        try:
+            if route_updates:
+                preferences.save(route_updates)
+        except Exception:
+            # Do not stop the live provider if the routing change cannot persist.
+            write_state(name, original_state)
+            raise
         if action in ("enable", "disable", "remove"):
-            loader.refresh_plugin(name)
+            try:
+                loader.refresh_plugin(name)
+            except Exception:
+                write_state(name, original_state)
+                if original_routes:
+                    preferences.save(original_routes)
+                loader.refresh_plugin(name)
+                raise
         else:
             loader.refresh_external_metadata(name)
-        return {"name": name, "message": "操作完成" + ("，重启后生效" if action in ("rollback", "remove") else "")}
+        if action == "remove":
+            message = "插件已停用，重启后删除插件文件；已保存的 Key 保留"
+            if route_updates:
+                message = "引用此插件的能力已恢复默认来源。" + message
+            return {"name": name, "message": message}
+        return {"name": name, "message": "操作完成" + ("，重启后生效" if action == "rollback" else "")}
 
 
 def discover():

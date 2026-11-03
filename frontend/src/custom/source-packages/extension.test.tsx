@@ -7,7 +7,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import { InstallDialog, PackageActions, PackageInstaller } from './extension'
 import type { PluginDataSourceItem } from '@/lib/api'
 
-const mocks = vi.hoisted(() => ({ inspect: vi.fn(), install: vi.fn(), manage: vi.fn(), route: vi.fn(), matrix: vi.fn(), toast: vi.fn(), close: vi.fn(), done: vi.fn() }))
+const mocks = vi.hoisted(() => ({ inspect: vi.fn(), install: vi.fn(), manage: vi.fn(), route: vi.fn(), matrix: vi.fn(), toast: vi.fn(), close: vi.fn(), done: vi.fn(), refresh: vi.fn() }))
 vi.mock('@/lib/api', () => ({ api: { inspectSourcePackage: mocks.inspect, installSourcePackage: mocks.install, manageSourcePackage: mocks.manage, updateDataProviders: mocks.route, capabilityMatrix: mocks.matrix } }))
 vi.mock('@/components/Toast', () => ({ toast: mocks.toast }))
 let root: Root
@@ -34,7 +34,7 @@ beforeEach(() => {
   Object.values(mocks).forEach(fn => fn.mockReset())
   mocks.inspect.mockResolvedValue(preview)
   mocks.install.mockResolvedValue({ name: 'demo', message: '安装完成' })
-  mocks.matrix.mockResolvedValue({ capabilities: [{ id: 'daily', label: '日K', field: 'daily_data_provider', current_display: '原数据源', candidates: [{ name: 'demo' }] }] })
+  mocks.matrix.mockResolvedValue({ capabilities: [{ id: 'daily', label: '日K', field: 'daily_data_provider', current: 'tickflow', default: 'tickflow', pending: [], current_display: '原数据源', candidates: [{ name: 'demo' }] }] })
   mocks.route.mockResolvedValue({})
 })
 afterEach(() => { act(() => root?.unmount()); qc?.clear(); node.innerHTML = '' })
@@ -84,7 +84,81 @@ it('only selected routing fields are changed', async () => {
 it('failed removal shows routing references without closing confirmation', async () => {
   mocks.manage.mockRejectedValue(new Error('请先切换五档数据源'))
   await render(<PackageActions plugin={plugin} refresh={mocks.done} />)
-  await click(button('卸载插件')); await click(button('确认'))
+  await click(button('卸载插件')); await vi.waitFor(() => expect(button('确认卸载').disabled).toBe(false)); await click(button('确认卸载'))
   expect(node.textContent).toContain('请先切换五档数据源')
   expect(node.querySelector('[role="dialog"]')).not.toBeNull()
+})
+
+const amberPlugin: PluginDataSourceItem = {
+  name: 'amber', display_name: 'Amber', origin: 'external', version: '1.0.0',
+  enabled: true, available: true, datasets: ['realtime'], runtime: 'none',
+  status: '已就绪', description: '', install_hint: '',
+}
+const capability = {
+  id: 'realtime', label: '实时行情', field: 'realtime_data_provider',
+  current: 'amber', default: 'tickflow',
+  candidates: [{ name: 'tickflow', display: 'TickFlow' }],
+  pending: [],
+}
+
+it('lists the affected capabilities before a single confirmed uninstall', async () => {
+  mocks.matrix.mockResolvedValue({ capabilities: [capability] })
+  mocks.manage.mockResolvedValue({ name: 'amber', message: '已安排卸载' })
+  await render(<PackageActions plugin={amberPlugin} refresh={mocks.refresh} />)
+  await click(button('卸载插件'))
+  await vi.waitFor(() => expect(button('确认卸载').disabled).toBe(false))
+  const dialog = node.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('实时行情')
+  expect(dialog.textContent).toContain('TickFlow')
+  expect(dialog.textContent).toContain('无需提前逐项切换')
+  expect(mocks.manage).not.toHaveBeenCalled()
+  await click(button('确认卸载'))
+  expect(mocks.manage).toHaveBeenCalledWith('amber', 'remove', true)
+  expect(mocks.refresh).toHaveBeenCalledOnce()
+  expect(node.querySelector('[role="dialog"]')).toBeNull()
+})
+
+it('blocks confirmation until the routing check succeeds and supports retry', async () => {
+  mocks.matrix.mockResolvedValue({ capabilities: [capability] })
+  await render(<PackageActions plugin={amberPlugin} refresh={mocks.refresh} />)
+  mocks.matrix.mockRejectedValue(new Error('network unavailable'))
+  await click(button('卸载插件'))
+  await vi.waitFor(() => expect(node.querySelector('[role="alert"]')?.textContent).toContain('无法读取'))
+  expect(button('确认卸载').disabled).toBe(true)
+  expect(mocks.manage).not.toHaveBeenCalled()
+  mocks.matrix.mockResolvedValue({ capabilities: [] })
+  await click(button('重新读取能力'))
+  await vi.waitFor(() => expect(button('确认卸载').disabled).toBe(false))
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain('可直接卸载')
+})
+
+it('explains when a default source cannot take over and cancellation makes no changes', async () => {
+  mocks.matrix.mockResolvedValue({ capabilities: [{ ...capability, candidates: [] }] })
+  await render(<PackageActions plugin={amberPlugin} refresh={mocks.refresh} />)
+  await click(button('卸载插件'))
+  await vi.waitFor(() => expect(node.textContent).toContain('相应能力将暂停取数'))
+  await click(button('取消'))
+  expect(mocks.manage).not.toHaveBeenCalled()
+  expect(node.querySelector('[role="dialog"]')).toBeNull()
+})
+
+it('keeps a failed uninstall available for retry without reporting success', async () => {
+  mocks.matrix.mockResolvedValue({ capabilities: [capability] })
+  mocks.manage.mockRejectedValue(new Error('插件目录不可写'))
+  await render(<PackageActions plugin={amberPlugin} refresh={mocks.refresh} />)
+  await click(button('卸载插件'))
+  await vi.waitFor(() => expect(button('确认卸载').disabled).toBe(false))
+  await click(button('确认卸载'))
+  expect(node.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain('插件目录不可写')
+  expect(mocks.refresh).not.toHaveBeenCalled()
+  expect(button('确认卸载').disabled).toBe(false)
+})
+
+it('shows the restart status instead of controls after scheduling uninstall', async () => {
+  await render(<PackageActions plugin={{ ...amberPlugin, pending_remove: true, enabled: false, available: false }} refresh={mocks.refresh} />)
+  expect(node.textContent).toContain('卸载已安排')
+  expect(node.textContent).toContain('API Key 保留')
+  expect(button('卸载插件')).toBeUndefined()
+  expect(button('选择启用能力')).toBeUndefined()
+  expect(mocks.matrix).not.toHaveBeenCalled()
 })

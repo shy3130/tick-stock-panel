@@ -77,11 +77,15 @@ async def install(file: Annotated[UploadFile, File()], digest: str = Form(...), 
 
 class Action(BaseModel):
     action: str
+    reset_routes: bool = False
 
 
 @router.post("/{name}/manage")
-def manage(name: str, body: Action):
+def manage(name: str, body: Action, request: Request):
     try:
-        return packages.manage(name, body.action)
+        result = packages.manage(name, body.action, reset_routes=body.reset_routes)
     except (ValueError, OSError, TypeError, yaml.YAMLError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    from app.tickflow.policy import detect_capabilities
+    request.app.state.capabilities = detect_capabilities()
+    return result

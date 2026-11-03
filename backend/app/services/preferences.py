@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.services.fs_utils import atomic_write_text
@@ -57,7 +58,14 @@ def load() -> dict:
     return copy.deepcopy(_cache)
 
 
-_SAVE_LOCK = threading.Lock()
+_SAVE_LOCK = threading.RLock()
+
+
+@contextmanager
+def mutation():
+    """Serialize multi-step preference changes with ordinary merge-writes."""
+    with _SAVE_LOCK:
+        yield
 
 
 def save(updates: dict) -> dict:
