@@ -173,6 +173,22 @@ def test_custom_provider_utc_frame_selfhealed(monkeypatch):
     assert df["datetime"].to_list() == [datetime(2026, 1, 15, 9, 30), datetime(2026, 1, 15, 13, 0)]
 
 
+def test_custom_provider_normalizes_column_order_and_price_types(monkeypatch):
+    frame = _minute_frame([datetime(2026, 1, 15, 9, 30)]).with_columns(
+        pl.col("volume").cast(pl.Int64),
+    ).select("symbol", "open", "high", "low", "close", "volume", "amount", "datetime")
+    provider = MagicMock()
+    provider.get_minute.return_value = frame
+    _setup_custom_provider(monkeypatch, provider)
+
+    df, fallback = kline_sync._try_custom_minute(
+        ["600519.SH"], datetime(2026, 1, 15, 9, 25), datetime(2026, 1, 15, 15, 5), asset_type="stock",
+    )
+    assert fallback is False
+    assert df.columns == kline_sync.CANONICAL_MINUTE_COLS
+    assert df.schema["volume"] == pl.Float64
+
+
 def test_custom_provider_garbage_datetime_fails_closed(monkeypatch):
     """插件返回无法识别口径 → fail-closed,不请求其他数据源。"""
     mock_provider = MagicMock()

@@ -123,3 +123,35 @@ def test_partial_provider_fields_filled_per_row(tmp_path, monkeypatch) -> None:
     by_symbol = {r["symbol"]: r for r in df.to_dicts()}
     assert by_symbol["600000.SH"]["float_shares"] == pytest.approx(5.0e8)
     assert by_symbol["000001.SZ"]["float_shares"] == pytest.approx(1.9e10)
+
+
+def test_daily_price_limits_are_not_inherited_from_old_metadata(tmp_path, monkeypatch):
+    _write_existing(tmp_path)
+    monkeypatch.setattr(isync, "_fetch_instruments_via_provider", lambda: _provider_rows("600000.SH"))
+
+    isync.sync_instruments(tmp_path)
+    row = pl.read_parquet(tmp_path / "instruments/instruments.parquet").row(0, named=True)
+    assert row["float_shares"] == pytest.approx(2.9e10)
+    assert row["limit_up"] is None
+    assert row["limit_down"] is None
+
+
+@pytest.mark.parametrize(("mode", "current_limits"), [("none", False), ("free", False), ("api_key", True)])
+def test_only_paid_metadata_can_supply_todays_price_limits(tmp_path, monkeypatch, mode, current_limits):
+    from types import SimpleNamespace
+
+    from app.tickflow import client
+
+    item = {"symbol": "002172.SZ", "name": "澳洋健康", "ext": {
+        "limit_up": 6.50, "limit_down": 5.32, "float_shares": 765140730.0,
+    }}
+    monkeypatch.setattr(isync, "_fetch_instruments_via_provider", lambda: None)
+    monkeypatch.setattr(isync, "get_client", lambda: SimpleNamespace(
+        exchanges=SimpleNamespace(get_instruments=lambda *args, **kwargs: [item]),
+    ))
+    monkeypatch.setattr(client, "current_mode", lambda: mode)
+    isync.sync_instruments(tmp_path)
+    row = pl.read_parquet(tmp_path / "instruments/instruments.parquet").row(0, named=True)
+    assert row["limit_up"] == (6.50 if current_limits else None)
+    assert row["limit_down"] == (5.32 if current_limits else None)
+    assert row["float_shares"] == 765140730.0

@@ -86,6 +86,22 @@ def test_multi_date_input_writes_one_partition_per_day(tmp_path):
     assert _read(minute_dir / "date=2026-01-06" / "part.parquet").height == 1
 
 
+def test_merge_aligns_provider_columns_and_legacy_numeric_types(tmp_path):
+    minute_dir = tmp_path / "kline_minute"
+    _write_minute_partition(_bars({
+        "000001.SZ": [("2026-01-05 09:31:00", 10.0)],
+        "600000.SH": [("2026-01-05 09:31:00", 8.0)],
+    }), minute_dir)
+    incoming = _bars({
+        "000001.SZ": [("2026-01-05 09:31:00", 11.0), ("2026-01-05 09:32:00", 12.0)],
+    }).with_columns(pl.col("close").cast(pl.Int64)).select("symbol", "close", "datetime")
+
+    assert _write_minute_partition(incoming, minute_dir) == 3
+    stored = _read(minute_dir / "date=2026-01-05" / "part.parquet")
+    assert stored.filter(pl.col("symbol") == "000001.SZ")["close"].to_list() == [11.0, 12.0]
+    assert stored.filter(pl.col("symbol") == "600000.SH")["close"].to_list() == [8.0]
+
+
 def test_existing_null_datetime_rows_are_dropped_on_merge(tmp_path):
     minute_dir = tmp_path / "kline_minute"
     _write_minute_partition(

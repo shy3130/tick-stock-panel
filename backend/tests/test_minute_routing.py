@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import polars as pl
+from polars.testing import assert_frame_equal
 
 from app.services import kline_sync
 
@@ -206,8 +207,8 @@ def test_custom_success_skips_tickflow(monkeypatch):
         "600519.SH", date(2026, 1, 15), asset_type="stock", capset=_empty_capset(),
     )
 
-    # 返回的是 mock provider 的 df
-    assert df is expected_df
+    # 规范化后保留 provider 的数据，不请求其他源。
+    assert_frame_equal(df, expected_df)
     # TickFlow 路径未进入
     get_client_spy.assert_not_called()
 
@@ -215,7 +216,7 @@ def test_custom_success_skips_tickflow(monkeypatch):
 # ---------- 测试 7: sync_minute_batch 自定义源成功直接返回 ----------
 
 def test_sync_minute_batch_custom_success_returns_directly(monkeypatch):
-    """§4 测试 7: sync_minute_batch 自定义源成功 + 未传 on_segment → 原样返回 df (实时补拉契约)。
+    """§4 测试 7: sync_minute_batch 自定义源成功 + 未传 on_segment → 返回规范化 df。
 
     传了 on_segment 时走流式落盘分支 (见测试 10), 此处验证未传时的实时补拉契约。
     """
@@ -234,8 +235,8 @@ def test_sync_minute_batch_custom_success_returns_directly(monkeypatch):
         asset_type="stock",
     )
 
-    # 返回 mock provider 的 df, 不走 segment
-    assert df is expected_df
+    # 返回 provider 数据，不走 segment。
+    assert_frame_equal(df, expected_df)
     get_client_spy.assert_not_called()
 
 
@@ -478,7 +479,8 @@ def test_sync_minute_batch_custom_calls_on_segment(monkeypatch):
         asset_type="stock",
     )
 
-    on_segment_spy.assert_called_once_with(expected_df)
+    on_segment_spy.assert_called_once()
+    assert_frame_equal(on_segment_spy.call_args.args[0], expected_df)
     assert isinstance(df, pl.DataFrame)
     assert df.is_empty()
     get_client_spy.assert_not_called()

@@ -96,6 +96,24 @@ def test_pull_success_merges_without_truncated(repo, monkeypatch):
     assert "truncated" not in out
 
 
+def test_pull_merges_legacy_column_order_and_overwrites_the_live_bar(repo, monkeypatch):
+    from app.api import kline as kline_api
+
+    local = _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 30), 30)
+    live = _bars(_SYM, _dt.datetime(2026, 10, 23, 9, 59), 3).with_columns(
+        pl.lit(10.5).alias("close"),
+    ).select("symbol", "open", "high", "low", "close", "volume", "amount", "datetime")
+    calls = []
+    _pin_clock(repo, monkeypatch, {_SYM: local}, live, calls)
+
+    out = json.loads(kline_api.get_minute_batch(_fake_req(repo), {"symbols": [_SYM]}).body)
+    rows = out["data"][_SYM]
+    assert len(rows) == 32
+    assert rows[29]["close"] == 10.5
+    assert rows[-1]["datetime"] == "2026-10-23T10:01:00"
+    assert "truncated" not in out
+
+
 def test_fresh_local_skips_pull_and_truncated(repo, monkeypatch):
     """本地已够新鲜 (90 根 ≥ expected-2) → 不补拉、直接本地, 不进兜底。"""
     from app.api import kline as kline_api

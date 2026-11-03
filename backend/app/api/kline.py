@@ -1027,7 +1027,7 @@ def get_minute_batch(request: Request, body: dict):
         live = live_map.get(sym)
         if live is not None:
             merged = (
-                pl.concat([sub, live])
+                pl.concat([sub, live], how="diagonal_relaxed")
                 .unique(subset=["symbol", "datetime"], keep="last")
                 .sort("datetime")
             )
