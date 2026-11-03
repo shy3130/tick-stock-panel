@@ -88,7 +88,7 @@ def _save(root: Path, old: dict, entries: list[dict]) -> None:
     atomic_write_text(path, json.dumps({"version": 1, "entries": entries, "revisions": revisions}, ensure_ascii=False))
 
 
-def record_scan(root: Path, issues, *, assets: list[str], start: date, end: date) -> None:
+def _issue_entries(issues) -> dict:
     from app.services.data_integrity import TABLE_FAMILY
 
     found = {}
@@ -100,6 +100,22 @@ def record_scan(root: Path, issues, *, assets: list[str], start: date, end: date
                      "symbol": symbol, "needs_raw": True, "needs_enriched": True,
                      "kind": issue.kind, "reason": issue.reason}
             found[_key(entry)] = entry
+    return found
+
+
+def record_issues(root: Path, issues) -> None:
+    """登记计算中新发现的问题, 不把未检查的日期/股票标记为已校验。"""
+    found = _issue_entries(issues)
+    if not found:
+        return
+    with _LOCK:
+        old = snapshot(root)
+        entries = [e for e in old["entries"] if _key(e) not in found]
+        _save(root, old, [*entries, *found.values()])
+
+
+def record_scan(root: Path, issues, *, assets: list[str], start: date, end: date) -> None:
+    found = _issue_entries(issues)
     with _LOCK:
         old = snapshot(root)
         entries = []

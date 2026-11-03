@@ -31,7 +31,7 @@ from pathlib import Path
 
 import polars as pl
 
-from app.market_time import CN_TZ
+from app.market_time import CN_TZ, cn_today
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,8 @@ def active_daily_tables() -> tuple[str, ...]:
 DAILY_REQUIRED = ("symbol", "date", "open", "high", "low", "close", "volume")
 
 
-def invalid_daily_rows(frame: pl.DataFrame, day: date | None = None) -> pl.DataFrame:
-    """自检与入库校验共享同一判据; 停牌零价与异常数值明确区分。"""
+def _daily_validation(frame: pl.DataFrame, day: date | None) -> tuple[pl.DataFrame, dict[str, pl.Expr]]:
+    """数值判据同时用于拦截与错误说明, 停牌零价沿用现有规则。"""
     if not set(DAILY_REQUIRED).issubset(frame.columns):
         raise ValueError("日K字段不完整")
     frame = frame.with_columns(
@@ -99,23 +99,61 @@ def invalid_daily_rows(frame: pl.DataFrame, day: date | None = None) -> pl.DataF
     prices = ("open", "high", "low", "close")
     halted = ((pl.col("volume") == 0) & (pl.col("open") == 0)
               & (pl.col("high") == 0) & (pl.col("low") == 0) & (pl.col("close") >= 0))
-    invalid = (
-        pl.col("symbol").is_null() | (pl.col("symbol").str.strip_chars() == "")
-        | pl.col("date").is_null()
-        | pl.col("volume").is_null() | ~pl.col("volume").is_finite() | (pl.col("volume") < 0)
-        | pl.any_horizontal(pl.col(c).is_null() | ~pl.col(c).is_finite() for c in prices)
-        | (~halted.fill_null(False) & (
-            pl.any_horizontal(pl.col(c) <= 0 for c in prices)
-            | (pl.col("high") < pl.max_horizontal("open", "close", "low"))
-            | (pl.col("low") > pl.min_horizontal("open", "close", "high"))
-        ))
-    )
+    checks = {
+        "股票代码缺失": pl.col("symbol").is_null() | (pl.col("symbol").str.strip_chars() == ""),
+        "日期缺失或非法": pl.col("date").is_null(),
+        "成交量缺失、非有限或为负": (
+            pl.col("volume").is_null() | ~pl.col("volume").is_finite() | (pl.col("volume") < 0)
+        ),
+        **{f"{label}缺失或非有限": pl.col(column).is_null() | ~pl.col(column).is_finite()
+           for column, label in zip(prices, ("开盘价", "最高价", "最低价", "收盘价"), strict=True)},
+        "非停牌日开高低收存在零价或负价": (
+            ~halted.fill_null(False) & pl.any_horizontal(pl.col(c) <= 0 for c in prices)
+        ),
+        "最高价小于开盘价、收盘价或最低价": (
+            ~halted.fill_null(False) & (pl.col("high") < pl.max_horizontal("open", "close", "low"))
+        ),
+        "最低价大于开盘价、收盘价或最高价": (
+            ~halted.fill_null(False) & (pl.col("low") > pl.min_horizontal("open", "close", "high"))
+        ),
+    }
     if day is not None:
-        invalid = invalid | (pl.col("date") != day)
+        checks["日期与文件分区不符"] = pl.col("date") != day
     if "amount" in frame.columns:
         amount = pl.col("amount").cast(pl.Float64, strict=False)
-        invalid = invalid | ((amount < 0) | ~amount.is_finite()).fill_null(False)
+        checks["成交额非有限或为负"] = ((amount < 0) | ~amount.is_finite()).fill_null(False)
+    return frame, checks
+
+
+def invalid_daily_rows(frame: pl.DataFrame, day: date | None = None) -> pl.DataFrame:
+    """自检与入库校验共享同一判据; 停牌零价与异常数值明确区分。"""
+    frame, checks = _daily_validation(frame, day)
+    invalid = pl.lit(False)
+    for check in checks.values():
+        invalid = invalid | check
     return frame.filter(invalid.fill_null(True))
+
+
+def _invalid_daily_reason(frame: pl.DataFrame, day: date) -> str:
+    frame, checks = _daily_validation(frame, day)
+    flags = frame.select(check.fill_null(False).any().alias(label) for label, check in checks.items()).row(0, named=True)
+    return "；".join(label for label, found in flags.items() if found)
+
+
+def inspect_invalid_history(root: Path, table: str, files: list[Path], invalid: pl.DataFrame) -> list[IntegrityIssue]:
+    """只在重算发现坏行后定位源分区; 行内日期损坏时仍按真实分区修补。"""
+    from app.parquet import scan_daily_parquet
+
+    paths = (
+        scan_daily_parquet(files, include_file_paths="__integrity_file")
+        .join(invalid.select("symbol", "date").unique().lazy(),
+              on=["symbol", "date"], how="semi", nulls_equal=True)
+        .select("__integrity_file").unique().collect(engine="streaming")["__integrity_file"]
+    )
+    days = sorted({date.fromisoformat(Path(path).parent.name.removeprefix("date=")) for path in paths})
+    # 与显式自检一致: 当天仍在更新, 不能登记成尚无法修补的历史问题。
+    today = cn_today()
+    return [issue for day in days if day < today and (issue := inspect_daily_partition(root, table, day)) is not None]
 
 
 def _partition_problem(
@@ -151,7 +189,7 @@ def _partition_problem(
                 invalid = invalid_daily_rows(pl.from_arrow(batch), day)
                 if not invalid.is_empty():
                     bad.append(path.name)
-                    reasons.append("日期、标的或开高低收/成交量存在异常")
+                    reasons.append(_invalid_daily_reason(invalid, day))
                     values = invalid["symbol"].unique().to_list()
                     unknown_symbols |= any(s is None or not s.strip() for s in values)
                     symbols.update(s for s in values if s and s.strip())

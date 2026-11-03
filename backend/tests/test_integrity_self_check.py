@@ -61,6 +61,29 @@ def test_deep_scan_reports_invalid_prices_and_empty_partition(tmp_path):
     }
 
 
+@pytest.mark.parametrize("column,value,reason", [
+    ("open", None, "开盘价缺失或非有限"),
+    ("volume", float("nan"), "成交量缺失、非有限或为负"),
+    ("high", 9.0, "最高价小于"),
+    ("low", 12.0, "最低价大于"),
+    ("amount", -1.0, "成交额非有限或为负"),
+    ("date", None, "日期缺失或非法"),
+])
+def test_invalid_daily_reason_identifies_the_field(tmp_path, column, value, reason):
+    day = date(2026, 10, 29)
+    path = write_day(tmp_path, day)
+    pl.read_parquet(path).with_columns(
+        pl.lit(value, dtype=pl.Date if column == "date" else pl.Float64).alias(column),
+    ).write_parquet(path)
+    issue = data_integrity.inspect_daily_partition(tmp_path, "kline_daily", day)
+    assert issue.kind == "invalid" and issue.symbols == ("600001.SH",)
+    assert reason in issue.reason
+    if column == "open":
+        assert "零价或负价" not in issue.reason
+    if column == "date":
+        assert "日期与文件分区不符" not in issue.reason
+
+
 def test_manual_scan_does_not_label_unknown_holiday_as_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(data_integrity, "_trading_calendar", lambda: None)
     write_day(tmp_path, date(2026, 10, 27))

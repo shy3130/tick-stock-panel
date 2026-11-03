@@ -1535,8 +1535,8 @@ def recompute_daily_symbols(
     复用正式的复权、历史股本、停牌及连板计算, 不用已有 enriched 作原始价格前缀。
     均线/MACD 等宽指标由现有读取链按新版本重新计算。
     """
-    from app.services import data_integrity, preferences
-    from app.tickflow.repository import enriched_dirname
+    from app.services import daily_health, data_integrity, preferences
+    from app.tickflow.repository import daily_dirname, enriched_dirname
 
     root = Path(repo.store.data_dir)
     files = repo.daily_repair_files(asset_type)
@@ -1560,8 +1560,17 @@ def recompute_daily_symbols(
             raw = raw_scan.filter(pl.col("symbol").is_in(batch)).sort(["symbol", "date"]).collect(engine="streaming")
             bad = data_integrity.invalid_daily_rows(raw)
             if not bad.is_empty():
-                first = bad["date"].min()
-                raise ValueError(f"所选股票在 {first} 的原始历史日K仍异常, 未发布指标")
+                issues = data_integrity.inspect_invalid_history(root, daily_dirname(asset_type), files, bad)
+                daily_health.record_issues(root, issues)
+                if issues:
+                    first = issues[0]
+                    codes = "、".join(first.symbols[:5]) or "无法定位具体标的"
+                    raise ValueError(
+                        f"{daily_health.ASSET_LABELS[asset_type]}在 {first.day} 的原始历史日K仍异常"
+                        f"（{codes}：{first.reason}）, 未发布指标。"
+                        "已加入自检报告，请到 数据→自检/修补 处理后重试"
+                    )
+                raise ValueError("原始日K未通过校验或在检查期间发生变化，请重新自检或完成当日日K同步后重试，未发布指标")
             enriched = compute_enriched(
                 raw,
                 factors=factors.filter(pl.col("symbol").is_in(batch)) if not factors.is_empty() else factors,
