@@ -871,7 +871,7 @@ def _enforce_minute_beijing_wallclock(df: pl.DataFrame, *, source: str) -> pl.Da
     return df
 
 
-def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
+def _normalize_minute(df_in, default_symbol: str | None = None, *, source: str = "tickflow") -> pl.DataFrame:
     """把 SDK 返回的分钟 K 数据规范成 canonical 列 (datetime 收口为北京墙钟)。"""
     if df_in is None or len(df_in) == 0:
         return pl.DataFrame()
@@ -911,7 +911,7 @@ def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
 
     if "datetime" in df.columns:
         # 时区契约守卫: 须在下方通用 us-cast 之前, 避免带时区列被静默剥成 UTC-naive
-        df = _enforce_minute_beijing_wallclock(df, source="tickflow")
+        df = _enforce_minute_beijing_wallclock(df, source=source)
 
     if "symbol" not in df.columns and default_symbol is not None:
         df = df.with_columns(pl.lit(default_symbol).alias("symbol"))
@@ -1008,10 +1008,10 @@ def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
             touched = new_rows["symbol"].unique().to_list()
             same = existing.filter(pl.col("symbol").is_in(touched))
             other = existing.filter(~pl.col("symbol").is_in(touched))
-            merged = pl.concat([same, new_rows]).unique(
+            merged = pl.concat([same, new_rows], how="diagonal_relaxed").unique(
                 subset=["symbol", "datetime"], keep="last",
             )
-            day_df = pl.concat([other, merged])
+            day_df = pl.concat([other, merged], how="diagonal_relaxed")
         else:
             day_df = day_df.drop("_trade_date")
         day_df = day_df.sort("symbol", "datetime")
@@ -1122,7 +1122,7 @@ def _try_custom_minute(
         return (pl.DataFrame(), False)
     try:
         # 时区契约守卫: 插件/自定义源帧同样收口为北京墙钟 (CONTRIBUTING §3.3)
-        df = _enforce_minute_beijing_wallclock(df, source=provider_name)
+        df = _normalize_minute(df, source=provider_name)
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "custom minute provider %s datetime 契约校验失败; not falling back to TickFlow: %s",
