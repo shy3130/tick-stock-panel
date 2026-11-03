@@ -14,6 +14,7 @@
  * 回填规则 (hydrateUiPrefs): 本地已有值优先保留并上推后端 —— 用户本次会话刚改的
  * 值不能被启动时的旧副本覆盖; 本地缺失的键才用后端值补。首次升级时(后端还没有
  * 任何 ui_prefs) 本地值全部上推, 完成从 localStorage-only 到双写的迁移。
+ * 策略池和主题优先恢复已有后端副本，防止旧端口恢复过时设置；本会话的新修改仍优先。
  */
 
 const ENDPOINT = '/api/settings/preferences/ui-prefs'
@@ -43,10 +44,14 @@ const SPECS: { ls: string; remote: string; codec: Codec }[] = [
   { ls: 'tf-nav-state', remote: 'nav_state', codec: 'string' },
   // AI 助手悬浮球显隐 — 不入副本时桌面版换端口即回默认开启 ("关了过一会又开")
   { ls: 'assistant.fab.enabled', remote: 'assistant_fab_enabled', codec: 'bool01' },
+  // 保留 JSON 文本，兼容后端界面偏好只接收标量的契约。
+  { ls: 'strategy-pool', remote: 'strategy_pool', codec: 'string' },
+  { ls: 'tf-theme', remote: 'theme', codec: 'string' },
 ]
 
 const BY_LS = new Map(SPECS.map(s => [s.ls, s]))
 const BY_REMOTE = new Map(SPECS.map(s => [s.remote, s]))
+const REMOTE_FIRST = new Set(['strategy-pool', 'tf-theme'])
 
 /** localStorage 原始文本 → 后端标量 */
 function toRemote(spec: { codec: Codec }, raw: string): unknown {
@@ -85,6 +90,7 @@ function toLocal(spec: { codec: Codec }, value: unknown): string {
  * 网络失败静默: localStorage 已写成功, 本次会话行为正确, 下次改动会再上推。
  */
 export function setUiPref(lsKey: string, raw: string | null): void {
+  locallyChanged.add(lsKey)
   try {
     if (raw === null) localStorage.removeItem(lsKey)
     else localStorage.setItem(lsKey, raw)
@@ -96,6 +102,7 @@ export function setUiPref(lsKey: string, raw: string | null): void {
 
 let _pushTimer: number | undefined
 let _pending: Record<string, unknown> = {}
+const locallyChanged = new Set<string>()
 
 function pushUiPrefs(updates: Record<string, unknown>): void {
   _pending = { ..._pending, ...updates }
@@ -127,11 +134,18 @@ export function hydrateUiPrefs(): Promise<void> {
 }
 
 async function _doHydrate(): Promise<void> {
+  const before = new Map<string, string | null>()
+  for (const key of REMOTE_FIRST) {
+    try { before.set(key, localStorage.getItem(key)) } catch { before.set(key, null) }
+  }
   try {
     const res = await fetch('/api/settings/preferences', {
       headers: { Accept: 'application/json' },
     })
-    if (!res.ok) return
+    if (!res.ok) {
+      _hydratePromise = undefined // 登录前的 401 不能阻止登录后恢复偏好。
+      return
+    }
     const payload = await res.json() as { ui_prefs?: Record<string, unknown> }
     const remote = payload?.ui_prefs
     if (!remote || typeof remote !== 'object') return
@@ -139,6 +153,12 @@ async function _doHydrate(): Promise<void> {
     for (const spec of SPECS) {
       let local: string | null = null
       try { local = localStorage.getItem(spec.ls) } catch { /* ignore */ }
+      // 旧端口可能留有过时的策略池/主题；恢复后端副本，但保留本会话的新修改。
+      if (REMOTE_FIRST.has(spec.ls) && spec.remote in remote
+        && !locallyChanged.has(spec.ls) && local === before.get(spec.ls)) {
+        try { localStorage.setItem(spec.ls, toLocal(spec, remote[spec.remote])) } catch { /* ignore */ }
+        continue
+      }
       if (local !== null) {
         // 本地优先: 用户本次会话改过的值不能被启动时的旧副本盖掉
         upstream[spec.remote] = toRemote(spec, local)
@@ -149,7 +169,9 @@ async function _doHydrate(): Promise<void> {
       }
     }
     if (Object.keys(upstream).length > 0) pushUiPrefs(upstream)
-  } catch { /* 后端不可达: 保持纯本地行为 */ }
+  } catch {
+    _hydratePromise = undefined // 后端恢复后允许重试，本地缓存保持可用。
+  }
 }
 
 // 页面缩放 (tf-page-zoom) 的首帧应用在 index.html 内联脚本里, 早于本模块加载,

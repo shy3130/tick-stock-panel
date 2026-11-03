@@ -97,3 +97,74 @@ def test_assistant_fab_enabled_in_whitelist(prefs_file):
     saved = preferences.set_ui_prefs({"assistant_fab_enabled": False})
     assert saved["assistant_fab_enabled"] is False
     assert preferences.get_ui_prefs()["assistant_fab_enabled"] is False
+
+
+def test_strategy_pool_survives_preferences_reload_and_explicit_empty(prefs_file):
+    from app.api.settings import UiPrefsIn, get_preferences, update_ui_prefs
+
+    pool = '["custom_daily", "custom_minute"]'
+    assert update_ui_prefs(UiPrefsIn(strategy_pool=pool))["ui_prefs"]["strategy_pool"] == pool
+    preferences._invalidate_cache()
+    assert get_preferences()["ui_prefs"]["strategy_pool"] == pool
+
+    update_ui_prefs(UiPrefsIn(strategy_pool="[]"))
+    preferences._invalidate_cache()
+    assert get_preferences()["ui_prefs"]["strategy_pool"] == "[]"
+
+
+@pytest.mark.parametrize("value", [True, [], "not json", "{}", '["valid", 1]'])
+def test_strategy_pool_rejects_invalid_id_lists(prefs_file, value):
+    preferences.set_ui_prefs({"strategy_pool": '["saved"]'})
+    with pytest.raises(ValueError, match="strategy_pool"):
+        preferences.set_ui_prefs({"strategy_pool": value})
+    assert preferences.get_ui_prefs()["strategy_pool"] == '["saved"]'
+
+
+def test_concurrent_ui_updates_do_not_overwrite_the_strategy_pool(prefs_file, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    original_get = preferences.get_ui_prefs
+    first_read, second_read, release = Event(), Event(), Event()
+
+    def delayed_snapshot():
+        snapshot = original_get()
+        if not first_read.is_set():
+            first_read.set()
+            assert release.wait(5)
+        else:
+            second_read.set()
+        return snapshot
+
+    monkeypatch.setattr(preferences, "get_ui_prefs", delayed_snapshot)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        pool_write = workers.submit(preferences.set_ui_prefs, {"strategy_pool": '["saved"]'})
+        assert first_read.wait(5)
+        other_write = workers.submit(preferences.set_ui_prefs, {"page_zoom": 1.1})
+        try:
+            assert not second_read.wait(0.1), "UI 偏好的读改写必须串行，不能丢失另一项设置"
+        finally:
+            release.set()
+            pool_write.result(timeout=5)
+            other_write.result(timeout=5)
+
+    assert original_get() == {"strategy_pool": '["saved"]', "page_zoom": 1.1}
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_theme_persists_across_preferences_reload(prefs_file, theme):
+    from app.api.settings import UiPrefsIn, get_preferences, update_ui_prefs
+
+    assert update_ui_prefs(UiPrefsIn(theme=theme))["ui_prefs"]["theme"] == theme
+    preferences._invalidate_cache()
+    assert get_preferences()["ui_prefs"]["theme"] == theme
+    preferences.set_ui_prefs({"theme": None})
+    assert "theme" not in preferences.get_ui_prefs()
+
+
+@pytest.mark.parametrize("value", ["system", "", True, 1, []])
+def test_theme_rejects_invalid_modes(prefs_file, value):
+    preferences.set_ui_prefs({"theme": "light"})
+    with pytest.raises(ValueError, match="theme"):
+        preferences.set_ui_prefs({"theme": value})
+    assert preferences.get_ui_prefs()["theme"] == "light"
