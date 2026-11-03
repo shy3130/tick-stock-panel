@@ -1,12 +1,13 @@
 // 主题管理 — 暗色(默认) / 亮色切换
 //
 // 机制:
-//   - 状态存 localStorage('tf-theme'), 默认 dark (保持老用户体验不变)
+//   - localStorage('tf-theme') 即时缓存 + 后端偏好副本，默认 dark
 //   - 生效方式: html.dark class (index.css 的 CSS variables + Tailwind darkMode:class)
 //   - index.html 里有预渲染内联脚本, 首屏前就设好 class, 避免闪烁 (FOUC)
 //   - UI token (bg-surface/text-foreground 等) 自动跟随;
 //     图表画布不吃 CSS 变量, 统一走 useChartTheme() 取调色板
 import { useEffect, useState } from 'react'
+import { hydrateUiPrefs, setUiPref } from '@/lib/uiPrefs'
 
 const KEY = 'tf-theme'
 const EVENT = 'tf-theme-change'
@@ -21,10 +22,15 @@ export function getTheme(): Theme {
   }
 }
 
-export function setTheme(theme: Theme) {
-  try { localStorage.setItem(KEY, theme) } catch { /* ignore */ }
+/** 恢复后端偏好时只应用主题，不把默认值重新写回后端。 */
+export function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle('dark', theme === 'dark')
   window.dispatchEvent(new CustomEvent(EVENT, { detail: theme }))
+}
+
+export function setTheme(theme: Theme) {
+  setUiPref(KEY, theme)
+  applyTheme(theme)
 }
 
 export function toggleTheme(): Theme {
@@ -37,10 +43,19 @@ export function toggleTheme(): Theme {
 export function useTheme(): Theme {
   const [theme, set] = useState<Theme>(getTheme)
   useEffect(() => {
-    const onChange = () => set(getTheme())
+    let active = true
+    const onChange = () => {
+      if (!active) return
+      const value = getTheme()
+      document.documentElement.classList.toggle('dark', value === 'dark')
+      set(value)
+    }
     window.addEventListener(EVENT, onChange)
     window.addEventListener('storage', onChange)  // 跨标签页同步
+    // 登录页在同一 SPA 内跳转，首次回填若为 401，挂载后仍须重新恢复主题。
+    void hydrateUiPrefs().then(onChange)
     return () => {
+      active = false
       window.removeEventListener(EVENT, onChange)
       window.removeEventListener('storage', onChange)
     }

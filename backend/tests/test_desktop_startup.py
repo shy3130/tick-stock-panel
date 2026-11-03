@@ -226,7 +226,7 @@ def test_main_reports_early_startup_errors(data_dir, monkeypatch, stage):
 
 # ---------- _open_window: pywebview 下载启用 ----------
 
-def test_open_window_enables_downloads_before_start(monkeypatch):
+def test_open_window_enables_downloads_before_start(data_dir, monkeypatch):
     """pywebview 5.0+ 默认取消所有文件下载 (Edge WebView2 / WKWebView 一致) —
     必须在 webview.start() 前显式开启 ALLOW_DOWNLOADS, 否则配置备份导出、
     回测 CSV 等 <a download> 直链在桌面版点击无反应 (2026-10-27 用户反馈)。"""
@@ -251,7 +251,7 @@ def test_open_window_enables_downloads_before_start(monkeypatch):
     assert calls == ["set:ALLOW_DOWNLOADS=True", "create_window", "start"]
 
 
-def test_open_window_explicitly_shows_window_after_gui_start(monkeypatch):
+def test_open_window_explicitly_shows_window_after_gui_start(data_dir, monkeypatch):
     """Windows 继承 SW_HIDE 时, GUI 就绪后应显式显示主窗口。"""
     shown = []
     window = SimpleNamespace(show=lambda: shown.append(True))
@@ -264,3 +264,37 @@ def test_open_window_explicitly_shows_window_after_gui_start(monkeypatch):
 
     desktop._open_window("http://127.0.0.1:3018")
     assert shown == [True]
+
+
+def test_open_window_preserves_browser_storage_across_restarts_and_ports(data_dir, monkeypatch):
+    starts = []
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: SimpleNamespace(show=lambda: None),
+        start=lambda *args, **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+    desktop._open_window("http://127.0.0.1:3019")
+
+    assert all(call.get("private_mode") is False for call in starts)
+    assert starts[0]["storage_path"] == starts[1]["storage_path"] == str(data_dir / "webview")
+    assert (data_dir / "webview").is_dir()
+
+
+def test_open_window_does_not_clear_existing_browser_profile(data_dir, monkeypatch):
+    profile = data_dir / "webview"
+    profile.mkdir()
+    marker = profile / "existing-profile-data"
+    marker.write_bytes(b"keep me")
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: SimpleNamespace(show=lambda: None),
+        start=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+
+    assert marker.read_bytes() == b"keep me"
