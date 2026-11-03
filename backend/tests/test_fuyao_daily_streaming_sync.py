@@ -131,6 +131,33 @@ def test_sync_merges_into_existing_daily_partition(monkeypatch, repo):
     assert set(stored["symbol"].to_list()) == {"000001.SZ", "000002.SZ"}
 
 
+def test_sync_merges_partition_holding_a_realtime_snapshot_with_quote_ts(monkeypatch, repo):
+    # 当天分区同时有流式直提的 8 列文件和实时快照写的带 quote_ts 的文件 (#536)。
+    target = repo.store.data_dir / "kline_daily" / "date=2020-01-02"
+    target.mkdir(parents=True)
+    _daily("000001.SZ", date(2020, 1, 2)).write_parquet(target / "part-stream-0.parquet")
+    _daily("000002.SZ", date(2020, 1, 2)).with_columns(
+        quote_ts=pl.lit(1577948400000, dtype=pl.Int64),
+    ).write_parquet(target / "part.parquet")
+    provider = _StreamingProvider([
+        _daily("000002.SZ", date(2020, 1, 2)).with_columns(close=pl.lit(10.8)),
+    ])
+    _route_fuyao(monkeypatch, provider)
+
+    written = kline_sync.sync_and_persist_daily_batch(
+        ["000002.SZ"], repo, object(),
+        start_date=datetime(2020, 1, 1), end_date=datetime(2020, 1, 2),
+    )
+
+    assert written == 1
+    stored = pl.concat(
+        [pl.read_parquet(file) for file in sorted(target.glob("*.parquet"))],
+        how="diagonal_relaxed",
+    ).sort("symbol")
+    assert stored["symbol"].to_list() == ["000001.SZ", "000002.SZ"]
+    assert stored["close"].to_list() == [10.5, 10.8]
+
+
 def test_sync_discards_staging_when_streaming_fails(monkeypatch, repo):
     provider = _StreamingProvider(
         [_daily("000001.SZ", date(2020, 1, 2))], error=RuntimeError("network lost")
