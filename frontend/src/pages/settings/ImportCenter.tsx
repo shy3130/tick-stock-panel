@@ -10,6 +10,8 @@ import { inspectPageBlob, inspectPageModule, refreshResourceQueries } from '@/li
 import { runtimeBundleUrl } from '@/extensions/runtime'
 import { getFrontendExtensionLoadErrors } from '@/extensions/registry'
 import { ResourceTransferDialog } from '@/components/ResourceTransferDialog'
+import { PluginMetadata } from '@/components/data/PluginMetadata'
+import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { PackageActions } from '@/custom/source-packages/extension'
 import { PluginKeyConfig } from './DataSources'
 import { INVALIDATE_KEYS, SettingsBackupPanel } from './Backup'
@@ -31,7 +33,7 @@ function Notice({ children, warning = false }: { children: ReactNode; warning?: 
 
 function Status({ children }: { children: string }) {
   return <span className={cn('inline-flex max-w-full rounded px-2 py-1 text-[11px] leading-5',
-    /失败|损坏/.test(children) ? 'bg-danger/10 text-danger' : /待|重启/.test(children) ? 'bg-warning/10 text-amber-800 dark:text-amber-300' : /已启用|已就绪/.test(children) ? 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300' : 'bg-elevated text-secondary')}>{children}</span>
+    /失败|损坏/.test(children) ? 'bg-danger/10 text-red-700 dark:text-red-300' : /待|重启/.test(children) ? 'bg-warning/10 text-amber-800 dark:text-amber-300' : /已启用|已就绪/.test(children) ? 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300' : 'bg-elevated text-secondary')}>{children}</span>
 }
 
 function Stepper({ step }: { step: number }) {
@@ -132,7 +134,10 @@ export function SettingsImportCenterPanel() {
     finally { busyRef.current = false; setBusy(false) }
   }
   async function refreshInstalled() {
-    await Promise.allSettled([QK.extensionPackages, QK.extPages, QK.dataSources, QK.capabilityMatrix].map(queryKey => qc.invalidateQueries({ queryKey })))
+    await Promise.allSettled([
+      QK.extensionPackages, QK.extPages, QK.dataSources, QK.capabilityMatrix,
+      QK.preferences, QK.capabilities, QK.quoteStatus,
+    ].map(queryKey => qc.invalidateQueries({ queryKey })))
   }
   async function apply() {
     if (!review || disabled || busyRef.current) return
@@ -197,8 +202,8 @@ export function SettingsImportCenterPanel() {
 
   return <div className="max-w-5xl space-y-6">
     <header className="flex flex-wrap items-start justify-between gap-4">
-      <div><h2 className="text-xl font-semibold tracking-tight text-foreground">导入与备份</h2><p className="mt-2 text-sm leading-6 text-secondary">一个入口，导入资源、安装扩展、迁移配置。</p></div>
-      <button type="button" className={BUTTON} disabled={busy} onClick={() => changeView('backup')}><Download className="h-4 w-4" aria-hidden="true" />创建配置备份</button>
+      <div className="min-w-0 flex-1"><h2 className="text-xl font-semibold tracking-tight text-foreground">导入与备份</h2><p className="mt-2 text-sm leading-6 text-secondary">一个入口，导入资源、安装扩展、迁移配置。</p></div>
+      <button type="button" className={cn(BUTTON, 'shrink-0')} disabled={busy} onClick={() => changeView('backup')}><Download className="h-4 w-4" aria-hidden="true" />创建配置备份</button>
     </header>
     <nav className="flex gap-6 border-b border-border" aria-label="导入与扩展">
       {[['import', '导入文件'], ['installed', '已安装扩展']].map(([key, label]) => <button key={key} type="button" aria-pressed={key === 'import' ? view !== 'installed' : view === key} disabled={busy} onClick={() => changeView(key)}
@@ -223,7 +228,9 @@ export function SettingsImportCenterPanel() {
               <div className="flex flex-wrap items-center gap-3 text-xs text-secondary"><Package className="h-4 w-4" aria-hidden="true" /><span>{review.kind === 'extension' && review.preview.manifest.frontend ? '完整功能包' : TYPE[review.kind]}</span><span className="break-all">{review.kind === 'project' ? '项目源码 · ' + review.preview.namespace : files.map(f => f.name).join('、')}</span>{!!files.length && <span>{formatSize(files.reduce((sum, f) => sum + f.size, 0))}</span>}</div>
               <h3 className="text-lg font-semibold text-foreground">{name}</h3>
               {packageDoc && <p className="text-xs text-secondary">{installedVersion ? '本机 ' + installedVersion + ' → 目标 ' + packageDoc.version : '版本 ' + packageDoc.version}{packageDoc.author ? ' · 来源声明：' + packageDoc.author : ''}</p>}
-              {packageDoc?.description && <p className="max-w-2xl text-sm leading-6 text-secondary">{packageDoc.description}</p>}
+              {packageDoc?.description && (review.kind === 'source'
+                ? <div className="max-w-2xl"><MarkdownRenderer content={packageDoc.description} compact /></div>
+                : <p className="max-w-2xl text-sm leading-6 text-secondary">{packageDoc.description}</p>)}
               {pendingVersion && packageDoc && <Notice warning>已有待生效版本 {pendingVersion}。{pendingVersion === packageDoc.version ? '本次是同一个暂存版本。' : '确认后会用 ' + packageDoc.version + ' 替换该暂存版本，当前运行版本保持不变。'}</Notice>}
             </header>
             <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_16rem]">
@@ -315,14 +322,18 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
   const [failure, setFailure] = useState('')
   const [message, setMessage] = useState('')
   const [confirm, setConfirm] = useState('')
-  const pack = packages.find(p => selected === 'extension:' + p.id)
-  const source = sources.find(p => selected === 'source:' + p.name)
-  const page = pages.find(p => selected === 'page:' + p.id)
+  const runtimeErrors = bootErrors.filter(e => e.source.startsWith('runtime:'))
+  const pageError = (id: string) => runtimeErrors.find(e => e.source === 'runtime:' + id)?.error
   const items = [
     ...packages.map(p => ({ key: 'extension:' + p.id, title: p.name, subtitle: (p.frontend ? '前端 + 后端' : '后端扩展') + ' · ' + (p.version || '尚未生效') + (p.pending_version ? ' → ' + p.pending_version : ''), status: p.status, icon: Server })),
     ...sources.map(p => ({ key: 'source:' + p.name, title: p.display_name, subtitle: '数据源插件 · ' + (p.version || '—') + (p.pending_version ? ' → ' + p.pending_version : ''), status: p.pending_remove ? '待重启卸载' : p.update_error ? '更新失败' : p.pending_version ? '待重启更新' : p.status, icon: Package })),
-    ...pages.map(p => ({ key: 'page:' + p.id, title: p.label || p.id, subtitle: '页面插件 · ' + (p.path || '尚未登记页面路径'), status: p.error ? '加载失败' : p.enabled ? '已启用' : '已停用', icon: FileCode2 })),
+    ...pages.map(p => ({ key: 'page:' + p.id, title: p.label || p.id, subtitle: '页面插件 · ' + (p.path || '尚未登记页面路径'), status: p.error || pageError(p.id) ? '加载失败' : p.enabled ? '已启用' : '已停用', icon: FileCode2 })),
   ]
+  const activeKey = items.some(item => item.key === selected) ? selected : items[0]?.key
+  const pack = packages.find(p => activeKey === 'extension:' + p.id)
+  const source = sources.find(p => activeKey === 'source:' + p.name)
+  const page = pages.find(p => activeKey === 'page:' + p.id)
+  const activeItem = items.find(item => item.key === activeKey)
   async function run(action: string) {
     if (busy) return
     setBusy(true); setFailure(''); setMessage('')
@@ -338,33 +349,71 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
     } catch (e) { setFailure(e instanceof Error ? e.message : '操作失败，请重试'); await refresh() }
     finally { setBusy(false) }
   }
-  const activeError = pack?.error || page?.error
+  const activeError = pack?.error || page?.error || (page && pageError(page.id))
   return <>
-    <header className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold text-foreground">已安装扩展</h3><p className="mt-2 text-xs leading-6 text-secondary">统一查看版本、启停状态与待生效变更。</p></div><div className="flex gap-2"><button className={BUTTON} disabled={busy || loading} onClick={() => void refresh()} aria-label="刷新扩展清单"><RefreshCw className="h-3.5 w-3.5" /></button><button className={BUTTON} disabled={busy} onClick={install}><Plus className="h-3.5 w-3.5" />安装扩展</button></div></header>
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <p className="text-sm text-secondary">{items.length} 个已安装扩展</p>
+      <div className="flex gap-2">
+        <button type="button" className={BUTTON} disabled={busy || loading} onClick={() => void refresh()} aria-label="刷新扩展清单"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /></button>
+        <button type="button" className={BUTTON} disabled={busy} onClick={install}><Plus className="h-3.5 w-3.5" aria-hidden="true" />安装扩展</button>
+      </div>
+    </header>
     {!!error && <div role="alert" className="text-sm text-danger">扩展清单读取失败，已保留可用列表。请点击刷新重试。</div>}
     {loading && <p role="status" className="flex gap-2 text-sm text-secondary"><Loader2 className="h-4 w-4 animate-spin" />正在读取扩展…</p>}
-    <div className={cn('grid items-start gap-6', (pack || source || page) && 'xl:grid-cols-[minmax(0,1fr)_19rem]')}>
-      <div className="min-w-0 divide-y divide-border border-y border-border">
-        {!loading && !items.length && <p className="py-12 text-sm leading-7 text-secondary">尚未安装外部扩展。可从“导入文件”开始；源码内置页面仍在“页面管理”维护。</p>}
-        {items.map(item => <button key={item.key} type="button" disabled={busy} aria-pressed={selected === item.key} onClick={() => { setFailure(''); setMessage(''); setConfirm(''); select(item.key) }} className={cn('flex w-full flex-wrap items-center gap-3 py-4 text-left hover:bg-elevated/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50', selected === item.key && 'text-accent')}>
-          <item.icon className="h-4 w-4 shrink-0 text-secondary" aria-hidden="true" /><span className="min-w-0 flex-1 basis-40"><span className="block break-words text-sm font-medium">{item.title}</span><span className="mt-1 block break-words text-xs leading-6 text-secondary">{item.subtitle}</span></span><Status>{item.status}</Status>
-        </button>)}
+    {!!runtimeErrors.length && <details className="rounded-btn border border-warning/25 bg-warning/5 px-4 py-3 text-xs leading-6 text-secondary">
+      <summary className="cursor-pointer font-medium text-amber-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent dark:text-amber-300">{runtimeErrors.length} 个页面加载失败</summary>
+      <div className="mt-2 space-y-2">
+        {runtimeErrors.map((entry, i) => <p key={i} className="break-words">{entry.source}：{entry.error}</p>)}
+        <p>选择对应页面查看详情，可停用或更新以解决冲突。</p>
       </div>
-      {(pack || source || page) && <aside className="min-w-0 rounded-card border border-border bg-surface p-4">
-        <h4 className="break-words text-sm font-semibold text-foreground">{pack?.name || source?.display_name || page?.label || page?.id}</h4>
+    </details>}
+    {!loading && !items.length && <div className="rounded-card border border-dashed border-border px-5 py-12 text-center">
+      <Package className="mx-auto h-7 w-7 text-muted" aria-hidden="true" />
+      <p className="mt-4 text-sm font-medium text-foreground">尚未安装外部扩展</p>
+      <p className="mt-2 text-xs leading-6 text-secondary">从“导入文件”安装数据源或页面插件。源码内置页面可在“页面管理”中维护。</p>
+      <button type="button" className={cn(BUTTON, 'mt-4')} onClick={install}>安装扩展</button>
+    </div>}
+    {/* 设置页已有两级侧栏，按面板的可用宽度决定何时折叠。 */}
+    {!!items.length && <div className="overflow-hidden rounded-card border border-border bg-surface [container-type:inline-size]">
+      <div className="grid grid-cols-1 [@container(min-width:44rem)]:grid-cols-[15rem_minmax(0,1fr)]">
+      <nav aria-label="已安装扩展列表" className="min-w-0 space-y-1 border-b border-border bg-elevated/20 p-2 [@container(min-width:44rem)]:border-b-0 [@container(min-width:44rem)]:border-r">
+        {items.map(item => <button key={item.key} type="button" disabled={busy} aria-pressed={activeKey === item.key} aria-controls="installed-extension-detail"
+          onClick={() => { setFailure(''); setMessage(''); setConfirm(''); select(item.key) }}
+          className={cn('flex min-h-16 w-full items-start gap-3 rounded-btn border px-3 py-3 text-left transition-colors hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50',
+            activeKey === item.key ? 'border-accent/20 bg-accent/10' : 'border-transparent')}>
+          <item.icon className={cn('mt-1 h-4 w-4 shrink-0', activeKey === item.key ? 'text-blue-700 dark:text-blue-400' : 'text-secondary')} aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className={cn('block break-words text-sm font-semibold', activeKey === item.key ? 'text-blue-700 dark:text-blue-400' : 'text-foreground')}>{item.title}</span>
+            <span className="mt-1 block truncate text-xs leading-5 text-secondary" title={item.subtitle}>{item.subtitle}</span>
+            <span className="mt-2 block"><Status>{item.status}</Status></span>
+          </span>
+        </button>)}
+      </nav>
+      {(pack || source || page) && <section id="installed-extension-detail" data-extension-detail className="min-w-0 p-5 sm:p-6" aria-label="扩展详情">
+        <header className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
+          <div className="min-w-0">
+            <h3 className="break-words text-lg font-semibold text-foreground">{activeItem?.title}</h3>
+            <p className="mt-1 break-words text-xs leading-6 text-secondary">{activeItem?.subtitle}</p>
+          </div>
+          {activeItem && <Status>{activeItem.status}</Status>}
+        </header>
+        {source && (source.description || source.usage_notes?.length || source.homepage || source.key_manage_url) && <div className="mb-5 max-w-2xl"><PluginMetadata plugin={source} /></div>}
         {pack && <><dl className="my-4 space-y-3 text-xs leading-6"><div className="flex justify-between gap-3"><dt className="text-secondary">当前版本</dt><dd>{pack.version || '尚未生效'}</dd></div>{pack.pending_version && <div className="flex justify-between gap-3"><dt className="text-secondary">待生效版本</dt><dd>{pack.pending_version}</dd></div>}<div className="flex justify-between gap-3"><dt className="text-secondary">当前进程</dt><dd>{pack.runtime_version ? '已加载 ' + pack.runtime_version : '未加载'}</dd></div></dl>
           <p className="text-xs leading-6 text-secondary">{pack.frontend ? '前端页面与后台服务一起更新、启停和卸载。' : '后端接口、初始化任务和通知格式化器在重启后生效。'}</p>
           {!pack.pending_remove && <div className="mt-4 flex flex-wrap gap-2"><button className={BUTTON} disabled={busy} onClick={() => void run(pack.enabled ? 'disable' : 'enable')}>{pack.enabled ? '停用扩展' : '启用扩展'}</button>{pack.previous_version && <button className={BUTTON} disabled={busy} onClick={() => setConfirm('rollback')}>{'回退到 ' + pack.previous_version}</button>}{pack.pending_version && pack.version && <button className={BUTTON} disabled={busy} onClick={() => void run('cancel-update')}>取消待生效更新</button>}<button className={cn(BUTTON, 'text-danger')} disabled={busy} onClick={() => setConfirm('remove')}>卸载扩展</button></div>}
           <p className="mt-4 flex items-start gap-2 text-xs leading-6 text-secondary"><Clock3 className="mt-1 h-3.5 w-3.5 shrink-0" />变更后请重启主程序；刷新浏览器不能替代后台重启。</p>
         </>}
-        {source && <div className="mt-4 space-y-4">{source.api_key_env && <PluginKeyConfig key={source.name} plugin={source} />}<PackageActions key={source.name} plugin={source} refresh={() => { void refresh() }} /></div>}
-        {page && <><p className="mt-3 break-all text-xs leading-6 text-secondary">页面标识：{page.id}</p><p className="mt-2 text-xs leading-6 text-secondary">启停和卸载在刷新浏览器后生效。更新时从“导入文件”上传新产物，并确认替换相同标识。</p><div className="mt-4 flex flex-wrap gap-2"><button className={BUTTON} disabled={busy || !!page.error} onClick={() => void run(page.enabled ? 'disable' : 'enable')}>{page.enabled ? '停用页面' : '启用页面'}</button><button className={cn(BUTTON, 'text-danger')} disabled={busy} onClick={() => setConfirm('remove')}>卸载页面</button></div></>}
-        {activeError && <p className="mt-4 break-words text-xs leading-6 text-danger">{pack?.failed_version ? '版本 ' + pack.failed_version + ' 启动失败；' + (pack.runtime_version ? '当前仍运行 ' + pack.runtime_version + '。' : '扩展未启用。') : activeError}</p>}
+        {source && <>
+          <PackageActions key={source.name} plugin={source} refresh={refresh} />
+          {source.api_key_env && source.enabled !== false && !source.pending_remove && <div className="mt-6 max-w-xl border-t border-border pt-5"><PluginKeyConfig key={source.name} plugin={source} /></div>}
+        </>}
+        {page && <><p className="break-all text-xs leading-6 text-secondary">页面标识：{page.id}</p><p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">启停和卸载在刷新浏览器后生效。更新时从“导入文件”上传新产物，并确认替换相同标识。</p><div className="mt-4 flex flex-wrap gap-2"><button className={BUTTON} disabled={busy || (!page.enabled && !!activeError)} onClick={() => void run(page.enabled ? 'disable' : 'enable')}>{page.enabled ? '停用页面' : '启用页面'}</button><button className={cn(BUTTON, 'text-danger')} disabled={busy} onClick={() => setConfirm('remove')}>卸载页面</button></div></>}
+        {activeError && <div role="alert" className="mt-5 space-y-2 rounded-btn bg-danger/5 p-3 text-xs leading-6 text-danger"><p className="font-medium">加载失败</p><p className="break-words">{pack?.failed_version ? '版本 ' + pack.failed_version + ' 启动失败；' + (pack.runtime_version ? '当前仍运行 ' + pack.runtime_version + '。' : '扩展未启用。') : activeError}</p>{page && <p>请停用此页面，或修正冲突后重新导入。</p>}</div>}
         {confirm && <div className="mt-5 space-y-3 border-t border-border pt-4"><p className="text-xs leading-6 text-secondary">{confirm === 'remove' ? '确认卸载此扩展？扩展包及关联页面将移除，包目录外的数据保留。' : '确认回退：' + pack?.version + ' → ' + pack?.previous_version + '。重启后切换，原有启停状态保留。' + (pack?.pending_version ? '已暂存的 ' + pack.pending_version + ' 将被替换。' : '')}</p><div className="flex flex-wrap gap-2"><button className={BUTTON} disabled={busy} onClick={() => setConfirm('')}>取消</button><button className={cn(BUTTON, confirm === 'remove' && 'text-danger')} disabled={busy} onClick={() => void run(confirm)}>{busy ? '处理中…' : '确认'}</button></div></div>}
-      </aside>}
-    </div>
+      </section>}
+      </div>
+    </div>}
     {failure && <p role="alert" className="break-words text-sm text-danger">{failure}</p>}
     {message && <p role="status" className="text-sm leading-6 text-secondary">{message}</p>}
-    {!!bootErrors.filter(e => e.source.startsWith('runtime:')).length && <Notice warning><p className="font-medium">本次启动有页面加载失败</p>{bootErrors.filter(e => e.source.startsWith('runtime:')).map((e, i) => <p key={i} className="break-words">{e.source}：{e.error}</p>)}<p>请停用或更新对应页面，避免与主程序或其他扩展的路由冲突。</p></Notice>}
   </>
 }

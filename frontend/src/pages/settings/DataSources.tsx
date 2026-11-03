@@ -9,7 +9,6 @@ import {
   Check,
   CheckCircle2,
   Database,
-  ExternalLink,
   Eye,
   EyeOff,
   FileWarning,
@@ -44,6 +43,7 @@ import { AnchorWrap } from '@/lib/useCardFlash'
 import { CAP_LABELS, TIER_RANK, tierRank, tierStyle, TierTag } from '@/lib/capability-labels'
 import { DEFAULT_ROUTING, buildProviderRouting } from '@/lib/provider-routing'
 import { toast } from '@/components/Toast'
+import { PluginMetadata } from '@/components/data/PluginMetadata'
 import { DataSourceEditor } from './DataSourceEditor'
 import { TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from './Keys'
 
@@ -417,35 +417,18 @@ export function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <KeyRound className="h-3.5 w-3.5 text-secondary" />
-        <h3 className="text-xs font-medium text-foreground">API Key</h3>
-        <span className="text-[10px] text-muted/50 uppercase tracking-wider">{plugin.api_key_env}</span>
+        <h4 className="text-xs font-medium text-foreground">API Key</h4>
+        <span className="break-all font-mono text-[11px] text-secondary">{plugin.api_key_env}</span>
       </div>
 
-      {/* 申请说明 + 官网链接 (对齐 TickFlow Key 区话术) */}
       <p className="text-xs text-secondary leading-relaxed mb-4">
-        {plugin.homepage ? (
-          <>
-            在{' '}
-            <a
-              href={plugin.homepage}
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent hover:underline inline-flex items-baseline gap-0.5"
-            >
-              {plugin.display_name} 官网
-              <ExternalLink className="h-3 w-3 self-center" />
-            </a>
-            {' '}申请获取。
-          </>
-        ) : (
-          <>向该数据源官方申请 API Key。</>
-        )}
+        向该数据源官方申请 API Key。
         Key 保存在本地，验证和取数时发送给该数据源用于认证。环境变量可作为后备配置。
       </p>
 
-      {/* 积分计费警示框 + Key/积分管理入口 (manifest billing/billing_note/key_manage_url 声明) */}
+      {/* 积分计费警示框 (manifest billing/billing_note 声明) */}
       {plugin.billing === 'points' && (
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/35 bg-warning/[0.07] px-3 py-2.5">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
@@ -456,18 +439,6 @@ export function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
           </div>
         </div>
       )}
-      {plugin.key_manage_url && (
-        <a
-          href={plugin.key_manage_url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-accent hover:underline mb-4"
-        >
-          管理 Key / 查看账户用量
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      )}
-
       {/* 当前状态 */}
       <div className="flex items-center justify-between mb-4">
         <div className="min-w-0">
@@ -512,6 +483,7 @@ export function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
       >
         <div className="relative">
           <input
+            aria-label={`${plugin.display_name} API Key`}
             type={revealing ? 'text' : 'password'}
             placeholder={plugin.available ? '粘贴新 Key 替换当前' : `粘贴 ${plugin.display_name} API Key`}
             value={keyInput}
@@ -1049,18 +1021,7 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet, refresh }: {
               </span>
             )}
           </div>
-          {plugin.description && <p className="text-xs text-secondary leading-relaxed">{plugin.description}</p>}
-          {/* 使用要点 (manifest usage_notes): 各能力的规模/节奏, 供容量与耗时预期 */}
-          {plugin.usage_notes && plugin.usage_notes.length > 0 && (
-            <ul className="mt-2 space-y-1">
-              {plugin.usage_notes.map((note, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted">
-                  <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-muted/50" />
-                  <span className="min-w-0">{note}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <PluginMetadata plugin={plugin} />
           <div className="mt-2">
             <CapabilityChips
               caps={matrixCaps.filter(c => declared.has(c.id))}

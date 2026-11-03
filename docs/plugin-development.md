@@ -35,15 +35,24 @@ check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可�
 datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial
 api_key_env: MY_SOURCE_API_KEY           # (可选)声明后设置页提供 Key 输入框
 hidden: false                            # (可选)true = 已加载但对设置页隐藏,不注册不展示
-description: "数据源描述"
+description: |
+  ## 接入说明
+  使用 **个人 API Key** 获取数据。
 install_hint: "pip install xxx"          # 未装依赖时显示的安装提示
-homepage: "https://example.com"          # (可选)官网/申请地址, 显示在设置页 Key 配置说明中
+homepage: "https://example.com"          # (可选)官网/文档地址, 显示在插件详情中
+homepage_label: "访问官网"                 # (可选)链接文字, 缺省为「显示名 官网」
 billing: points                          # (可选)计费标识: "points" → 设置页能力芯片/适配行标注「积分」
 billing_note: "消耗与频率/范围相关,间隔越短越高"  # (可选)计费提示: 设置页按警示框展示
 usage_notes:                             # (可选)使用要点: 各能力规模/节奏, 详情卡以列表展示
-  - "实时快照: 600 只/批, 全市场一轮约 10 批"
-key_manage_url: "https://example.com/me" # (可选)Key/账务管理页, 显示在设置页 Key 配置区(如积分明细入口)
+  - "实时快照: **600 只/批**, 全市场一轮约 10 批"
+  - "请先阅读 [接口文档](https://example.com/docs)。"
+key_manage_url: "https://example.com/me" # (可选)Key/账务管理页, 显示在插件详情中
+key_manage_label: "获取 Key / 查看用量"    # (可选)缺省为「管理 Key / 查看账户用量」
 ```
+
+`homepage_label`、`key_manage_label` 为可选纯文本，最多 200 字符；不填或留空时使用默认文案，没有对应 URL 时不显示入口。外部安装包的 `homepage`、`key_manage_url` 必须使用 HTTPS。链接在「数据源」与「已安装扩展」详情中展示，不依赖 `api_key_env` 或 Key 配置状态。新增字段不改变插件 API 版本，旧清单继续兼容。
+
+这两处详情及数据源安装预览的 `description`、详情中的 `usage_notes` 支持基础 Markdown：1–4 级标题、加粗、行内代码、无序/有序列表、引用、分隔线、表格和 HTTP/HTTPS 链接。YAML 多行正文可用 `|` 编写；名称、按钮与链接文案保持纯文本。当前不是完整 GFM，不支持图片、代码围栏或原始 HTML；原始 HTML 和不安全协议链接只显示为文字，不会执行。
 
 只声明真实提供的数据集;未声明的数据集 `provider_has_dataset` 返回 False,自动回退
 TickFlow。不要声明做不了的数据集(粒度含义见下文"能力声明的粒度")。

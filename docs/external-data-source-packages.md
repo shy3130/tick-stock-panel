@@ -18,7 +18,7 @@
 - 使用同一入口上传更高版本。新版暂存，当前进程继续使用旧版；完整重启后生效，设置页「重新加载」不会应用待生效更新。
 - 重启时新版初始化失败，保留原有效版本并显示错误。缺 Key 属于待配置状态，不视为代码初始化失败。
 - 详情区支持取消待生效更新、停用/启用、回退上一版本；回退也在重启后生效。
-- 停用或卸载前必须先切换引用该插件的所有能力，包括除权、五档和全量分钟。检查保存的路由配置，不依赖当前可用性。
+- 停用前需先切换引用该插件的能力。卸载确认会列出受影响的能力，确认后一次性将仍引用该插件的能力恢复为注册表中的默认来源，无需提前逐项切换。仅处理该插件的引用，包括除权、五档和全量分钟；默认来源不可用时，对应能力暂停取数，需在数据源设置中配置或选择其他来源。
 - 卸载后当前实例停止接收新调用，正在执行的调用/流式迭代结束后关闭；文件在重启时删除。Key 保留，需清除时在卸载前使用原 Key 配置区的清除操作。
 - 相同包重复安装不会重复注册。相同版本但不同内容拒绝覆盖，请提升版本。
 - 外部包在 `data/plugins/<name>/versions/<version>/`，激活状态在 `state.json`。实际 `data` 根目录服从应用配置；升级主程序不会覆盖该目录，兼容性仍须重新检查。
@@ -52,7 +52,7 @@ platforms: [any]               # 或 sys.platform-machine，如 linux-x86_64
 requires: []                   # 现有宿主发行包版本约束，例如 'httpx>=0.27'
 ```
 
-`description`、`author`、`homepage`、`key_manage_url`、`billing`、`billing_note`、`usage_notes` 沿用插件元数据；链接须为 HTTPS。作者字段只是包内声明，不是签名认证。`check: provider:availability` 可选，返回 `(bool, reason)`；只做本地就绪检查，不进行慢网络操作。
+`description`、`author`、`homepage`、`homepage_label`、`key_manage_url`、`key_manage_label`、`billing`、`billing_note`、`usage_notes` 沿用插件元数据；链接须为 HTTPS。两个 `_label` 字段可自定义链接文字（纯文本，最多 200 字符），省略或留空时保留原默认文案。官网和账户链接在插件详情中展示，不依赖 API Key 表单。`description` 与 `usage_notes` 支持基础 Markdown，具体语法与清单示例见 [插件开发指南](plugin-development.md)。作者字段只是包内声明，不是签名认证。`check: provider:availability` 可选，返回 `(bool, reason)`；只做本地就绪检查，不进行慢网络操作。
 
 外部插件独立命名空间加载，内部使用 `from .client import ...` 等相对导入。普通子包需要自己的 `__init__.py`。不要修改全局 `sys.path`，不要写入程序目录，不要依赖核心服务私有属性。构造函数应快速、无网络访问；取数在数据方法中执行。
 
@@ -83,7 +83,7 @@ requires: []                   # 现有宿主发行包版本约束，例如 'htt
 | --- | --- |
 | `POST /api/custom/source-packages/inspect` | multipart `file`，静态预检，返回清单、摘要、兼容问题 |
 | `POST /api/custom/source-packages/install` | multipart `file` + 预览的 `digest`，再次校验后安装/暂存更新 |
-| `POST /api/custom/source-packages/{name}/manage` | JSON `action`: `enable` / `disable` / `rollback` / `cancel-update` / `remove` |
+| `POST /api/custom/source-packages/{name}/manage` | JSON `action`: `enable` / `disable` / `rollback` / `cancel-update` / `remove`；卸载时可显式传 `reset_routes: true`，一并恢复所引用能力的默认来源。省略时保留原引用保护 |
 
 包文件先完整写入临时目录，再发布版本目录及原子状态文件。管理操作用跨进程文件数据库锁串行化；上传摘要只用于绑定预览和内容，不证明作者身份。Python 异常按插件隔离，但进程内插件无法隔离恶意行为、无限循环或原生崩溃。
 

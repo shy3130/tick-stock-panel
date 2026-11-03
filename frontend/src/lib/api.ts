@@ -2145,12 +2145,14 @@ export interface PluginDataSourceItem {
   description: string
   install_hint: string     // 未装依赖时显示的安装命令
   homepage?: string        // 插件官网/申请地址 (manifest 可选声明)
+  homepage_label?: string  // 官网入口文案，缺省使用「显示名 官网」
   api_key_env?: string     // 声明后设置页提供 Key 输入框 (先探后存)
   api_key_masked?: string  // 当前生效 Key 的脱敏串 (secrets.json 优先, .env 兜底; 与 TickFlow Key 同一展示契约)
   billing?: string         // 计费标识 (可选): "points" → 能力芯片/适配行标注「积分」
   billing_note?: string    // 计费提示 (可选): 积分消耗与频率/范围的关系, 按警示样式展示
   usage_notes?: string[]   // 使用要点 (可选): 各能力规模/节奏, 详情卡以列表展示
-  key_manage_url?: string  // Key/账务管理页 (可选): Key 配置区展示入口链接
+  key_manage_url?: string  // Key/账务管理页 (可选): 插件详情展示入口链接
+  key_manage_label?: string // 账户入口文案，缺省使用「管理 Key / 查看账户用量」
 }
 
 /** 数据源路由偏好字段 (每个能力一个, 与后端能力注册表一一对应) */
@@ -2854,9 +2856,9 @@ export const api = {
     if (revision) body.append('revision', revision)
     return request<{ name: string; message: string }>('/api/custom/source-packages/install', { method: 'POST', body, quiet: true, timeoutMs: 120_000 })
   },
-  manageSourcePackage: (name: string, action: string) =>
+  manageSourcePackage: (name: string, action: string, resetRoutes = false) =>
     request<{ name: string; message: string }>(`/api/custom/source-packages/${encodeURIComponent(name)}/manage`, {
-      method: 'POST', body: JSON.stringify({ action }), quiet: true,
+      method: 'POST', body: JSON.stringify({ action, reset_routes: resetRoutes }), quiet: true,
     }),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
   capabilityMatrix: () => request<CapabilityMatrix>('/api/settings/capability-matrix'),

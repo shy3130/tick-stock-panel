@@ -9,7 +9,7 @@ import { SettingsImportCenterPanel } from './ImportCenter'
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(), install: vi.fn(), backup: vi.fn(), resources: vi.fn(), source: vi.fn(),
   packages: vi.fn(), pages: vi.fn(), sources: vi.fn(), namespaces: vi.fn(), matrix: vi.fn(),
-  manage: vi.fn(),
+  manage: vi.fn(), loadErrors: vi.fn(),
 }))
 vi.mock('@/lib/api', () => ({ api: {
   importCenterInspect: mocks.inspect, installExtensionPackage: mocks.install,
@@ -20,8 +20,8 @@ vi.mock('@/lib/api', () => ({ api: {
   manageExtensionPackage: mocks.manage,
 } }))
 vi.mock('@/custom/source-packages/extension', () => ({ PackageActions: () => null }))
-vi.mock('./DataSources', () => ({ PluginKeyConfig: () => null }))
-vi.mock('@/extensions/registry', () => ({ getFrontendExtensionLoadErrors: () => [] }))
+vi.mock('./DataSources', () => ({ PluginKeyConfig: ({ plugin }: { plugin: { name: string } }) => <div data-key-config={plugin.name}>API Key configuration</div> }))
+vi.mock('@/extensions/registry', () => ({ getFrontendExtensionLoadErrors: mocks.loadErrors }))
 
 const extension = {
   kind: 'extension',
@@ -60,6 +60,7 @@ beforeEach(() => {
   mocks.namespaces.mockResolvedValue([])
   mocks.matrix.mockResolvedValue({ capabilities: [] })
   mocks.manage.mockResolvedValue({ id: 'demo.backend', message: '变更已保存，重启后生效' })
+  mocks.loadErrors.mockReturnValue([])
 })
 afterEach(() => { act(() => root?.unmount()); qc?.clear(); node.innerHTML = '' })
 
@@ -78,6 +79,18 @@ it('compatibility errors block a trusted package and a failed request preserves 
   await render(); await pick(); await click(node.querySelector<HTMLInputElement>('[aria-label="信任代码来源"]')!)
   expect(button('确认安装').disabled).toBe(true)
   expect(node.textContent).toContain('需要更高主程序版本')
+})
+
+it('previews a data source Markdown description before installation', async () => {
+  mocks.inspect.mockResolvedValue({ kind: 'source', preview: {
+    manifest: { name: 'demo', display_name: '演示数据源', version: '1.0.0', datasets: ['daily'],
+      description: '## 接入说明\n使用 **个人 Key**，价格为 `不复权`。' },
+    digest: 'digest', revision: 'revision', files: ['plugin.yaml', 'provider.py'], errors: [], installed_version: null,
+  } })
+  await render(); await pick('source.zip')
+  expect(node.querySelector('strong')?.textContent).toBe('个人 Key')
+  expect(node.querySelector('code')?.textContent).toBe('不复权')
+  expect(mocks.source).not.toHaveBeenCalled()
 })
 
 it('each backup operation starts without keys/passwords and applies only explicitly selected categories', async () => {
@@ -148,4 +161,62 @@ it('factor-page context extracts factors from a strategy-root package without se
   await render('/settings?tab=import&kind=factor'); await pick('strategy.zip')
   await click(button('确认导入'))
   expect(mocks.resources).toHaveBeenCalledWith(expect.any(Array), ['factor:f'], [], 'r')
+})
+
+it('opens the first extension by default and shows its full detail', async () => {
+  mocks.packages.mockResolvedValue([{ id: 'demo.backend', name: '研究服务', version: '1.0.0',
+    enabled: true, status: '已启用', revision: 'r' }])
+  await render('/settings?tab=import&view=installed')
+  await vi.waitFor(() => {
+    expect(node.querySelector('button[aria-pressed="true"]')?.textContent).toBe('已安装扩展')
+    expect(button('停用扩展')).toBeTruthy()
+  })
+  expect(node.querySelector('nav[aria-label="已安装扩展列表"] button[aria-pressed="true"]')?.textContent).toContain('研究服务')
+})
+
+it.each([
+  { enabled: false, pending_remove: false },
+  { enabled: false, pending_remove: true },
+  { enabled: undefined, pending_remove: true },
+])('hides credential editing for an inactive source %j', async (state) => {
+  const source = { name: 'amber', display_name: 'Amber', origin: 'external', version: '1.0.0',
+    datasets: ['realtime'], ...state, api_key_env: 'AMBER_API_KEY',
+    available: false, status: '待重启卸载', description: '' }
+  mocks.sources.mockResolvedValue({ plugins: [source] })
+  await render('/settings?tab=import&view=installed&selected=source%3Aamber')
+  await vi.waitFor(() => expect(node.querySelector('[data-extension-detail] h3')?.textContent).toContain('Amber'))
+  expect(node.querySelector('[data-key-config]')).toBeNull()
+})
+
+it('shows Markdown instructions and custom links even for a disabled source without a Key form', async () => {
+  mocks.sources.mockResolvedValue({ plugins: [{
+    name: 'demo', display_name: '演示数据源', origin: 'external', version: '1.0.0',
+    datasets: ['daily'], enabled: false, available: false, status: '已停用',
+    description: '## 接入说明\n使用 **个人账户** 和 `不复权` 数据。',
+    usage_notes: ['阅读 [详细说明](https://example.com/docs)。'],
+    homepage: 'https://example.com', homepage_label: '访问官方网站',
+    key_manage_url: 'https://example.com/account', key_manage_label: '获取个人 Key',
+  }] })
+  await render('/settings?tab=import&view=installed&selected=source%3Ademo')
+  await vi.waitFor(async () => {
+    await act(async () => {})
+    expect(node.querySelector('[data-extension-detail] strong')?.textContent).toBe('个人账户')
+  })
+  const detail = node.querySelector('[data-extension-detail]')!
+  expect(detail.querySelector('code')?.textContent).toBe('不复权')
+  expect([...detail.querySelectorAll('a')].map(link => link.textContent)).toEqual(['详细说明', '访问官方网站', '获取个人 Key'])
+  expect(node.querySelector('[data-key-config]')).toBeNull()
+})
+
+it('associates runtime loading errors with their page instead of showing it as enabled', async () => {
+  mocks.pages.mockResolvedValue([{ id: 'abnormal', label: '异动监控', enabled: true }])
+  mocks.loadErrors.mockReturnValue([{ source: 'runtime:abnormal', error: '扩展 ID 重复: official.abnormal' }])
+  await render('/settings?tab=import&view=installed&selected=page%3Aabnormal')
+  await vi.waitFor(() => {
+    const entry = node.querySelector('nav[aria-label="已安装扩展列表"] button')
+    expect(entry?.textContent).toContain('加载失败')
+    expect(entry?.textContent).not.toContain('已启用')
+  })
+  expect(button('停用页面')?.disabled).toBe(false)
+  expect(node.querySelector('[data-extension-detail]')?.textContent).toContain('扩展 ID 重复: official.abnormal')
 })

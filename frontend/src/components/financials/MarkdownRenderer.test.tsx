@@ -49,6 +49,26 @@ it('leaves signed pct inside inline code untouched', async () => {
   expect(html).toContain('<code')
 })
 
+it('renders Markdown links with formatted labels and safe external navigation', async () => {
+  const html = await renderToHtml('阅读 [**接入文档**](https://example.com/docs)。')
+  const host = document.createElement('div')
+  host.innerHTML = html
+  const link = host.querySelector('a')!
+  expect(link.getAttribute('href')).toBe('https://example.com/docs')
+  expect(link.querySelector('strong')?.textContent).toBe('接入文档')
+  expect(link.target).toBe('_blank')
+  expect(link.rel).toContain('noopener')
+  expect(link.rel).toContain('noreferrer')
+})
+
+it('keeps unsafe links and raw HTML inert', async () => {
+  const html = await renderToHtml('[运行](javascript:alert%281%29)\n<img src=x onerror=alert(1)>\n<script>alert(1)</script>')
+  const host = document.createElement('div')
+  host.innerHTML = html
+  expect(host.querySelector('a, img, script')).toBeNull()
+  expect(host.textContent).toContain('<img src=x onerror=alert(1)>')
+})
+
 it('wide tables (>4 cols) use auto layout, nowrap cells and horizontal scroll', async () => {
   const html = await renderToHtml(
     '| # | 标的 | 收盘 | 当日 | 换手率 | 评分 |\n' +

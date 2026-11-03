@@ -968,10 +968,15 @@ def update_data_providers(req: DataProvidersIn, request: Request) -> dict:
     """保存数据源选择。"""
     from app.services import preferences
     updates = req.model_dump(exclude_none=True)
-    if updates:
-        preferences.save(updates)
-    # 刷新能力快照: 当前 provider 变化会改变自定义源能力增广结果 (读缓存, 无网络请求)
-    request.app.state.capabilities = detect_capabilities()
+    with preferences.mutation():
+        from app.data_providers import custom as custom_sources
+        removing = {p["name"] for p in custom_sources.list_plugins() if p.get("pending_remove")}
+        if any(provider.lower() in removing for provider in updates.values()):
+            raise HTTPException(400, "该插件正在等待卸载，请选择其他数据源")
+        if updates:
+            preferences.save(updates)
+        # 与插件卸载共用写锁，避免并发请求重新引用已移除的数据源。
+        request.app.state.capabilities = detect_capabilities()
     return {
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
