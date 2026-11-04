@@ -4216,6 +4216,22 @@ export const api = {
   extDataDelete: (id: string) =>
     request<{ status: string }>(`/api/ext-data/${id}`, { method: 'DELETE' }),
 
+  extDataConfigExport: (id: string) =>
+    request<Blob>(`/api/ext-data/${encodeURIComponent(id)}/config/export`, { responseType: 'blob', quiet: true }),
+
+  extDataConfigInspect: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<ExtDataConfigPreview>('/api/ext-data/config/inspect', { method: 'POST', body, quiet: true })
+  },
+
+  extDataConfigImport: (file: File, id: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('config_id', id)
+    return request<ExtDataConfig>('/api/ext-data/config/import', { method: 'POST', body, quiet: true })
+  },
+
   extDataUpload: (id: string, file: File, snapshotDate?: string) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -5328,6 +5344,20 @@ export interface ExtDataConfig {
   /** 生效序列粒度 (显式声明 > 数据形态判断): intraday | daily; snapshot 表为 null */
   granularity_effective?: 'intraday' | 'daily' | null
   pull?: PullConfig | null
+}
+
+export interface ExtDataConfigPreview {
+  id: string
+  label: string
+  mode: 'snapshot' | 'timeseries'
+  fields: ExtDataField[]
+  field_count: number
+  conflict: boolean
+  requires_key: boolean
+  has_pull: boolean
+  pull_url?: string | null
+  pull_method?: string | null
+  warnings: string[]
 }
 
 export interface ExtDataRowsResult {
