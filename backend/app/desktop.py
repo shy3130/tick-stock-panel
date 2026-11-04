@@ -447,6 +447,13 @@ def main() -> int:
                 if ready.is_set() else None
             )
             logger.error("后端未就绪 (reason=%s), 桌面版退出", reason)
+            if not ready.is_set():
+                frame = sys._current_frames().get(server_thread.ident)
+                if frame is not None:
+                    logger.error(
+                        "启动超时，后端线程调用栈:\n%s",
+                        "".join(traceback.format_stack(frame)),
+                    )
             _open_static_window(_failed_html(reason))
             return 1
 

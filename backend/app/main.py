@@ -67,6 +67,7 @@ from app.services.daily_health import DailyIntegrityError
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock, MiningProcessLockError
 from app.services.quote_service import QuoteService
+from app.startup_diagnostics import startup_phase
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
@@ -110,14 +111,17 @@ async def _application_lifespan(app: FastAPI):
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
     # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
     try:
-        from app.services import auth as auth_service
-        auth_service.bootstrap_from_env()
+        with startup_phase(logger, "auth bootstrap"):
+            from app.services import auth as auth_service
+            auth_service.bootstrap_from_env()
     except Exception as e:  # noqa: BLE001
         logger.warning("auth bootstrap failed: %s", e)
 
     # 数据层
-    store = DataStore()
-    repo = KlineRepository(store)
+    with startup_phase(logger, "data store initialization"):
+        store = DataStore()
+    with startup_phase(logger, "repository initialization"):
+        repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
     # 去内置化种子迁移必须赶在下方 refresh_cache 之前: enriched 缓存构建时
@@ -125,39 +129,46 @@ async def _application_lifespan(app: FastAPI):
     # 列缺失 (跌停恒 0、连板梯队无数据), 直到下一次缓存刷新才自愈。
     _seeded_signals = 0
     try:
-        from app.strategy import custom_signals as _cs_seed
+        with startup_phase(logger, "signal seeding"):
+            from app.strategy import custom_signals as _cs_seed
 
-        _seeded_signals = _cs_seed.seed_if_empty(store.data_dir)
+            _seeded_signals = _cs_seed.seed_if_empty(store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("signal seeding failed (ignored): %s", e)
     # 自定义/复合因子载入注册表 (P3); 单个失败只跳过该因子 (fail-隔离)
-    from app.factors.store import load_into_registry
+    with startup_phase(logger, "custom factor module import"):
+        from app.factors.store import load_into_registry
 
     try:
-        loaded_factors = load_into_registry(store.data_dir)
+        with startup_phase(logger, "custom factor registration"):
+            loaded_factors = load_into_registry(store.data_dir)
         if loaded_factors:
             logger.info("custom factors loaded: %s", len(loaded_factors))
     except Exception as exc:  # noqa: BLE001
         logger.warning("custom factors load failed: %s", exc)
-    from app.services.mining_jobs import MiningRunStore
-    from app.services.mining_manager import MiningJobManager
+    with startup_phase(logger, "mining manager initialization"):
+        from app.services.mining_jobs import MiningRunStore
+        from app.services.mining_manager import MiningJobManager
 
-    mining_manager = MiningJobManager(store.data_dir)
+        mining_manager = MiningJobManager(store.data_dir)
     # A degraded instance must never rewrite another owner's live run manifests.
-    recovered_mining_runs = (
-        mining_manager.recover_interrupted() if app.state.mining_lock_acquired else 0
-    )
+    with startup_phase(logger, "mining run recovery"):
+        recovered_mining_runs = (
+            mining_manager.recover_interrupted() if app.state.mining_lock_acquired else 0
+        )
     app.state.mining_manager = mining_manager
     if recovered_mining_runs:
         logger.warning("recovered %d interrupted mining runs", recovered_mining_runs)
     # 策略守护复验: 复用挖掘的任务编排 (线程 + spawn 子进程 + 持久 run store),
     # 独立 namespace 存 run 记录; 与挖掘共用 heavy 槽 (避免双份全市场矩阵)。
-    guardian_manager = MiningJobManager(
-        store.data_dir,
-        kind="guardian",
-        store=MiningRunStore(store.data_dir, namespace="guardian"),
-    )
-    recovered_guardian_runs = guardian_manager.recover_interrupted()
+    with startup_phase(logger, "guardian manager initialization"):
+        guardian_manager = MiningJobManager(
+            store.data_dir,
+            kind="guardian",
+            store=MiningRunStore(store.data_dir, namespace="guardian"),
+        )
+    with startup_phase(logger, "guardian run recovery"):
+        recovered_guardian_runs = guardian_manager.recover_interrupted()
     app.state.guardian_manager = guardian_manager
     if recovered_guardian_runs:
         logger.warning(
@@ -166,7 +177,8 @@ async def _application_lifespan(app: FastAPI):
     # 在接受回测请求前固定 managed generation，避免首批并发 worker 各自创建版本。
     if settings.backtest_matrix_disk_cache_enabled:
         try:
-            repo.get_matrix_data_generation("stock")
+            with startup_phase(logger, "enriched generation initialization"):
+                repo.get_matrix_data_generation("stock")
         except EnrichedGenerationUnavailableError as exc:
             logger.warning("enriched generation requires a full rebuild: %s", exc)
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
