@@ -8,8 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app import __version__
 from app.api import (
@@ -62,6 +61,7 @@ from app.extensions.loader import (
     current_extension_context,
     start_backend_extensions,
 )
+from app.frontend_static import FrontendStaticFiles, frontend_file_response
 from app.jobs import daily_pipeline
 from app.services.daily_health import DailyIntegrityError
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
@@ -768,8 +768,13 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
     未匹配路径都回退 index.html, 浏览器把 HTML 当图标解析失败, Docker 与桌面
     安装包的浏览器页签因此没有图标。
     """
+    # 旧客户端可能缓存了 text/plain 的 JS/CSS。使用版本化资源地址，连带
+    # 相对路径动态 import 的分块一起绕过旧缓存；保留 /assets 兼容旧链接。
+    asset_base = f"/_static/{__version__}/assets"
     if (static_dir / "assets").exists():
-        target.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+        assets = FrontendStaticFiles(directory=static_dir / "assets")
+        target.mount("/assets", assets, name="assets")
+        target.mount(asset_base, assets, name="versioned-assets")
 
     @target.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
@@ -777,11 +782,14 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
         if full_path and "/" not in full_path and full_path not in (".", ".."):
             asset = static_dir / full_path
             if full_path != "index.html" and asset.is_file():
-                return FileResponse(asset)
+                return frontend_file_response(asset)
         index = static_dir / "index.html"
         if index.exists():
-            return FileResponse(
-                index,
+            markup = index.read_text(encoding="utf-8")
+            for quote in ('"', "'"):
+                markup = markup.replace(f"{quote}/assets/", f"{quote}{asset_base}/")
+            return HTMLResponse(
+                markup,
                 headers={"Cache-Control": "no-store, must-revalidate"},
             )
         return {"error": "frontend not built"}

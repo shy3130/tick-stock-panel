@@ -83,6 +83,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; 把 PyInstaller 产出的整个文件夹搬进安装目录
 ; Source 路径相对于 .iss 文件所在目录
 Source: "..\backend\dist\TSP\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; .NET 按 EXE 文件名读取同目录配置，不能放进 PyInstaller 的 _internal。
+Source: "TSP.exe.config"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 开始菜单

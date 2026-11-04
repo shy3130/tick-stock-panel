@@ -5,11 +5,16 @@ SPA 兜底返回 index.html, 浏览器会因 MIME 不符丢弃图标, 页签显�
 """
 from __future__ import annotations
 
+import mimetypes
+import re
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
+from app import __version__
 from app.main import _register_static_routes
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>'
@@ -61,3 +66,80 @@ def test_index_html_direct_request_stays_uncached(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.headers["cache-control"] == NO_STORE
     assert response.text == INDEX_HTML
+
+
+@pytest.mark.parametrize("prefix", ["", "/assets"])
+@pytest.mark.parametrize(("suffix", "media_type"), [
+    (".js", "text/javascript"), (".mjs", "text/javascript"),
+    (".css", "text/css"), (".wasm", "application/wasm"),
+    (".json", "application/json"), (".svg", "image/svg+xml"),
+    (".woff", "font/woff"), (".woff2", "font/woff2"),
+])
+def test_frontend_mime_is_independent_of_system_mapping(
+    tmp_path: Path, monkeypatch, prefix: str, suffix: str, media_type: str,
+) -> None:
+    client = _client(tmp_path)
+    # 注册表/其他库污染全局表后，静态响应仍须使用前端资源的标准类型。
+    mimetypes.init()
+    monkeypatch.setitem(mimetypes.types_map, suffix, "text/plain")
+    asset = tmp_path / prefix.lstrip("/") / f"entry{suffix}"
+    asset.write_bytes(b"frontend asset")
+
+    response = client.get(f"{prefix}/entry{suffix}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == media_type
+    assert response.content == b"frontend asset"
+
+
+def test_index_html_is_html_even_when_system_mapping_is_wrong(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    mimetypes.init()
+    monkeypatch.setitem(mimetypes.types_map, ".html", "text/plain")
+    assert client.get("/").headers["content-type"].startswith("text/html")
+
+
+def test_entry_urls_bypass_legacy_wrong_mime_cache(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    (tmp_path / "assets" / "index.css").write_text("body { color: red }")
+    (tmp_path / "index.html").write_text(
+        '<!doctype html><link rel="stylesheet" href="/assets/index.css">'
+        "<script type='module' src='/assets/index-abc123.js'></script>"
+    )
+    mimetypes.init()
+    monkeypatch.setitem(mimetypes.types_map, ".js", "text/plain")
+    # 旧版本的 URL/响应可能已被客户端缓存，新 HTML 必须使用不同资源 URL。
+    legacy = FastAPI()
+    legacy.mount("/assets", StaticFiles(directory=tmp_path / "assets"))
+    old = TestClient(legacy).get("/assets/index-abc123.js")
+    assert old.headers["content-type"].startswith("text/plain")
+
+    html = client.get("/").text
+    urls = re.findall(r"(?:src|href)=[\"']([^\"']+)[\"']", html)
+    assert len(urls) == 2
+    assert all(not url.startswith("/assets/") for url in urls)
+    for url in urls:
+        response = client.get(url)
+        assert response.status_code == 200
+        expected = "text/javascript" if url.endswith(".js") else "text/css"
+        assert response.headers["content-type"].startswith(expected)
+
+
+def test_frontend_static_preserves_conditional_head_and_range_requests(tmp_path):
+    client = _client(tmp_path)
+    response = client.get("/assets/index-abc123.js")
+    assert client.get(
+        "/assets/index-abc123.js", headers={"If-None-Match": response.headers["etag"]},
+    ).status_code == 304
+    head = client.head("/assets/index-abc123.js")
+    assert head.status_code == 200
+    assert head.content == b""
+    partial = client.get("/assets/index-abc123.js", headers={"Range": "bytes=0-6"})
+    assert partial.status_code == 206
+    assert partial.content == b"console"
+
+
+@pytest.mark.parametrize("path", ["missing.js", "%2e%2e/favicon.svg"])
+def test_versioned_assets_do_not_fall_back_or_escape_asset_directory(tmp_path, path):
+    response = _client(tmp_path).get(f"/_static/{__version__}/assets/{path}")
+    assert response.status_code == 404
