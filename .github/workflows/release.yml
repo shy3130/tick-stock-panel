@@ -60,7 +60,7 @@ jobs:
           #   2) 项目依赖 polars, 而 polars 自 1.33 起移除了 macOS x86_64 原生 wheel
           #      (改 py3-none-any), 在 arm64 runner 上经 Rosetta 无法产出可运行的 x64 包。
           #   runner 用 macos-26 (2026-02 GA, 免费, arm64 原生, SDK 更新)。
-          ALL='[{"os":"windows-latest","artifact":"TSP-Setup-x64.exe","platform":"windows"},{"os":"macos-26","artifact":"TSP-macos-arm64.dmg","platform":"macos","arch":"arm64"},{"os":"ubuntu-latest","artifact":"TSP-linux-x64.tar.gz","platform":"linux"}]'
+          ALL='[{"os":"windows-latest","artifact":"TSP-Setup-x64.exe","platform":"windows"},{"os":"macos-15","artifact":"TSP-macos-arm64.dmg","platform":"macos","arch":"arm64"},{"os":"ubuntu-latest","artifact":"TSP-linux-x64.tar.gz","platform":"linux"}]'
           # 按 input 过滤平台 (macos → arm64 单项)
           python3 -c "
           import json, sys
