@@ -315,6 +315,8 @@ def iter_daily_frames(
     from app.data_providers import custom
 
     provider_name = preferences.get_daily_data_provider()
+    logger.info("日K修补取数: provider=%s asset=%s symbols=%d start=%s end=%s",
+                provider_name, asset_type, len(symbols), start_time.isoformat(), end_time.isoformat())
     if provider_name != "tickflow" and custom.provider_has_dataset(provider_name, "daily"):
         found = False
         for frame in iter_custom_daily_frames(
@@ -327,6 +329,9 @@ def iter_daily_frames(
         # 非股票源沿用指数/ETF 原有的「明确不支持时回退」契约。
         if found or asset_type == "stock":
             return
+        logger.warning("日K源 %s 未返回 %s 数据, 修补回退 TickFlow", provider_name, asset_type)
+    elif provider_name != "tickflow":
+        logger.warning("数据源 %s 未提供 daily 能力, 修补回退 TickFlow", provider_name)
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         raise RuntimeError("当前日K数据源不可用, 请检查数据源配置")
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH, default_batch=100)
