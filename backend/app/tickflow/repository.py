@@ -20,7 +20,8 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
+from datetime import time as dt_time
 from pathlib import Path
 
 import duckdb
@@ -36,7 +37,7 @@ from app.enriched_generation import (
     get_enriched_generation,
     get_enriched_generation_snapshot,
 )
-from app.market_time import cn_today
+from app.market_time import CN_TZ, cn_today
 from app.parquet import scan_enriched_parquet
 from app.polars_guard import guarded_collect
 from app.services.minute_adjust import apply_minute_adjustment, minute_basis_is_raw
@@ -2341,7 +2342,7 @@ class KlineRepository:
 
     def replace_daily_rows(
         self, asset_type: str, day: date, incoming: pl.DataFrame, *,
-        symbols: list[str] | None, backup_dir: Path,
+        symbols: list[str] | None, backup_dir: Path, remove_symbols: list[str] | None = None,
     ) -> None:
         """修正一个日期的指定股票; symbols=None 仅用于无法读取的整日分区。
 
@@ -2352,12 +2353,22 @@ class KlineRepository:
         part = self.store.data_dir / daily_dirname(asset_type) / f"date={day}"
         self._validate_repair_path(part)
         self._validate_repair_path(backup_dir)
-        if incoming.is_empty() or incoming.filter(pl.col("date") != day).height:
+        removals = set(remove_symbols or [])
+        if ((incoming.is_empty() and not removals)
+                or not {"symbol", "date"}.issubset(incoming.columns)
+                or incoming.filter(pl.col("date") != day).height):
             raise ValueError("修补日K为空或日期与目标分区不符")
-        if symbols is not None and not set(incoming["symbol"].to_list()).issubset(symbols):
+        received = set(incoming["symbol"].to_list())
+        if symbols is not None and not (received | removals).issubset(symbols):
             raise ValueError("修补日K超出目标股票范围")
+        if received & removals:
+            raise ValueError("修补和清理的股票不能重叠")
+        if symbols is not None and set(symbols) != received | removals:
+            raise ValueError("修补日K不完整, 不能丢弃尚未获取的股票")
         paths = sorted(part.glob("*.parquet"))
         fingerprints = {p: self._partition_fingerprint(p) for p in paths}
+        if removals - self.daily_repair_nontrading_symbols(asset_type, day, sorted(removals)):
+            raise ValueError("无法确认待清理记录为非交易记录, 原数据保持不变")
         base = pl.DataFrame()
         if symbols is not None and paths:
             base = pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed")
@@ -2365,6 +2376,8 @@ class KlineRepository:
         merged = pl.concat([base, incoming], how="diagonal_relaxed").unique(
             subset=["symbol", "date"], keep="last",
         ).sort(["symbol", "date"])
+        if merged.is_empty():
+            raise ValueError("清理后整日日K为空, 需要完整日K数据, 原数据保持不变")
         with self._write_lock:
             if {p: self._partition_fingerprint(p) for p in part.glob("*.parquet")} != fingerprints:
                 raise ValueError("日K在修补期间发生变化, 请重新自检")
@@ -2381,6 +2394,46 @@ class KlineRepository:
 
     def validate_daily_repair_target(self, asset_type: str, day: date) -> None:
         self._validate_repair_path(self.store.data_dir / daily_dirname(asset_type) / f"date={day}")
+
+    def daily_repair_nontrading_symbols(self, asset_type: str, day: date, symbols: list[str]) -> set[str]:
+        """仅确认本地已有的上市前、零成交及旧日快照遗留, 不从源的空返回推断停牌。
+
+        零成交判据沿用 filter_halt_days; 重复行必须全部有依据, 防止删掉同股真实成交。
+        指数的零成交量可能是源缺字段, 不套用股票/ETF 的清理规则。
+        """
+        if not symbols or asset_type not in {"stock", "etf"}:
+            return set()
+        part = self.store.data_dir / daily_dirname(asset_type) / f"date={day}"
+        self._validate_repair_path(part)
+        frames = []
+        for path in sorted(part.glob("*.parquet")):
+            self._validate_repair_path(path)
+            scan = pl.scan_parquet(path)
+            columns = set(scan.collect_schema().names())
+            if "symbol" not in columns:
+                return set()
+            frames.append(scan.filter(pl.col("symbol").is_in(symbols)).select(
+                [c for c in ("symbol", "volume", "amount", "quote_ts") if c in columns],
+            ).collect())
+        if not frames:
+            return set()
+        rows = pl.concat(frames, how="diagonal_relaxed")
+        eligible = pl.lit(False)
+        if {"volume", "amount"}.issubset(rows.columns):
+            eligible = eligible | ((pl.col("volume").cast(pl.Float64, strict=False) == 0)
+                                   & (pl.col("amount").cast(pl.Float64, strict=False) == 0))
+        if "quote_ts" in rows.columns:
+            start_ms = int(datetime.combine(day, dt_time.min, tzinfo=CN_TZ).timestamp() * 1000)
+            ts = pl.col("quote_ts").cast(pl.Int64, strict=False)
+            eligible = eligible | ((ts > 0) & (ts < start_ms))
+        instruments = self.get_instruments_asset(asset_type)
+        if {"symbol", "listing_date"}.issubset(instruments.columns):
+            prelisting = instruments.filter(
+                pl.col("listing_date").cast(pl.Date, strict=False) > day,
+            )["symbol"].to_list()
+            eligible = eligible | pl.col("symbol").is_in(prelisting)
+        confirmed = rows.group_by("symbol").agg(eligible.fill_null(False).all().alias("nontrading"))
+        return set(confirmed.filter(pl.col("nontrading"))["symbol"].to_list())
 
     def daily_repair_files(self, asset_type: str) -> list[Path]:
         """重算原始历史前验证全部输入路径, 不沿目录或文件链接读取。"""

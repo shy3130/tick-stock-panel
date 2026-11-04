@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from app.market_time import cn_today
+from app.market_time import CN_TZ, cn_today
 from app.tickflow.capabilities import CapabilitySet
 from app.tickflow.repository import KlineRepository
 
@@ -57,6 +57,7 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
     root = Path(repo.store.data_dir)
     targets = plan_daily_repair(issues)
     staging = root / ".daily_repair_staging" / backup_dir.name
+    removals = {}
 
     def emit(stage, pct, message, *, stage_pct=0):
         if on_progress:
@@ -80,8 +81,8 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
 
             frames = []
             for incoming in kline_sync.iter_daily_frames(
-                symbols, capset, start_time=datetime.combine(target.day, datetime.min.time()),
-                end_time=datetime.combine(target.day, datetime.min.time()), asset_type=target.asset_type,
+                symbols, capset, start_time=datetime.combine(target.day, datetime.min.time(), tzinfo=CN_TZ),
+                end_time=datetime.combine(target.day, datetime.max.time(), tzinfo=CN_TZ), asset_type=target.asset_type,
                 on_chunk_done=progress,
             ):
                 if incoming.is_empty():
@@ -94,16 +95,22 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
                     if not data_integrity.invalid_daily_rows(incoming, target.day).is_empty():
                         raise ValueError(f"数据源返回的 {target.day} 日K仍异常, 未写入正式数据")
                     frames.append(incoming)
-            if not frames:
-                raise ValueError(f"数据源未返回 {target.day} 的修补日K, 原数据保持不变")
-            frame = pl.concat(frames, how="diagonal_relaxed").unique(subset=["symbol", "date"], keep="last")
+            frame = (pl.concat(frames, how="diagonal_relaxed").unique(subset=["symbol", "date"], keep="last")
+                     if frames else pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date}))
             missing = required - set(frame["symbol"].to_list())
-            if missing:
-                raise ValueError(f"{target.day} 缺少修补股票: {', '.join(sorted(missing)[:10])}")
+            confirmed = repo.daily_repair_nontrading_symbols(target.asset_type, target.day, sorted(missing))
+            unresolved = missing - confirmed
+            if unresolved or (frame.is_empty() and not confirmed):
+                codes = ", ".join(sorted(unresolved)[:10])
+                if not frames:
+                    raise ValueError(f"数据源未返回 {target.day} 的修补日K ({codes}), "
+                                     "且无法确认原记录为非交易记录。请核对日K数据源的历史覆盖和权限, 原数据保持不变")
+                raise ValueError(f"{target.day} 缺少修补股票: {codes}, 原数据保持不变")
+            removals[target] = sorted(confirmed)
             part = staging / daily_dirname(target.asset_type) / f"date={target.day}"
             part.mkdir(parents=True, exist_ok=True)
             frame.write_parquet(part / "part.parquet")
-            if data_integrity.inspect_daily_partition(staging, daily_dirname(target.asset_type), target.day):
+            if not frame.is_empty() and data_integrity.inspect_daily_partition(staging, daily_dirname(target.asset_type), target.day):
                 raise ValueError(f"数据源返回的 {target.day} 日K未通过复检, 未写入正式数据")
 
         for i, target in enumerate(targets):
@@ -112,7 +119,10 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
             frame = pl.read_parquet(staging / table / f"date={target.day}/part.parquet")
             repo.replace_daily_rows(target.asset_type, target.day, frame,
                                     symbols=list(target.symbols) if target.symbols is not None else None,
-                                    backup_dir=backup_dir / table / f"date={target.day}")
+                                    backup_dir=backup_dir / table / f"date={target.day}",
+                                    remove_symbols=removals[target])
+            if removals[target]:
+                emit("sync_daily", 55, f"已备份并清理 {target.day} 的非交易遗留记录 ({len(removals[target])} 只)")
             remaining = data_integrity.inspect_daily_partition(root, table, target.day)
             if remaining is not None:
                 raise ValueError(f"{target.day} 日K仍未通过校验, 未进入指标计算")

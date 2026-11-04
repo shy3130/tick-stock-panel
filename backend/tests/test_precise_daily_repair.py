@@ -1,18 +1,20 @@
 """日K修补的业务边界: 精确取数、先校验、完整历史计算、隔离其他股票。"""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
+from app.market_time import CN_TZ
 from app.services import data_integrity, integrity_check, kline_sync
 from app.tickflow.repository import DataStore, KlineRepository
 
 A, B = "600001.SH", "600002.SH"
 TODAY = date(2026, 10, 30)
 BAD_DAY = date(2026, 10, 27)
+REAL_ITER_DAILY_FRAMES = kline_sync.iter_daily_frames
 
 
 def frame(day, symbols=(A, B), prices=(10.0, 20.0)):
@@ -95,6 +97,224 @@ def test_failed_source_validation_never_changes_raw_or_enriched(env, monkeypatch
         integrity_check.run_repair(env.repo, env.caps, report["id"])
     assert not computed
     assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize("evidence", ["zero_activity", "before_listing", "stale_quote"])
+def test_empty_source_removes_only_confirmed_nontrading_residue_with_backup(env, monkeypatch, evidence):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    original = pl.read_parquet(path)
+    if evidence == "zero_activity":
+        original = original.with_columns(
+            *(pl.when(pl.col("symbol") == A).then(0.0).otherwise(pl.col(c)).alias(c)
+              for c in ("volume", "amount")),
+        )
+    elif evidence == "before_listing":
+        monkeypatch.setattr(env.repo, "get_instruments_asset", lambda _: pl.DataFrame({
+            "symbol": [A, B], "listing_date": [BAD_DAY + timedelta(days=1), date(2000, 1, 1)],
+        }))
+    else:
+        ts = int(datetime.combine(BAD_DAY - timedelta(days=1), time(15), tzinfo=CN_TZ).timestamp() * 1000)
+        original = original.with_columns(
+            pl.when(pl.col("symbol") == A).then(ts).otherwise(None).cast(pl.Int64).alias("quote_ts"),
+        )
+    original.write_parquet(path)
+    before = path.read_bytes()
+    unrelated = {p: p.read_bytes() for p in (env.root / "kline_daily").rglob("*.parquet") if p != path}
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", lambda *a, **kw: iter(()))
+
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    result = integrity_check.run_repair(env.repo, env.caps, report["id"])
+
+    assert result["status"] == "clean"
+    assert pl.read_parquet(path).equals(original.filter(pl.col("symbol") == B))
+    assert all(p.read_bytes() == value for p, value in unrelated.items())
+    backups = list((env.root / "integrity_backups").rglob("*.parquet"))
+    assert len(backups) == 1 and backups[0].read_bytes() == before
+    enriched = pl.read_parquet(env.root / f"kline_daily_enriched/date={BAD_DAY}/part.parquet")
+    assert enriched["symbol"].to_list() == [B]
+    later = pl.read_parquet(env.root / f"kline_daily_enriched/date={BAD_DAY + timedelta(days=1)}/part.parquet")
+    assert A in later["symbol"].to_list()
+
+
+@pytest.mark.parametrize("column,value", [("volume", None), ("amount", None), ("amount", 1.0), ("volume", -1.0)])
+def test_empty_source_cannot_remove_unconfirmed_activity(env, monkeypatch, column, value):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    original = pl.read_parquet(path).with_columns(
+        *(pl.when(pl.col("symbol") == A).then(0.0).otherwise(pl.col(c)).alias(c)
+          for c in ("volume", "amount")),
+    ).with_columns(pl.when(pl.col("symbol") == A).then(pl.lit(value)).otherwise(pl.col(column)).alias(column))
+    original.write_parquet(path)
+    before = path.read_bytes()
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", lambda *a, **kw: iter(()))
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    with pytest.raises(ValueError, match="数据源未返回"):
+        integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert path.read_bytes() == before
+    assert not (env.root / "integrity_backups").exists()
+
+
+def test_mixed_real_repair_and_nontrading_cleanup_preserve_healthy_rows(env, monkeypatch):
+    placeholder = "600003.SH"
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    base = pl.read_parquet(path)
+    residue = frame(BAD_DAY, (placeholder,), (float("nan"),)).with_columns(
+        pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"),
+    )
+    pl.concat([base, residue]).write_parquet(path)
+    original = path.read_bytes()
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", lambda *a, **kw: iter([frame(BAD_DAY, (A,), (10.0,))]))
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    result = integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert result["status"] == "clean"
+    repaired = pl.read_parquet(path)
+    assert set(repaired["symbol"]) == {A, B}
+    assert repaired.filter(pl.col("symbol") == A)["close"].item() == 10.0
+    assert repaired.filter(pl.col("symbol") == B).equals(base.filter(pl.col("symbol") == B))
+    assert next((env.root / "integrity_backups").rglob("*.parquet")).read_bytes() == original
+
+
+def test_nontrading_cleanup_waits_for_all_required_source_rows(env, monkeypatch):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    pl.read_parquet(path).with_columns(
+        *(pl.when(pl.col("symbol") == B).then(0.0).otherwise(pl.col(c)).alias(c)
+          for c in ("volume", "amount")),
+        pl.when(pl.col("symbol") == B).then(float("nan")).otherwise(pl.col("close")).alias("close"),
+    ).write_parquet(path)
+    before = path.read_bytes()
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", lambda *a, **kw: iter(()))
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    with pytest.raises(ValueError, match="数据源未返回"):
+        integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert path.read_bytes() == before
+
+
+def test_repair_requests_full_beijing_day_through_tickflow_adapter(env, monkeypatch):
+    from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+
+    requested = []
+    def batch(symbols, **kwargs):
+        requested.append(kwargs)
+        ts = int(datetime.combine(BAD_DAY, time(15), tzinfo=CN_TZ).timestamp() * 1000)
+        if not kwargs["start_time"] <= ts <= kwargs["end_time"]:
+            return {}
+        return {A: {"timestamp": [ts], "open": [10.0], "high": [11.0], "low": [9.0],
+                    "close": [10.0], "volume": [100.0], "amount": [1000.0]}}
+
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", REAL_ITER_DAILY_FRAMES)
+    monkeypatch.setattr(kline_sync, "get_client", lambda: SimpleNamespace(klines=SimpleNamespace(batch=batch)))
+    monkeypatch.setattr(kline_sync, "resolve_limit", lambda *a, **kw: SimpleNamespace(batch=100, rpm=None))
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    caps = CapabilitySet({Cap.KLINE_DAILY_BATCH: CapabilityLimits()})
+    assert integrity_check.run_repair(env.repo, caps, report["id"])["status"] == "clean"
+    start = datetime.fromtimestamp(requested[0]["start_time"] / 1000, CN_TZ)
+    end = datetime.fromtimestamp(requested[0]["end_time"] / 1000, CN_TZ)
+    assert start == datetime.combine(BAD_DAY, time.min, tzinfo=CN_TZ)
+    assert end.date() == BAD_DAY and end.hour == 23 and end.minute == 59 and end.second == 59
+
+
+def test_nontrading_cleanup_does_not_discard_an_active_duplicate(env, monkeypatch):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    original = pl.read_parquet(path)
+    duplicate = original.filter(pl.col("symbol") == A).with_columns(
+        pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"),
+    )
+    pl.concat([original, duplicate]).write_parquet(path)
+    before = path.read_bytes()
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", lambda *a, **kw: iter(()))
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    with pytest.raises(ValueError, match="数据源未返回"):
+        integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert path.read_bytes() == before
+
+
+def test_confirmed_cleanup_does_not_bypass_source_failure(env, monkeypatch):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    pl.read_parquet(path).with_columns(
+        *(pl.when(pl.col("symbol") == A).then(0.0).otherwise(pl.col(c)).alias(c)
+          for c in ("volume", "amount")),
+    ).write_parquet(path)
+    before = path.read_bytes()
+    def fail(*a, **kw):
+        raise RuntimeError("source unavailable")
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", fail)
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    with pytest.raises(RuntimeError, match="source unavailable"):
+        integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert path.read_bytes() == before
+
+
+def test_repository_rejects_unconfirmed_or_whole_day_cleanup(env):
+    empty = pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date})
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    before = path.read_bytes()
+    backup = env.root / "integrity_backups" / "test"
+    with pytest.raises(ValueError, match="无法确认"):
+        env.repo.replace_daily_rows("stock", BAD_DAY, empty, symbols=[A], backup_dir=backup, remove_symbols=[A])
+    assert path.read_bytes() == before and not backup.exists()
+    pl.read_parquet(path).with_columns(
+        pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"),
+    ).write_parquet(path)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="整日日K为空"):
+        env.repo.replace_daily_rows("stock", BAD_DAY, empty, symbols=[A, B], backup_dir=backup, remove_symbols=[A, B])
+    assert path.read_bytes() == before and not backup.exists()
+
+
+def test_repository_cleanup_rechecks_concurrent_daily_changes(env, monkeypatch):
+    path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
+    pl.read_parquet(path).with_columns(
+        *(pl.when(pl.col("symbol") == A).then(0.0).otherwise(pl.col(c)).alias(c)
+          for c in ("volume", "amount")),
+    ).write_parquet(path)
+    confirm = env.repo.daily_repair_nontrading_symbols
+    concurrent = frame(BAD_DAY)
+    def changed(*args):
+        result = confirm(*args)
+        concurrent.write_parquet(path)
+        return result
+    monkeypatch.setattr(env.repo, "daily_repair_nontrading_symbols", changed)
+    backup = env.root / "integrity_backups" / "test"
+    empty = pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date})
+    with pytest.raises(ValueError, match="修补期间发生变化"):
+        env.repo.replace_daily_rows("stock", BAD_DAY, empty, symbols=[A], backup_dir=backup, remove_symbols=[A])
+    assert pl.read_parquet(path).equals(concurrent)
+    assert not backup.exists()
+
+
+def test_index_zero_activity_cannot_be_pruned_as_stock_residue(env):
+    path = env.root / f"kline_index_daily/date={BAD_DAY}/part.parquet"
+    path.parent.mkdir(parents=True)
+    original = frame(BAD_DAY).with_columns(pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"))
+    original.write_parquet(path)
+    backup = env.root / "integrity_backups" / "test"
+    empty = pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date})
+    with pytest.raises(ValueError, match="无法确认"):
+        env.repo.replace_daily_rows("index", BAD_DAY, empty, symbols=[A], backup_dir=backup, remove_symbols=[A])
+    assert pl.read_parquet(path).equals(original) and not backup.exists()
+
+
+def test_empty_custom_stock_daily_does_not_silently_switch_to_tickflow(env, monkeypatch, caplog):
+    from app.data_providers import custom
+    from app.services import preferences
+
+    calls = []
+    def fetch(symbols, **kwargs):
+        calls.append((symbols, kwargs))
+        return pl.DataFrame()
+    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "test_source")
+    monkeypatch.setattr(custom, "provider_has_dataset", lambda *a: True)
+    monkeypatch.setattr(custom, "get_provider", lambda _: SimpleNamespace(get_daily=fetch))
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", REAL_ITER_DAILY_FRAMES)
+    def wrong_source():
+        raise AssertionError("must not switch the selected stock daily source")
+    monkeypatch.setattr(kline_sync, "get_client", wrong_source)
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    with caplog.at_level("INFO"), pytest.raises(ValueError, match="数据源未返回"):
+        integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert calls[0][0] == [A]
+    assert calls[0][1]["start_time"].tzinfo == CN_TZ
+    assert calls[0][1]["end_time"].hour == 23
+    assert "provider=test_source" in caplog.text
 
 
 def test_one_corrupt_file_falls_back_to_only_its_day(env):
