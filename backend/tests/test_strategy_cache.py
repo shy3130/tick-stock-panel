@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services import strategy_cache
 
 
@@ -9,6 +11,20 @@ def _result(*symbols: str) -> dict:
         "as_of": "2026-07-20",
         "rows": [{"symbol": symbol, "close": index + 1.0} for index, symbol in enumerate(symbols)],
     }
+
+
+def test_strict_publication_reports_write_failure_and_preserves_old_snapshot(tmp_path, monkeypatch):
+    strategy_cache.write_cache(tmp_path, "2026-07-20", {"strategy_a": _result("000001.SZ")})
+
+    def fail(*args):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(strategy_cache.os, "replace", fail)
+    with pytest.raises(OSError):
+        strategy_cache.write_cache(tmp_path, "2026-07-20", {"strategy_a": _result("000002.SZ")}, strict=True)
+    assert strategy_cache.read_cache(tmp_path)["results"]["strategy_a"]["rows"][0]["symbol"] == "000001.SZ"
+    # Existing best-effort writers remain backward compatible.
+    strategy_cache.write_cache(tmp_path, "2026-07-20", {"strategy_a": _result("000003.SZ")})
 
 
 def test_same_day_partial_writes_merge_strategy_results(tmp_path):

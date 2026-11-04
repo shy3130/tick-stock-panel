@@ -5,7 +5,8 @@ import { QueryClient, QueryCache } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
 import { installTspExtBridge, loadRuntimePageExtensions } from './extensions/runtime'
-import { api } from './lib/api'
+import { api, ApiError } from './lib/api'
+import { retryDelay } from './lib/refreshPolicy'
 import { QK } from './lib/queryKeys'
 import { cn } from './lib/cn'
 import * as format from './lib/format'
@@ -57,6 +58,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 5_000,           // 5s 内复用,与 §4.2 Repository 不变量一致
       refetchOnWindowFocus: false,
+      retryDelay: (attempt, error) => retryDelay(attempt, error instanceof ApiError ? error.retryAfterMs : undefined),
     },
     mutations: {
       onError: (err) => _redirectToLogin(err),

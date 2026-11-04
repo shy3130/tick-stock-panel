@@ -50,6 +50,35 @@ def test_strategy_result_subscriber_notification_is_coalesced():
     assert sub.wait(timeout=0.01) is False
 
 
+def test_stream_revisions_are_shared_and_restart_safe():
+    service = QuoteService()
+    first, second = service.subscribe(), service.subscribe()
+    before = service.stream_versions()
+    service._broadcast_quote_updated()
+    assert service.stream_versions()["quote"] != before["quote"]
+    assert first.pop()["quote_updated"] and second.pop()["quote_updated"]
+    assert service.stream_versions()["subscribers"] == 2
+    assert QuoteService().stream_versions()["quote"] != service.stream_versions()["quote"]
+
+
+def test_many_sse_subscribers_wait_without_blocking_worker_threads():
+    import asyncio
+    import threading
+
+    async def check():
+        subscribers = [QuoteSubscriber() for _ in range(100)]
+        tasks = [asyncio.create_task(sub.wait_async(1)) for sub in subscribers]
+        await asyncio.sleep(0)
+        thread = threading.Thread(target=lambda: [sub.notify_quote() for sub in subscribers])
+        thread.start()
+        assert all(await asyncio.gather(*tasks))
+        thread.join(1)
+        assert all(sub.pop()["quote_updated"] for sub in subscribers)
+        assert await subscribers[0].wait_async(0.001) is False
+
+    asyncio.run(check())
+
+
 def test_strategy_result_notification_fans_out_to_all_subscribers():
     service = QuoteService()
     first = service.subscribe()

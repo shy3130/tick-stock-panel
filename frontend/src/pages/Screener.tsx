@@ -3,13 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X, SlidersHorizontal } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
-import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
+import { useMinuteBatchQuery } from '@/lib/useMinuteBatchQuery'
 import { fetchDailyBatchChunked } from '@/lib/klineBatchChunked'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
+import { pendingStrategyIds, pollingInterval, useDocumentVisible } from '@/lib/refreshPolicy'
 import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -158,7 +159,7 @@ export function Screener() {
   // 各策略显示上限 (null = 全部)
   const [strategyLimits, setStrategyLimits] = useState<Record<string, number | null>>({})
   // run_all 渐进式返回后仍在后台计算的策略 (startedAt 为后端时钟, 用于判断缓存新旧)
-  const [pendingRun, setPendingRun] = useState<{ ids: string[]; startedAt: number } | null>(null)
+  const [pendingRun, setPendingRun] = useState<{ ids: string[]; startedAt: number; taskId?: string } | null>(null)
   const pendingRunIds = useMemo(() => new Set(pendingRun?.ids ?? []), [pendingRun])
 
   // 筛选条件变化时同步到 map（供切换策略时读取最新值）
@@ -204,12 +205,14 @@ export function Screener() {
   // 交易时段内需要定期重取, 否则列表一直停在首次加载那一刻的涨跌幅, 与详情
   // 弹窗的实时价对不上。摘要没有价格字段, 仍只在 run_all 未完成时轮询。
   const quoteStatus = useQuoteStatus()
+  const documentVisible = useDocumentVisible()
   const inTradingSession = quoteStatus.data?.is_trading_hours !== false
   const summaryQuery = useQuery({
-    queryKey: QK.screenerCachedSummary,
-    queryFn: api.screenerCachedSummary,
+    queryKey: pendingRun?.taskId ? [...QK.screenerCachedSummary, pendingRun.taskId] : QK.screenerCachedSummary,
+    queryFn: () => api.screenerCachedSummary(pendingRun?.taskId),
+    placeholderData: previous => previous,
     enabled: assetType === 'stock',
-    refetchInterval: pendingRun ? 2000 : false,
+    refetchInterval: pendingRun ? pollingInterval(2000, false, documentVisible) : false,
   })
 
   const fullCachedQuery = useQuery({
@@ -217,7 +220,7 @@ export function Screener() {
     queryFn: () => api.screenerCached(extColumnsParam || undefined),
     enabled: assetType === 'stock' && tfFilter !== '1m' && showAll,
     // 交易时段跟随行情轮询; 收盘后价格不再变, 降为 60s 仅兜底数据修正
-    refetchInterval: inTradingSession ? 6_000 : 60_000,
+    refetchInterval: pollingInterval(inTradingSession ? 6_000 : 60_000, false, documentVisible),
   })
 
   const singleCachedQuery = useQuery({
@@ -229,7 +232,7 @@ export function Screener() {
       && !!activeStrategy
       && summaryQuery.data?.results[activeStrategy]?.as_of === asOf,
     // 与 fullCachedQuery 同口径: 列表与详情共享同一份实时覆盖后的价格
-    refetchInterval: inTradingSession ? 6_000 : 60_000,
+    refetchInterval: pollingInterval(inTradingSession ? 6_000 : 60_000, false, documentVisible),
   })
 
   const dataStatus = useDataStatus({ staleTime: 0 })
@@ -350,11 +353,13 @@ export function Screener() {
   // 进入页面自动跑策略池中的策略，获取命中数 (日线走盘后缓存/渐进式 runAll;
   // 分钟策略结果不落缓存, 由 runAllMinute 异步批量计算后合入 hitCounts)
   const runAll = useMutation({
-    mutationFn: ({ date, strategyIds }: { date?: string; strategyIds?: string[] } = {}) =>
+    mutationFn: ({ date, strategyIds, ensure = false }: { date?: string; strategyIds?: string[]; ensure?: boolean } = {}) =>
       api.screenerRunAll(
         date,
         strategyIds ?? dailyPoolIds,
         assetType,
+        '1d',
+        ensure,
       ),
     onSuccess: (data) => {
       if (data.as_of) setAsOf(data.as_of)
@@ -366,10 +371,11 @@ export function Screener() {
       // 渐进式返回: 慢策略后台继续算, 开启摘要轮询逐个点亮
       setPendingRun(
         data.pending?.length
-          ? { ids: [...data.pending], startedAt: data.started_at ?? 0 }
+          ? { ids: [...data.pending], startedAt: data.started_at ?? 0, taskId: data.task_id }
           : null,
       )
       if (data.error) toast(`策略计算失败：${data.error}`, 'error')
+      if (Object.keys(data.errors ?? {}).length) toast('部分策略计算失败，请检查后重新运行', 'error')
       // 策略池残留的失效 ID (如内置策略移除后的旧数据目录): 后端已跳过,
       // 这里从池中清掉并提示一次, 空库场景 prune(按有效列表) 清不掉的兜底。
       if (data.skipped_unknown?.length) {
@@ -386,16 +392,17 @@ export function Screener() {
   // 同一套 2s 轮询点亮 (arrived 判据用 computed_at)。
   const runAllMinute = useMutation({
     mutationFn: (strategyIds: string[]) =>
-      api.screenerRunAll(undefined, strategyIds, assetType, '1m'),
+      api.screenerRunAll(undefined, strategyIds, assetType, '1m', true),
     onSuccess: (data) => {
       const counts: Record<string, number> = {}
       for (const [id, item] of Object.entries(data.results)) {
         counts[id] = item.total
       }
       if (Object.keys(counts).length) setHitCounts(prev => ({ ...prev, ...counts }))
+      if (data.error || Object.keys(data.errors ?? {}).length) toast('部分策略计算失败，请检查后重新运行', 'error')
       setPendingRun(
         data.pending?.length
-          ? { ids: [...data.pending], startedAt: data.started_at ?? 0 }
+          ? { ids: [...data.pending], startedAt: data.started_at ?? 0, taskId: data.task_id }
           : null,
       )
     },
@@ -413,7 +420,7 @@ export function Screener() {
   // 用 ref 同步门闩，避免同一渲染周期内 isPending 尚未更新导致重复触发
   const runAllPendingRef = useRef(false)
   const requestRunAll = useCallback((
-    vars: { date?: string; strategyIds?: string[] } = {},
+    vars: { date?: string; strategyIds?: string[]; ensure?: boolean } = {},
     options?: Parameters<typeof runAll.mutate>[1],
   ) => {
     if (runAllPendingRef.current || runAll.isPending) return
@@ -455,12 +462,21 @@ export function Screener() {
     // 渐进式: computed_at 晚于本轮起点的策略已算完, 从 pending 中移除;
     // 无 computed_at (监控实时叠加/旧缓存) 视为新鲜。容差吸收前后端时钟差。
     if (pendingRun) {
-      const arrived = (id: string) => {
-        const r = summaryQuery.data!.results[id]
-        if (!r || r.as_of !== asOf) return false
-        return r.computed_at == null || r.computed_at >= pendingRun.startedAt - 2000
+      const rest = pendingStrategyIds(pendingRun, summaryQuery.data, asOf)
+      if (rest === null) {
+        toast('计算状态已过期，请重新运行', 'error')
+        setPendingRun(null)
+        return
       }
-      const rest = pendingRun.ids.filter(id => !arrived(id))
+      const task = summaryQuery.data.task
+      if (task && task.id === pendingRun.taskId) {
+        if (task.complete || task.pending.length < pendingRun.ids.length) {
+          if (task.error) toast(`策略计算失败：${task.error}`, 'error')
+          if (Object.keys(task.errors).length) toast('部分策略计算失败，请检查策略后重新运行', 'error')
+          setPendingRun(task.complete || !task.pending.length ? null : { ...pendingRun, ids: task.pending })
+        }
+        return
+      }
       if (rest.length !== pendingRun.ids.length) {
         setPendingRun(rest.length ? { ...pendingRun, ids: rest } : null)
       }
@@ -637,16 +653,13 @@ export function Screener() {
     [intradaySymbols],
   )
 
-  const minuteBatch = useQuery({
-    queryKey: QK.minuteBatch(),
-    // 增量轮询: 读缓存以最后一根为 since 只拉新增, 本地合并为完整序列
-    // (缓存 key 与自选页共享, 按 symbol 合并; 请求集已被截断到 batch 上限内)
-    queryFn: () => fetchMinuteBatchIncremental(qc, intradayRequestSymbols, fullMinuteHealthy),
-    enabled: intradayVisible && intradayRequestSymbols.length > 0,
-    staleTime: 10_000,
-    placeholderData: previousData => previousData,
+  const minuteBatch = useMinuteBatchQuery(intradayRequestSymbols, {
+    // 共享增量缓存; 切换列表时立即补拉当前标的, 不依赖轮询是否开启。
+    enabled: intradayVisible && documentVisible,
+    preferLocal: fullMinuteHealthy,
     // 仅当开启分时刷新偏好 且 盘中实时行情运行时 才轮询 (省 rpm)
-    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning)
+      ? pollingInterval(intradayRefreshInterval * 1000, false, documentVisible) : false,
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
@@ -693,7 +706,7 @@ export function Screener() {
     // 分钟筛选视图下不跑日线缓存 (切回 全部/日线 视图时本 effect 会重新评估)
     // 与分钟 runAll 互斥: 后端并发 run_all 会崩 Numba, 分钟在跑时先让路,
     // 其结束后 isPending 翻转, 本 effect 重新评估
-    if (assetType !== 'stock' || tfFilter === '1m') return
+    if (!documentVisible || assetType !== 'stock' || tfFilter === '1m') return
     if (runAllMinute.isPending) return
     if (!asOf || strategyPresets.length === 0 || !summaryQuery.isSuccess || runAll.isPending || dailyPoolIds.length === 0) return
     const runKey = `${asOf}|${dailyPoolIds.join(',')}`
@@ -706,14 +719,14 @@ export function Screener() {
     // 未覆盖: 受系统开关控制
     if (!screenerAutoRun) return
     runAllDateRef.current = runKey
-    requestRunAll({ date: asOf, strategyIds: missingStrategyIds })
-  }, [asOf, strategyPresets.length, summaryQuery.isSuccess, dailyPoolIds, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, requestRunAll])
+    requestRunAll({ date: asOf, strategyIds: missingStrategyIds, ensure: true })
+  }, [documentVisible, asOf, strategyPresets.length, summaryQuery.isSuccess, dailyPoolIds, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, requestRunAll])
 
   // 分钟策略自动计算: 结果不落盘后缓存, 每次进入页面/池变化后异步跑一轮点亮卡片。
   // 与日线 runAll 串行 (并发 run_all 会崩 Numba); 分钟卡片不可见 (日线视图) 时不白算。
   // 不随 asOf 变化重跑 — 分钟分区只有最新交易日, 与 asOf 无关 (单跑同口径)。
   useEffect(() => {
-    if (assetType !== 'stock' || tfFilter === '1d') return
+    if (!documentVisible || assetType !== 'stock' || tfFilter === '1d') return
     if (runAll.isPending || runAllPendingRef.current) return
     if (!asOf || strategyPresets.length === 0 || runAllMinute.isPending || minutePoolIds.length === 0) return
     const runKey = `${minutePoolIds.join(',')}|${assetType}`
@@ -722,12 +735,12 @@ export function Screener() {
     if (!screenerAutoRun) return
     minuteRunDateRef.current = runKey
     minuteMutate(minutePoolIds)
-  }, [asOf, strategyPresets.length, minutePoolIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, minuteMutate])
+  }, [documentVisible, asOf, strategyPresets.length, minutePoolIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, runAllMinute.isPending, minuteMutate])
 
   // 执行周期由策略自身声明决定: 日线走盘后缓存/单跑, 分钟走本地分钟K分区实时跑
   const run = useMutation({
-    mutationFn: ({ id, date, timeframe: tf }: { id: string; date: string; timeframe: '1d' | '1m' }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, tf),
+    mutationFn: ({ id, date, timeframe: tf, ensure = false }: { id: string; date: string; timeframe: '1d' | '1m'; ensure?: boolean }) =>
+      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, tf, ensure),
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -746,12 +759,12 @@ export function Screener() {
     // ETF 模式无股票盘后缓存、分钟策略走本地分钟分区 → 始终实时单跑。
     // 传空日期让后端用自身的最新交易日 (ETF 与分钟分区跟股票 enriched 可能不同日)。
     if (assetType !== 'stock' || tf === '1m') {
-      run.mutate({ id: s.id, date: '', timeframe: tf })
+      run.mutate({ id: s.id, date: '', timeframe: tf, ensure: true })
       return
     }
     // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
-    if (summaryQuery.data?.results[s.id]?.as_of === asOf || runAll.isPending) return
-    run.mutate({ id: s.id, date: asOf, timeframe: tf })
+    if (summaryQuery.data?.results[s.id]?.as_of === asOf || runAll.isPending || pendingRunIds.has(s.id)) return
+    run.mutate({ id: s.id, date: asOf, timeframe: tf, ensure: true })
   }
 
   // 日期变化交给统一 effect 计算一次，避免这里与 effect 重复请求。
@@ -1389,7 +1402,7 @@ export function Screener() {
               const addedDaily = newPool.filter(
                 id => !prev.has(id) && !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false),
               )
-              if (addedDaily.length > 0) requestRunAll({ date: asOf || undefined, strategyIds: addedDaily })
+              if (addedDaily.length > 0) requestRunAll({ date: asOf || undefined, strategyIds: addedDaily, ensure: true })
             }
             reorderPool(newPool)
           }}

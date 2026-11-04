@@ -138,7 +138,7 @@ async def quote_stream(request: Request):
         try:
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
-                await asyncio.to_thread(sub.wait, 5.0)
+                await sub.wait_async(5.0)
                 data = sub.pop()
 
                 # 告警 (分片推送, 避免单条 SSE 过大)
@@ -168,6 +168,7 @@ async def quote_stream(request: Request):
                         "data": json.dumps({
                             "ts": int(time.time() * 1000),
                             "symbol_count": qs._symbol_count,
+                            "revision": qs.stream_versions()["quote"],
                         }),
                     }
 
@@ -180,7 +181,8 @@ async def quote_stream(request: Request):
                 if data["strategy_results_updated"]:
                     yield {
                         "event": "strategy_results_updated",
-                        "data": json.dumps({"ts": int(time.time() * 1000)}),
+                        "data": json.dumps({"ts": int(time.time() * 1000),
+                                            "revision": qs.stream_versions()["strategy"]}),
                     }
 
                 # 五档修正完成 — 前端刷新连板梯队封单数据
