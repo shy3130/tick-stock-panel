@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import threading
+from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -517,6 +518,24 @@ class ExtConfigStore:
             return ExtConfig.from_dict(raw)
         except Exception:
             return None
+
+    def create(self, config: ExtConfig) -> None:
+        """Reserve a new table directory before publication; never replace data."""
+        directory = self._config_path(config.id).parent
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(exist_ok=False)
+        try:
+            self.upsert(config)
+        except BaseException:
+            # Clean up our unpublished temporary file so a failed import can be
+            # retried, while retaining any committed configuration or data.
+            path = self._config_path(config.id)
+            if not path.exists():
+                with suppress(OSError):
+                    path.with_suffix(path.suffix + ".tmp").unlink(missing_ok=True)
+                with suppress(OSError):
+                    directory.rmdir()
+            raise
 
     def upsert(self, config: ExtConfig, *, keep_strategy_cache: bool = False) -> None:
         config.updated_at = datetime.now().isoformat()

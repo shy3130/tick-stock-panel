@@ -7,6 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ExtDataPullPanel } from './ExtDataPullPanel'
 import { ExtDataApiPanel } from './ExtDataApiPanel'
+import { ExtConfigExportButton } from './ExtConfigTransfer'
 
 export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
   config: ExtDataConfig
@@ -137,6 +138,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
         </div>
         <button
           onClick={() => setSettingsOpen(v => !v)}
+          aria-label={`${config.label}设置`}
           className="shrink-0 p-1.5 rounded-md hover:bg-elevated/70 transition-colors text-muted hover:text-secondary"
         >
           <Settings className="h-3.5 w-3.5" />
@@ -326,8 +328,8 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
               )}
 
               {/* 管理操作: 低频, 收到底部一行 */}
-              <div className="flex items-center justify-between pt-2.5 border-t border-border/40">
-                <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-border/40">
+                <div className="flex flex-wrap items-center gap-1">
                   {onEdit && (
                     <button
                       onClick={() => { setSettingsOpen(false); onEdit() }}
@@ -338,6 +340,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
                       编辑配置
                     </button>
                   )}
+                  <ExtConfigExportButton id={config.id} label={config.label} />
                   <button
                     onClick={() => {
                       api.extDataFixSymbol(config.id).then((res) => {
