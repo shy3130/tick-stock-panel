@@ -134,6 +134,44 @@ def test_wait_for_server_times_out_when_alive_but_not_ready():
     assert time.monotonic() - start >= 0.5
 
 
+def test_main_timeout_records_stalled_backend_stack(data_dir, monkeypatch, caplog):
+    """慢启动时记录真正阻塞的后端调用, 不能只有笼统的 60 秒超时。"""
+    entered = threading.Event()
+    release = threading.Event()
+    stopped = threading.Event()
+    opened = []
+
+    def _slow_backend_import(port, done):
+        entered.set()
+        try:
+            release.wait(timeout=5)
+        finally:
+            done.set()
+            stopped.set()
+
+    def timeout(port, timeout, done_event):
+        assert entered.wait(timeout=1)
+        return False
+
+    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
+    monkeypatch.setattr(desktop, "_find_free_port", lambda _: 59998)
+    monkeypatch.setattr(desktop, "_run_uvmicorn", _slow_backend_import)
+    monkeypatch.setattr(desktop, "_wait_for_server", timeout)
+    monkeypatch.setattr(desktop, "_open_static_window", opened.append)
+    try:
+        with caplog.at_level("ERROR", logger="app.desktop"):
+            assert desktop.main() == 1
+        assert len(opened) == 1
+        assert "启动超时" in opened[0]
+        assert "_slow_backend_import" in caplog.text
+    finally:
+        release.set()
+        assert stopped.wait(timeout=1)
+
+
 # ---------- _precheck_mining_lock ----------
 
 def test_precheck_mining_lock_passes_when_free(data_dir):

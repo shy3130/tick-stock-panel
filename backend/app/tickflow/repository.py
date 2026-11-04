@@ -40,6 +40,7 @@ from app.market_time import cn_today
 from app.parquet import scan_enriched_parquet
 from app.polars_guard import guarded_collect
 from app.services.minute_adjust import apply_minute_adjustment, minute_basis_is_raw
+from app.startup_diagnostics import startup_phase
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,8 @@ class DataStore:
 
         # 一次性数据迁移: 旧桌面版把数据放在 exe 同级的兄弟目录 TickFlowStockPanel_Data/,
         # 新版改为 {app}/data/。老用户首次启动时自动把旧数据搬过来, 无感升级。
-        self._migrate_legacy_data_dir()
+        with startup_phase(logger, "legacy data migration"):
+            self._migrate_legacy_data_dir()
 
         # 关键子目录(§7.2)
         for sub in (
@@ -187,8 +189,10 @@ class DataStore:
             (self.data_dir / "financials" / sub).mkdir(parents=True, exist_ok=True)
 
         # DuckDB 内存模式 — 不建 .db 文件(§7.1)
-        self.db = duckdb.connect(database=":memory:")
-        self._register_views()
+        with startup_phase(logger, "DuckDB connection"):
+            self.db = duckdb.connect(database=":memory:")
+        with startup_phase(logger, "DuckDB view registration"):
+            self._register_views()
 
     def _migrate_legacy_data_dir(self) -> None:
         """把旧版数据目录迁移到当前位置 (打包桌面版, 首次启动自动搬迁)。
@@ -313,13 +317,15 @@ class DataStore:
         ]
         for sql in statements:
             try:
-                self.db.execute(sql)
+                with startup_phase(logger, f"DuckDB view {sql.split()[4]}"):
+                    self.db.execute(sql)
             except Exception as e:  # noqa: BLE001
                 # 空数据目录(首次启动)或权限问题时 DuckDB 会抛 IOException;
                 # 跨版本/平台也可能抛 CatalogException 等。空目录缺视图不影响启动
                 # (后续同步写入数据后会重新刷新视图),这里一律降级为 debug 日志。
                 logger.debug("view registration skipped (no parquet yet): %s", sql[:60])
-        self._register_unified_views()
+        with startup_phase(logger, "unified DuckDB views"):
+            self._register_unified_views()
 
     def _has_parquet(self, subdir: str) -> bool:
         return any((self.data_dir / subdir).rglob("*.parquet"))
@@ -517,7 +523,7 @@ class KlineRepository:
                 cursor.close()
 
     def refresh_view(self, name: str, glob: str) -> bool:
-        """重建指向 parquet glob 的视图 (视图懒扫描, 创建本身 O(1))。
+        """重建指向 parquet glob 的视图 (创建时绑定文件结构, 不读取全部数据行)。
 
         运行期所有视图重建必须走此方法, 不得直连 db.execute:
         - 并发重建同名视图抛 Catalog write-write conflict (1.5.3 实测),
