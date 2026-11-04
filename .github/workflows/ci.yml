@@ -86,4 +86,5 @@ jobs:
           uv run pytest tests/test_mining_process_lock.py
           tests/test_mining_lock_admin.py tests/test_mining_lock_http.py
           tests/test_main_mining_lifespan.py
-          tests/test_desktop_startup.py tests/test_enriched_generation.py -q
+          tests/test_desktop_startup.py tests/test_spa_static_routes.py
+          tests/test_enriched_generation.py -q
