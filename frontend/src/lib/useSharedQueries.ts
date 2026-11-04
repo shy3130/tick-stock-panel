@@ -104,6 +104,7 @@ export function useDataStatus(opts?: {
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,
     staleTime: opts?.staleTime,
-    refetchInterval: opts?.refetchInterval,
+    // 首次统计和失效刷新由后台完成, 取到快照后自动停止兜底轮询。
+    refetchInterval: opts?.refetchInterval ?? ((query) => query.state.data?.stats_pending ? 2_000 : false),
   })
 }

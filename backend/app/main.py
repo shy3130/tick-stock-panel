@@ -64,9 +64,11 @@ from app.extensions.loader import (
 from app.frontend_static import FrontendStaticFiles, frontend_file_response
 from app.jobs import daily_pipeline
 from app.services.daily_health import DailyIntegrityError
+from app.services.heavy_job_limiter import HeavyJobLimitTimeoutError
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock, MiningProcessLockError
 from app.services.quote_service import QuoteService
+from app.services.shared_work import WorkBusyError
 from app.startup_diagnostics import startup_phase
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
@@ -565,6 +567,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.exception_handler(WorkBusyError)
+@app.exception_handler(HeavyJobLimitTimeoutError)
+async def shared_work_busy_handler(request: Request, exc: WorkBusyError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc), "code": "work_busy"},
+                        headers={"Retry-After": "3"})
+
+
 # CORS: 允许局域网访问 (自托管场景, 放开所有来源)
 # 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
 # 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
@@ -598,6 +607,23 @@ _AUTH_WHITELIST_EXACT = (
     # 白名单, 仍走网关 Bearer 通道
     "/api/events",
 )
+
+
+@app.middleware("http")
+async def workload_middleware(request: Request, call_next):
+    import time
+
+    from app.services.workload import workload
+
+    group = next((name for name in ("screener", "kline", "overview", "watchlist", "backtest")
+                  if request.url.path == f"/api/{name}" or request.url.path.startswith(f"/api/{name}/")), None)
+    if group is None:
+        return await call_next(request)
+    started = time.perf_counter()
+    try:
+        return await call_next(request)
+    finally:
+        workload.record(f"http.{group}", "request", elapsed_s=time.perf_counter() - started)
 
 
 @app.middleware("http")

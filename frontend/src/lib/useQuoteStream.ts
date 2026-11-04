@@ -7,6 +7,7 @@ import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
 import { createEnrichedThrottler } from './enrichedInvalidateThrottle'
+import { createRevisionTracker, retryDelay } from './refreshPolicy'
 import type { KlineDailyResponse, StrategyAlertEvent } from './api'
 
 // ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
@@ -84,6 +85,7 @@ export function useQuoteStream(
   pagesRef.current = sseRefreshPages
   // watchlist-enriched 单独节流 5s: SSE 每秒到达, 该前缀整表重拉代价最大
   const enrichedThrottlerRef = useRef(createEnrichedThrottler())
+  const strategyThrottlerRef = useRef(createEnrichedThrottler(6000))
 
   const handleAlerts = useCallback((alerts: StrategyAlertEvent[]) => {
     // depth 系统接管通知: 单独处理, 不走 strategy 回调
@@ -116,6 +118,11 @@ export function useQuoteStream(
     // 连续失败计数 (用于指数退避 + 到阈值弹一次 toast)
     let failCount = 0
     let toastFired = false
+    const revisions = createRevisionTracker()
+    const refetchType = () => document.visibilityState === 'hidden' ? 'none' as const : 'active' as const
+    const refreshStrategies = () => strategyThrottlerRef.current.fire(() => {
+      qc.invalidateQueries({ queryKey: ['screener-cached'], refetchType: refetchType() })
+    })
 
     // 分组 invalidation: watchlist-enriched 走 5s 节流 (整表 N 行×64 字段重拉,
     // 大自选时每秒一拍代价最大), 其余前缀立即。节流 leading 立即 + trailing 兜底。
@@ -123,6 +130,7 @@ export function useQuoteStream(
       const immediate = prefixes.filter(p => p !== 'watchlist-enriched')
       if (immediate.length) {
         qc.invalidateQueries({
+          refetchType: refetchType(),
           predicate: query =>
             immediate.some(prefix => String(query.queryKey[0]).startsWith(prefix)),
         })
@@ -130,6 +138,7 @@ export function useQuoteStream(
       if (prefixes.includes('watchlist-enriched')) {
         enrichedThrottlerRef.current.fire(() => {
           qc.invalidateQueries({
+            refetchType: refetchType(),
             predicate: query =>
               String(query.queryKey[0]).startsWith('watchlist-enriched'),
           })
@@ -147,11 +156,15 @@ export function useQuoteStream(
         failCount = 0
         toastFired = false
         _setStatus('connected')
+        // Reconnect may have missed a notification; read snapshots without creating work.
+        invalidatePrefixes(SSE_INVALIDATE_PREFIXES.filter(p => pagesRef.current?.[p] !== false))
+        refreshStrategies()
       }
 
       // sse-starlette ping 心跳走 SSE comment，不会到达这里
 
-      es.addEventListener('quotes_updated', () => {
+      es.addEventListener('quotes_updated', (e: MessageEvent) => {
+        if (!revisions.accept('quotes', e.data)) return
         // 实时行情未开启时不处理行情刷新
         if (!enabledRef.current) return
         // 根据用户配置过滤 invalidation
@@ -176,7 +189,7 @@ export function useQuoteStream(
           invalidatePrefixes(SSE_INVALIDATE_PREFIXES)
         }
         // 焦点股票日K增量刷新: 只取内存中的当日行并合并缓存尾部。
-        if (_focusSymbol) {
+        if (_focusSymbol && document.visibilityState !== 'hidden') {
           const symbol = _focusSymbol
           void qc.fetchQuery({ ...klineDailyLatestQueryOptions(symbol), staleTime: 0 })
             .then((latest) => {
@@ -199,9 +212,10 @@ export function useQuoteStream(
         }
       })
 
-      es.addEventListener('strategy_results_updated', () => {
+      es.addEventListener('strategy_results_updated', (e: MessageEvent) => {
+        if (!revisions.accept('strategy', e.data)) return
         // 策略监控完成后只刷新策略结果缓存，不扩散到其他行情页面。
-        qc.invalidateQueries({ queryKey: ['screener-cached'] })
+        refreshStrategies()
       })
 
       es.addEventListener('daily_integrity_updated', () => {
@@ -212,8 +226,8 @@ export function useQuoteStream(
       es.addEventListener('depth_updated', () => {
         // 五档修正完成: 刷新连板梯队 + 看板封单数据。
         // 不受实时行情开关限制 — 修正轮询独立于行情轮询, 用户开了修正就想看实时封单。
-        qc.invalidateQueries({ queryKey: ['limit-ladder'] })
-        qc.invalidateQueries({ queryKey: ['overview-market'] })
+        qc.invalidateQueries({ queryKey: ['limit-ladder'], refetchType: refetchType() })
+        qc.invalidateQueries({ queryKey: ['overview-market'], refetchType: refetchType() })
       })
 
       es.addEventListener('strategy_alert', (e: MessageEvent) => {
@@ -258,16 +272,24 @@ export function useQuoteStream(
         }
         // 指数退避 (base * 2^(n-1), 上限 60s), 替代原来固定 5s
         const base = getQueryConfig().sse.reconnectDelay
-        const delay = Math.min(base * 2 ** (failCount - 1), BACKOFF_CAP_MS)
+        const delay = retryDelay(0, Math.min(base * 2 ** (failCount - 1), BACKOFF_CAP_MS))
         retryRef.current = setTimeout(connect, delay)
       }
     }
 
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') return
+      invalidatePrefixes(SSE_INVALIDATE_PREFIXES.filter(p => pagesRef.current?.[p] !== false))
+      refreshStrategies()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
     connect()
 
     return () => {
       clearTimeout(retryRef.current)
       enrichedThrottlerRef.current.cancel()
+      strategyThrottlerRef.current.cancel()
+      document.removeEventListener('visibilitychange', onVisibility)
       if (esRef.current) {
         esRef.current.close()
         esRef.current = null

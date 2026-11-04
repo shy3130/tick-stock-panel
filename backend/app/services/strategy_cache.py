@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,9 @@ def write_cache(
     data_dir: Path,
     as_of: str,
     results: dict[str, Any],
+    *,
+    validate: Callable[[], None] | None = None,
+    strict: bool = False,
 ) -> None:
     """将策略结果写入缓存文件，同时更新今日曾命中集合。
 
@@ -154,7 +158,9 @@ def write_cache(
 
     # 整个 read-modify-write 持锁: 避免并发 write 丢更新, 也避免与 read_cache 撕裂
     with _file_lock:
-        _write_cache_locked(path, data_dir, as_of, results)
+        if validate is not None:
+            validate()
+        _write_cache_locked(path, data_dir, as_of, results, strict=strict)
 
 
 def _write_cache_locked(
@@ -162,6 +168,8 @@ def _write_cache_locked(
     data_dir: Path,
     as_of: str,
     results: dict[str, Any],
+    *,
+    strict: bool = False,
 ) -> None:
     """持 _file_lock 后的实际写入逻辑 (read-merge-write + 原子替换)。"""
     # 读取旧缓存 (已持锁, 走不重入的 _read_cache_unlocked)
@@ -221,5 +229,7 @@ def _write_cache_locked(
         total_rows = sum(len(r.get("rows", [])) for r in merged_results.values())
         total_ever = sum(len(v) for v in today_ever_matched.values())
         logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(merged_results), total_rows, total_ever)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("写入策略缓存失败: %s", e)
+        if strict:
+            raise

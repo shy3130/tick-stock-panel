@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from app.enriched_generation import (
     EnrichedGenerationUnavailableError,
     get_enriched_generation,
 )
+from app.services.data_status_cache import DataStatusCache
 
 
 class _RepoStub:
@@ -51,7 +53,7 @@ def _stub_clear_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(alert_store, "clear", lambda _data_dir: None)
     monkeypatch.setattr(ScreenerService, "clear_history_cache", lambda: None)
     monkeypatch.setattr(overview, "invalidate_overview_cache", lambda: None)
-    monkeypatch.setattr(data_api, "invalidate_data_cache", lambda _table=None: None)
+    monkeypatch.setattr(data_api, "invalidate_data_cache", lambda _table=None, **_kwargs: None)
     # 重置重任务执行槽, 隔离其他测试可能残留的持有者
     monkeypatch.setattr(pipeline_jobs, "_run_slot_owner", None)
 
@@ -265,3 +267,35 @@ def test_clear_data_pauses_and_restores_minute_refresh(
     request.app.state.minute_refresh = _MrsIdle()
     data_api.clear_data(request)
     assert calls == ["stop"]
+
+
+def test_clear_discards_status_snapshot_and_rejects_inflight_old_statistics(tmp_path, monkeypatch):
+    invalidate = data_api.invalidate_data_cache
+    _stub_clear_side_effects(monkeypatch)
+    monkeypatch.setattr(data_api, "invalidate_data_cache", invalidate)
+    cache = DataStatusCache({"daily": 30})
+    monkeypatch.setattr(data_api, "_status_cache", cache)
+    loaders = {"daily": lambda: {"rows": 42}}
+    cache.snapshot(loaders, is_busy=lambda: False)
+    if cache._thread is not None:
+        cache._thread.join(2)
+    cache.invalidate()
+    entered, release = threading.Event(), threading.Event()
+
+    def old_statistics():
+        entered.set()
+        assert release.wait(3)
+        return {"rows": 99}
+
+    try:
+        cache.snapshot({"daily": old_statistics}, is_busy=lambda: False)
+        assert entered.wait(1)
+        assert data_api.clear_data(_request(_RepoStub(tmp_path))) == {"deleted_files": 0}
+        assert cache.snapshot(loaders, is_busy=lambda: True)["daily"] is None
+    finally:
+        release.set()
+        thread = cache._thread
+        if thread is not None:
+            thread.join(2)
+            assert not thread.is_alive()
+    assert cache.snapshot(loaders, is_busy=lambda: True)["daily"] is None

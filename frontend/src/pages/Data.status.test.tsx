@@ -21,6 +21,9 @@ vi.mock('@/lib/api', () => ({ api: {
   settings: vi.fn(async () => ({ onboarding_completed: true, mode: 'api_key', has_tickflow_key: true })),
   preferences: vi.fn(async () => ({})),
   capabilities: vi.fn(async () => ({ capabilities: {} })),
+  capabilityMatrix: vi.fn(async () => ({ capabilities: [] })),
+  quoteStatus: vi.fn(async () => ({})),
+  quoteInterval: vi.fn(async () => ({ interval: 5 })),
 } }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: () => null }))
 vi.mock('@/components/EndpointTestDialog', () => ({ EndpointTestDialog: () => null }))
@@ -43,6 +46,7 @@ afterEach(async () => {
   client.clear()
   host.remove()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 // busy 降级形态: status 非空但各统计与 storage 均为 null (冷启动缓存未热)
@@ -105,4 +109,21 @@ it('非 busy 的空库 (stats_pending=false + 统计 null) 判为无数据, 显�
 
   await renderPage()
   expect(host.querySelector('.animate-breath-sync')).not.toBeNull()
+})
+
+it('统计后台刷新时每 2 秒重查, 完成后恢复正常轮询间隔', async () => {
+  vi.useFakeTimers()
+  const { api } = await import('@/lib/api')
+  vi.mocked(api.dataStatus).mockClear().mockResolvedValueOnce({
+    ...busyStatus, indicators_ready: true,
+  }).mockResolvedValue({
+    ...busyStatus, indicators_ready: true, stats_pending: false,
+  })
+  await act(async () => root.render(
+    <MemoryRouter><QueryClientProvider client={client}><Data /></QueryClientProvider></MemoryRouter>,
+  ))
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_002) })
+  expect(api.dataStatus).toHaveBeenCalledTimes(2)
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+  expect(api.dataStatus).toHaveBeenCalledTimes(2)
 })

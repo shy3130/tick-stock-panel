@@ -4,7 +4,10 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from app.services import strategy_run_queue as q
+from app.services.shared_work import WorkBusyError
 
 
 def test_order_strategy_ids_fast_first_unknown_last():
@@ -185,3 +188,62 @@ def test_running_duplicate_still_rides_same_handle():
     assert h2 is h1
     release.set()
     _wait_done(h1)
+
+
+def test_ensure_reuses_completed_matching_version_but_manual_run_is_fresh():
+    mgr = q.StrategyRunManager()
+    calls = []
+
+    def job(handle):
+        calls.append(1)
+        handle.complete("s", {"total": len(calls)})
+
+    first = mgr.get_or_submit(("k",), ["s"], job, reuse_completed_ms=5000, source_version="v1")
+    _wait_done(first)
+    assert mgr.get_or_submit(("k",), ["s"], job, reuse_completed_ms=5000, source_version="v1") is first
+    changed = mgr.get_or_submit(("k",), ["s"], job, reuse_completed_ms=5000, source_version="v2")
+    _wait_done(changed)
+    assert changed is not first
+    manual = mgr.get_or_submit(("k",), ["s"], job)
+    _wait_done(manual)
+    assert calls == [1, 1, 1]
+
+
+def test_bounded_queue_still_allows_existing_task_subscriptions():
+    mgr = q.StrategyRunManager(max_pending=1)
+    entered, release = threading.Event(), threading.Event()
+
+    def job(handle):
+        entered.set()
+        assert release.wait(3)
+
+    first = mgr.get_or_submit(("a",), ["s"], job)
+    assert entered.wait(3)
+    try:
+        assert mgr.get_or_submit(("a",), ["s"], job) is first
+        with pytest.raises(WorkBusyError):
+            mgr.get_or_submit(("b",), ["s"], job)
+    finally:
+        release.set()
+    _wait_done(first)
+
+
+def test_failed_handle_has_terminal_timestamp_and_does_not_poison_ensure():
+    mgr = q.StrategyRunManager()
+    first = mgr.get_or_submit(("k",), ["s"], lambda handle: handle.fail("error"))
+    _wait_done(first)
+    assert first.finished_at_ms is not None
+    assert mgr.get_or_submit(("k",), ["s"], lambda handle: None, reuse_completed_ms=5000) is first
+    second = mgr.get_or_submit(("k",), ["s"], lambda handle: None, reuse_completed_ms=5000, source_version="new")
+    assert second is not first
+    _wait_done(second)
+
+
+def test_strategy_execution_allows_repository_cold_cache_refresh():
+    from app.services.heavy_job_limiter import shared_heavy_job_limiter
+
+    manager = q.StrategyRunManager()
+    # get_enriched_latest can lazily refresh history with an exclusive slot.
+    with manager.execution(), shared_heavy_job_limiter.slot("exclusive", timeout=0):
+        assert shared_heavy_job_limiter.in_use == shared_heavy_job_limiter.capacity
+    assert shared_heavy_job_limiter.in_use == 0

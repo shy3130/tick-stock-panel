@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import threading
+import weakref
 from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Literal
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.api.auth import COOKIE_NAME
 from app.config import settings
 from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.market_time import cn_today
@@ -22,6 +24,7 @@ from app.services.backtest import (
     VectorbtUnavailable,
 )
 from app.services.daily_health import DailyIntegrityError
+from app.services.workload import admit_request, workload
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +118,7 @@ def run(req: BacktestRequest, request: Request):
         asset_type=req.asset_type,
     )
     try:
+        admit_request(request, COOKIE_NAME)
         result = svc.run(cfg)
     except VectorbtUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -184,6 +188,7 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         asset_type=req.asset_type,
     )
     try:
+        admit_request(request, COOKIE_NAME)
         result = svc.run(cfg)
     except DailyIntegrityError:
         raise
@@ -236,6 +241,7 @@ def factor_batch(req: FactorBatchRequest, request: Request):
 
     svc = FactorBacktestService(_get_engine(request))
     try:
+        admit_request(request, COOKIE_NAME)
         result = svc.run_batch(FactorBatchConfig(
             factor_names=factor_names,
             symbols=symbols,
@@ -443,7 +449,9 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     task = make_worker_task("backtest", settings.data_dir, cfg)
     from app.services.heavy_job_limiter import shared_heavy_job_limiter
 
+    admit_request(request, COOKIE_NAME)
     with shared_heavy_job_limiter.slot("normal"):
+        workload.record("backtest.task", "executed")
         return _stamp_daily_data(run_worker_task(task))
 
 
@@ -480,7 +488,8 @@ def strategy_run_evidence(run_id: str):
 
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
-    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "daily_data_revisions")
+    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts",
+                 "daily_data_revisions", "started", "expiry_timer", "__weakref__")
 
     def __init__(self, key: str):
         self.key = key
@@ -489,6 +498,8 @@ class _BacktestJob:
         self.result = None               # 完成后的结果
         self.error: str | None = None
         self.done = False
+        self.started = False
+        self.expiry_timer = None
         self.finish_ts: float = 0.0
         self.daily_data_revisions = _daily_data_revisions()
 
@@ -497,6 +508,15 @@ class _BacktestJob:
 _running_jobs: dict[str, _BacktestJob] = {}
 _jobs_lock = threading.Lock()
 _JOB_TTL = 300  # 完成后保留 5 分钟
+_MAX_ACTIVE_JOBS = 32
+_MAX_FINISHED_JOBS = 16
+
+
+def _drop_job(key: str) -> None:
+    """Caller holds _jobs_lock; evict timers along with their cache entries."""
+    job = _running_jobs.pop(key, None)
+    if job is not None and job.expiry_timer is not None:
+        job.expiry_timer.cancel()
 
 
 def _cleanup_stale_jobs():
@@ -508,10 +528,13 @@ def _cleanup_stale_jobs():
             now - j.finish_ts > _JOB_TTL or j.daily_data_revisions != revisions
         )]
         for k in stale:
-            _running_jobs.pop(k, None)
+            _drop_job(k)
+        completed = sorted((j.finish_ts, k) for k, j in _running_jobs.items() if j.done)
+        for _, key in completed[:-_MAX_FINISHED_JOBS]:
+            _drop_job(key)
 
 
-def _acquire_or_evict_job(job_key: str, *, force: bool) -> tuple[_BacktestJob, bool]:
+def _acquire_or_evict_job(job_key: str, *, force: bool, on_submit=None) -> tuple[_BacktestJob, bool]:
     """获取或创建任务, 返回 (job, is_new)。
 
     force 强制重跑: 同 key 已完成任务 (5 分钟 TTL 内) 直接丢弃重建, 不回放旧
@@ -522,13 +545,43 @@ def _acquire_or_evict_job(job_key: str, *, force: bool) -> tuple[_BacktestJob, b
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is not None and force and job.done:
-            _running_jobs.pop(job_key, None)
             job = None
         if job is None:
+            if sum(not current.done for current in _running_jobs.values()) >= _MAX_ACTIVE_JOBS:
+                from app.services.shared_work import WorkBusyError
+
+                workload.record("backtest.task", "rejected")
+                raise WorkBusyError("回测与优化等待队列已满，请稍后重试")
+            if on_submit is not None:
+                on_submit()
+            _drop_job(job_key)
             job = _BacktestJob(job_key)
             _running_jobs[job_key] = job
             return job, True
+        workload.record("backtest.task", "cache_hit" if job.done else "shared")
         return job, False
+
+
+def _claim_job_start(job: _BacktestJob) -> bool:
+    """A disconnected creator must not prevent another subscriber starting the job."""
+    with _jobs_lock:
+        if job.done or job.started:
+            return False
+        job.started = True
+        return True
+
+
+def _discard_unstarted_job(job: _BacktestJob) -> None:
+    with _jobs_lock:
+        if not job.started and _running_jobs.get(job.key) is job:
+            _running_jobs.pop(job.key, None)
+
+
+def _start_job_thread(job: _BacktestJob, target) -> None:
+    try:
+        threading.Thread(target=target, daemon=True).start()
+    except RuntimeError:
+        _finish_job(job, error="无法启动计算任务，请稍后重试")
 
 
 def _finish_job(job: _BacktestJob, *, result=None, error: str | None = None) -> None:
@@ -542,16 +595,26 @@ def _finish_job(job: _BacktestJob, *, result=None, error: str | None = None) -> 
         job.error = error
         job.done = True
         job.finish_ts = finished_at
+    workload.record("backtest.task", "failed" if error else "completed")
+
+    reference, key = weakref.ref(job), job.key
 
     def _expire() -> None:
         with _jobs_lock:
-            current = _running_jobs.get(job.key)
-            if current is job and current.done and current.finish_ts == finished_at:
-                _running_jobs.pop(job.key, None)
+            current = _running_jobs.get(key)
+            if current is not None and current is reference() and current.done and current.finish_ts == finished_at:
+                _running_jobs.pop(key, None)
 
     timer = threading.Timer(_JOB_TTL, _expire)
     timer.daemon = True
+    with _jobs_lock:
+        if _running_jobs.get(key) is not job:
+            return
+        if job.expiry_timer is not None:
+            job.expiry_timer.cancel()
+        job.expiry_timer = timer
     timer.start()
+    _cleanup_stale_jobs()
 
 
 def _make_job_key(
@@ -654,7 +717,15 @@ async def strategy_stream(
 
     _cleanup_stale_jobs()
 
-    job, is_new = _acquire_or_evict_job(job_key, force=force)
+    for raw in (params, overrides, regime_filter, position_policy_params):
+        if raw:
+            try:
+                json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(400, "回测参数必须是有效 JSON") from exc
+    job, _ = (_BacktestJob(job_key), False) if guard_violated else _acquire_or_evict_job(
+        job_key, force=force, on_submit=lambda: admit_request(request, COOKIE_NAME),
+    )
 
     async def event_generator():
         # 范围保护: 直接报错
@@ -667,6 +738,7 @@ async def strategy_stream(
             capset = request.app.state.capabilities
             from app.tickflow.capabilities import Cap
             if not capset.has(Cap.KLINE_MINUTE_BATCH):
+                _discard_unstarted_job(job)
                 yield f"event: error\ndata: {json.dumps({'message': '分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)'}, ensure_ascii=False)}\n\n"
                 return
             # 检查本地分钟K历史是否覆盖回测区间
@@ -675,11 +747,12 @@ async def strategy_stream(
             if earliest_minute is not None and start_date < earliest_minute:
                 msg = (f"本地分钟K历史最早到 {earliest_minute}, 无法覆盖回测起始日 {start_date}。"
                        f"请先用「扩展分钟K历史」功能拉取更多数据, 或缩小回测区间。")
+                _discard_unstarted_job(job)
                 yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
                 return
 
         # 如果是新任务, 启动回测线程
-        if is_new and not job.done:
+        if _claim_job_start(job):
             cfg = StrategyBacktestConfig(
                 strategy_id=strategy_id,
                 symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
@@ -721,6 +794,7 @@ async def strategy_stream(
                         cancel_event=job.cancel_event,
                     ):
                         task = make_worker_task("backtest", settings.data_dir, cfg)
+                        workload.record("backtest.task", "executed")
                         result = run_worker_task(
                             task,
                             lambda d: job.progress.append(d),
@@ -733,7 +807,7 @@ async def strategy_stream(
                     _finish_job(job, error=str(e))
 
             # 启动后台线程 (不阻塞事件循环)
-            threading.Thread(target=_run_backtest, daemon=True).start()
+            _start_job_thread(job, _run_backtest)
 
         # 订阅进度: 用读指针读 job.progress 列表 (多连接互不干扰)
         cursor = 0
@@ -1045,14 +1119,9 @@ async def optimize_robust_stream(
     ) + f"|k={int(k_segments)}|mt={int(min_trades_total)}|s2={int(stage2_top_n)}"
 
     _cleanup_stale_jobs()
-    with _jobs_lock:
-        job = _running_jobs.get(job_key)
-        if job is None:
-            job = _BacktestJob(job_key)
-            _running_jobs[job_key] = job
-            is_new = True
-        else:
-            is_new = False
+    job, _ = (_BacktestJob(job_key), False) if guard_violated else _acquire_or_evict_job(
+        job_key, force=False, on_submit=lambda: admit_request(request, COOKIE_NAME),
+    )
 
     async def event_generator():
         yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
@@ -1061,7 +1130,7 @@ async def optimize_robust_stream(
             yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
             return
 
-        if is_new and not job.done:
+        if _claim_job_start(job):
             try:
                 grid = json.loads(param_grid)
             except (json.JSONDecodeError, TypeError):
@@ -1111,6 +1180,7 @@ async def optimize_robust_stream(
                             cancel_event=job.cancel_event,
                         ):
                             task = make_worker_task("robust_optimize", settings.data_dir, rcfg)
+                            workload.record("backtest.task", "executed")
                             result = run_worker_task(
                                 task,
                                 lambda d: job.progress.append(d),
@@ -1122,7 +1192,7 @@ async def optimize_robust_stream(
                     except Exception as e:
                         _finish_job(job, error=str(e))
 
-                threading.Thread(target=_run_robust, daemon=True).start()
+                _start_job_thread(job, _run_robust)
 
         cursor = 0
         tick = 0
@@ -1255,14 +1325,9 @@ async def walkforward_stream(
     )
 
     _cleanup_stale_jobs()
-    with _jobs_lock:
-        job = _running_jobs.get(job_key)
-        if job is None:
-            job = _BacktestJob(job_key)
-            _running_jobs[job_key] = job
-            is_new = True
-        else:
-            is_new = False
+    job, _ = (_BacktestJob(job_key), False) if wf_guard_violated else _acquire_or_evict_job(
+        job_key, force=False, on_submit=lambda: admit_request(request, COOKIE_NAME),
+    )
 
     async def event_generator():
         yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
@@ -1272,7 +1337,7 @@ async def walkforward_stream(
             yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
             return
 
-        if is_new and not job.done:
+        if _claim_job_start(job):
             try:
                 grid = json.loads(param_grid)
             except (json.JSONDecodeError, TypeError):
@@ -1325,6 +1390,7 @@ async def walkforward_stream(
                             cancel_event=job.cancel_event,
                         ):
                             task = make_worker_task("walkforward", settings.data_dir, wf_cfg)
+                            workload.record("backtest.task", "executed")
                             result = run_worker_task(
                                 task,
                                 lambda d: job.progress.append(d),
@@ -1336,7 +1402,7 @@ async def walkforward_stream(
                     except Exception as e:
                         _finish_job(job, error=str(e))
 
-                threading.Thread(target=_run_wf, daemon=True).start()
+                _start_job_thread(job, _run_wf)
 
         cursor = 0
         tick = 0

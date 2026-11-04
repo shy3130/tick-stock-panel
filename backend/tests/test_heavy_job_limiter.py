@@ -12,6 +12,7 @@ from app.services.heavy_job_limiter import (
     heavy_job_limiter,
     shared_heavy_job_limiter,
 )
+from app.services.shared_work import WorkBusyError
 
 
 def test_weighted_capacity_and_timeout() -> None:
@@ -94,6 +95,29 @@ def test_invalid_release_does_not_overfill_capacity() -> None:
 def test_module_aliases_share_the_capacity_two_singleton() -> None:
     assert heavy_job_limiter is shared_heavy_job_limiter
     assert shared_heavy_job_limiter.capacity == 2
+
+
+def test_waiting_queue_is_bounded_and_expired_waiters_release_admission():
+    limiter = HeavyJobLimiter(capacity=1, max_waiters=1)
+    assert limiter.acquire(timeout=0)
+    started = threading.Event()
+
+    def wait():
+        started.set()
+        assert not limiter.acquire(timeout=0.15)
+
+    thread = threading.Thread(target=wait)
+    thread.start()
+    assert started.wait(1)
+    deadline = time.monotonic() + 1
+    while limiter.snapshot()["waiting"] != 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    with pytest.raises(WorkBusyError):
+        limiter.acquire(timeout=0)
+    thread.join(1)
+    limiter.release()
+    assert limiter.acquire(timeout=0)
+    limiter.release()
 
 
 def test_exclusive_job_waits_for_all_normal_jobs() -> None:

@@ -7,7 +7,6 @@ import logging
 import math
 from datetime import date, timedelta
 from functools import lru_cache
-from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -968,38 +967,18 @@ def get_minute_batch(request: Request, body: dict):
     # 系数): 此前裸 limits().rpm=60 与盘后解析出的 48 分属两个互不感知的 rpm 桶,
     # 同一服务端池的实际合并上限是 108rpm。
     lim = resolve_limit(capset, Cap.KLINE_MINUTE_BATCH)
-    minute_dirs = {
-        "stock": repo.store.data_dir / "kline_minute",
-        "etf": repo.store.data_dir / "kline_etf_minute",
-    }
     live_map: dict[str, pl.DataFrame] = {}
 
     def _pull(asset: str, sym_list: list[str], start: datetime) -> None:
         if not sym_list:
             return
         raw_basis = minute_adjust.minute_basis_is_raw(repo.store.data_dir)
-        df_live = kline_sync.sync_minute_batch(
-            sym_list,
-            start_time=start,
-            end_time=session_end,
-            batch_size=lim.batch,
-            rpm=lim.rpm,
-            asset_type=asset,
-            raw_basis=raw_basis,
-        )
+        from app.services.minute_shared_pull import pull
+
+        df_live = pull(repo, sym_list, asset_type=asset, start=start, end=session_end,
+                       batch_size=lim.batch, rpm=lim.rpm, raw_basis=raw_basis)
         if df_live.is_empty():
             return
-        try:
-            # 读-改-写必须持仓库写锁 (与全量分钟服务/盘后同步同一纪律, Windows 临时文件占用)。
-            # 仅在拿到真实目录时落盘: data_dir 异常 (非 Path) 时跳过, 只返回本轮数据。
-            # 落盘必须是原始口径 (raw_basis=True 时 sync 已按 adjust='none' 取回);
-            # 对外响应再统一复权投影。
-            minute_dir = minute_dirs[asset]
-            if isinstance(minute_dir, Path):
-                with repo._write_lock:
-                    kline_sync._write_minute_partition(df_live, minute_dir)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("minute-batch 补拉落盘失败 (降级为仅返回): %s", e)
         if raw_basis:
             df_live = minute_adjust.apply_minute_adjustment(
                 df_live, repo.store.data_dir, asset,

@@ -24,11 +24,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import date, datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
@@ -116,6 +117,8 @@ class QuoteSubscriber:
 
     def __init__(self, max_alerts: int = 1000, max_reviews: int = 200) -> None:
         self._event = threading.Event()
+        self._async_loop = None
+        self._async_event = None
         self._lock = threading.Lock()
         self._max_alerts = max_alerts
         self._max_reviews = max_reviews
@@ -130,6 +133,29 @@ class QuoteSubscriber:
     def wait(self, timeout: float = 5.0) -> bool:
         """阻塞等待任一通道有新信号。"""
         return self._event.wait(timeout=timeout)
+
+    def _notify(self) -> None:
+        self._event.set()
+        if self._async_loop is not None and not self._async_loop.is_closed():
+            with suppress(RuntimeError):  # The event loop may close during shutdown.
+                self._async_loop.call_soon_threadsafe(self._async_event.set)
+
+    async def wait_async(self, timeout: float = 5.0) -> bool:
+        # One asyncio event per connection avoids occupying a thread for every
+        # idle SSE client. The threading event preserves existing sync consumers.
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._async_loop is not loop:
+                self._async_loop, self._async_event = loop, asyncio.Event()
+            self._async_event.clear()
+            if self._event.is_set():
+                return True
+            event = self._async_event
+        try:
+            await asyncio.wait_for(event.wait(), timeout)
+            return True
+        except TimeoutError:
+            return False
 
     def pop(self) -> dict:
         """原子取走全部待推送内容并复位事件。"""
@@ -158,14 +184,14 @@ class QuoteSubscriber:
             self._alerts.extend(alerts)
             if len(self._alerts) > self._max_alerts:  # 背压: 丢弃最旧
                 self._alerts = self._alerts[-self._max_alerts:]
-            self._event.set()
+            self._notify()
 
     def push_review(self, event_json: str) -> None:
         with self._lock:
             self._reviews.append(event_json)
             if len(self._reviews) > self._max_reviews:
                 self._reviews = self._reviews[-self._max_reviews:]
-            self._event.set()
+            self._notify()
 
     def clear_alerts(self) -> None:
         with self._lock:
@@ -182,22 +208,22 @@ class QuoteSubscriber:
     def notify_quote(self) -> None:
         with self._lock:
             self._quote_updated = True
-            self._event.set()
+            self._notify()
 
     def notify_daily_integrity(self, data_changed: bool) -> None:
         with self._lock:
             self._daily_integrity_updated = bool(self._daily_integrity_updated or data_changed)
-            self._event.set()
+            self._notify()
 
     def notify_strategy_results(self) -> None:
         with self._lock:
             self._strategy_results_updated = True
-            self._event.set()
+            self._notify()
 
     def notify_depth(self) -> None:
         with self._lock:
             self._depth_updated = True
-            self._event.set()
+            self._notify()
 
 
 # 落盘节流间隔: last_fetch_ms 仅在进程重启后用于显示"最后获取时间"(运行中读内存值),
@@ -271,6 +297,10 @@ class QuoteService:
         self._repo = None          # 延迟注入, 避免循环导入
         # SSE 订阅者集合: 每个 /stream 连接一个 QuoteSubscriber, 事件广播到所有订阅者
         self._subscribers: set[QuoteSubscriber] = set()
+        # A process identity prevents revision collisions after a server restart.
+        self._stream_id = str(time.time_ns())
+        self._quote_revision = 0
+        self._strategy_revision = 0
         self._strategy_monitor = None            # 延迟注入
         self._app_state = None                   # 延迟注入 (FastAPI app.state)
         # 异动边缘规则上次评估时间戳 (秒)。异动快照历史部分有 60s 缓存,
@@ -473,6 +503,12 @@ class QuoteService:
         with self._lock:
             return list(self._subscribers)
 
+    def stream_versions(self) -> dict:
+        with self._lock:
+            return {"quote": f"{self._stream_id}:{self._quote_revision}",
+                    "strategy": f"{self._stream_id}:{self._strategy_revision}",
+                    "subscribers": len(self._subscribers)}
+
     def _broadcast_quote_updated(self) -> None:
         # 实时行情刷新后清空总览聚合缓存, 使看板 (overview-market) 在 SSE 触发的
         # 重取中拿到最新指数/聚合值。与 _broadcast 同时进行, 与侧栏 /intraday/indices
@@ -481,11 +517,15 @@ class QuoteService:
         from app.api.overview import invalidate_overview_cache
 
         invalidate_overview_cache()
+        with self._lock:
+            self._quote_revision += 1
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
 
     def notify_strategy_results_updated(self) -> None:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
+        with self._lock:
+            self._strategy_revision += 1
         for sub in self._snapshot_subscribers():
             sub.notify_strategy_results()
 

@@ -339,3 +339,50 @@ def test_run_all_isolates_single_strategy_failure(
     assert set(results) == {"ok_a", "ok_b"}
     assert "broken" not in results
     assert "boom: schema mismatch" in (resp["errors"] or {}).get("broken", "")
+
+
+def test_auto_ensure_reuses_completed_and_overlapping_batches(monkeypatch, tmp_path, fast_first_return):
+    engine = _FakeEngine({"a": 0.01, "b": 0.01, "c": 0.01})
+    monkeypatch.setattr(screener_api, "ScreenerService", _FakeService)
+    request = _request(tmp_path, engine)
+    body = {"as_of": AS_OF, "strategy_ids": ["a", "b"], "summary_only": True, "ensure": True}
+    assert screener_api.run_all(request, body)["complete"]
+    assert screener_api.run_all(request, body)["complete"]
+    assert engine.executed == ["a", "b"]
+    screener_api.run_all(request, {**body, "strategy_ids": ["b", "c"]})
+    assert engine.executed == ["a", "b", "c"]
+    # Existing/manual callers still get a real rerun.
+    screener_api.run_all(request, {**body, "ensure": False})
+    assert set(engine.executed[-2:]) == {"a", "b"}
+
+
+def test_override_change_during_execution_cannot_publish_old_results(monkeypatch, tmp_path, fast_first_return):
+    from app.strategy import config
+
+    class ChangedEngine(_FakeEngine):
+        def run_all(self, *args, **kwargs):
+            result = super().run_all(*args, **kwargs)
+            config.save_override(tmp_path, "a", {"params": {"window": 20}})
+            return result
+
+    engine = ChangedEngine({"a": 0.01})
+    monkeypatch.setattr(screener_api, "ScreenerService", _FakeService)
+    body = {"as_of": AS_OF, "strategy_ids": ["a"], "summary_only": True, "ensure": True}
+    with pytest.raises(HTTPException):
+        screener_api.run_all(_request(tmp_path, engine), body)
+    assert not (strategy_cache.read_cache(tmp_path) or {}).get("results")
+
+
+def test_failed_cache_publication_does_not_report_strategy_result_available(monkeypatch, tmp_path, fast_first_return):
+    engine = _FakeEngine({"a": 0.01})
+    monkeypatch.setattr(screener_api, "ScreenerService", _FakeService)
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(strategy_cache, "write_cache", fail)
+    result = screener_api.run_all(_request(tmp_path, engine), {
+        "as_of": AS_OF, "strategy_ids": ["a"], "summary_only": True, "ensure": True,
+    })
+    assert "a" not in result["results"]
+    assert "a" in result["errors"]

@@ -383,6 +383,12 @@ class JobStore:
     def active_id(self) -> str | None:
         return self._active_id
 
+    def active_status(self) -> JobStatus | None:
+        """仅用于状态展示的内存快照, 不等待持久化锁或读取磁盘。"""
+        job_id = self._active_id
+        active = self._active_jobs.get(job_id) if job_id else None
+        return active.get("status") if active else None
+
     def reap_stale(self, timeout_s: int | None = None) -> None:
         """回收卡死的 running job, 以及排队超时的 pending job。判定:
 
