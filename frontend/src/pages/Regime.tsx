@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import * as echarts from 'echarts'
+import * as echarts from '@/lib/echarts'
 import {
   Activity, RefreshCw, Loader2, Gauge, TrendingUp, TrendingDown, Minus,
   Pencil, CalendarDays, Repeat, Rows3, LayoutGrid, Flame, Layers, Filter, X,

@@ -81,11 +81,12 @@ it('信号库页: 数字右值条件不再触发错误边界, 正常渲染', asy
       <Signals />
     </ExtensionBoundary>,
   )
-  await new Promise(r => setTimeout(r, 120))
+  // 等数据落地: 固定 120ms 在整包并行跑时会不够 (机器负载高), 用轮询代替
+  await vi.waitFor(() => {
+    expect(container!.textContent).toContain('0.6')
+  }, { timeout: 3000 })
   expect(container!.textContent).not.toContain('暂时不可用')
   expect(container!.textContent).toContain('信号库')
-  // 数字右值条件正常显示 (不再因 .startsWith 崩溃)
-  expect(container!.textContent).toContain('0.6')
 })
 
 it('条件编辑器: 数字右值不抛错, 常量输入正常挂载', async () => {

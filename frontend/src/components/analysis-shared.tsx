@@ -277,7 +277,7 @@ export function DimensionHeatmap({
               onClick={() => onSelect(active ? null : g.key)}
               className="px-2.5 py-1.5 rounded-sm text-[11px] whitespace-nowrap cursor-pointer hover:brightness-125 transition-all"
               style={{
-                fontSize: `${10 + size * 2}px`,
+                fontSize: `${11 + size * 2}px`,
                 color: active ? '#fff' : `rgba(${r},${gr},${b},${0.6 + upRatio * 0.4})`,
                 backgroundColor: active
                   ? `rgba(${r},${gr},${b},0.7)`
@@ -290,7 +290,7 @@ export function DimensionHeatmap({
               {g.key}
               <span className="ml-1 opacity-60">{g.count}</span>
               {qm.avgPct != null && (
-                <span className={`ml-1 ${priceColorClass(qm.avgPct)}`} style={{ fontSize: '9px' }}>
+                <span className={`ml-1 ${priceColorClass(qm.avgPct)}`} style={{ fontSize: '10px' }}>
                   {fmtPct(qm.avgPct)}
                 </span>
               )}
