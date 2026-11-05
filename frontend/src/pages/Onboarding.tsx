@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import {
   Loader2,
   CheckCircle2,
@@ -22,22 +22,26 @@ import {
   Puzzle,
   Coins,
   Route,
+  Code2,
+  ExternalLink,
+  ChevronDown,
 } from 'lucide-react'
 import { api, type ProviderField } from '@/lib/api'
 import { usePreferences, useSettings } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { Logo } from '@/components/Logo'
+import { PROJECT_LICENSE_NAME, PROJECT_LICENSE_TEXT, PROJECT_REPO_URL } from '@/data/ossLicenses'
 
 // ===== 引导页:5 步向导 =====
-// 0. 声明  1. 欢迎  2. 数据源与 Key  3. 能力路由检测  4. 完成 → 写标记 → 进面板
+// 0. 使用须知  1. 欢迎  2. 数据源与 Key  3. 能力路由检测  4. 完成 → 写标记 → 进面板
 
-const STEPS = ['声明', '欢迎', '数据源', '能力路由', '完成'] as const
+const STEPS = ['使用须知', '功能介绍', '数据源', '能力路由', '完成'] as const
 
 const BRAND = '#8B5CF6'
 
 const HIGHLIGHTS = [
   { icon: LineChart,   title: '看板与自选', desc: '市场全景看板、涨跌分布、情绪雷达,自定义自选列表', tint: 'text-accent' },
-  { icon: ScanSearch,  title: '策略',   desc: '内置多套策略,一键扫描全市场命中标的', tint: 'text-bull' },
+  { icon: ScanSearch,  title: '策略研究',   desc: '自行创建或导入策略,按自定义规则筛选标的', tint: 'text-bull' },
   { icon: TrendingUp,  title: '个股分析',   desc: 'AI 四维分析个股,关键价位、技术形态一目了然', tint: 'text-warning' },
   { icon: Flame,       title: '连板梯队',   desc: '涨停梯队、封板强度、炸板监控,情绪温度计', tint: 'text-warning' },
   { icon: Landmark,    title: '概念行业',   desc: '概念板块、行业维度的资金流向与热度排名', tint: 'text-accent' },
@@ -50,6 +54,7 @@ const HIGHLIGHTS = [
 export function Onboarding() {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const reduceMotion = useReducedMotion()
 
   const [step, setStep] = useState(0)
 
@@ -76,7 +81,7 @@ export function Onboarding() {
   return (
     <div className="relative min-h-full bg-base overflow-hidden flex flex-col">
       {/* 背景光晕 —— 品牌 + 主色渐变 */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {step !== 0 && <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
           className="absolute -top-40 -left-40 h-[28rem] w-[28rem] rounded-full blur-[120px] opacity-20"
           style={{ background: `radial-gradient(circle, ${BRAND}, transparent 70%)` }}
@@ -94,55 +99,45 @@ export function Onboarding() {
             backgroundSize: '40px 40px',
           }}
         />
-      </div>
+      </div>}
 
       {/* 顶栏:logo + 进度指示 */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-border">
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-x-6 gap-y-4 border-b border-border px-5 py-4 sm:px-8">
         <div className="flex items-center gap-2.5 text-foreground">
           <Logo
             size={24}
             className="shrink-0"
-            style={{ color: BRAND, filter: `drop-shadow(0 0 8px ${BRAND}55)` }}
+            style={{ color: BRAND }}
           />
           <span className="text-sm font-semibold tracking-tight">Tick Stock Panel</span>
         </div>
-        {/* 步骤进度条 —— 胶囊式 */}
-        <div className="flex items-center gap-1.5">
+        <ol aria-label="初始设置进度" className="order-last flex w-full items-center gap-2 md:order-none md:w-auto md:gap-3">
           {STEPS.map((label, i) => (
-            <div key={label} className="flex items-center gap-1.5">
-              {i > 0 && <div className="h-px w-3 bg-border" />}
-              <motion.div
-                animate={{
-                  width: i === step ? 64 : 24,
-                  backgroundColor: i === step
-                    ? 'hsl(var(--accent))'
-                    : i < step
-                      ? 'hsl(var(--accent) / 0.6)'
-                      : 'hsl(var(--border))',
-                }}
-                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-                className="h-1.5 rounded-full"
-              />
-            </div>
+            <li key={label} aria-current={i === step ? 'step' : undefined} className="min-w-0 flex-1 md:w-14 md:flex-none">
+              <div aria-hidden="true" className={`h-1 rounded-full ${i <= step ? 'bg-accent' : 'bg-border'}`} />
+              <span className={`mt-2 block whitespace-nowrap text-center text-[11px] ${i === step ? 'font-semibold text-foreground' : 'text-secondary'}`}>
+                {label}
+              </span>
+            </li>
           ))}
-        </div>
-        <div className="w-[88px] text-right">
-          <span className="text-xs text-muted tabular">
+        </ol>
+        <div className="text-right sm:w-[88px]">
+          <span className="text-xs text-secondary tabular">
             {step + 1} / {STEPS.length}
           </span>
         </div>
       </header>
 
       {/* 步骤内容 (数据源步骤含编辑器, 加宽容器) */}
-      <main className="relative z-10 flex-1 flex items-center justify-center px-6 py-10">
-        <div className={`w-full ${step === 2 ? 'max-w-3xl' : 'max-w-xl'}`}>
+      <main className="relative z-10 flex flex-1 items-center justify-center px-5 py-8 sm:px-8 sm:py-12">
+        <div className={`w-full ${step === 0 ? 'max-w-5xl' : step === 2 ? 'max-w-3xl' : 'max-w-xl'}`}>
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
-              initial={{ opacity: 0, x: 24 }}
+              initial={step === 0 || reduceMotion ? false : { opacity: 0, x: 24 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -24 }}
-              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              exit={{ opacity: 0, x: reduceMotion ? 0 : -24 }}
+              transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
             >
               {step === 0 && <DisclaimerStep onNext={() => setStep(1)} />}
               {step === 1 && <WelcomeStep onNext={() => setStep(2)} onSkip={finish} />}
@@ -159,48 +154,96 @@ export function Onboarding() {
   )
 }
 
-// ===== Step 0: 声明 =====
+// ===== Step 0: 使用须知 =====
 
 function DisclaimerStep({ onNext }: { onNext: () => void }) {
   return (
-    <div className="text-center">
-      <motion.div
-        initial={{ scale: 0.85, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        className="mx-auto w-fit rounded-2xl p-4 border border-warning/40"
-        style={{ background: 'linear-gradient(135deg, hsl(var(--warning) / 0.15), transparent)' }}
-      >
-        <AlertCircle className="h-8 w-8 text-warning" />
-      </motion.div>
+    <div>
+      <div className="grid gap-6 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:gap-12 lg:gap-16">
+        <section aria-labelledby="onboarding-intro-title" className="flex flex-col items-start">
+          <h1 id="onboarding-intro-title" className="text-3xl font-semibold leading-snug tracking-tight text-foreground sm:text-4xl sm:leading-snug">
+            TSP · 智能量化<br /><span className="text-violet-700 dark:text-violet-300">工作台引擎</span>
+          </h1>
+          <p className="mt-5 max-w-md text-sm leading-7 text-secondary">
+            接入行情与扩展数据，用开源引擎回测自己的策略，盘后复核结果。
+          </p>
 
-      <h1 className="mt-6 text-2xl font-bold text-foreground tracking-tight">使用前请知悉</h1>
+          <ol aria-label="研究流程" className="mt-6 grid w-full grid-cols-3 gap-3 md:mt-10 md:block md:space-y-6">
+            {[
+              { icon: Database, title: '接入数据', description: '连接已获授权的数据源，建立研究基础。', tint: 'bg-sky-100 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300' },
+              { icon: Code2, title: '定义规则', description: '创建或导入策略，将研究想法转为条件。', tint: 'bg-violet-100 text-violet-700 dark:bg-violet-400/10 dark:text-violet-300' },
+              { icon: LineChart, title: '回测验证', description: '检验历史表现，理解结果与局限。', tint: 'bg-teal-100 text-teal-700 dark:bg-teal-400/10 dark:text-teal-300' },
+            ].map(({ icon: Icon, title, description, tint }) => (
+              <li key={title} className="flex flex-col items-start gap-2 md:flex-row md:gap-3.5">
+                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tint}`}>
+                  <Icon aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-medium text-foreground">{title}</h2>
+                  <p className="mt-1 hidden text-sm leading-6 text-secondary md:block">{description}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <a
+            href={PROJECT_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-btn text-sm text-violet-700 underline decoration-violet-300 underline-offset-4 transition-colors hover:text-violet-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-4 focus-visible:ring-offset-base dark:text-violet-300 dark:decoration-violet-500/50 dark:hover:text-violet-200 md:mt-8"
+          >
+            查看引擎源码
+            <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
+            <span className="sr-only">（在新标签页打开）</span>
+          </a>
+        </section>
 
-      <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5 text-left">
-        <div className="flex items-start gap-2.5">
-          <ShieldCheck className="h-4 w-4 text-accent shrink-0 mt-0.5" />
-          <div className="space-y-2.5 text-sm text-secondary leading-relaxed">
-            <p>
-              本项目为<strong className="text-warning">个人开源项目</strong>,由个人独立维护,与任何商业数据服务
-              <span className="text-warning">无官方关联</span>。数据能力依赖第三方数据服务提供。
-            </p>
-            <p>
-              仅供学习研究使用,不构成任何投资建议。股市有风险,使用本项目产生的任何盈亏由使用者自行承担。
-            </p>
-            <p>
-              本项目基于 MIT 协议开源。使用本项目时,请遵守所用数据源的服务条款;第三方接口插件存在版权与反爬风险,使用需自行评估合规责任。
-            </p>
-          </div>
-        </div>
+        <section aria-labelledby="onboarding-notice-title" className="rounded-2xl border border-violet-200 bg-violet-50/70 p-5 dark:border-violet-400/20 dark:bg-violet-950/30 sm:p-7">
+          <h2 id="onboarding-notice-title" className="text-lg font-semibold text-violet-950 dark:text-violet-100">开始前，请了解</h2>
+          <dl className="mt-5 divide-y divide-violet-200/70 text-sm dark:divide-violet-400/15 [&_dt]:font-semibold [&_dt]:text-amber-800 dark:[&_dt]:text-amber-300">
+            <div className="pb-5">
+              <dt>不内置策略</dt>
+              <dd className="mt-2 leading-6 text-violet-950/75 dark:text-violet-100/80">
+                初次安装的策略库为空，策略由你自行创建或导入。
+                第三方策略和 AI 生成内容均需自行审查与验证。
+              </dd>
+            </div>
+            <div className="py-5">
+              <dt>不荐股，不预测，不承诺收益</dt>
+              <dd className="mt-2 leading-6 text-violet-950/75 dark:text-violet-100/80">
+                筛选、评分、监控和 AI 输出仅用于学习与研究，不构成投资建议。
+                回测呈现历史表现，不代表未来收益。
+              </dd>
+            </div>
+            <div className="pt-5">
+              <dt>遵守开源许可与服务协议</dt>
+              <dd className="mt-2 space-y-2 leading-6 text-violet-950/75 dark:text-violet-100/80">
+                <p>使用、修改或分发本项目须遵守 {PROJECT_LICENSE_NAME} 许可，保留版权与许可声明。软件按现状提供，不作保证。</p>
+                <p>数据源、插件与模型服务适用各自条款。请取得必要授权，遵守使用范围与访问限制；软件开源不等于数据开放授权。</p>
+              </dd>
+            </div>
+          </dl>
+          <details className="group mt-4">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-btn text-sm font-medium text-violet-700 underline decoration-violet-300 underline-offset-4 transition-colors hover:text-violet-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-4 focus-visible:ring-offset-surface dark:text-violet-300 dark:decoration-violet-500/50 dark:hover:text-violet-200 [&::-webkit-details-marker]:hidden">
+              查看完整开源许可（{PROJECT_LICENSE_NAME}）
+              <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+            </summary>
+            <pre className="mt-3 whitespace-pre-wrap break-words border-t border-violet-200 pt-4 font-mono text-xs leading-6 text-violet-950/75 dark:border-violet-400/15 dark:text-violet-100/80" lang="en">{PROJECT_LICENSE_TEXT}</pre>
+          </details>
+        </section>
       </div>
 
-      <div className="mt-6 flex items-center justify-center">
+      <div className="mt-8 flex flex-col gap-5 border-t border-border pt-6 sm:mt-10 sm:flex-row sm:items-center sm:justify-between sm:gap-8">
+        <div className="max-w-xl text-sm leading-6">
+          <p className="font-medium text-amber-800 dark:text-amber-300">独立判断，审慎使用。</p>
+          <p className="mt-1 text-secondary">市场有风险，请自行核验数据与结果，并承担决策风险。</p>
+        </div>
         <button
+          type="button"
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 transition-all"
+          className="inline-flex min-h-12 shrink-0 items-center justify-center gap-3 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700 active:bg-violet-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-4 focus-visible:ring-offset-base"
         >
-          我已了解,继续
-          <ArrowRight className="h-4 w-4" />
+          我已了解，继续
+          <ArrowRight aria-hidden="true" className="h-4 w-4" />
         </button>
       </div>
     </div>
