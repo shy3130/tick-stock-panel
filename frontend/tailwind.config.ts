@@ -30,6 +30,17 @@ export default {
         sans: ['Inter', '"HarmonyOS Sans SC"', '"PingFang SC"', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', '"IBM Plex Mono"', 'ui-monospace', 'monospace'],
       },
+      /* 字号整体 +1 档 (2026-11): 原始 token 各上调 1px, 行高同步 +2px 保持疏密。
+       * 任意值写法 text-[11px] 的 +1 在 index.css「字号整体 +1 档」一节统一覆盖;
+       * base 不在此列 — 与 colors.base 撞名, text-base 生成的是 color 规则。 */
+      fontSize: {
+        xs:   ['13px', '18px'],
+        sm:   ['15px', '20px'],
+        lg:   ['19px', '26px'],
+        xl:   ['21px', '28px'],
+        '2xl': ['25px', '32px'],
+        '3xl': ['31px', '38px'],
+      },
       borderRadius: {
         card: '8px',
         btn: '6px',

@@ -15,7 +15,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import * as echarts from 'echarts'
+import * as echarts from '@/lib/echarts'
 import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, History, ListChecks, PieChart, Plus, RefreshCw, Settings, ShieldAlert, SlidersHorizontal, Snowflake, Trash2, TrendingUp, Wallet, X, Zap } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { api, type PaperCompareRow, type PaperFill, type PaperHolding, type PaperOrder, type PaperRound } from '@/lib/api'

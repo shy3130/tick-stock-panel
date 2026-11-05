@@ -152,3 +152,132 @@ body {
   animation: breath-sync 2.8s ease-in-out infinite;
 }
 
+/* === 字号整体 +1 档 (2026-11, 用户反馈界面字号偏小) ===
+ * 全站字号统一上调 1px, 三种来源分别处理:
+ *  1) 标准 token (text-xs / sm / lg / xl / 2xl / 3xl) → tailwind.config.ts 的 fontSize
+ *  2) 任意值写法 text-[Npx] → 下面这段覆盖 (置于 @tailwind utilities 之后, 同特异度靠后生效)
+ *  3) 画布尺寸 (ECharts/SVG 的 fontSize 数值) → lib/echartsFont.ts 运行时 +1
+ * 若要回退: 删掉这段 + 还原 tailwind fontSize 即可, 不散落在组件里。
+ * 注意 text-base 不参与 (与 colors.base 撞名, 生成的是 color 规则)。 */
+.text-\[7px\]  { font-size: 8px; }
+.text-\[8px\]  { font-size: 9px; }
+.text-\[9px\]  { font-size: 10px; }
+.text-\[10px\] { font-size: 11px; }
+.text-\[11px\] { font-size: 12px; }
+.text-\[12px\] { font-size: 13px; }
+.text-\[13px\] { font-size: 14px; }
+.text-\[14px\] { font-size: 15px; }
+.text-\[15px\] { font-size: 16px; }
+.text-\[16px\] { font-size: 17px; }
+.text-\[17px\] { font-size: 18px; }
+.text-\[18px\] { font-size: 19px; }
+.text-\[20px\] { font-size: 21px; }
+.text-\[22px\] { font-size: 23px; }
+.text-\[24px\] { font-size: 25px; }
+.text-\[26px\] { font-size: 27px; }
+.text-\[28px\] { font-size: 29px; }
+.text-\[32px\] { font-size: 33px; }
+
+/* === 模块放大 (点选卡片 → 提升到最上层 + 铺满浏览器视口 + 整体放大) ===
+ * 交互与判定逻辑见 lib/moduleFocus.ts; 这里只管视觉。
+ * .tf-module-max 加在被点中的卡片元素上, 用 !important 压掉组件自带的尺寸/圆角/overflow。
+ *
+ * 放大手法: transform: scale(--tf-max-zoom) + 布局尺寸按 1/zoom 反向补偿。
+ * 之所以不是"把盒子撑到视口大小": 那样只会露出更多空白, 字号一比不变; 而这样做
+ * 卡片内部先按「视口/zoom」排版再整体放大, 文字/图标/间距/图表按同一倍数放大,
+ * 相当于把模块放大镜式拉近 — 用户要的"字体自适应跟着放大倍数"。
+ * - 文字是矢量, 放大后依然清晰; canvas 图表会轻微软化 (与 设置→系统→界面缩放 同代价)。
+ * - 布局尺寸用 % 而非 vw: 包含块是最近的定位祖先 — 页面缩放层 #root 带 transform 时
+ *   该盒子 = 视口/页面缩放, 于是 .tf-module-max 的 scale 与 #root 的 scale 相乘,
+ *   视觉上刚好铺满视口, 且放大倍数不受界面缩放影响 (两处缩放互不干扰)。
+ * - 用户若想更猛/更保守, 只改下面这一个 --tf-max-zoom。
+ * .tf-module-flat 加在祖先上: 临时抹掉 transform/filter 等会劫持 fixed 定位的属性
+ * (react-grid-layout 的定位 transform、framer-motion 动画层、backdrop-filter 卡片)。 */
+@keyframes tf-module-max-in {
+  from { opacity: 0.35; }
+  to   { opacity: 1; }
+}
+
+.tf-module-max {
+  /* 默认倍数 (兜底): 实际倍数由 lib/moduleFocus.ts 按卡片尺寸自适应算出,
+   * 以内联 --tf-max-zoom / --tf-max-zoom-inv 覆盖这里的值。
+   * 布局尺寸按倒数缩, 再被 scale 放大回视口 (用乘法不用除法: calc 里除以 var()
+   * 在部分 WebView 内核不认)。若要改上限/下限, 见 moduleFocus.ts 的 ZOOM_MAX / ZOOM_MIN。 */
+  --tf-max-zoom: 1.5;
+  --tf-max-zoom-inv: 0.6667;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 900 !important;
+  width: calc(100% * var(--tf-max-zoom-inv)) !important;
+  height: calc(100% * var(--tf-max-zoom-inv)) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow: auto !important;
+  background: hsl(var(--surface)) !important;
+  transform: scale(var(--tf-max-zoom)) !important;
+  transform-origin: 0 0 !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  animation: tf-module-max-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tf-module-flat {
+  transform: none !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  will-change: auto !important;
+}
+
+/* 放大态下的浮动操作条 (挂在 body, 不受卡片 overflow/缩放影响)。
+ * 放底部居中: 放大后卡片铺满视口, 卡片自己的标题与工具按钮都在顶部,
+ * 顶部的条会压住它们; 底部中间通常是空白区, 也离"看完要点还原"的手更近。 */
+.tf-module-bar {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px 4px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--elevated) / 0.96);
+  color: hsl(var(--fg-secondary));
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 4px 16px hsl(var(--base) / 0.45);
+  backdrop-filter: blur(6px);
+}
+.tf-module-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: hsl(var(--accent));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+.tf-module-bar-btn:hover { background: hsl(var(--accent) / 0.88); }
+.tf-module-bar-hint { white-space: nowrap; }
+

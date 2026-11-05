@@ -16,7 +16,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import * as echarts from 'echarts'
+import * as echarts from '@/lib/echarts'
 import { Activity, Database, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { api, type SectorRotationSector } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'

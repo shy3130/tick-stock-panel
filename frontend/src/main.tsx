@@ -13,6 +13,7 @@ import * as format from './lib/format'
 import { createAppPersister, shouldPersistQuery, PERSIST_BUSTER } from './lib/queryPersist'
 import { hydrateUiPrefs } from './lib/uiPrefs'
 import { applyPageZoom, getPageZoom } from './lib/pageZoom'
+import { installModuleFocus } from './lib/moduleFocus'
 import { applyTheme, getTheme } from './lib/theme'
 // 字体自托管 (@fontsource): 替代 rsms.me / Google Fonts 渲染阻塞外链,
 // 内网/离线部署不再白屏等字体。权重覆盖 tailwind 全部用量 (300-900)。
@@ -78,6 +79,8 @@ async function bootstrap() {
   await initializeFrontendExtensions()
   // 页面插件能力桥: 运行时页面插件经 shim 读取宿主 api/QK/cn/format
   installTspExtBridge({ api, QK, cn, format })
+  // 模块放大: 点选任意卡片 → 提到最上层并铺满视口 (全站委托, 见 lib/moduleFocus.ts)
+  installModuleFocus()
   // 运行时页面插件: 必须在 router 模块求值(finalize + 建路由表)之前挂载
   await loadRuntimePageExtensions()
   const { router } = await import('./router')

@@ -228,7 +228,7 @@ function AuctionOnly({ rows, prevClose, match, unmatched, width, height, auction
       <text
         x={plotX0 + (W - plotX0) / 2} y={H / 2}
         textAnchor="middle" dominantBaseline="middle"
-        fill={LINE_PREV_CLOSE} fontSize={8} opacity={0.55}
+        fill={LINE_PREV_CLOSE} fontSize={9} opacity={0.55}
       >
         暂无分时
       </text>

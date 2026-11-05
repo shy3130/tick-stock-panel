@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import * as echarts from 'echarts'
+import * as echarts from '@/lib/echarts'
 import { useECharts } from './useECharts'
 import type { StrategyBacktestResult } from '@/lib/api'
 import { useChartTheme } from '@/lib/theme'

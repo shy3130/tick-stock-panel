@@ -71,7 +71,7 @@ export function CandlestickChart({ data, height = 480 }: Props) {
         background: { color: THEME.background },
         textColor: ctRef.current.text,
         fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 11,
+        fontSize: 12,
       },
       grid: {
         vertLines: { color: ctRef.current.grid },
