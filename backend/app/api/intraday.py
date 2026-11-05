@@ -178,6 +178,8 @@ async def quote_stream(request: Request):
                         "event": "daily_integrity_updated",
                         "data": json.dumps({"data_changed": data["daily_integrity_updated"]}),
                     }
+                if data.get("data_updated"):
+                    yield {"event": "data_updated", "data": json.dumps({"versions": qs.data_versions()})}
                 if data["strategy_results_updated"]:
                     yield {
                         "event": "strategy_results_updated",
@@ -197,6 +199,13 @@ async def quote_stream(request: Request):
             qs.unsubscribe(sub)
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/data-versions")
+def data_versions(request: Request):
+    """补齐数据版本的只读出口，供重连/漏事件校准，不创建取数任务。"""
+    qs = _get_quote_service(request)
+    return {"versions": qs.data_versions() if qs else {}}
 
 
 @router.post("/refresh")

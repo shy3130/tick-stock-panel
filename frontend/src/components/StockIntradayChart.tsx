@@ -51,6 +51,7 @@ export function StockIntradayChart({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['kline-minute', symbol] })
       qc.invalidateQueries({ queryKey: QK.klineMinute(symbol, date ?? '') })
+      qc.invalidateQueries({ queryKey: QK.minuteBatch() })
       setMinuteDismissed(false)
     },
   })

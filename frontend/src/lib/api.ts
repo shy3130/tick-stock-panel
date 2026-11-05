@@ -28,6 +28,12 @@ export class ApiError extends Error {
   }
 }
 
+export interface WatchlistPrepareResult {
+  symbol: string
+  status: 'ready' | 'no_data' | 'unsupported' | 'failed' | 'busy'
+  message: string
+}
+
 /**
  * 把浏览器 fetch 抛出的裸网络错误文案翻译成可操作的提示。
  * 各浏览器文案不同: Chrome "Failed to fetch" / Safari "network error" / "Load failed"。
@@ -3534,6 +3540,11 @@ export const api = {
         ? `/api/watchlist/enriched?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/watchlist/enriched',
     ),
+  watchlistPrepare: (symbols: string[]) => request<{ results: WatchlistPrepareResult[] }>(
+    '/api/watchlist/prepare',
+    { method: 'POST', body: JSON.stringify({ symbols }), timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, quiet: true },
+  ),
+  dataVersions: () => request<{ versions: Record<string, string> }>('/api/intraday/data-versions', { quiet: true }),
 
   // timeframe='all' 时不传参数 → 后端不过滤周期, 返回日线+分钟合并列表
   screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1m' | 'all' = '1d') => {

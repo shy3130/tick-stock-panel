@@ -15,6 +15,8 @@ export interface TailExtendLiveRow {
   rt_price?: number | null
   close?: number | null
   asset_type?: string | null
+  date?: string | null
+  prepared_daily?: boolean | null
 }
 
 /** 按资产类型的行情日期 (enriched 响应 dates 字段, ISO 日期); 旧后端不返回 */
@@ -53,9 +55,11 @@ export function extendMinuteTail(
     const arr = base[sym]
     if (!Array.isArray(arr) || arr.length === 0) { patched[sym] = arr; continue }
     const live = liveBySymbol.get(sym)
+    // 按需补齐的是日线快照；即使日期是今天，也不能充当当前分钟的实时价。
+    if (live?.prepared_daily) { patched[sym] = arr; continue }
     const price = live?.rt_price ?? live?.close
     // 未知资产类型取到 undefined → 不等于当日 → 跳过 (fail-closed)
-    const quoteDate = (quoteDates as Record<string, string | null | undefined>)[
+    const quoteDate = live?.date ?? (quoteDates as Record<string, string | null | undefined>)[
       live?.asset_type ?? 'stock'
     ]
     // 行情日期非当日 (旧日K回退) 或价格非法 (含 0) 的标的不续画

@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import date, datetime
 from datetime import time as dt_time
@@ -447,6 +448,9 @@ class KlineRepository:
         # 序列化 parquet 分区的读-改-写: 实时轮询线程、手动 refresh、盘后管道
         # 可能并发 merge/flush 同一分区文件, 无锁会互相覆盖丢数据
         self._write_lock = threading.Lock()
+        # 自选/详情定向补齐的最新行。只供展示回退，不能混入全市场当日策略快照。
+        self._prepared_daily_lock = threading.Lock()
+        self._prepared_daily: OrderedDict = OrderedDict()
 
         # ---- Polars 缓存 ----
         self._enriched_cache: pl.DataFrame | None = None       # 最新一天 (~5500行)
@@ -661,6 +665,8 @@ class KlineRepository:
         导致内存里的旧缓存残留 (clear 数据后看板仍显示旧数据的根因)。
         本方法无条件清空, 供清除数据/重置场景调用。
         """
+        with self._prepared_daily_lock:
+            self._prepared_daily.clear()
         self._enriched_cache = None
         self._enriched_cache_date = None
         self._enriched_history_cache = None
@@ -1378,6 +1384,38 @@ class KlineRepository:
                 return pl.DataFrame(), self._index_enriched_cache_date
             return self._index_enriched_cache, self._index_enriched_cache_date
         return pl.DataFrame(), None
+
+    def remember_prepared_daily(self, asset_type: str, frame: pl.DataFrame) -> None:
+        """保留定向补齐的最新展示行，按已有 generation 验证有效性。"""
+        if frame.is_empty():
+            return
+        snapshot = self.get_enriched_generation_snapshot(asset_type)
+        latest = frame.sort("date").unique(subset=["symbol"], keep="last")
+        with self._prepared_daily_lock:
+            for part in latest.partition_by("symbol"):
+                key = (asset_type, part["symbol"][0])
+                day = part["date"][0]
+                self._prepared_daily[key] = (day, snapshot.through(day), part)
+                self._prepared_daily.move_to_end(key)
+            while len(self._prepared_daily) > 1024:
+                self._prepared_daily.popitem(last=False)
+
+    def get_prepared_daily(self, asset_type: str, symbols: list[str]) -> pl.DataFrame:
+        """热路径仅读有界快照与版本标记，不扫描历史文件或访问上游。"""
+        snapshot = self.get_enriched_generation_snapshot(asset_type)
+        parts = []
+        with self._prepared_daily_lock:
+            for symbol in symbols:
+                key = (asset_type, symbol)
+                entry = self._prepared_daily.get(key)
+                if entry is None:
+                    continue
+                day, version, frame = entry
+                if snapshot.through(day) != version:
+                    del self._prepared_daily[key]
+                else:
+                    parts.append(frame)
+        return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
 
     def get_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame | None:
         """返回预计算的 enriched 历史数据 (仅 lookback 范围, 不含 warmup)。

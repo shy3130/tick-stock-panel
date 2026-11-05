@@ -9,6 +9,8 @@ import { ExtSparkChart } from '@/components/screener/ExtSparkChart'
 import { fetchMinuteBatchIncremental, MINUTE_SEED_MAX } from '@/lib/minuteBatchIncremental'
 import { fetchDailyBatchChunked } from '@/lib/klineBatchChunked'
 import { extendMinuteTail } from '@/lib/minuteTailExtend'
+import { extendDailyTail } from '@/lib/dailyTailExtend'
+import { useWatchlistPrepare } from '@/lib/useWatchlistPrepare'
 import { reuseUnchangedSeries, EMPTY_ROWS } from '@/lib/series-identity'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -872,6 +874,7 @@ export function Watchlist() {
     queryFn: () => api.watchlistEnriched(extColumnsParam || undefined),
     enabled: (list.data?.symbols.length ?? 0) > 0,
   })
+  const preparation = useWatchlistPrepare(enriched.data?.rows)
 
   // symbol 派生只依赖 enriched.data: 旧写法 symbols 每次渲染都是新引用 (击穿 memo)
   // 且 filter×find 为 O(n²), 实时行情每 tick 重渲染时放大为每秒全量比较。
@@ -910,30 +913,13 @@ export function Watchlist() {
   const klineData = useMemo(() => {
     const base = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
     const liveRows = enriched.data?.rows
-    const asOf = enriched.data?.as_of
     // 无可修补数据时直接返回查询缓存对象 — 它是 react-query 持有的外来引用,
     // 只能作为后续 tick 的比较参照 (prev), 不得进收敛 (next 会被原地改写)。
-    if (!dailyKVisible || !liveRows?.length || !asOf) {
+    if (!dailyKVisible || !liveRows?.length) {
       prevKlineSeriesRef.current = base
       return base
     }
-    const liveBySymbol = new Map<string, any>(liveRows.map((r: any) => [r.symbol, r]))
-    const patched: Record<string, KlineRow[]> = {}
-    for (const sym of Object.keys(base)) {
-      const arr = base[sym]
-      if (!Array.isArray(arr) || arr.length === 0) { patched[sym] = arr; continue }
-      const live = liveBySymbol.get(sym)
-      const { open, high, low, close } = live ?? {}
-      if (open == null || high == null || low == null || close == null) { patched[sym] = arr; continue }
-      const last = arr[arr.length - 1]
-      if (last.date === asOf) {
-        patched[sym] = [...arr.slice(0, -1), { ...last, open, high, low, close }]
-      } else if (last.date < asOf) {
-        patched[sym] = [...arr, { date: asOf, open, high, low, close }]
-      } else {
-        patched[sym] = arr
-      }
-    }
+    const patched = extendDailyTail(base, liveRows, enriched.data?.dates)
     const merged = reuseUnchangedSeries(prevKlineSeriesRef.current, patched)
     prevKlineSeriesRef.current = merged
     return merged
@@ -1506,13 +1492,17 @@ export function Watchlist() {
             </span>
             {/* 数据未就绪提示: 自选了但 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 指标全为 null */}
             {pendingCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted/15 text-muted border border-border/50 whitespace-nowrap"
-                title={`当前有 ${pendingCount} 只指标暂未就绪 (新股/冷门股或数据尚未同步), 等待每日数据更新后自动补全`}
+              <button
+                type="button"
+                disabled={preparation.isFetching}
+                onClick={() => { void preparation.refetch() }}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted/15 text-muted border border-border/50 whitespace-nowrap disabled:cursor-wait"
+                title={preparation.isFetching ? '正在按需补齐自选日K，已有数据仍可查看' :
+                  `${preparation.data?.filter(r => r.status !== 'ready').map(r => `${r.symbol}：${r.message}`).join('\n') || '日K暂未就绪，请检查数据源配置'}\n点击重试补齐`}
               >
                 <Clock className="h-2.5 w-2.5" />
-                待数据 {pendingCount}
-              </span>
+                {preparation.isFetching ? '补齐中' : preparation.data?.some(r => r.status === 'unsupported') ? '待配置' : '待数据'} {pendingCount}
+              </button>
             )}
             {/* 过滤提示: 仅在有筛选隐藏时出现, 柔和橙色融入整体 */}
             {hiddenCount > 0 && (

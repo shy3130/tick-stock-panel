@@ -36,6 +36,21 @@ def _invalidate_cache() -> None:
     _cache_sig = None
 
 
+def data_source_stamp() -> tuple:
+    """请求去重的配置版本，只取文件元信息，不携带 Key 或配置内容。"""
+    from app.config import settings
+
+    result = []
+    for name in ("preferences.json", "secrets.json"):
+        path = settings.data_dir / "user_data" / name
+        try:
+            stat = path.stat()
+            result.append((stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            result.append(None)
+    return (str(settings.data_dir.resolve()), *result)
+
+
 def load() -> dict:
     """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
     global _cache, _cache_sig

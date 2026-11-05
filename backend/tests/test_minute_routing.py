@@ -520,7 +520,7 @@ def test_sync_and_persist_minute_custom_failure_does_not_call_tickflow(monkeypat
     _setup_custom_provider(monkeypatch, provider, has_dataset=True)
     monkeypatch.setattr(kline_sync, "_cleanup_null_datetime_minute", lambda repo: None)
     monkeypatch.setattr(kline_sync, "_migrate_symbol_to_date_partition", lambda repo: None)
-    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo: None)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo, asset_type="stock": None)
     monkeypatch.setattr(kline_sync.preferences, "get_minute_sync_segment_days", lambda: 20)
     monkeypatch.setattr(kline_sync, "resolve_limit", lambda *a, **kw: MagicMock(batch=100, rpm=30))
     write_spy = MagicMock()
@@ -552,7 +552,7 @@ def test_sync_and_persist_minute_custom_persists(monkeypatch, tmp_path):
     # mock sync_and_persist_minute 内部依赖 (通过 monkeypatch kline_sync 模块属性)
     monkeypatch.setattr(kline_sync, "_cleanup_null_datetime_minute", lambda repo: None)
     monkeypatch.setattr(kline_sync, "_migrate_symbol_to_date_partition", lambda repo: None)
-    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo: None)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo, asset_type="stock": None)
     monkeypatch.setattr(kline_sync, "resolve_limit", lambda *a, **kw: MagicMock(batch=100, rpm=30))
     monkeypatch.setattr(kline_sync.preferences, "get_minute_sync_segment_days", lambda: 20)
 
@@ -590,7 +590,7 @@ def test_sync_and_persist_minute_holds_repository_write_lock(monkeypatch, tmp_pa
 
     monkeypatch.setattr(kline_sync, "_cleanup_null_datetime_minute", lambda repo: None)
     monkeypatch.setattr(kline_sync, "_migrate_symbol_to_date_partition", lambda repo: None)
-    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo: None)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo, asset_type="stock": None)
     monkeypatch.setattr(kline_sync, "resolve_limit", lambda *a, **kw: MagicMock(batch=100, rpm=30))
     monkeypatch.setattr(kline_sync.preferences, "get_minute_sync_segment_days", lambda: 20)
 

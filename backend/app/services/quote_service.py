@@ -126,6 +126,7 @@ class QuoteSubscriber:
         self._strategy_results_updated = False
         self._depth_updated = False
         self._daily_integrity_updated: bool | None = None
+        self._data_updated: set[str] = set()
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
 
@@ -169,6 +170,9 @@ class QuoteSubscriber:
             }
             if self._daily_integrity_updated is not None:
                 out["daily_integrity_updated"] = self._daily_integrity_updated
+            if self._data_updated:
+                out["data_updated"] = sorted(self._data_updated)
+            self._data_updated.clear()
             self._daily_integrity_updated = None
             self._quote_updated = False
             self._strategy_results_updated = False
@@ -201,6 +205,7 @@ class QuoteSubscriber:
                 and not self._strategy_results_updated
                 and not self._depth_updated
                 and self._daily_integrity_updated is None
+                and not self._data_updated
                 and not self._reviews
             ):
                 self._event.clear()
@@ -213,6 +218,11 @@ class QuoteSubscriber:
     def notify_daily_integrity(self, data_changed: bool) -> None:
         with self._lock:
             self._daily_integrity_updated = bool(self._daily_integrity_updated or data_changed)
+            self._notify()
+
+    def notify_data(self, kind: str) -> None:
+        with self._lock:
+            self._data_updated.add(kind)
             self._notify()
 
     def notify_strategy_results(self) -> None:
@@ -301,6 +311,7 @@ class QuoteService:
         self._stream_id = str(time.time_ns())
         self._quote_revision = 0
         self._strategy_revision = 0
+        self._data_revisions = {"daily": 0, "minute": 0}
         self._strategy_monitor = None            # 延迟注入
         self._app_state = None                   # 延迟注入 (FastAPI app.state)
         # 异动边缘规则上次评估时间戳 (秒)。异动快照历史部分有 60s 缓存,
@@ -528,6 +539,18 @@ class QuoteService:
             self._strategy_revision += 1
         for sub in self._snapshot_subscribers():
             sub.notify_strategy_results()
+
+    def data_versions(self) -> dict[str, str]:
+        with self._lock:
+            return {kind: f"{self._stream_id}:{version}" for kind, version in self._data_revisions.items()}
+
+    def notify_data_updated(self, kind: str) -> None:
+        if kind not in {"daily", "minute"}:
+            raise ValueError("unknown data kind")
+        with self._lock:
+            self._data_revisions[kind] += 1
+        for sub in self._snapshot_subscribers():
+            sub.notify_data(kind)
 
     def notify_daily_integrity_updated(self, assets: list[str], *, data_changed: bool) -> None:
         if data_changed:
