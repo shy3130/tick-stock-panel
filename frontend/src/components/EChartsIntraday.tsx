@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
-import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES, summarizeMinutes, type DailySummary } from '@/lib/intraday-chart'
+import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES, summarizeMinutes, getLimitPrices, type DailySummary } from '@/lib/intraday-chart'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
+import { pricePrecision } from '@/lib/format'
 
 type YMode = 'adaptive' | 'limit'
 
@@ -17,6 +18,7 @@ const THEME = {
 }
 
 interface Props {
+  assetType?: 'stock' | 'etf' | 'index'
   data: MinuteKlineRow[]
   height?: number
   prevClose?: number
@@ -42,29 +44,8 @@ function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
-/** 计算实际涨跌停价 (四舍五入到2位小数) 和实际涨跌停幅度 */
-function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
-  limitUp: number      // 涨停价 (四舍五入)
-  limitDown: number    // 跌停价 (四舍五入)
-  upPct: number        // 实际涨停幅度 (如 9.97)
-  downPct: number      // 实际跌停幅度 (如 -9.97)
-} {
-  const pct = priceLimit && Number.isFinite(priceLimit.rate) ? priceLimit.rate : 0.10
-  const rawUp = prevClose * (1 + pct)
-  const rawDown = prevClose * (1 - pct)
-  // A股涨跌停价四舍五入到分 (2位小数)
-  const limitUp = isValidPrice(priceLimit?.limit_up)
-    ? priceLimit.limit_up
-    : Math.round(rawUp * 100) / 100
-  const limitDown = isValidPrice(priceLimit?.limit_down)
-    ? priceLimit.limit_down
-    : Math.round(rawDown * 100) / 100
-  const upPct = (limitUp - prevClose) / prevClose * 100
-  const downPct = (limitDown - prevClose) / prevClose * 100
-  return { limitUp, limitDown, upPct, downPct }
-}
-
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = []): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = [], assetType?: Props['assetType']): EChartsOption {
+  const digits = pricePrecision(assetType)
   // 无涨跌幅标的 (注册制新股上市初期窗口, 后端 no_limit 标记): 不存在可信
   // 涨跌停带, 自适应/涨跌停两类模式都退化为纯数据对称范围, 也不画涨跌停虚线
   const limitLinesActive = showLimitLines && !priceLimit?.no_limit
@@ -164,7 +145,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     ), 0) * 1.05
 
     if (limitLinesActive && yMode === 'limit') {
-      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
+      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit, assetType)
       const limitDiffUp = limitUp - prevClose
       const limitDiffDown = prevClose - limitDown
       const limitDiff = Math.max(limitDiffUp, limitDiffDown)
@@ -315,7 +296,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
           label: {
             formatter: (params: any) => {
               const v = params.value
-              return typeof v === 'number' ? v.toFixed(2) : ''
+              return typeof v === 'number' ? v.toFixed(digits) : ''
             },
           },
         },
@@ -323,7 +304,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
           color: ct.text,
           fontSize: 10,
           fontFamily: 'JetBrains Mono, monospace',
-          formatter: (v: number) => v.toFixed(2),
+          formatter: (v: number) => v.toFixed(digits),
         },
       },
       {
@@ -406,6 +387,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
 
 export function EChartsIntraday({
   data,
+  assetType,
   height = 320,
   prevClose,
   date,
@@ -418,6 +400,7 @@ export function EChartsIntraday({
   showLimitLines = true,
   showAvgLine = true,
 }: Props) {
+  const digits = pricePrecision(assetType)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -529,12 +512,12 @@ export function EChartsIntraday({
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines, assetType), true)
     } else {
       fullDayToDataIdx.current = new Map()
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines, assetType])
 
   useEffect(() => {
     return () => {
@@ -599,13 +582,13 @@ export function EChartsIntraday({
               {date && <span className="text-muted">{date}</span>}
               <span className="text-muted">{hovered ? `${formatMinuteTime(hovered.datetime)} 分钟` : daily ? '日K（前复权）' : '分时汇总'}</span>
               <span className="text-muted">开</span>
-              <span style={{ color: priceClr }}>{ohlc.open != null ? ohlc.open.toFixed(2) : '—'}</span>
+              <span style={{ color: priceClr }}>{ohlc.open != null ? ohlc.open.toFixed(digits) : '—'}</span>
               <span className="text-muted">高</span>
-              <span style={{ color: priceClr }}>{ohlc.high.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{ohlc.high.toFixed(digits)}</span>
               <span className="text-muted">低</span>
-              <span style={{ color: priceClr }}>{ohlc.low.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{ohlc.low.toFixed(digits)}</span>
               <span className="text-muted">收</span>
-              <span style={{ color: priceClr }} className="font-semibold">{ohlc.close.toFixed(2)}</span>
+              <span style={{ color: priceClr }} className="font-semibold">{ohlc.close.toFixed(digits)}</span>
             </>
           )}
         </div>
@@ -615,11 +598,11 @@ export function EChartsIntraday({
             <>
               <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: priceClr }} />
-                <span style={{ color: priceClr }}>{d.close.toFixed(2)}</span>
+                <span style={{ color: priceClr }}>{d.close.toFixed(digits)}</span>
               </span>
               {showAvgLine && <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: THEME.avgLine }} />
-                <span style={{ color: THEME.avgLine }}>{avg != null ? avg.toFixed(2) : '—'}</span>
+                <span style={{ color: THEME.avgLine }}>{avg != null ? avg.toFixed(digits) : '—'}</span>
               </span>}
               <span className="text-muted">{hovered ? '量' : '累计量'}</span>
               <span className="text-secondary">{d.volume.toFixed(0)}</span>

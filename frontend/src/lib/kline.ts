@@ -40,7 +40,9 @@ export function mergeLatestKlineRow(
   current: KlineDailyResponse | undefined,
   latest: KlineDailyLatestResponse,
 ): KlineDailyResponse | undefined {
-  if (!current || !latest.row || current.symbol !== latest.symbol) return current
+  if (!current || current.symbol !== latest.symbol) return current
+  if (latest.asset_type && latest.asset_type !== current.asset_type) current = { ...current, asset_type: latest.asset_type }
+  if (!latest.row) return current
 
   const latestDate = String(latest.row.date).slice(0, 10)
   const last = current.rows.at(-1)

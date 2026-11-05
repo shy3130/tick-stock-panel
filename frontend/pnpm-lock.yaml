@@ -45,8 +45,8 @@ importers:
         specifier: ^11.5.0
         version: 11.18.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       lightweight-charts:
-        specifier: ^4.2.0
-        version: 4.2.3
+        specifier: 5.2.1
+        version: 5.2.1
       lucide-react:
         specifier: ^0.439.0
         version: 0.439.0(react@18.3.1)
@@ -944,8 +944,8 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  lightweight-charts@4.2.3:
-    resolution: {integrity: sha512-5kS/2hY3wNYNzhnS8Gb+GAS07DX8GPF2YVDnd2NMC85gJVQ6RLU6YrXNgNJ6eg0AnWPwCnvaGtYmGky3HiLQEw==}
+  lightweight-charts@5.2.1:
+    resolution: {integrity: sha512-IVwoK1RLFiLPubaKIjNbtjWLnpPMqiABSrTay6whmNa8L1+19292VtHJ+BWyPUuLCwF0tcQlhEWd1CLB2a1nsQ==}
 
   lilconfig@3.1.3:
     resolution: {integrity: sha512-/vlFKAoH5Cgt3Ie+JLhRbwOsCQePABiU3tJ1egGvyQ+33R/vcwM2Zl2QR/LzjsBeItPt3oSVXapn+m4nQDvpzw==}
@@ -2186,7 +2186,7 @@ snapshots:
 
   json5@2.2.3: {}
 
-  lightweight-charts@4.2.3:
+  lightweight-charts@5.2.1:
     dependencies:
       fancy-canvas: 2.1.0
 

@@ -19,6 +19,7 @@ pnpm build        # → dist/extension.js
 
 - `src/extension.tsx` — 产物清单（id / routes / navigation）与示例页面；`mount(el, ctx)` 渲染进容器，返回清理函数。
 - `src/tsp.ts` — 从 `window.__TSP_EXT__` 取宿主能力桥 `ctx`：`ctx.api`（宿主完整 API 封装）、`ctx.QK`、`ctx.cn`、`ctx.format`。
+- 个股详情：`ctx.ui?.openStockPreview({ symbol: '159558.SZ', name, navList })`，关闭用 `ctx.ui?.closeStockPreview()`；模板已包含调用按钮。使用完整交易所后缀，旧宿主没有 `ui` 时检测后提示升级。
 - **禁止** import 宿主内部模块（`@/lib/...` 在产物构建中不可解析）；数据请求一律经 `ctx.api`。
 - 样式：宿主 Tailwind 按需编译，任意类名不保证存在——布局关键样式用内联样式，主题色用宿主 CSS 变量（如 `var(--accent)`）。
 

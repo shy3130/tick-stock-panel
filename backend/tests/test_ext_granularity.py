@@ -140,6 +140,52 @@ def test_series_daily_same_day_multi_row_takes_last_non_null(store):
     assert res["items"]["600000.SH"] == [["2026-10-23", 7.0]]
 
 
+def test_series_daily_uses_mapped_business_date_instead_of_pull_partition(store):
+    config = _config(time_field="__pull_ts__", granularity="daily")
+    config.pull.field_map = {"date": "日期", "net": "主力净流入"}
+    ExtConfigStore(store).upsert(config)
+    _write_part(store, "flow", "2026-11-04", pl.DataFrame({
+        "symbol": ["600000.SH"], "日期": ["2026-11-04"], "net": [10.0],
+    }))
+    _write_part(store, "flow", "2026-11-05", pl.DataFrame({
+        "symbol": ["600000.SH"] * 4,
+        "日期": ["2026-11-04", "2026-11-04", "2026-11-05", "2026-11-05"],
+        "net": [10.0, 10.0, 20.0, 20.0],
+        "__pull_ts__": ["09:24:00", "09:34:00", "15:42:00", "15:52:00"],
+    }))
+    # 次日盘前仍可能返回上一交易日快照; 拉取日期不能伪造成新的业务日期。
+    _write_part(store, "flow", "2026-11-06", pl.DataFrame({
+        "symbol": ["600000.SH"] * 2, "日期": ["2026-11-05"] * 2, "net": [20.0, 20.0],
+    }))
+    res = ext_api.ext_series(_request(store), "flow", field="net", days=10, date=None, symbols=None)
+    assert res["granularity"] == "daily"
+    assert res["items"]["600000.SH"] == [["2026-11-04", 10.0], ["2026-11-05", 20.0]]
+
+
+def test_series_daily_mapped_date_does_not_expose_future_values(store):
+    config = _config(granularity="daily")
+    config.pull.field_map = {"date": "日期"}
+    ExtConfigStore(store).upsert(config)
+    _write_part(store, "flow", "2026-11-05", pl.DataFrame({
+        "symbol": ["600000.SH"] * 3,
+        "日期": ["2026-11-04", None, "2026-11-06"],
+        "net": [10.0, 20.0, 999.0],
+    }))
+    res = ext_api.ext_series(_request(store), "flow", field="net", days=10, date="2026-11-05", symbols=None)
+    assert res["items"]["600000.SH"] == [["2026-11-04", 10.0]]
+
+
+def test_series_daily_missing_mapped_date_falls_back_to_partition(store):
+    config = _config(granularity="daily")
+    config.pull.field_map = {"date": "日期"}
+    ExtConfigStore(store).upsert(config)
+    _write_part(store, "flow", "2026-11-05", pl.DataFrame({
+        "symbol": ["600000.SH"], "net": [10.0],
+    }))
+    res = ext_api.ext_series(_request(store), "flow", field="net", days=10, date=None, symbols=None)
+    assert res["items"]["600000.SH"] == [["2026-11-05", 10.0]]
+
+
 def test_series_daily_date_param_is_window_right_edge(store):
     ExtConfigStore(store).upsert(_config())
     for day in ("2026-10-21", "2026-10-22", "2026-10-23"):
@@ -195,6 +241,71 @@ def test_series_intraday_unchanged(store):
     )
     assert res["granularity"] != "daily"
     assert res["items"]["600000.SH"] == [["09:20:00", 1.0], ["09:25:00", 2.0]]
+
+
+def test_series_can_display_multi_snapshot_table_by_day_without_changing_config(store):
+    ExtConfigStore(store).upsert(_config(time_field="ts", granularity="intraday"))
+    for day, values in [("2026-11-04", [1.0, 2.0]), ("2026-11-05", [3.0, 4.0])]:
+        _write_part(store, "flow", day, pl.DataFrame({
+            "symbol": ["600000.SH"] * 2, "net": values, "ts": ["09:20:00", "09:25:00"],
+        }))
+    res = ext_api.ext_series(
+        _request(store), "flow", field="net", date="2026-11-05", days=2,
+        symbols="600000.SH", granularity="daily",
+    )
+    assert res["items"]["600000.SH"] == [["2026-11-04", 2.0], ["2026-11-05", 4.0]]
+    assert ExtConfigStore(store).get("flow").pull.granularity == "intraday"
+    # 切回日内仍可读取所有盘次, 按日展示不改写原始记录。
+    intraday = ext_api.ext_series(
+        _request(store), "flow", field="net", date="2026-11-05", days=2,
+        symbols="600000.SH", granularity="intraday",
+    )
+    assert intraday["items"]["600000.SH"] == [["09:20:00", 3.0], ["09:25:00", 4.0]]
+
+
+def test_series_can_display_daily_default_table_as_intraday_if_snapshots_exist(store):
+    ExtConfigStore(store).upsert(_config(time_field="ts", granularity="daily"))
+    _write_part(store, "flow", "2026-11-05", pl.DataFrame({
+        "symbol": ["600000.SH"] * 2, "net": [1.0, 2.0], "ts": ["09:20:00", "09:25:00"],
+    }))
+    res = ext_api.ext_series(
+        _request(store), "flow", field="net", date="2026-11-05", days=10,
+        symbols=None, granularity="intraday",
+    )
+    assert res["granularity"] == "intraday"
+    assert res["items"]["600000.SH"] == [["09:20:00", 1.0], ["09:25:00", 2.0]]
+    assert ExtConfigStore(store).get("flow").pull.granularity == "daily"
+
+
+def test_series_intraday_override_requires_time_field(store):
+    from fastapi import HTTPException
+
+    ExtConfigStore(store).upsert(_config())
+    with pytest.raises(HTTPException) as exc:
+        ext_api.ext_series(
+            _request(store), "flow", field="net", date=None, days=10,
+            symbols=None, granularity="intraday",
+        )
+    assert exc.value.status_code == 400
+    assert "time_field" in exc.value.detail
+
+
+async def test_series_query_validates_display_granularity(store):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    ExtConfigStore(store).upsert(_config(time_field="ts"))
+    _write_part(store, "flow", "2026-11-05", pl.DataFrame({
+        "symbol": ["600000.SH"] * 2, "net": [1.0, 2.0], "ts": ["09:20:00", "09:25:00"],
+    }))
+    app = FastAPI()
+    app.include_router(ext_api.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/ext-data/flow/series", params={"field": "net", "granularity": "daily"})
+        assert response.status_code == 200
+        assert response.json()["items"]["600000.SH"] == [["2026-11-05", 2.0]]
+        invalid = await client.get("/api/ext-data/flow/series", params={"field": "net", "granularity": "weekly"})
+        assert invalid.status_code == 422
 
 
 # ---------- schema / list 透出 ----------

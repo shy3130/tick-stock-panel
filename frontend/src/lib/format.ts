@@ -5,6 +5,24 @@ export function fmtPrice(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
+/** 使用接口给出的资产类型, 不根据证券代码或价格大小猜测报价精度。 */
+export function pricePrecision(assetType?: string | null): 2 | 3 {
+  return assetType === 'etf' ? 3 : 2
+}
+
+export function roundPriceToTick(value: number, assetType?: string | null): number {
+  const scale = 10 ** pricePrecision(assetType)
+  const scaled = value * scale
+  // 消除运算产生的二进制尾差, 让半个报价单位按四舍五入处理。
+  const rounded = Math.round(scaled + Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4) / scale
+  return rounded === 0 ? 0 : rounded
+}
+
+export function fmtAssetPrice(value: number | null | undefined, assetType?: string | null): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return roundPriceToTick(value, assetType).toFixed(pricePrecision(assetType))
+}
+
 export function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || Number.isNaN(v)) return '—'
   const sign = v > 0 ? '+' : ''

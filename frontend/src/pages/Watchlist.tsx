@@ -14,7 +14,7 @@ import { useWatchlistPrepare } from '@/lib/useWatchlistPrepare'
 import { reuseUnchangedSeries, EMPTY_ROWS } from '@/lib/series-identity'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber, fmtAssetPrice } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
@@ -615,7 +615,7 @@ const StockCard = React.memo(function StockCard({
         {/* 第二行: 大价格 + 涨跌幅胶囊 */}
         <div className="flex items-end justify-between gap-2 mb-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
+            {fmtAssetPrice(price, r.asset_type)}
           </span>
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
@@ -783,7 +783,7 @@ export function Watchlist() {
   }, [columns])
 
   // 计算 ext 列参数
-  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
+  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns, extSchema.data?.items), [columns, extSchema.data])
 
   const toggleView = useCallback(() => {
     setGroupCardsOpen(false)
@@ -1322,8 +1322,7 @@ export function Watchlist() {
     [filteredRows, sortRows, columns],
   )
 
-  // 日内多盘扩展列 (集合竞价等) 迷你图: 每个 bar/line 图列按列表标的拉当日序列
-  // (与策略页同口径; 人气排行等每日截面表无时间列, 不会出现图列)
+  // 扩展列迷你图按本列显示周期读取, 未指定时跟随数据表默认。
   const extChartColumns = useMemo(
     () => columns.filter(c =>
       c.visible && c.source.type === 'ext'
@@ -1331,7 +1330,12 @@ export function Watchlist() {
     [columns],
   )
   const extChartColsKey = extChartColumns
-    .map(c => `${(c.source as { configId: string }).configId}.${(c.source as { fieldName: string }).fieldName}:${c.extDisplay?.chartDays ?? 10}`)
+    .map(c => {
+      const src = c.source as { configId: string; fieldName: string }
+      const granularity = c.extDisplay?.seriesGranularity
+        ?? extSchema.data?.items.find(t => t.id === src.configId)?.granularity ?? 'auto'
+      return `${src.configId}.${src.fieldName}:${c.extDisplay?.chartDays ?? 10}:${granularity}`
+    })
     .join(',')
   const extChartSymbolsKey = useMemo(
     () => sortedRows.map(r => r.symbol as string).sort().join(','),
@@ -1343,14 +1347,14 @@ export function Watchlist() {
       const symbols = extChartSymbolsKey ? extChartSymbolsKey.split(',') : []
       const entries = await Promise.all(extChartColumns.map(async c => {
         const src = c.source as { type: 'ext'; configId: string; fieldName: string }
-        const r = await api.extDataSeries(src.configId, src.fieldName, undefined, symbols, c.extDisplay?.chartDays || 10)
+        const r = await api.extDataSeries(src.configId, src.fieldName, undefined, symbols, c.extDisplay?.chartDays || 10, c.extDisplay?.seriesGranularity)
         return [`${src.configId}.${src.fieldName}`, r.items ?? {}] as const
       }))
       return Object.fromEntries(entries) as Record<string, Record<string, [string, number][]>>
     },
     enabled: extChartColumns.length > 0 && extChartSymbolsKey.length > 0,
     staleTime: 5 * 60_000,
-    placeholderData: prev => prev,
+    placeholderData: (prev, previousQuery) => previousQuery?.queryKey[1] === extChartColsKey ? prev : undefined,
   })
   const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
 
@@ -1974,7 +1978,7 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
-                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtAssetPrice(price, r.asset_type)}</td>
                 }
                 if (key === 'pct') {
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>

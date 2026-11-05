@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { api, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { klineMinuteQueryOptions, minuteRefetchInterval } from '@/lib/kline'
-import { EChartsIntraday } from '@/components/EChartsIntraday'
 import type { DailySummary } from '@/lib/intraday-chart'
+import type { ChartRenderer } from '@/lib/chart-types'
+
+const EChartsIntraday = lazy(() => import('./EChartsIntraday').then(m => ({ default: m.EChartsIntraday })))
+const LightweightIntraday = lazy(() => import('./charts/LightweightIntraday').then(m => ({ default: m.LightweightIntraday })))
 
 interface Props {
   symbol: string
+  renderer?: ChartRenderer
   date: string | null
   height?: number
   prevClose?: number
@@ -24,6 +28,7 @@ interface Props {
 
 export function StockIntradayChart({
   symbol,
+  renderer = 'echarts',
   date,
   height = 520,
   prevClose,
@@ -62,6 +67,8 @@ export function StockIntradayChart({
   const sourceIsNone = minute.data?.source === 'none'
   // 指数分钟K无本地存储且不支持落库获取 (后端 sync_minute_single 显式拒绝), 不显示获取按钮
   const isIndex = minute.data?.asset_type === 'index'
+  const Chart = renderer === 'lightweight' ? LightweightIntraday : EChartsIntraday
+  const chartHeight = renderer === 'lightweight' && minute.data?.source === 'local_partial' ? Math.max(260, height - 32) : height
 
   useEffect(() => {
     setMinuteDismissed(false)
@@ -71,7 +78,7 @@ export function StockIntradayChart({
   if (!symbol || !date) return null
 
   return (
-    <div className={className} style={{ height, flexShrink: 0 }}>
+    <div className={className} style={{ height: renderer === 'lightweight' && minuteRows.length > 0 ? undefined : height, minHeight: height, flexShrink: 0 }}>
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>
@@ -142,9 +149,12 @@ export function StockIntradayChart({
               </button>
             </div>
           )}
-          <EChartsIntraday
+          <Suspense fallback={<div className="text-xs text-muted py-4">正在加载图表…</div>}>
+          <Chart
+            assetType={minute.data?.asset_type}
+            symbol={symbol}
             data={minuteRows}
-            height={height}
+            height={chartHeight}
             prevClose={minute.data?.prev_close ?? prevClose}
             dailySummary={dailySummary}
             date={date}
@@ -154,6 +164,7 @@ export function StockIntradayChart({
             currentPrice={currentPrice}
             priceLines={priceLines}
           />
+          </Suspense>
         </>
       )}
     </div>

@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { EChartsIntraday } from './EChartsIntraday'
+import { EChartsMultiDayIntraday } from './EChartsMultiDayIntraday'
 
 const chart = vi.hoisted(() => ({
   handlers: {} as Record<string, (event?: any) => void>,
@@ -16,8 +17,39 @@ const rows = [
   { datetime: '2026-09-09 11:20:00', open: 118.25, high: 118.28, low: 118.24, close: 118.25, volume: 55, amount: 650375 },
 ]
 const daily = { date: '2026-09-09', open: 119.77, high: 119.77, low: 118.16, close: 118.25 }
+const etfRows = [
+  { datetime: '2026-11-05 09:30:00', open: 0.751, high: 0.755, low: 0.747, close: 0.752, volume: 100, amount: 7520 },
+  { datetime: '2026-11-05 15:00:00', open: 0.825, high: 0.827, low: 0.824, close: 0.827, volume: 100, amount: 8270 },
+]
 let cleanup = async () => {}
 afterEach(async () => { await cleanup(); vi.unstubAllGlobals() })
+
+it('ETF 单日分时读数、轴及涨跌停兜底保留千分位', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(<EChartsIntraday assetType="etf" data={etfRows} prevClose={0.752} />))
+  expect(host.textContent).toContain('0.827')
+  const axis = lastYAxis()
+  expect(axis.axisLabel.formatter(0.827)).toBe('0.827')
+  expect(axis.axisPointer.label.formatter({ value: 0.827 })).toBe('0.827')
+  expect(axis.max).toBeCloseTo(0.827, 6)
+})
+
+it('ETF 多日分时读数和轴保持三位', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(<EChartsMultiDayIntraday assetType="etf" sessions={[
+    { date: '2026-11-05', prev_close: 0.752, rows: etfRows },
+  ]} />))
+  expect(host.textContent).toContain('0.827')
+  expect(lastYAxis().axisLabel.formatter(0.827)).toBe('0.827')
+})
 
 it('shows daily OHLC by default, labels hovered minute, restores on exit and date switch', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })

@@ -63,3 +63,42 @@ it('跨零柱状图: 正负值都以 0 轴为基线, 最后一根高亮', () => 
   expect(rects[2].getAttribute('opacity')).toBe('1')
   expect(rects[0].getAttribute('opacity')).toBe('0.55')
 })
+
+it('全正柱状图从零起算, 不把最小的正值压成基线', () => {
+  render({ points: [['d1', 10], ['d2', 20], ['d3', 30]], kind: 'bar', width: 120, height: 40 })
+  const rects = [...host.querySelectorAll('svg rect')]
+  expect(rects.map(r => Number(r.getAttribute('height')))).toEqual([12, 24, 36])
+  expect(rects.map(r => Number(r.getAttribute('y')))).toEqual([26, 14, 2])
+})
+
+it('全负柱状图从图内零轴向下延伸, 不溢出或裁成满柱', () => {
+  render({ points: [['d1', -30], ['d2', -20], ['d3', -10]], kind: 'bar', width: 120, height: 40 })
+  const rects = [...host.querySelectorAll('svg rect')]
+  expect(rects.map(r => Number(r.getAttribute('height')))).toEqual([36, 24, 12])
+  expect(rects.map(r => Number(r.getAttribute('y')))).toEqual([2, 2, 2])
+})
+
+it('密集序列的每根柱体完整留在绘图区内, 零值不伪造柱高', () => {
+  const points = Array.from({ length: 240 }, (_, i) => [`t${i}`, i % 3 - 1] as [string, number])
+  render({ points, kind: 'bar', width: 120, height: 40 })
+  const rects = [...host.querySelectorAll('svg rect')]
+  expect(rects).toHaveLength(points.length)
+  for (const rect of rects) {
+    const x = Number(rect.getAttribute('x'))
+    const y = Number(rect.getAttribute('y'))
+    const width = Number(rect.getAttribute('width'))
+    const height = Number(rect.getAttribute('height'))
+    expect(x).toBeGreaterThanOrEqual(2)
+    expect(x + width).toBeLessThanOrEqual(118)
+    expect(y).toBeGreaterThanOrEqual(2)
+    expect(y + height).toBeLessThanOrEqual(38)
+  }
+  expect(Number(rects[1].getAttribute('height'))).toBe(0)
+})
+
+it('非有限值不进入 SVG 坐标或文本回退', () => {
+  render({ points: [['d1', 10], ['d2', Number.NaN], ['d3', 20], ['d4', Infinity]], kind: 'line' })
+  const svg = host.querySelector('svg')!
+  expect(svg.outerHTML).not.toMatch(/NaN|Infinity/)
+  expect(svg.querySelector('polyline')!.getAttribute('points')!.split(' ')).toHaveLength(2)
+})

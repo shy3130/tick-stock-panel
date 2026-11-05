@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
 import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
-import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
+import { fmtPrice, fmtBigNum, fmtVolume, fmtAssetPrice } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
@@ -13,6 +13,9 @@ const BEAR = '#2D9B65'
 
 interface Props {
   symbol: string
+  assetType?: 'stock' | 'etf' | 'index'
+  /** 详情窗口顶栏已显示标的身份时，信息条只保留报价与指标。 */
+  showIdentity?: boolean
   name?: string
   stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
@@ -100,6 +103,8 @@ function renderExtInline(
 
 export function StockInfoBar({
   symbol,
+  assetType,
+  showIdentity = true,
   name,
   stockInfo,
   rows,
@@ -140,9 +145,9 @@ export function StockInfoBar({
     return (
       <div className="px-2 pb-3 font-mono text-[12px] select-none space-y-1">
         {/* 首行 min-h-7 对齐完整态的 text-lg 价格行高, 加载中不整体变矮 */}
-        <div className="flex min-h-7 items-baseline gap-x-3 flex-wrap">
-          <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
-          {name && <span className="text-secondary font-medium">{name}</span>}
+        <div className={`flex items-baseline gap-x-3 flex-wrap ${showIdentity ? 'min-h-7' : 'min-h-8'}`}>
+          {showIdentity && <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>}
+          {showIdentity && name && <span className="text-secondary font-medium">{name}</span>}
           <span className="ml-auto self-center text-muted">
             <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
           </span>
@@ -188,9 +193,9 @@ export function StockInfoBar({
         const lo = Number(latest.low)
         return `${((hi - lo) / prevClose * 100).toFixed(2)}%`
       }
-      case 'open': return fmtPrice(Number(latest.open))
-      case 'high': return fmtPrice(Number(latest.high))
-      case 'low':  return fmtPrice(Number(latest.low))
+      case 'open': return fmtAssetPrice(latest.open, assetType)
+      case 'high': return fmtAssetPrice(latest.high, assetType)
+      case 'low':  return fmtAssetPrice(latest.low, assetType)
       // 财务指标：百分比字段存储为百分点(12.3 表示 12.3%)，直接 toFixed(2) + %
       case 'eps':         return financialMetrics?.eps_basic != null ? fmtPrice(financialMetrics.eps_basic) : null
       case 'bps':         return financialMetrics?.bps != null ? fmtPrice(financialMetrics.bps) : null
@@ -246,13 +251,13 @@ export function StockInfoBar({
     <div className="px-2 pb-3 font-mono text-[12px] select-none space-y-1">
       {/* Row 1: code, name, price, change, change% */}
       <div className="flex items-baseline gap-x-3 flex-wrap">
-        <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
-        <span className="text-secondary font-medium">{displayName}</span>
-        <span style={{ color: clr }} className="text-lg font-bold tabular-nums">
-          {fmtPrice(close)}
+        {showIdentity && <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>}
+        {showIdentity && <span className="text-secondary font-medium">{displayName}</span>}
+        <span style={{ color: clr }} className={`${showIdentity ? 'text-lg' : 'text-2xl tracking-tight'} font-bold tabular-nums`}>
+          {fmtAssetPrice(close, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
-          {isUp ? '+' : ''}{fmtPrice(chg)}
+          {isUp ? '+' : ''}{fmtAssetPrice(chg, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%

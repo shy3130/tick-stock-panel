@@ -5,6 +5,7 @@ import { QueryClient, QueryCache } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
 import { installTspExtBridge, loadRuntimePageExtensions } from './extensions/runtime'
+import { stockPreviewUi } from './lib/stockPreviewStore'
 import { api, ApiError } from './lib/api'
 import { retryDelay } from './lib/refreshPolicy'
 import { QK } from './lib/queryKeys'
@@ -76,8 +77,8 @@ async function bootstrap() {
     applyTheme(getTheme())
   })
   await initializeFrontendExtensions()
-  // 页面插件能力桥: 运行时页面插件经 shim 读取宿主 api/QK/cn/format
-  installTspExtBridge({ api, QK, cn, format })
+  // 页面插件能力桥: 共享 api/QK/cn/format 和宿主 UI 操作，不复制弹窗状态。
+  installTspExtBridge({ api, QK, cn, format, ui: stockPreviewUi })
   // 运行时页面插件: 必须在 router 模块求值(finalize + 建路由表)之前挂载
   await loadRuntimePageExtensions()
   const { router } = await import('./router')

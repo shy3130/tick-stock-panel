@@ -22,6 +22,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { ClassValue } from 'clsx'
 import { loadFrontendExtensions } from './registry'
 import type { FrontendExtension, FrontendExtensionModule } from './types'
+import type { StockPreviewUi } from './stockPreview'
 
 /** mount 挂载上下文: 宿主能力桥(window.__TSP_EXT__ 安装) + 页面卸载通知 */
 export interface PagePackCtx {
@@ -29,6 +30,8 @@ export interface PagePackCtx {
   QK: unknown
   cn: (...inputs: ClassValue[]) => string
   format: unknown
+  /** 可选新增能力；旧版页面包仍只使用 api/QK/cn/format。 */
+  ui?: StockPreviewUi
 }
 
 export interface PagePackRoute {

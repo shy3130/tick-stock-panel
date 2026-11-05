@@ -1,4 +1,5 @@
-import type { MinuteKlineRow } from '@/lib/api'
+import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
+import { roundPriceToTick } from '@/lib/format'
 
 export type DailySummary = { date: string; open: number | null; high: number; low: number; close: number }
 
@@ -60,3 +61,28 @@ function generateFullDayTimes(): string[] {
 }
 
 export const FULL_DAY_TIMES = generateFullDayTimes()
+
+function isValidPrice(v: number | null | undefined): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0
+}
+
+export function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo, assetType?: string): {
+  limitUp: number      // 涨停价 (四舍五入)
+  limitDown: number    // 跌停价 (四舍五入)
+  upPct: number        // 实际涨停幅度 (如 9.97)
+  downPct: number      // 实际跌停幅度 (如 -9.97)
+} {
+  const pct = priceLimit && Number.isFinite(priceLimit.rate) ? priceLimit.rate : 0.10
+  const rawUp = prevClose * (1 + pct)
+  const rawDown = prevClose * (1 - pct)
+  // 权威价格优先; 兜底按 ETF 0.001 元、股票 0.01 元的报价单位取整。
+  const limitUp = isValidPrice(priceLimit?.limit_up)
+    ? priceLimit.limit_up
+    : roundPriceToTick(rawUp, assetType)
+  const limitDown = isValidPrice(priceLimit?.limit_down)
+    ? priceLimit.limit_down
+    : roundPriceToTick(rawDown, assetType)
+  const upPct = (limitUp - prevClose) / prevClose * 100
+  const downPct = (limitDown - prevClose) / prevClose * 100
+  return { limitUp, limitDown, upPct, downPct }
+}
