@@ -47,8 +47,52 @@ export default extension
 | `ctx.QK` | 集中查询键（若你自行使用 TanStack Query 可作 key 规范） |
 | `ctx.cn` | 样式类合并工具（clsx + tailwind-merge） |
 | `ctx.format` | 数值/日期格式化工具集 |
+| `ctx.ui?.openStockPreview(options)` | 打开宿主个股详情，复用日K、分时、自选、监控等原有操作 |
+| `ctx.ui?.closeStockPreview()` | 关闭公共个股详情弹窗 |
 
 **禁止** import 宿主内部模块（`@/lib/...` 等别名在产物构建中不可解析）；数据请求一律经 `ctx.api`，不得自行拼后端 URL 绕过封装。
+
+### 调用个股详情
+
+运行时页面不需要自己挂图表组件，也不把宿主图表引擎打进页面包。在 `mount(el, ctx)` 中使用能力桥：
+
+```ts
+const items = [
+  { symbol: '159558.SZ', name: '半导体设备ETF易方达' },
+  { symbol: '605365.SH', name: '立达信' },
+]
+
+button.onclick = () => {
+  const opened = ctx.ui?.openStockPreview({
+    symbol: items[0].symbol,
+    name: items[0].name,
+    navList: items,
+  })
+  // false：参数无效；undefined：旧宿主尚未提供 ui 能力。
+  if (!opened) status.textContent = '请检查完整代码，并确认宿主支持个股详情调用'
+}
+// 需要主动关闭时：ctx.ui?.closeStockPreview()
+```
+
+`symbol` 必填，使用六位数字加 `.SH`、`.SZ` 或 `.BJ` 的完整代码，股票、ETF、指数复用宿主的资产路由；不会按数字猜市场或资产类型。首尾空白和大小写会归一化。
+`name` 可省略或为 `null`。`navList` 可省略；传入当前列表后，标的在列表中且至少有两个有效标的时，启用原来的前后切股按钮和方向键。
+列表会复制、过滤无效项并按代码去重，保留调用方顺序。
+
+公共入口在当前窗口复用一个弹窗，连续调用更新当前标的，不叠加弹窗；未传入新列表时不沿用上一次列表。
+关闭仍使用原来的退出动画和查询清理，宿主路由切换或退出应用外壳会清空请求；不会新增独立行情缓存、轮询或后台任务。
+`ui` 是 v1 的可选新增能力，旧页面包无需修改；新页面在旧宿主运行时应先检测 `ctx.ui`。
+
+源码扩展（随宿主构建或通过源码导入编译）可使用公开入口：
+
+```tsx
+import { openStockPreview, closeStockPreview } from '@/extensions/stockPreview'
+
+<button onClick={() => openStockPreview({ symbol: '159558.SZ' })}>查看详情</button>
+```
+
+该公开模块只转发到宿主能力桥，不携带独立弹窗状态；源码编译为自包含页面后仍打开宿主弹窗。
+宿主尚未提供该能力时，公开函数返回 `false`，关闭函数可安全调用。
+手工维护的 Page Pack 工程继续使用 `ctx.ui`，不要导入宿主内部组件或复制其查询逻辑。
 
 ## 图标白名单
 

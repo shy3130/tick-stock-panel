@@ -16,6 +16,26 @@ ETF = "159558.SZ"
 DAY = date(2026, 11, 4)
 
 
+@pytest.mark.parametrize("asset_type", ["stock", "etf", "index"])
+@pytest.mark.parametrize("has_rows", [False, True])
+def test_daily_metadata_carries_asset_type_without_rounding_prices(monkeypatch, asset_type, has_rows):
+    from app.services import daily_bootstrap
+
+    frame = pl.DataFrame({"date": [DAY], "open": [0.751], "high": [0.828], "low": [0.747], "close": [0.827]})
+    repo = SimpleNamespace(resolve_asset_type=lambda symbol: asset_type, get_daily_asset=lambda *args: frame if has_rows else pl.DataFrame())
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)), headers={})
+    monkeypatch.setattr(api, "_get_stock_info", lambda *args: {})
+    monkeypatch.setattr(api, "_get_asset_info", lambda *args: {})
+    monkeypatch.setattr(api, "_compress_on", lambda *args: False)
+    monkeypatch.setattr(daily_bootstrap, "ensure_history", lambda *args, **kwargs: pl.DataFrame())
+    result = api.get_daily(request, ETF, 120, str(DAY), str(DAY), None)
+    assert result["asset_type"] == asset_type
+    if has_rows:
+        assert result["rows"][0]["close"] == 0.827
+    else:
+        assert result["rows"] == []
+
+
 @pytest.fixture
 def route(monkeypatch, tmp_path):
     frame = pl.DataFrame({
@@ -47,6 +67,7 @@ def route(monkeypatch, tmp_path):
 def test_detail_daily_uses_selected_provider_and_asset(route):
     request, calls, tickflow = route
     result = api.get_daily(request, ETF, 120, str(DAY), str(DAY), None)
+    assert result["asset_type"] == "etf"
     assert result["rows"][0]["date"] == DAY
     assert calls[0][0] == [ETF]
     assert calls[0][1]["asset_type"] == "etf"

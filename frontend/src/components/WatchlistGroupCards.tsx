@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { WatchlistGroup } from '@/lib/api'
-import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
+import { fmtAssetPrice, fmtPct, priceColorClass } from '@/lib/format'
 import {
   rowPct,
   groupPctColor,
@@ -143,7 +143,7 @@ const GroupCard = React.memo(function GroupCard({
                     </span>
                   )}
                 </span>
-                <span className={`shrink-0 font-mono text-xs tabular-nums ${cls}`}>{fmtPrice(price)}</span>
+                <span className={`shrink-0 font-mono text-xs tabular-nums ${cls}`}>{fmtAssetPrice(price, r.asset_type)}</span>
                 <span className={`w-[52px] shrink-0 text-right font-mono text-xs font-medium tabular-nums ${cls}`}>
                   {fmtPct(pct)}
                 </span>

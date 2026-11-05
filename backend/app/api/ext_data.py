@@ -10,6 +10,7 @@ import tempfile
 import time
 from datetime import date, datetime
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -1356,8 +1357,8 @@ def _daily_series(
 ) -> dict:
     """日级粒度序列: 近 N 个分区, 每标的每日一值 [YYYY-MM-DD, value]。
 
-    分区日期为 x 轴 (无需 time_field); 表自带 date 列时优先用列值 (否则用
-    范围读注入的分区日期)。同日多行 (误配/补写) 取末个非空值 — 日末定型语义。
+    优先按字段映射后的业务日期或表自带 date 列分日, 缺少日期列时才使用
+    分区日期。同日多行 (误配/补写) 取末个非空值 — 日末定型语义。
     窗口按「实际存在的分区」截取近 N 个, 中途缺日不补点。
     """
     base = _ext_data_dir(config, data_dir)
@@ -1378,7 +1379,9 @@ def _daily_series(
         return empty
     window = partitions[-days:]
     df, _ = _read_ext_dataframe(config, data_dir, start_date=window[0], end_date=window[-1])
-    day_col = next((c for c in ("date", "data_date") if c in df.columns), None)
+    # 日期字段可被映射为「日期」等名称; 拉取分区日期不一定等于业务日期。
+    mapped_date = config.pull.field_map.get("date") if config.pull else None
+    day_col = next((c for c in (mapped_date, "date", "data_date") if c and c in df.columns), None)
     if df.is_empty() or field not in df.columns or day_col is None or "symbol" not in df.columns:
         return empty
 
@@ -1389,11 +1392,11 @@ def _daily_series(
     points = (
         df.select(
             pl.col("symbol").cast(pl.Utf8).alias("symbol"),
-            pl.col(day_col).cast(pl.Utf8).alias("d"),
+            pl.col(day_col).cast(pl.Utf8).str.slice(0, 10).alias("d"),
             pl.col(field).cast(pl.Float64).alias("v"),
         )
-        .filter(pl.col("v").is_not_null() & pl.col("d").is_not_null())
-        .sort(["symbol", "d"])
+        .filter(pl.col("v").is_not_null() & pl.col("d").is_not_null() & (pl.col("d") <= window[-1]))
+        .sort(["symbol", "d"], maintain_order=True)
         .group_by(["symbol", "d"], maintain_order=True)
         .agg(pl.col("v").last())
     )
@@ -1418,13 +1421,15 @@ def ext_series(
     date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区; 日级粒度时为近N日窗口右端"),
     symbols: str | None = Query(None, description="逗号分隔标的过滤, 缺省全表"),
     days: int = Query(10, ge=1, le=60, description="日级粒度的近 N 日窗口"),
+    granularity: Literal["auto", "intraday", "daily"] = "auto",
 ):
-    """扩展列迷你图序列 — 生效粒度 (granularity) 决定口径。
+    """扩展列迷你图序列 — 列级显示粒度优先, auto 沿用表的默认粒度。
 
     - intraday (日内多盘, 如集合竞价): 每标的一天的 [HH:MM:SS, value] 点列;
     - daily (日级别, 如主力净流入每日值): 每标的近 N 日、每日一值
-      [YYYY-MM-DD, value] — 分区日期为 x 轴, 无需 time_field; 同日多行取
-      末个非空值 (日末定型语义)。
+      [YYYY-MM-DD, value] — 按业务日期分日, 缺少日期列时使用分区日期;
+      无需 time_field, 同日多行取末个非空值 (日末定型语义)。
+    列级覆盖仅影响本次读取, 不修改配置或原始多盘记录。
     value 为 null 的点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
     控制响应体积; 无分区时 items 为空 (fail-closed, 不回退其他窗口)。
     """
@@ -1434,7 +1439,7 @@ def ext_series(
     if config.mode != "timeseries":
         raise HTTPException(400, "仅时序扩展表支持序列查询")
     data_dir = _data_dir(request)
-    effective = _granularity_effective(config, data_dir)
+    effective = granularity if granularity != "auto" else _granularity_effective(config, data_dir)
     if effective == "daily":
         return _daily_series(config, data_dir, field, date, symbols, days)
     time_field = config.pull.time_field if config.pull else None

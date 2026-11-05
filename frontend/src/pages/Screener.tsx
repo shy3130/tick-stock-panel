@@ -150,7 +150,7 @@ export function Screener() {
     setColumns(prev => refreshExtColumns(prev, extSchema.data?.items))
   }, [extSchema.data])
 
-  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
+  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns, extSchema.data?.items), [columns, extSchema.data])
 
   // 各策略命中数 (进入页面自动跑)
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({})
@@ -663,7 +663,7 @@ export function Screener() {
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
-  // 日内多盘扩展列 (集合竞价等) 迷你图: 每个 bar/line 图列按可见页标的拉当天序列
+  // 扩展列迷你图按本列显示周期读取, 未指定时跟随数据表默认。
   const extChartColumns = useMemo(
     () => columns.filter(c =>
       c.visible && c.source.type === 'ext'
@@ -671,7 +671,12 @@ export function Screener() {
     [columns],
   )
   const extChartColsKey = extChartColumns
-    .map(c => `${(c.source as { configId: string }).configId}.${(c.source as { fieldName: string }).fieldName}:${c.extDisplay?.chartDays ?? 10}`)
+    .map(c => {
+      const src = c.source as { configId: string; fieldName: string }
+      const granularity = c.extDisplay?.seriesGranularity
+        ?? extSchema.data?.items.find(t => t.id === src.configId)?.granularity ?? 'auto'
+      return `${src.configId}.${src.fieldName}:${c.extDisplay?.chartDays ?? 10}:${granularity}`
+    })
     .join(',')
   const extChartSymbolsKey = useMemo(
     () => [...new Set(displayRows.map((r: any) => r.symbol as string))].sort().join(','),
@@ -683,14 +688,15 @@ export function Screener() {
       const symbols = extChartSymbolsKey ? extChartSymbolsKey.split(',') : []
       const entries = await Promise.all(extChartColumns.map(async c => {
         const src = c.source as { type: 'ext'; configId: string; fieldName: string }
-        const r = await api.extDataSeries(src.configId, src.fieldName, asOf || undefined, symbols, c.extDisplay?.chartDays || 10)
+        const r = await api.extDataSeries(src.configId, src.fieldName, asOf || undefined, symbols, c.extDisplay?.chartDays || 10, c.extDisplay?.seriesGranularity)
         return [`${src.configId}.${src.fieldName}`, r.items ?? {}] as const
       }))
       return Object.fromEntries(entries) as Record<string, Record<string, [string, number][]>>
     },
     enabled: extChartColumns.length > 0 && extChartSymbolsKey.length > 0,
     staleTime: 5 * 60_000,
-    placeholderData: prev => prev,
+    placeholderData: (prev, previousQuery) => previousQuery?.queryKey[1] === extChartColsKey
+      && previousQuery.queryKey[2] === (asOf ?? '') ? prev : undefined,
   })
   const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
 

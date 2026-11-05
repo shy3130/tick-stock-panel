@@ -35,17 +35,18 @@ export function useAuctionSeries(
     : ''
 
   const query = useQuery({
-    queryKey: QK.extSeries(`auction:${cfgKey}`, date, symbolsKey),
+    queryKey: QK.extSeries(`auction:intraday:${cfgKey}`, date, symbolsKey),
     queryFn: async () => {
       const c = cfg!
       const syms = symbolsKey ? symbolsKey.split(',') : []
       const [price, match, unmatched] = await Promise.all([
-        api.extDataSeries(c.configId!, c.priceField!, date ?? undefined, syms),
+        // 竞价叠加始终需要逐盘点列, 不受表或其他列的默认显示周期影响。
+        api.extDataSeries(c.configId!, c.priceField!, date ?? undefined, syms, undefined, 'intraday'),
         c.matchField
-          ? api.extDataSeries(c.configId!, c.matchField, date ?? undefined, syms)
+          ? api.extDataSeries(c.configId!, c.matchField, date ?? undefined, syms, undefined, 'intraday')
           : Promise.resolve(null),
         c.unmatchedField
-          ? api.extDataSeries(c.configId!, c.unmatchedField, date ?? undefined, syms)
+          ? api.extDataSeries(c.configId!, c.unmatchedField, date ?? undefined, syms, undefined, 'intraday')
           : Promise.resolve(null),
       ])
       const out: AuctionSeriesMap = {}

@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Link } from 'react-router-dom'
 import {
   createChart,
+  LineSeries,
   LineStyle,
   type IChartApi,
   type ISeriesApi,
@@ -418,8 +419,7 @@ function IntradayChart({ points, kind }: { points: DimensionIntradayPoint[]; kin
       width: el.clientWidth,
       height: 132,
       layout: {
-        // 关闭 TV 角标 (licence 归属改由 README 技术栈外链承担)
-        attributionLogo: false,
+        attributionLogo: true,
         background: { color: 'transparent' },
         textColor: ctRef.current.text,
         fontFamily: 'JetBrains Mono, monospace',
@@ -446,7 +446,7 @@ function IntradayChart({ points, kind }: { points: DimensionIntradayPoint[]; kin
       handleScroll: false,
       handleScale: false,
     })
-    const sector = chart.addLineSeries({
+    const sector = chart.addSeries(LineSeries, {
       color: INTRADAY_SECTOR_COLOR[kind],
       lineWidth: 2,
       priceLineVisible: false,
@@ -454,7 +454,7 @@ function IntradayChart({ points, kind }: { points: DimensionIntradayPoint[]; kin
       priceFormat: { type: 'custom', formatter: (v: number) => `${(v * 100).toFixed(2)}%`, minMove: 0.0001 },
       crosshairMarkerRadius: 3,
     })
-    const market = chart.addLineSeries({
+    const market = chart.addSeries(LineSeries, {
       color: INTRADAY_MARKET_COLOR,
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,

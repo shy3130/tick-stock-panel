@@ -525,7 +525,7 @@ def get_daily(
         if enriched.is_empty():
             return _gzip_payload(
                 request,
-                {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []},
+                {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": []},
                 pref_key="daily_batch_compress",
             )
         rows = enriched.filter(
@@ -534,7 +534,7 @@ def get_daily(
         # 即使 live 模式也尝试追加实时蜡烛
         if end >= cn_today():
             rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
-        resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
+        resp = {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
         return _gzip_payload(
             request,
             _attach_ext(resp, repo, symbol, ext_columns),
@@ -547,7 +547,7 @@ def get_daily(
     if end >= cn_today():
         rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
-    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+    resp = {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _gzip_payload(
         request,
         _attach_ext(resp, repo, symbol, ext_columns),
@@ -664,6 +664,11 @@ def _latest_live_candle(
                 "atr_14", "vol_ratio_5d"):
         if key in q and q[key] is not None:
             live_row[key] = q[key]
+    # 当前价变化时同步替换异动判定字段；缺失/无涨跌停时显式清空，不能残留旧标记。
+    for key in ("raw_low", "raw_close", "limit_down_price", "signal_limit_down",
+                "signal_limit_down_recovery", "signal_limit_up", "signal_broken_limit_up",
+                "consecutive_limit_ups"):
+        live_row[key] = q.get(key)
     return live_row
 
 
@@ -698,6 +703,7 @@ def get_daily_latest(
     row = _latest_live_candle(request, symbol, asset_type, refresh_asset=False)
     return {
         "symbol": symbol,
+        "asset_type": asset_type,
         "row": row,
         "source": "live" if row is not None else "none",
     }

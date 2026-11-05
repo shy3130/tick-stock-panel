@@ -83,6 +83,20 @@ export function SettingsAboutPanel() {
           </button>
         </div>
 
+        <div className="mt-3 border-t border-border/60 pt-3 text-[11px] leading-relaxed text-secondary">
+          <p>
+            图表组件：
+            <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">
+              TradingView Lightweight Charts™
+            </a>
+          </p>
+          <p className="mt-1">Copyright (с) 2025 TradingView, Inc.</p>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+            <a href="/third-party/lightweight-charts/LICENSE" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">Apache-2.0 许可</a>
+            <a href="/third-party/lightweight-charts/NOTICE" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">NOTICE</a>
+          </div>
+        </div>
+
         {/* 许可合规声明 — 醒目警示 */}
         <LicenseComplianceNotice compact />
       </section>

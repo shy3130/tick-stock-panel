@@ -62,7 +62,7 @@ export const FRONTEND_DEPENDENCIES: OssLicenseEntry[] = [
   { name: 'clsx', version: '2.1.1', license: 'MIT' },
   { name: 'echarts', version: '5.6.0', license: 'Apache-2.0' },
   { name: 'framer-motion', version: '11.18.2', license: 'MIT' },
-  { name: 'lightweight-charts', version: '4.2.3', license: 'Apache-2.0' },
+  { name: 'lightweight-charts', version: '5.2.1', license: 'Apache-2.0' },
   { name: 'lucide-react', version: '0.439.0', license: 'ISC' },
   { name: 'react', version: '18.3.1', license: 'MIT' },
   { name: 'react-dom', version: '18.3.1', license: 'MIT' },

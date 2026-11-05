@@ -59,6 +59,11 @@ function HelloPage() {
         <button style={button} onClick={() => setCount(n => n + 1)}>
           点击 {count} 次
         </button>
+        <button style={{ ...button, marginLeft: 8 }} disabled={!ctx.ui?.openStockPreview}
+          title={ctx.ui?.openStockPreview ? '打开宿主的个股详情' : '当前宿主未提供个股详情调用入口'}
+          onClick={() => ctx.ui?.openStockPreview({ symbol: '000001.SZ' })}>
+          查看标的详情
+        </button>
       </div>
     </div>
   )

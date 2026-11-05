@@ -23,6 +23,7 @@
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
 - 当前前端插槽：`layout.navigation.extra`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
+- 个股详情公共入口（已实现）：源码扩展通过 `@/extensions/stockPreview` 的 `openStockPreview` / `closeStockPreview` 调用；运行时页面通过 `ctx.ui` 调用相同能力。复用原弹窗、查询和列表切股，不要求每个扩展自行挂载图表。
 - 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
 - 因子平台与策略线的既有桥接（已实现，二开时直接复用、勿重复实现）：因子库一键生成单因子排名策略（`GenerateFactorStrategyDialog` → `custom_factor_*`）；策略触发器引用因子条件信号（`AddFactorSignalDialog`，`csg_f_*`）；自定义信号 AI 提示词含因子分组（`custom_signals_ai.py`）；策略回测因子归因（`strategy.py` 的 `factor_attribution`，覆盖 `meta.scoring` 非空的策略）。
 - 旧策略包格式与接口（兼容保留）：按依赖闭包打包策略 `.py` + 引用的自定义信号/因子定义 + 用户调参（叠加策略含子策略）。`app/services/strategy_bundle.py` 只保留兼容入口，实际实现统一位于 `app/services/resource_bundle.py`；新旧接口共用依赖闭包、ZIP 安全校验、打包与资源预检，旧导入复用 `config_backup.apply_archive` 的校验/逐条写盘/冒烟管线，缺失依赖在旧预览中只作预警。包内仅允许策略/调参/信号/因子四类，其他路径 400 拒绝。API：`GET /api/strategies/{id}/bundle`、`POST /api/strategies/bundle/inspect|apply`；当前页面入口使用下述统一资源传输。
@@ -173,6 +174,28 @@ const extension: FrontendExtension = {
 - 不用插槽绕过权限、数据口径或表单校验。
 - 不通过 DOM 查询、全局事件或 monkey patch 修改核心组件。
 - 不把整个核心页面复制到二开目录后长期独立维护。
+
+### 3.5 调用宿主个股详情
+
+```tsx
+import { openStockPreview } from '@/extensions/stockPreview'
+
+function StockLink() {
+  return <button onClick={() => openStockPreview({
+    symbol: '159558.SZ',
+    navList: [{ symbol: '159558.SZ' }, { symbol: '605365.SH' }],
+  })}>查看详情</button>
+}
+```
+
+`symbol` 使用完整交易所后缀；`name` 与 `navList` 可选，返回 `boolean` 表示请求是否接受。
+运行时 JS/TSX 页面包改用 `ctx.ui?.openStockPreview(...)`，关闭方法为 `ctx.ui?.closeStockPreview()`。
+通过源码导入编译的扩展也可保留上述公开 import，入口会转发给宿主，不会把另一套弹窗状态编入产物。
+
+这是新增公共前端能力：消费方按 L2 使用，宿主通过 `Layout` 单点挂载 `StockPreviewHost` 作最小接线，不新增后端 API 或插槽注册系统。
+连续调用复用当前窗口的公共弹窗，宿主换页或退出应用外壳清空请求；日K、分时、键盘切股和关闭清理沿用既有组件。
+已有页面自己的 `StockPreviewDialog` 调用不迁移，原查询键、缓存、数据源路由和用户数据不变。
+契约与旧宿主能力检测见 [Page Pack SDK](page-sdk.md#调用个股详情)。
 
 ## 4. 后端扩展规范
 

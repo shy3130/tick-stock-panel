@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { api, type MinuteKlineRow } from '@/lib/api'
+import { api, type MinuteKlineRow, type PriceLimitInfo } from '@/lib/api'
 import { useMinuteBatchQuery } from '@/lib/useMinuteBatchQuery'
 import { StockIntradayChart } from './StockIntradayChart'
 import { StockMultiDayIntradayChart } from './StockMultiDayIntradayChart'
@@ -15,6 +15,12 @@ vi.mock('@/components/EChartsIntraday', () => ({ EChartsIntraday: () => <div>分
 vi.mock('@/components/EChartsMultiDayIntraday', () => ({
   EChartsMultiDayIntraday: ({ sessions }: { sessions: { rows: MinuteKlineRow[] }[] }) =>
     <div data-testid="multi-count">{sessions.reduce((n, session) => n + session.rows.length, 0)}</div>,
+}))
+vi.mock('@/components/charts/LightweightIntraday', () => ({
+  LightweightIntraday: ({ sessions, data, priceLimit }: { sessions?: { rows: MinuteKlineRow[] }[]; data?: MinuteKlineRow[]; priceLimit?: PriceLimitInfo }) => <>
+    <div data-testid="multi-count">{sessions ? sessions.reduce((n, session) => n + session.rows.length, 0) : data?.length ?? 0}</div>
+    <span data-testid="minute-meta">{JSON.stringify({ priceLimit })}</span>
+  </>,
 }))
 vi.mock('@/components/Toast', () => ({ toast: vi.fn() }))
 
@@ -69,10 +75,12 @@ async function tick() {
   await act(async () => { await vi.advanceTimersByTimeAsync(100) })
 }
 
-it.each(['single', 'multi'] as const)('ETF %s detail sync refreshes the visible list without polling', async mode => {
+it.each([
+  ['single', 'echarts'], ['multi', 'echarts'], ['single', 'lightweight'], ['multi', 'lightweight'],
+] as const)('ETF %s %s detail sync refreshes the visible list without polling', async (mode, renderer) => {
   await act(async () => root.render(<QueryClientProvider client={client}>
     <ListPreview />
-    {mode === 'single' ? <StockIntradayChart symbol={SYMBOL} date={DAY} /> : <StockMultiDayIntradayChart symbol={SYMBOL} days={1} />}
+    {mode === 'single' ? <StockIntradayChart symbol={SYMBOL} date={DAY} renderer={renderer} /> : <StockMultiDayIntradayChart symbol={SYMBOL} days={1} renderer={renderer} />}
   </QueryClientProvider>))
   await tick()
   expect(host.querySelector('output')?.textContent).toBe('0')
@@ -87,13 +95,32 @@ it.each(['single', 'multi'] as const)('ETF %s detail sync refreshes the visible 
   expect(api.klineMinuteBatch).toHaveBeenCalledTimes(2)
 })
 
-it('a delayed live response cannot replace newer persisted minute bars', async () => {
+it.each(['echarts', 'lightweight'] as const)('%s: a delayed live response cannot replace newer persisted minute bars', async renderer => {
   available = true
   vi.mocked(api.klineMinute).mockResolvedValue({ symbol: SYMBOL, date: DAY, asset_type: 'etf', rows: bars.slice(0, 1), source: 'live' })
   await act(async () => root.render(<QueryClientProvider client={client}>
-    <StockMultiDayIntradayChart symbol={SYMBOL} days={1} />
+    <StockMultiDayIntradayChart symbol={SYMBOL} days={1} renderer={renderer} />
   </QueryClientProvider>))
   await tick()
   expect(host.querySelector('[data-testid="multi-count"]')?.textContent).toBe('2')
   expect(api.syncMinuteSingle).not.toHaveBeenCalled()
 })
+
+it.each([[DAY, 1, true], ['2026-11-04', 1, false], [DAY, 2, false]] as const)(
+  'passes limit metadata only for one matching session: latest=%s days=%s', async (latestDay, days, expected) => {
+    available = true
+    const priceLimit = { rate: 0.1, limit_up: 0.825, limit_down: 0.675, source: 'instrument' } as const
+    const previousRows = bars.map(row => ({ ...row, datetime: row.datetime.replace(DAY, '2026-11-04') }))
+    vi.mocked(api.klineMinute).mockResolvedValue({ symbol: SYMBOL, date: latestDay, asset_type: 'etf', prev_close: 0.75,
+      rows: latestDay === DAY ? bars : previousRows, source: 'live', price_limit: priceLimit })
+    vi.mocked(api.klineMinuteRange).mockResolvedValue({ symbol: SYMBOL, asset_type: 'etf', requested_days: days, source: 'local', sessions: [
+      { date: DAY, prev_close: 0.75, rows: bars }, ...(days === 2 ? [{ date: '2026-11-04', prev_close: 0.75, rows: previousRows }] : []),
+    ] })
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <StockMultiDayIntradayChart symbol={SYMBOL} days={days} renderer="lightweight" />
+    </QueryClientProvider>))
+    await tick()
+    expect(JSON.parse(host.querySelector('[data-testid="minute-meta"]')!.textContent!).priceLimit).toEqual(expected ? priceLimit : undefined)
+    expect(api.syncMinuteSingle).not.toHaveBeenCalled()
+  },
+)

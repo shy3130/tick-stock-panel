@@ -9,7 +9,8 @@ import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
-import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartMarker, ChartPriceLine, ChartRange, ChartRenderer } from '@/lib/chart-types'
+import { dailyChartHeight } from '@/lib/chart-layout'
 import {
   loadInfoFields,
   saveInfoFields,
@@ -19,6 +20,10 @@ import {
 
 interface Props {
   symbol: string
+  onAssetType?: (assetType: 'stock' | 'etf' | 'index') => void
+  renderer?: ChartRenderer
+  /** 详情顶栏已有名称时可隐藏报价条的重复身份；独立面板默认保留。 */
+  showQuoteIdentity?: boolean
   height?: number
   showIntraday?: boolean
   className?: string
@@ -59,6 +64,9 @@ export { getDefaultRange }
 
 export function StockPanel({
   symbol,
+  onAssetType,
+  renderer = 'echarts',
+  showQuoteIdentity = true,
   height = 520,
   showIntraday = true,
   className,
@@ -120,6 +128,9 @@ export function StockPanel({
   const rows = useMemo(() => toOHLC(rawRows), [rawRows])
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
+  useEffect(() => {
+    if (kline.data?.asset_type) onAssetType?.(kline.data.asset_type)
+  }, [kline.data?.asset_type, onAssetType])
 
   const handleDateClick = useCallback((date: string) => {
     setSelectedDate(date)
@@ -189,7 +200,9 @@ export function StockPanel({
   return (
     <div className={className}>
       <StockInfoBar
+        assetType={kline.data?.asset_type}
         symbol={symbol}
+        showIdentity={showQuoteIdentity}
         name={name}
         stockInfo={stockInfo}
         rows={rawRows}
@@ -205,11 +218,14 @@ export function StockPanel({
       />
 
       {infoBarOnly ? null : (
-      <div className="flex gap-3 items-start">
+      <div className={renderer === 'lightweight'
+        ? `grid min-w-0 grid-cols-1 items-start overflow-hidden rounded-lg border border-border/70 ${showIntraday && selectedDate && !intradayDismissed ? 'xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]' : ''}`
+        : 'flex gap-3 items-start'}>
         <StockDailyKChart
           symbol={symbol}
+          renderer={renderer}
           height={height}
-          className={`${dailyKlineFlex} min-w-0`}
+          className={renderer === 'lightweight' ? 'min-w-0' : `${dailyKlineFlex} min-w-0`}
           dateRange={dateRange}
           markers={markers}
           ranges={ranges}
@@ -219,16 +235,16 @@ export function StockPanel({
           linkedPrice={linkedPrice}
           onDateClick={handleDateClick}
           onPriceDoubleClick={onPriceDoubleClick}
-          visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
+          visibleBars={visibleBars ?? (renderer === 'lightweight' ? undefined : showIntraday ? 40 : 60)}
           extColumns={extColumns}
           addedDate={addedDate}
         />
 
         {showIntraday && selectedDate && !intradayDismissed && (
-          <div className="relative flex-1 min-w-0 border-l border-border pl-3">
+          <div className={renderer === 'lightweight' ? 'relative min-w-0 border-t border-border/60 xl:border-l xl:border-t-0' : 'relative flex-1 min-w-0 border-l border-border pl-3'}>
             <button
               onClick={() => setIntradayDismissed(true)}
-              className="absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated"
+              className={renderer === 'lightweight' ? 'absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-elevated hover:text-foreground' : 'absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated'}
               title="收起分时图"
               aria-label="收起分时图"
             >
@@ -236,8 +252,9 @@ export function StockPanel({
             </button>
             <StockIntradayChart
               symbol={symbol}
+              renderer={renderer}
               date={selectedDate}
-              height={height}
+              height={renderer === 'lightweight' ? dailyChartHeight(height, 1) : height}
               prevClose={prevClose}
               dailySummary={selectedRow}
               onPriceHover={setLinkedPrice}

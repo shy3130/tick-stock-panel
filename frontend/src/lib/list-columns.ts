@@ -35,6 +35,8 @@ export interface ExtColumnDisplayConfig {
   snapshotAt?: string
   /** 展示形态: text=文字(选定时刻值), bar=柱状迷你图, line=折线迷你图 (默认 text) */
   snapshotRender?: 'text' | 'bar' | 'line'
+  /** 本列显示周期: daily=近 N 日每天一值, intraday=当日逐盘; 缺省跟随数据表。 */
+  seriesGranularity?: 'daily' | 'intraday'
   /** 迷你图宽度 px (仅 bar/line), 默认 110 */
   chartWidth?: number
   /** 迷你图高度 px (仅 bar/line), 默认 36 */
@@ -355,6 +357,7 @@ export function mergeColumns(
 /** 扩展表 schema 的最小结构 (api.extDataSchemaAll items 的结构子集, 供刷新用) */
 export interface ExtTableSchemaInfo {
   id: string
+  granularity?: 'daily' | 'intraday' | null
   columns?: readonly { name: string; label?: string; dtype?: string; type?: string }[]
 }
 
@@ -431,12 +434,14 @@ export function restoreColumnsFromBaseline(
 
  *  日内多盘列配置了 snapshotAt 时追加 "@HH:MM[:SS]" 后缀:
  *  后端取该时刻或之前最近一盘的值 (缺省=末盘)。 */
-export function buildExtColumnsParam(columns: ColumnConfig[]): string {
+export function buildExtColumnsParam(columns: ColumnConfig[], extTables?: readonly ExtTableSchemaInfo[]): string {
   return columns
     .filter(c => c.visible && c.source.type === 'ext')
     .map(c => {
       const src = c.source as { type: 'ext'; configId: string; fieldName: string }
-      const at = c.extDisplay?.snapshotAt?.trim()
+      // 按日展示用最新值; 保留取盘时刻配置, 切回日内时恢复。
+      const granularity = c.extDisplay?.seriesGranularity ?? extTables?.find(t => t.id === src.configId)?.granularity
+      const at = granularity === 'daily' ? undefined : c.extDisplay?.snapshotAt?.trim()
       return `${src.configId}.${src.fieldName}${at ? `@${at}` : ''}`
     })
     .join(',')

@@ -301,6 +301,11 @@ export interface KlineRow {
   low: number
   close: number
   volume?: number
+  /** 图表异动判定使用未复权价格与引擎的当日判定价，不与复权 OHLC 混用。 */
+  raw_low?: number | null
+  raw_close?: number | null
+  limit_down_price?: number | null
+  signal_limit_down_recovery?: boolean | null
   change_pct?: number
   ma5?: number | null
   ma20?: number | null
@@ -315,6 +320,7 @@ export interface KlineRow {
 
 export interface KlineDailyResponse {
   symbol: string
+  asset_type?: 'stock' | 'etf' | 'index'
   name?: string
   stock_info?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
@@ -323,6 +329,7 @@ export interface KlineDailyResponse {
 
 export interface KlineDailyLatestResponse {
   symbol: string
+  asset_type?: 'stock' | 'etf' | 'index'
   row: KlineRow | null
   source: 'live' | 'none'
 }
@@ -4261,13 +4268,14 @@ export const api = {
   extDataSchemaAll: () =>
     request<{ items: { id: string; label: string; mode: string; time_field?: string | null; granularity?: 'intraday' | 'daily' | null; columns: { name: string; type: string; label: string }[] }[] }>('/api/ext-data/schema-all'),
 
-  /** 日内多盘序列 (列表迷你图列): 每标的一天的 [HH:MM:SS, value] 点列 */
-  extDataSeries: (configId: string, field: string, date?: string | null, symbols?: string[], days?: number) =>
+  /** 列表扩展序列: 按日 / 按日内读取, 不指定显示周期时跟随数据表。 */
+  extDataSeries: (configId: string, field: string, date?: string | null, symbols?: string[], days?: number, granularity?: 'daily' | 'intraday') =>
     request<{ config_id: string; field: string; date: string | null; granularity?: 'intraday' | 'daily'; days?: number; items: Record<string, [string, number][]> }>(
       `/api/ext-data/${configId}/series?field=${encodeURIComponent(field)}`
         + (date ? `&date=${date}` : '')
         + (symbols?.length ? `&symbols=${encodeURIComponent(symbols.join(','))}` : '')
-        + (days ? `&days=${days}` : ''),
+        + (days ? `&days=${days}` : '')
+        + (granularity ? `&granularity=${granularity}` : ''),
     ),
 
   extDataPullConfig: (id: string, body: {
