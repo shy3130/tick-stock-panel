@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Loader2, RefreshCw } from 'lucide-react'
 import { api, type MinuteKlineSession } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 import { klineMinuteQueryOptions, klineMinuteRangeQueryOptions, minuteRefetchInterval } from '@/lib/kline'
 import { toast } from '@/components/Toast'
 import { EChartsMultiDayIntraday } from '@/components/EChartsMultiDayIntraday'
@@ -47,11 +48,15 @@ export function StockMultiDayIntradayChart({
     const latestRows = latest.data?.rows ?? []
     if (latestDate && latestRows.length > 0) {
       const existing = byDate.get(latestDate)
-      byDate.set(latestDate, {
-        date: latestDate,
-        prev_close: latest.data?.prev_close ?? existing?.prev_close ?? null,
-        rows: latestRows,
-      })
+      // 补齐落盘后，短缓存/延迟响应中的实时序列可能比本地历史尾部更旧。
+      const existingTail = existing?.rows.at(-1)?.datetime
+      if (!existingTail || existingTail <= latestRows.at(-1)!.datetime) {
+        byDate.set(latestDate, {
+          date: latestDate,
+          prev_close: latest.data?.prev_close ?? existing?.prev_close ?? null,
+          rows: latestRows,
+        })
+      }
     }
 
     return Array.from(byDate.values())
@@ -65,6 +70,7 @@ export function StockMultiDayIntradayChart({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['kline-minute-range', symbol] }),
         queryClient.invalidateQueries({ queryKey: ['kline-minute', symbol] }),
+        queryClient.invalidateQueries({ queryKey: QK.minuteBatch() }),
       ])
     },
     onError: (e: Error) => {

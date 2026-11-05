@@ -10,10 +10,10 @@ from typing import Callable
 import anyio
 import polars as pl
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db_safe import is_valid_ext_ident, quote_ident
-from app.market_time import CN_TZ
+from app.market_time import CN_TZ, cn_today
 from app.price_limits import (
     polars_is_risk_warning_name,
     polars_limit_price,
@@ -145,6 +145,26 @@ def add_batch(req: BatchAddRequest, request: Request):
 @router.get("/groups")
 def list_groups():
     return {"groups": watchlist.list_groups()}
+
+
+class PrepareRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1, max_length=50)
+
+
+@router.post("/prepare")
+def prepare_data(body: PrepareRequest, request: Request):
+    """显式提交自选缺数补齐；普通列表读取不创建后台取数任务。"""
+    from app.services import daily_bootstrap
+
+    selected = list(dict.fromkeys(s.strip() for s in body.symbols))
+    saved = {entry["symbol"] for entry in watchlist.list_symbols()}
+    if any(symbol not in saved for symbol in selected):
+        raise HTTPException(400, "仅支持补齐已加入自选的标的")
+    qs = getattr(request.app.state, "quote_service", None)
+    return {"results": daily_bootstrap.prepare(
+        request.app.state.repo, request.app.state.capabilities, selected, cn_today(),
+        on_updated=qs.notify_data_updated if qs else None,
+    )}
 
 
 @router.post("/groups")
@@ -358,7 +378,7 @@ def clear_all():
 
 # 自选页需要的列
 _WATCHLIST_COLS = [
-    "symbol", "close", "open", "high", "low", "prev_close", "volume",
+    "symbol", "date", "close", "open", "high", "low", "prev_close", "volume",
     "change_pct", "change_amount", "amount",
     "turnover_rate",
     "amplitude", "annual_vol_20d",
@@ -555,8 +575,28 @@ def watchlist_enriched(
         pl.col("symbol").replace_strict(asset_map, default="stock", return_dtype=pl.Utf8).alias("asset_type")
     )
 
+    # 定向补齐仅作缺失行回退，不把旧日K注入全市场实时快照。
+    prepared_reader = getattr(repo, "get_prepared_daily", None)
+    if callable(prepared_reader):
+        parts = []
+        for asset, group in (("stock", stock_symbols), ("etf", etf_symbols), ("index", index_symbols)):
+            missing = df.filter(pl.col("symbol").is_in(group))
+            if "close" in missing.columns:
+                missing = missing.filter(pl.col("close").is_null())
+            if missing.height:
+                fallback = prepared_reader(asset, missing["symbol"].to_list())
+                if isinstance(fallback, pl.DataFrame) and not fallback.is_empty():
+                    parts.append(fallback.with_columns(
+                        pl.lit(asset).alias("asset_type"), pl.lit(True).alias("prepared_daily"),
+                    ))
+        if parts:
+            prepared = pl.concat(parts, how="diagonal_relaxed")
+            df = pl.concat([df.filter(~pl.col("symbol").is_in(prepared["symbol"].to_list())), prepared], how="diagonal_relaxed")
+            # 回退行也由维表统一补名称/股本。
+            df = df.with_columns(pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name"))
+
     # 选择内置需要的列
-    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
+    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type", "prepared_daily"] if c in df.columns]
     df = df.select(keep)
 
     # 涨跌停价 (交易所整数分半进位口径, 仅股票): prev_close/名称已在行上, 对自选的

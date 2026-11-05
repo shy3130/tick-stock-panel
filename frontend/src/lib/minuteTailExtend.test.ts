@@ -28,6 +28,14 @@ const LIVE: TailExtendLiveRow[] = [
 const DATES_FRESH_STOCK_STALE_ETF = { stock: TODAY, etf: '2026-09-29', index: null }
 
 describe('extendMinuteTail 新鲜度守卫', () => {
+  it('a prepared old row is not fresh merely because another ETF has today quotes', () => {
+    const out = extendMinuteTail(BASE, [{ ...LIVE[1], date: '2026-09-29' }], { etf: TODAY }, NOW)
+    expect(out['588200.SH']).toBe(BASE['588200.SH'])
+  })
+  it('prepared daily data never extends intraday prices even with today date', () => {
+    const out = extendMinuteTail(BASE, [{ ...LIVE[1], date: TODAY, prepared_daily: true }], { etf: TODAY }, NOW)
+    expect(out['588200.SH']).toBe(BASE['588200.SH'])
+  })
   it('当日行情的标的正常续画: 追加当前分钟的平K', () => {
     const out = extendMinuteTail(BASE, LIVE, DATES_FRESH_STOCK_STALE_ETF, NOW)
     const stock = out['600519.SH']

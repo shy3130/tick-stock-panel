@@ -20,6 +20,7 @@ export const MINUTE_DATA_QUERY_PREFIXES = new Set([
 ])
 
 export const QK = {
+  dataVersions: ['data-versions'] as const,
   extensionPackages: ['extension-packages'] as const,
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,
@@ -38,6 +39,7 @@ export const QK = {
   // Watchlist
   watchlist:            ['watchlist'] as const,
   watchlistGroups:      ['watchlist-groups'] as const,
+  watchlistPrepare:     (symbols: string[]) => ['watchlist-prepare', symbols] as const,
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext ?? ''] as const,
   // 异动边缘总览 (开启监控时才查询, 参数为 min_closeness/limit)

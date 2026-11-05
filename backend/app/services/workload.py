@@ -9,7 +9,8 @@ from collections import OrderedDict, deque
 
 _GROUPS = frozenset({
     "http.screener", "http.kline", "http.overview", "http.watchlist", "http.backtest",
-    "strategy.batch", "strategy.unit", "strategy.single", "screener.custom", "minute.pull", "backtest.task", "market.calendar",
+    "strategy.batch", "strategy.unit", "strategy.single", "screener.custom", "minute.pull", "minute.single", "minute.sync",
+    "daily.prepare", "backtest.task", "market.calendar",
 })
 _EVENTS = frozenset({"request", "executed", "completed", "shared", "cache_hit", "rejected", "failed"})
 
