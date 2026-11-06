@@ -11,11 +11,12 @@
 GitHub Actions 每次推送都会自动构建多架构镜像(linux/amd64 · arm64)并发布到 GHCR,直接拉取运行,本地无需 Python / Node,也不用现场 build:
 
 ```bash
-docker run -d --name tsp -p 3018:3018 -v ${PWD}/data:/app/data ghcr.io/shy3130/tick-stock-panel:latest
+docker run -d --name tsp -p 3018:3018 -e DATA_DIR=/app/data -v "${PWD}/data:/app/data" ghcr.io/shy3130/tick-stock-panel:latest
 # 打开 http://localhost:3018
 ```
 
-- 需要配置时:从 `.env.example` 复制出 `.env`,命令里加 `--env-file .env`。
+- 需要配置时:从 `.env.example` 复制出 `.env`,命令里加 `--env-file .env`,保留 `-e DATA_DIR=/app/data` 与数据挂载,避免旧镜像把 `DATA_DIR=./data` 解析到未挂载的 `/data`。
+- 自定义绝对数据路径会原样保留,需要把宿主机目录挂载到相同目标。Compose 用户需要同时调整 `environment` 和 `volumes`,仅修改 `.env` 不会覆盖 Compose 中明确指定的路径。
 - 自定义数据源等服务跑在宿主机、容器内需通过 `host.docker.internal` 访问时,Linux 的 `docker run` 要在命令里加 `--add-host=host.docker.internal:host-gateway`(Docker Desktop 的 macOS/Windows 默认已可解析;方式 B 的 compose 已在 `extra_hosts` 配好),否则报 `Name or service not known`。
 - 镜像默认不含 `legacy-cpu` / `backtest` extras —— 老 CPU(无 AVX2)或需要 vectorbt 回测时,请用方式 B 通过 `BACKEND_EXTRAS` 自构建。
 - 跑自己改过的代码:fork 后到仓库 Actions 页启用 workflow(fork 默认禁用),构建出的 `ghcr.io/<你的用户名>/tick-stock-panel` 用法相同。
@@ -23,10 +24,12 @@ docker run -d --name tsp -p 3018:3018 -v ${PWD}/data:/app/data ghcr.io/shy3130/t
 
 更新到新版本:
 
+首次升级、曾使用 `--env-file` 或不确定挂载是否正确时,先完成下方的[数据目录核对与备份](#docker-升级前核对数据目录)。
+
 ```bash
 docker pull ghcr.io/shy3130/tick-stock-panel:latest
 docker rm -f tsp
-# 重新执行上面的 docker run
+# 重新执行原有的完整 docker run,保留 --env-file、自定义 -e 和原有数据挂载
 ```
 
 ---
@@ -119,7 +122,28 @@ git pull
 
 > 用方式 A 镜像直跑(无本地仓库)的用户:`docker pull ghcr.io/shy3130/tick-stock-panel:latest` 后删除旧容器重跑;compose 换 `image:` 的用户执行 `docker compose pull && docker compose up -d`。
 
-> ⚠️ **方式 A 重建容器时必须保留原有的 `-v ${PWD}/data:/app/data` 挂载参数。** 遗漏挂载后新数据会写进容器层,随旧容器删除而**静默丢失**;之后重新挂载,读到的会是宿主机目录里的旧副本,表现为「配置被重置回默认值」。升级前建议先备份 `data/` 目录。
+> ⚠️ **方式 A 重建容器时必须保留 `-e DATA_DIR=/app/data` 与原有的宿主机数据目录挂载。** 更换启动目录时,相对的 `${PWD}/data` 也会指向另一份数据;建议使用固定宿主机绝对路径。自定义容器数据目录时,环境变量和挂载目标须一致。
+
+### Docker 升级前核对数据目录
+
+数据源、AI 与扩展数据的 Key 保存于实际 `DATA_DIR` 下的 `user_data/secrets.json`,其他配置与行情也使用这个数据根目录。检查时只输出路径,不要把凭据文件内容贴到日志或反馈中。
+
+```bash
+# 容器名若不是 tsp,请替换为自己的容器名。
+docker exec tsp /app/.venv/bin/python -c "from app.config import settings; print(settings.data_dir)"
+docker inspect tsp --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+```
+
+实际数据目录应位于挂载目标内,且升级前后使用同一份宿主机目录。新版镜像会将相对路径按应用目录解析,仍保留已经挂载的旧路径和用户配置的绝对路径。发现未挂载的旧目录中有数据时会停止切换,要求先备份;程序不会自动搬迁或覆盖文件。未能确认持久化挂载时会输出启动提醒,不影响源码版与桌面版。
+
+如果旧容器的实际目录是 `/data`,但挂载目标只有 `/app/data`,先保留旧容器并备份。以下备份目标应是一个尚未使用的新目录:
+
+```bash
+docker stop tsp
+docker cp tsp:/data ./tsp-data-backup
+```
+
+核对备份中的 `user_data`、行情与扩展数据后,手动合并到实际挂载的宿主机数据目录;已有文件存在冲突时先核对,不要整目录覆盖。确认数据和 Key 均已迁出后,再按正确的路径重建容器。旧容器已删除且没有持久卷或备份的文件,此次修复无法自动找回。
 
 **整个 `data/` 目录都不纳入 git** —— 行情 K线、财务、自选、回测、监控记录,乃至概念/行业扩展数据,全部是程序运行时生成/拉取的用户数据,`git pull` 物理上无法影响它们。新用户首次启动时,概念/行业两份扩展数据会自动从远程接口拉取,无需任何手动操作。
 

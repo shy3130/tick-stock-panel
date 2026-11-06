@@ -90,7 +90,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
-# 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
+# 三个关键路径；TSP_DOCKER 也确保 env_file 中的相对 DATA_DIR 按 /app 解析。
 COPY backend/app ./app
 COPY tiers.yaml /app/tiers.yaml
 # 版本号运行时兜底 (issue #513): 非冻结路径 _load_version() 读
@@ -99,6 +99,7 @@ COPY frontend/package.json /app/frontend/package.json
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data \
+    TSP_DOCKER=1 \
     TICKFLOW_ENV_FILE=/app/.env
 
 # Frontend 静态产物
