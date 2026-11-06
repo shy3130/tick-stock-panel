@@ -43,15 +43,15 @@
 
 <div align="center">
 
-<a href="https://www.runninghub.ai/call-api?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
+<a href="https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
   <img src="docs/sponsors/runninghub-banner-v3.svg?v=3" alt="RunningHub API — 单一接口直连 400+ 主流大模型" width="100%">
 </a>
 
-<a href="https://www.runninghub.ai/call-api?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
+<a href="https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
   <img src="docs/sponsors/runninghub-intro-card.svg?v=4" alt="About RunningHub API — 产品介绍" width="100%">
 </a>
 
-**本项目由 [RunningHub](https://www.runninghub.ai/call-api?source=github&inviteCode=edt5wh7c) 提供支持** · 单一接口直连 400+ 主流大模型 · [DeepSeek v4.1 Flash 3-6 折](https://www.runninghub.ai/call-api?source=github&inviteCode=edt5wh7c) · 免费测试
+**本项目由 [RunningHub](https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c) 提供支持** · 单一接口直连 400+ 主流大模型 · [DeepSeek v4.1 Flash 3-6 折](https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c) · 免费测试
 
 </div>
 
