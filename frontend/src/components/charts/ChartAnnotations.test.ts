@@ -13,7 +13,9 @@ function setup(data: AnnotationData) {
   const priceToCoordinate = vi.fn((price: number) => 200 - price * 10)
   const annotation = new ChartAnnotations()
   annotation.attached({ requestUpdate, chart: { timeScale: () => ({
-    logicalToCoordinate: (i: number) => i * 20,
+    // Lightweight Charts returns 0 for fractional logical indices.
+    logicalToCoordinate: (i: number) => Number.isInteger(i) ? i * 20 : 0,
+    options: () => ({ barSpacing: 20 }),
     timeToCoordinate: (time: string) => dates.indexOf(time) * 20,
   }) }, series: { priceToCoordinate, getPane: () => ({ getHeight: () => 200 }) } } as never)
   annotation.update(data)
@@ -31,9 +33,20 @@ it('bounds price lines and range backgrounds by trading dates, ignoring expired 
   ] })
   draw()
   expect(ctx.clip).toHaveBeenCalledOnce()
-  expect(ctx.fillRect).toHaveBeenCalledExactlyOnceWith(0, 0, 20, 200)
-  expect(ctx.moveTo).toHaveBeenCalledExactlyOnceWith(20, 100)
-  expect(ctx.lineTo).toHaveBeenCalledExactlyOnceWith(40, 100)
+  expect(ctx.fillRect).toHaveBeenCalledExactlyOnceWith(-10, 0, 40, 200)
+  expect(ctx.moveTo).toHaveBeenCalledExactlyOnceWith(10, 100)
+  expect(ctx.lineTo).toHaveBeenCalledExactlyOnceWith(50, 100)
+})
+
+it('covers a full candle for same-day holding periods and fill-price lines', () => {
+  const { ctx, draw } = setup({ dates,
+    ranges: [{ start: dates[1], end: dates[1] }],
+    priceLines: [{ value: 10, start: dates[1], end: dates[1] }],
+  })
+  draw()
+  expect(ctx.fillRect).toHaveBeenCalledExactlyOnceWith(10, 0, 20, 200)
+  expect(ctx.moveTo).toHaveBeenCalledExactlyOnceWith(10, 100)
+  expect(ctx.lineTo).toHaveBeenCalledExactlyOnceWith(30, 100)
 })
 
 it('right-aligns colored indicator values and wraps narrow headers without dropping values or overlapping the title', () => {

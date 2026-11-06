@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type KlineRow } from '@/lib/api'
-import { klineDailyQueryOptions } from '@/lib/kline'
+import { klineDailyQueryOptions, klineDateRange } from '@/lib/kline'
 import { storage } from '@/lib/storage'
 import type { ChartMarker, ChartPriceLine, ChartRange, ChartRenderer, DailyMarkerStyle, OHLC, VolumeCompareConfig } from '@/lib/chart-types'
 import { OVERLAY_INDICATORS, SUB_CHART_META } from '@/lib/chart-indicators'
@@ -105,12 +105,7 @@ function buildLimitMarkers(rows: KlineRow[], includeLimitDown: boolean): ChartMa
 }
 
 export function getDefaultRange(): { start: string; end: string } {
-  const now = new Date()
-  const end = now.toISOString().slice(0, 10)
-  const s = new Date(now)
-  s.setMonth(s.getMonth() - 6)
-  const start = s.toISOString().slice(0, 10)
-  return { start, end }
+  return klineDateRange()
 }
 
 /** 工具栏小胶囊开关（指标与标注开关共用一套尺寸/关闭态样式，激活色由调用方给字面量）。 */
@@ -277,14 +272,14 @@ export function StockDailyKChart({
                 />
                 {renderer === 'lightweight' && <select
                   aria-label="异动显示方式"
-                  title="文字标签显示板/炸/跌/翘标记；颜色柱体：涨停为黄，跌停为青蓝；炸板收阳为玫紫、收阴为蓝紫；翘板收阳为薄荷青、收阴为钢蓝。开收同价沿用对应收阴色，影线保留原涨跌色。"
+                  title="文字：显示板/炸/跌/翘标记；颜色：涨停为黄，跌停为青蓝；炸板收阳为玫紫、收阴为蓝紫；翘板收阳为薄荷青、收阴为钢蓝。开收同价沿用对应收阴色，影线保留原涨跌色。"
                   value={markerStyle}
                   disabled={!showMarkers}
                   onChange={event => updateMarkerStyle(event.target.value as DailyMarkerStyle)}
                   className="h-5 w-[74px] rounded border border-border bg-base px-1 text-[10px] text-secondary outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40"
                 >
-                  <option value="label">文字标签</option>
-                  <option value="candle">颜色柱体</option>
+                  <option value="label">文字</option>
+                  <option value="candle">颜色</option>
                 </select>}
               </div>
             )}

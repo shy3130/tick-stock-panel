@@ -25,7 +25,9 @@ export function formatMinuteTime(datetime: string): string {
   return `${match[1]}:${match[2]}`
 }
 
-export function computeIntradayAverage(data: MinuteKlineRow[]): (number | null)[] {
+export function computeIntradayAverage(data: MinuteKlineRow[], assetType?: 'stock' | 'etf' | 'index'): (number | null)[] {
+  // 指数成交额 / 成交股数是成分股价格口径，不能作为指数点位均线。
+  if (assetType === 'index') return data.map(() => null)
   const result: (number | null)[] = []
   let amount = 0
   let volume = 0

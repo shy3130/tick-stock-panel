@@ -277,6 +277,7 @@ export function Indices() {
                     {minuteRows.length > 0 && (
                       <EChartsIntraday
                         key={`${selectedSymbol}:${selectedDate}`}
+                        assetType="index"
                         data={minuteRows}
                         height={620}
                         prevClose={prevClose}

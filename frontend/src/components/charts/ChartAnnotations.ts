@@ -1,4 +1,4 @@
-import type { IChartApi, ISeriesApi, ISeriesPrimitive, IPrimitivePaneView, IPrimitivePaneRenderer, ISeriesPrimitiveAxisView, SeriesType, Time, SeriesAttachedParameter } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, ISeriesPrimitive, IPrimitivePaneView, IPrimitivePaneRenderer, ISeriesPrimitiveAxisView, Logical, SeriesType, Time, SeriesAttachedParameter } from 'lightweight-charts'
 import type { ChartRange, ChartPriceLine } from '@/lib/chart-types'
 import type { PlotAxisTick } from '@/lib/lightweight-model'
 
@@ -81,7 +81,11 @@ export class ChartAnnotations implements ISeriesPrimitive<Time> {
       const coordinate = (date: string, end = false) => {
         const index = this.data.dates.findIndex(d => d >= date)
         const i = index < 0 ? this.data.dates.length : index
-        return ts.logicalToCoordinate((end && this.data.dates[i] !== date ? i - 1 : i) as never)
+        const anchor = end && this.data.dates[i] !== date ? i - 1 : i
+        // Inclusive bar edges keep same-day holdings visible as one full candle.
+        // The native API accepts integer indices; apply half-bar spacing in pixels.
+        const center = ts.logicalToCoordinate(anchor as Logical)
+        return center == null ? null : center + (end ? 0.5 : -0.5) * ts.options().barSpacing
       }
       ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip()
       ctx.font = '10px "JetBrains Mono", monospace'
