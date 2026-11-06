@@ -20,6 +20,7 @@ import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } fr
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { QuoteFreshnessBadge } from '@/components/QuoteFreshnessBadge'
 import { toNavItems, type NavItem } from '@/lib/listNav'
 import {
   DimensionMembersDialog,
@@ -599,6 +600,7 @@ const StockCard = React.memo(function StockCard({
           {name && (
             <span className="text-xs text-secondary truncate">{name}</span>
           )}
+          <QuoteFreshnessBadge freshness={r.quote_freshness} compact />
           {board && (
             <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
               {board.label}
@@ -1914,6 +1916,7 @@ export function Watchlist() {
                           ) : null}
                           {monitoredSymbols.has(r.symbol) && <span className="ml-2"><RealtimeDot /></span>}
                         </button>
+                        <QuoteFreshnessBadge freshness={r.quote_freshness} compact />
                         {/* 删除入口：从分组移除 + 从自选移除(二次确认) + 移到顶部 */}
                         <div className="ml-auto pl-1 shrink-0">
                           {confirmRemove === r.symbol ? (

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -37,11 +38,13 @@ def _invalidate_cache() -> None:
 
 
 def data_source_stamp() -> tuple:
-    """请求去重的配置版本，只取文件元信息，不携带 Key 或配置内容。"""
+    """Opaque config version; routine last-fetch persistence must not invalidate pulls."""
     from app.config import settings
 
-    result = []
-    for name in ("preferences.json", "secrets.json"):
+    data = load()
+    data.pop("last_fetch_ms", None)
+    result = [hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()]
+    for name in ("secrets.json",):
         path = settings.data_dir / "user_data" / name
         try:
             stat = path.stat()

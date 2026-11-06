@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Settings, Tag, Upload, Code, RefreshCw, CheckCircle2, Loader2, Pencil, ChevronDown, ChevronUp, AlertTriangle, Trash2 } from 'lucide-react'
 import { api, type ExtDataConfig } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { invalidateExtDataQueries } from '@/lib/ext-data-cache'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ExtDataPullPanel } from './ExtDataPullPanel'
 import { ExtDataApiPanel } from './ExtDataApiPanel'
@@ -76,7 +77,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
     onMutate: () => { setUploading(true); setUploadResult(null) },
     onSuccess: (data) => {
       setUploadResult({ rows: data.rows, date: data.date })
-      qc.invalidateQueries({ queryKey: QK.extData })
+      void invalidateExtDataQueries(qc)
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       setTimeout(() => setUploadResult(null), 3000)
     },

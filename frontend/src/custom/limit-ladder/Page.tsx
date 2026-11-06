@@ -91,8 +91,8 @@ function resolveExtFields(fields: ExtFieldConfig, showConcept: boolean, showIndu
   }
 }
 
-function buildExtColumnsParam(fields: ExtFieldConfig): string | undefined {
-  const parts = [fields.concept?.field, fields.industry?.field].filter(Boolean)
+export function buildExtColumnsParam(fields: ExtFieldConfig): string | undefined {
+  const parts = [...new Set([fields.concept?.field, fields.industry?.field].filter(Boolean))]
   return parts.length > 0 ? parts.join(',') : undefined
 }
 

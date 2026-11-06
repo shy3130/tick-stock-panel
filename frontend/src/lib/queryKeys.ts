@@ -19,6 +19,13 @@ export const MINUTE_DATA_QUERY_PREFIXES = new Set([
   'minute-gaps', 'minute-batch', 'kline-minute', 'kline-minute-range',
 ])
 
+/** 扩展数据写入后的结构、序列和列表消费方。日K仅刷新携带扩展列的查询。 */
+export const EXT_DATA_QUERY_PREFIXES = new Set([
+  'ext-data', 'ext-data-rows', 'ext-data-schema-all', 'ext-schema-all', 'ext-series',
+  'watchlist-enriched', 'screener-cached', 'dimension-members', 'dimension-intraday',
+  'table-schema', 'custom-signals-options',
+])
+
 export const QK = {
   dataVersions: ['data-versions'] as const,
   extensionPackages: ['extension-packages'] as const,

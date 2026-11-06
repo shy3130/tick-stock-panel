@@ -160,7 +160,11 @@ async def test_since_with_date_param_and_pagination(monkeypatch: pytest.MonkeyPa
     pl.DataFrame({"symbol": ["000001.SZ", "000002.SZ"], "ts": ["0900", "0900"]}).write_parquet(part)
 
     n, _ = await ext_pull.fetch_and_ingest(cfg, tmp_path, TARGET)
-    assert n == 1
+    # A sparse old schema must not make the new page replace the existing disks.
+    assert n == 3
+    saved = pl.read_parquet(part).sort(["ts", "symbol"])
+    assert saved["ts"].to_list() == ["0900", "0900", "0930"]
+    assert saved["val"].to_list() == [None, None, 10.0]
     assert seen[0] == {"since": "0900", "page": "1", "pageSize": "1"}  # 每页携带
 
 

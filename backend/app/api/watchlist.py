@@ -12,7 +12,7 @@ import polars as pl
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from app.db_safe import is_valid_ext_ident, quote_ident
+from app.db_safe import quote_ident
 from app.market_time import CN_TZ, cn_today
 from app.price_limits import (
     polars_is_risk_warning_name,
@@ -378,7 +378,7 @@ def clear_all():
 
 # 自选页需要的列
 _WATCHLIST_COLS = [
-    "symbol", "date", "close", "open", "high", "low", "prev_close", "volume",
+    "symbol", "date", "close", "open", "high", "low", "prev_close", "volume", "quote_ts",
     "change_pct", "change_amount", "amount",
     "turnover_rate",
     "amplitude", "annual_vol_20d",
@@ -733,33 +733,21 @@ def watchlist_enriched(
     df = df.sort("_sort_order").drop("_sort_order")
 
     rows = df.to_dicts()
+    from app.services.quote_freshness import QuoteFreshness
+
+    freshness = QuoteFreshness.for_request(request)
+    for row in rows:
+        row["quote_freshness"] = freshness.describe(row)
     elapsed = (time.perf_counter() - t0) * 1000
     return {"rows": rows, "as_of": str(as_of) if as_of else None,
             "elapsed_ms": elapsed, "dates": quote_dates}
 
 
 def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
-    """解析 'config_id1.field1@09:20,config_id2.field2' 为 [(config_id, field_name, at), ...]。
+    """解析并去重扩展列；同一输出列存在歧义时返回 400。"""
+    from app.services.ext_data import parse_ext_columns
 
-    "@HH:MM[:SS]" 为日内多盘表的选盘时刻 (该时刻或之前最近一盘), 与 screener 同口径。
-    """
-    from app.services.ext_data import norm_ext_snapshot_at
-
-    result = []
-    for part in ext_columns.split(","):
-        part = part.strip()
-        if "." not in part:
-            continue
-        config_id, field_name = part.split(".", 1)
-        at: str | None = None
-        if "@" in field_name:
-            field_name, at_raw = field_name.rsplit("@", 1)
-            try:
-                at = norm_ext_snapshot_at(at_raw)
-            except ValueError:
-                continue
-        config_id = config_id.strip()
-        field_name = field_name.strip()
-        if config_id and field_name and is_valid_ext_ident(config_id) and "\x00" not in field_name:
-            result.append((config_id, field_name, at))
-    return result
+    try:
+        return parse_ext_columns(ext_columns)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc

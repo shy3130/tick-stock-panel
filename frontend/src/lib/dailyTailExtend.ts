@@ -1,4 +1,5 @@
-import type { KlineRow } from './api'
+import type { KlineRow, QuoteFreshness } from './api'
+import { advanceQuoteFreshness } from './quote-freshness'
 import type { TailExtendQuoteDates } from './minuteTailExtend'
 
 interface DailyLiveRow {
@@ -9,6 +10,7 @@ interface DailyLiveRow {
   high?: number | null
   low?: number | null
   close?: number | null
+  quote_freshness?: QuoteFreshness | null
 }
 
 /** 自选日K尾部修补；只生成展示序列，不修改查询缓存。 */
@@ -22,6 +24,9 @@ export function extendDailyTail(
   const patched: Record<string, KlineRow[]> = {}
   for (const [symbol, rows] of Object.entries(base)) {
     const live = liveBySymbol.get(symbol)
+    if (live?.quote_freshness && ['stale', 'delayed', 'unknown', 'missing'].includes(
+      advanceQuoteFreshness(live.quote_freshness, Date.now() - live.quote_freshness.checked_at).state,
+    )) { patched[symbol] = rows; continue }
     // 新后端给出逐行日期；旧后端仅按资产日期回退，不能使用混合列表的全局最旧日。
     const asset = (live?.asset_type ?? 'stock') as keyof TailExtendQuoteDates
     const asOf = live?.date ?? quoteDates?.[asset]

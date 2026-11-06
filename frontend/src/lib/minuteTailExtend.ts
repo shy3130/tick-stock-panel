@@ -8,7 +8,8 @@
 // dates[asset_type]) 是今天时才续画。ETF 等未开实时拉取的资产类型, enriched
 // close 是旧日K回退值 (与当日价可偏离数个百分点), 拼到当日分钟K尾部会把整条
 // 分时压扁并在尾部画出错价长刺; dates 缺失 (旧后端) 同样一律不续画。
-import type { MinuteKlineRow } from '@/lib/api'
+import type { MinuteKlineRow, QuoteFreshness } from '@/lib/api'
+import { advanceQuoteFreshness } from './quote-freshness'
 
 export interface TailExtendLiveRow {
   symbol: string
@@ -17,6 +18,7 @@ export interface TailExtendLiveRow {
   asset_type?: string | null
   date?: string | null
   prepared_daily?: boolean | null
+  quote_freshness?: QuoteFreshness | null
 }
 
 /** 按资产类型的行情日期 (enriched 响应 dates 字段, ISO 日期); 旧后端不返回 */
@@ -57,6 +59,8 @@ export function extendMinuteTail(
     const live = liveBySymbol.get(sym)
     // 按需补齐的是日线快照；即使日期是今天，也不能充当当前分钟的实时价。
     if (live?.prepared_daily) { patched[sym] = arr; continue }
+    if (live?.quote_freshness && advanceQuoteFreshness(live.quote_freshness,
+      now.getTime() - live.quote_freshness.checked_at).state !== 'live') { patched[sym] = arr; continue }
     const price = live?.rt_price ?? live?.close
     // 未知资产类型取到 undefined → 不等于当日 → 跳过 (fail-closed)
     const quoteDate = live?.date ?? (quoteDates as Record<string, string | null | undefined>)[
