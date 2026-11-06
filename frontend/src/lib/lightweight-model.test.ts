@@ -2,6 +2,18 @@ import { expect, it } from 'vitest'
 import { buildIntradayModel, intradayTimeLabel, minuteTime, timeKey, validDailyRows } from './lightweight-model'
 import { FULL_DAY_TIMES } from './intraday-chart'
 
+it('never turns aggregate index turnover into a fictitious index-point average', () => {
+  const rows = [{ datetime: '2026-11-06 09:30:00', open: 5059.65, high: 5160.75, low: 5059.65,
+    close: 5128.90, volume: 567329187, amount: 906563120224 }]
+  const sessions = [{ date: '2026-11-06', prev_close: 5211.79, rows }]
+  const index = buildIntradayModel(sessions, true, 'index')
+  expect(index.latest?.average).toBeNull()
+  expect(index.series.some(series => series.id.includes(':average:'))).toBe(false)
+  for (const assetType of ['stock', 'etf'] as const) {
+    expect(buildIntradayModel(sessions, true, assetType).latest?.average).toBeCloseTo(15.97949)
+  }
+})
+
 it('minute canvas keys preserve Beijing wall clock independently of the host timezone', () => {
   expect(timeKey(minuteTime('2026-11-05 09:30:00'))).toBe('2026-11-05 09:30')
   expect(minuteTime('2026-11-05T09:30:00')).toBe(Date.UTC(2026, 10, 5, 9, 30) / 1000)

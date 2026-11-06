@@ -11,7 +11,8 @@ import { DailyVolumeSeries } from './DailyVolumeSeries'
 
 const PRICE_MARGINS = { daily: { top: 0.08, bottom: 0.06 }, intraday: { top: 0, bottom: 0 } }
 const markersForView = (markers: SeriesMarker<Time>[] = [], compact: boolean) => compact
-  ? markers.map(marker => ({ ...marker, text: '', shape: 'circle' as const, size: marker.size === 0 ? 0.5 : Math.min(marker.size ?? 0.65, 0.65) }))
+  ? markers.map(marker => marker.shape === 'arrowUp' || marker.shape === 'arrowDown' ? marker
+    : { ...marker, text: '', shape: 'circle' as const, size: marker.size === 0 ? 0.5 : Math.min(marker.size ?? 0.65, 0.65) })
   : markers
 
 interface Props {
@@ -78,6 +79,7 @@ export function FinancialPlot(props: Props) {
         scaleMargins: propsRef.current.intraday ? PRICE_MARGINS.intraday : PRICE_MARGINS.daily },
       timeScale: { borderColor: theme.border, minimumHeight: CHART_LAYOUT.timeAxis,
         rightOffset: 0, fixLeftEdge: true, fixRightEdge: !propsRef.current.intraday, timeVisible: !!propsRef.current.intraday,
+        lockVisibleTimeRangeOnResize: propsRef.current.visibleBars === 'all',
         // 20 日约 4820 个分钟位置，窄屏也要能完整适配所选时段。
         minBarSpacing: propsRef.current.intraday ? 0.01 : 0.5,
         tickMarkFormatter: (time: Time, kind: number) => {
@@ -155,9 +157,10 @@ export function FinancialPlot(props: Props) {
       layout: { panes: { enableResize: !intraday } },
       rightPriceScale: { ...(intraday ? { autoScale: true } : {}), entireTextOnly: intraday,
         scaleMargins: intraday ? PRICE_MARGINS.intraday : PRICE_MARGINS.daily },
-      timeScale: { timeVisible: intraday, fixRightEdge: !intraday, rightOffset: 0, minBarSpacing: intraday ? 0.01 : 0.5 },
+      timeScale: { timeVisible: intraday, fixRightEdge: !intraday, rightOffset: 0, minBarSpacing: intraday ? 0.01 : 0.5,
+        lockVisibleTimeRangeOnResize: props.visibleBars === 'all' },
     })
-  }, [props.intraday])
+  }, [props.intraday, props.visibleBars])
 
   useEffect(() => {
     const chart = chartRef.current

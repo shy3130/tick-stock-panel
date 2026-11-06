@@ -56,7 +56,7 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
   const theme = useTheme()
   const color = (key: keyof typeof LINE_COLORS) => LINE_COLORS[key][theme]
   const volumeMAs = useMemo(() => ({ 5: volMaN(rows, 5), 10: volMaN(rows, 10) }), [rows])
-  const scope = `${symbol}:${rows[0]?.date ?? ''}`
+  const scope = `${symbol}:${rows[0]?.date ?? ''}:${ranges?.map(range => `${range.start}:${range.end}`).join(';') ?? ''}`
   const [hover, setHover] = useState<{ scope: string; time: string } | null>(null)
   const index = hover?.scope === scope ? rows.findIndex(d => d.date === hover.time) : -1
   const i = index >= 0 ? index : rows.length - 1

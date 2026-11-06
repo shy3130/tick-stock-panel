@@ -5,6 +5,7 @@ import type { MinuteKlineRow, MinuteKlineSession } from '@/lib/api'
 import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES } from '@/lib/intraday-chart'
 import { useChartTheme } from '@/lib/theme'
 import { pricePrecision } from '@/lib/format'
+import { intradayScale } from '@/lib/intraday-scale'
 
 const COLORS = {
   up: '#C74040',
@@ -43,7 +44,7 @@ function priceColor(close: number, prevClose: number | null): string {
   return close > prevClose ? COLORS.up : COLORS.down
 }
 
-function buildModel(sessions: MinuteKlineSession[]) {
+function buildModel(sessions: MinuteKlineSession[], assetType?: Props['assetType']) {
   const categories: string[] = []
   const volumeData: ({ value: number; itemStyle: { color: string } } | null)[] = []
   const dayLabelByIndex = new Map<number, string>()
@@ -66,7 +67,7 @@ function buildModel(sessions: MinuteKlineSession[]) {
       dayLabelByIndex.set(start + Math.floor(FULL_DAY_TIMES.length / 2), session.date.slice(5))
     }
 
-    const averagePrices = computeIntradayAverage(session.rows)
+    const averagePrices = computeIntradayAverage(session.rows, assetType)
     const rowsByTime = new Map<string, { row: MinuteKlineRow; average: number | null }>()
     session.rows.forEach((row, index) => {
       rowsByTime.set(formatMinuteTime(row.datetime), {
@@ -107,8 +108,7 @@ function buildModel(sessions: MinuteKlineSession[]) {
         },
       })
       prevRef = row.close
-      priceValues.push(row.low, row.high)
-      if (average != null) priceValues.push(average)
+      priceValues.push(row.low, row.high, row.close)
       pointByIndex.set(index, {
         date: session.date,
         row,
@@ -158,7 +158,7 @@ export function EChartsMultiDayIntraday({
   const priceDoubleClickHandlerRef = useRef<((event: { offsetX: number; offsetY: number }) => void) | null>(null)
   const onPriceDoubleClickRef = useRef(onPriceDoubleClick)
   onPriceDoubleClickRef.current = onPriceDoubleClick
-  const model = useMemo(() => buildModel(sessions), [sessions])
+  const model = useMemo(() => buildModel(sessions, assetType), [sessions, assetType])
   const modelRef = useRef(model)
   modelRef.current = model
   const [info, setInfo] = useState<InfoPoint | null>(model.latest)
@@ -212,13 +212,7 @@ export function EChartsMultiDayIntraday({
       chart.getZr().on('dblclick', handlePriceDoubleClick)
     }
 
-    const monitoredPrices = priceLines
-      .map(line => line.value)
-      .filter(value => Number.isFinite(value) && value > 0)
-    const allPriceValues = [...model.priceValues, ...monitoredPrices]
-    const minPrice = allPriceValues.length > 0 ? Math.min(...allPriceValues) : 0
-    const maxPrice = allPriceValues.length > 0 ? Math.max(...allPriceValues) : 1
-    const padding = Math.max((maxPrice - minPrice) * 0.08, maxPrice * 0.002)
+    const scale = intradayScale(model.priceValues, undefined, digits)
     const totalLength = model.categories.length
     const priceSeries: any[] = model.dayRanges.map(({ start, session, values }) => {
       const data = new Array(totalLength).fill(null) as (number | null)[]
@@ -270,7 +264,7 @@ export function EChartsMultiDayIntraday({
         data: markLineData,
       }
     }
-    const averageSeries: any[] = model.dayRanges.map(({ start, session, averages }) => {
+    const averageSeries: any[] = assetType === 'index' ? [] : model.dayRanges.map(({ start, session, averages }) => {
       const data = new Array(totalLength).fill(null) as (number | null)[]
       for (let index = 0; index < averages.length; index++) data[start + index] = averages[index]
       return {
@@ -350,8 +344,8 @@ export function EChartsMultiDayIntraday({
       yAxis: [
         {
           type: 'value',
-          min: minPrice - padding,
-          max: maxPrice + padding,
+          min: scale?.range.min,
+          max: scale?.range.max,
           scale: true,
           minInterval: 10 ** -digits,
           axisPointer: { label: { formatter: p => Number(p.value).toFixed(digits) } },
@@ -396,7 +390,7 @@ export function EChartsMultiDayIntraday({
       ],
     }
     chart.setOption(option, true)
-  }, [height, model, priceLines, theme, digits])
+  }, [height, model, priceLines, theme, digits, assetType])
 
   useEffect(() => () => {
     chartRef.current?.off('updateAxisPointer')
@@ -429,7 +423,7 @@ export function EChartsMultiDayIntraday({
               {changePct != null && (
                 <span style={{ color: infoColor }}>{changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%</span>
               )}
-              <span className="text-muted">均价</span><span style={{ color: COLORS.average }}>{info.average != null ? info.average.toFixed(digits) : '—'}</span>
+              {assetType !== 'index' && <><span className="text-muted">均价</span><span style={{ color: COLORS.average }}>{info.average != null ? info.average.toFixed(digits) : '—'}</span></>}
               <span className="text-muted">量</span><span className="text-secondary">{info.row.volume.toFixed(0)}</span>
               <span className="text-muted">额</span><span className="text-secondary">{formatAmount(info.row.amount)}</span>
             </>

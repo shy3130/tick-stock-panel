@@ -12,7 +12,9 @@ const fixture = vi.hoisted(() => ({ rows: [
   { date: '2026-11-06', open: 10.2, high: 11.88, low: 9.72, close: 9.72, volume: 100, signal_limit_down: true, signal_broken_limit_up: true },
 ] as KlineRow[] }))
 vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: fixture, isLoading: false, isError: false }) }))
-vi.mock('@/lib/kline', () => ({ klineDailyQueryOptions: vi.fn(() => ({})) }))
+vi.mock('@/lib/kline', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/kline')>(), klineDailyQueryOptions: vi.fn(() => ({})),
+}))
 vi.mock('./charts/LightweightDaily', () => ({ LightweightDaily: (props: any) => <output>{JSON.stringify(props)}</output> }))
 vi.mock('./EChartsCandlestick', () => ({ EChartsCandlestick: (props: any) => <output>{JSON.stringify(props)}</output> }))
 
@@ -74,7 +76,7 @@ it.each([
 it('persists the style independently of the existing marker on/off switch', async () => {
   await render()
   const select = host.querySelector('[aria-label="异动显示方式"]') as HTMLSelectElement
-  expect([...select.options].map(option => [option.value, option.text])).toEqual([['label', '文字标签'], ['candle', '颜色柱体']])
+  expect([...select.options].map(option => [option.value, option.text])).toEqual([['label', '文字'], ['candle', '颜色']])
   await act(async () => { select.value = 'candle'; select.dispatchEvent(new Event('change', { bubbles: true })) })
   expect(props().markerStyle).toBe('candle')
   expect(JSON.parse(localStorage.getItem('stock_daily_marker_style')!)).toBe('candle')
