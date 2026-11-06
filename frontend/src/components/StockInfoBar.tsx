@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
-import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
+import type { KlineRow, FinancialMetricRecord, QuoteFreshness } from '@/lib/api'
+import { QuoteFreshnessBadge } from '@/components/QuoteFreshnessBadge'
 import { fmtPrice, fmtBigNum, fmtVolume, fmtAssetPrice } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
@@ -12,6 +13,7 @@ const BULL = '#C74040'
 const BEAR = '#2D9B65'
 
 interface Props {
+  freshness?: QuoteFreshness | null
   symbol: string
   assetType?: 'stock' | 'etf' | 'index'
   /** 详情窗口顶栏已显示标的身份时，信息条只保留报价与指标。 */
@@ -102,6 +104,7 @@ function renderExtInline(
 }
 
 export function StockInfoBar({
+  freshness,
   symbol,
   assetType,
   showIdentity = true,
@@ -148,6 +151,7 @@ export function StockInfoBar({
         <div className={`flex items-baseline gap-x-3 flex-wrap ${showIdentity ? 'min-h-7' : 'min-h-8'}`}>
           {showIdentity && <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>}
           {showIdentity && name && <span className="text-secondary font-medium">{name}</span>}
+          <QuoteFreshnessBadge freshness={freshness} />
           <span className="ml-auto self-center text-muted">
             <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
           </span>
@@ -262,6 +266,7 @@ export function StockInfoBar({
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%
         </span>
+        <QuoteFreshnessBadge freshness={freshness} />
         {/* 右侧操作按钮：外链 + 加自选 + 加监控 + 信息条配置 */}
         <div className="ml-auto self-center flex items-center gap-1">
           {extUrl && (

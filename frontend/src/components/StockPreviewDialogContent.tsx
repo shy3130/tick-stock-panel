@@ -17,12 +17,12 @@ import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { buildMonitorPriceLines } from '@/lib/price-alerts'
 import { usePreferences } from '@/lib/useSharedQueries'
-import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { storage } from '@/lib/storage'
 import { navItemKey, type NavItem } from '@/lib/listNav'
 import { useListNav } from '@/lib/useListNav'
-import { DEFAULT_INTRADAY_DAYS } from '@/lib/kline'
+import { DEFAULT_INTRADAY_DAYS, cnToday, klineDateRange } from '@/lib/kline'
+import { useQuoteClock } from '@/lib/useQuoteClock'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 
 export interface Props {
@@ -93,6 +93,12 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
   const [view, setView] = useState<PreviewView>('daily')
   const [intradayDays, setIntradayDays] = useState<number | null>(loadIntradayDays)
   const [dateRange, setDateRange] = useState(getDefaultRange)
+  const [rollingMonths, setRollingMonths] = useState<number | null>(6)
+  const clock = useQuoteClock()
+  const today = cnToday(new Date(clock))
+  useEffect(() => {
+    if (rollingMonths != null) setDateRange(current => current.end === today ? current : klineDateRange(rollingMonths, today))
+  }, [today, rollingMonths])
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const customNames = useCustomSignalNames()
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
@@ -200,14 +206,7 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
     setPriceAlertDraft(null)
   }, [symbol])
 
-  // 焦点股票注册: SSE quotes_updated 推送时精准 invalidate 当前股票日K,
-  // 让对话框日K最后一根蜡烛随实时价变化 (后端只读内存, 不调 TickFlow)。
-  // 关闭/切股时清除, 避免无谓刷新。
-  useEffect(() => {
-    if (!symbol) return
-    setFocusSymbol(symbol)
-    return () => clearFocusSymbol()
-  }, [symbol])
+  // StockPanel owns the quote lease and focused SSE updates, including cleanup.
 
   // 分时图实时轮询: 详情打开即独立轮询, 不再依赖自选列表的「分时刷新」开关
   // 与实时行情运行状态 (打开详情就是要看实时分时); 间隔沿用偏好, 默认 6s。
@@ -331,19 +330,14 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
                   <div className="flex max-w-full flex-wrap items-center gap-2">
                     <div className="inline-flex shrink-0 items-center rounded border border-border/60 bg-base/60 p-0.5">
                     {PRESETS.map(p => {
-                      const now = new Date()
-                      const s = new Date(now)
-                      s.setMonth(s.getMonth() - p.months)
-                      const expected = s.toISOString().slice(0, 10)
+                      const expected = klineDateRange(p.months, today).start
                       const isActive = dateRange.start === expected
                       return (
                         <button
                           key={p.label}
                           onClick={() => {
-                            const end = new Date().toISOString().slice(0, 10)
-                            const ns = new Date()
-                            ns.setMonth(ns.getMonth() - p.months)
-                            setDateRange({ start: ns.toISOString().slice(0, 10), end })
+                            setRollingMonths(p.months)
+                            setDateRange(klineDateRange(p.months, today))
                           }}
                           className={`h-6 shrink-0 whitespace-nowrap rounded px-2.5 text-[11px] transition-colors cursor-pointer
                             ${isActive
@@ -359,13 +353,13 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
                     <div className="inline-flex shrink-0 items-center gap-2">
                     <DatePicker
                       value={dateRange.start}
-                      onChange={(v) => setDateRange(prev => ({ ...prev, start: v }))}
+                      onChange={(v) => { setRollingMonths(null); setDateRange(prev => ({ ...prev, start: v })) }}
                       max={dateRange.end}
                     />
                     <span className="text-muted/70 text-[10px]">~</span>
                     <DatePicker
                       value={dateRange.end}
-                      onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
+                      onChange={(v) => { setRollingMonths(null); setDateRange(prev => ({ ...prev, end: v })) }}
                       min={dateRange.start}
                     />
                     </div>

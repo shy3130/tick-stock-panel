@@ -525,7 +525,8 @@ def get_daily(
         if enriched.is_empty():
             return _gzip_payload(
                 request,
-                {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": []},
+                {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": [],
+                 "quote_freshness": _daily_freshness(request, [], end)},
                 pref_key="daily_batch_compress",
             )
         rows = enriched.filter(
@@ -535,6 +536,7 @@ def get_daily(
         if end >= cn_today():
             rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
         resp = {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
+        resp["quote_freshness"] = _daily_freshness(request, rows, end)
         return _gzip_payload(
             request,
             _attach_ext(resp, repo, symbol, ext_columns),
@@ -548,11 +550,18 @@ def get_daily(
         rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
     resp = {"symbol": symbol, "asset_type": asset_type, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+    resp["quote_freshness"] = _daily_freshness(request, rows, end)
     return _gzip_payload(
         request,
         _attach_ext(resp, repo, symbol, ext_columns),
         pref_key="daily_batch_compress",
     )
+
+
+def _daily_freshness(request: Request, rows: list[dict], end: date) -> dict:
+    from app.services.quote_freshness import QuoteFreshness
+
+    return QuoteFreshness.for_request(request).describe(rows[-1] if rows else None, historical=end < cn_today())
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:
@@ -656,6 +665,8 @@ def _latest_live_candle(
         "change_pct": q.get("change_pct"),
         "is_live": True,
     }
+    if q.get("quote_ts") is not None:
+        live_row["quote_ts"] = q["quote_ts"]
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
                 "macd_dif", "macd_dea", "macd_hist",
                 "kdj_k", "kdj_d", "kdj_j",
@@ -701,11 +712,14 @@ def get_daily_latest(
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
     row = _latest_live_candle(request, symbol, asset_type, refresh_asset=False)
+    from app.services.quote_freshness import QuoteFreshness
+
     return {
         "symbol": symbol,
         "asset_type": asset_type,
         "row": row,
         "source": "live" if row is not None else "none",
+        **({"quote_freshness": QuoteFreshness.for_request(request).describe(row)} if row else {}),
     }
 
 

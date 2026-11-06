@@ -54,17 +54,8 @@ export function useQuoteStreamStatus(): QuoteStreamStatus {
 // 个股对话框打开时注册当前 symbol, SSE quotes_updated 推送时只取当日最新行，
 // 再原位更新该 symbol 的日K查询缓存，避免重复下载整段历史。
 // 不加进 SSE_INVALIDATE_PREFIXES 全局列表 —— 避免回测弹窗等也每秒重拉。
-let _focusSymbol: string | null = null
-
-/** 注册当前焦点股票 (个股对话框打开时调用)。 */
-export function setFocusSymbol(symbol: string): void {
-  _focusSymbol = symbol
-}
-
-/** 清除焦点股票 (个股对话框关闭时调用)。 */
-export function clearFocusSymbol(): void {
-  _focusSymbol = null
-}
+export { setFocusSymbol, clearFocusSymbol } from './quote-focus'
+import { focusSymbols } from './quote-focus'
 
 /**
  * 全局 SSE hook: 监听后端行情更新推送 + 策略监控通知。
@@ -192,19 +183,18 @@ export function useQuoteStream(
           invalidatePrefixes(SSE_INVALIDATE_PREFIXES)
         }
         // 焦点股票日K增量刷新: 只取内存中的当日行并合并缓存尾部。
-        if (_focusSymbol && document.visibilityState !== 'hidden') {
-          const symbol = _focusSymbol
+        if (document.visibilityState !== 'hidden') for (const symbol of focusSymbols()) {
           void qc.fetchQuery({ ...klineDailyLatestQueryOptions(symbol), staleTime: 0 })
             .then((latest) => {
-              if (_focusSymbol !== symbol || !latest.row) return
-              const latestDate = String(latest.row.date).slice(0, 10)
+              if (!focusSymbols().includes(symbol)) return
+              const latestDate = latest.row ? String(latest.row.date).slice(0, 10) : ''
               const queries = qc.getQueryCache().findAll({ queryKey: ['kline', symbol] })
               for (const query of queries) {
                 const start = String(query.queryKey[2] ?? '')
                 const end = String(query.queryKey[3] ?? '')
                 // 空串边界 = 滚动"最近 N 根"窗口 (无日期边界): 尾部合并总是适用,
                 // 不得因 latestDate > '' 被跳过 — 否则这类看板收不到实时修补
-                if ((start && latestDate < start) || (end && latestDate > end)) continue
+                if (latestDate && ((start && latestDate < start) || (end && latestDate > end))) continue
                 qc.setQueryData<KlineDailyResponse>(
                   query.queryKey,
                   current => mergeLatestKlineRow(current, latest),

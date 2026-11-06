@@ -16,6 +16,7 @@ from typing import Literal
 import anyio
 import polars as pl
 
+from app.db_safe import is_valid_ext_ident
 from app.market_time import cn_now, cn_today
 from app.services.fs_utils import atomic_write_parquet, atomic_write_text
 
@@ -101,6 +102,40 @@ def norm_ext_snapshot_at(raw: str) -> str:
     if not m:
         raise ValueError(f"非法选盘时刻 {raw!r} (应为 HH:MM 或 HH:MM:SS)")
     return f"{raw}:00" if len(raw) == 5 else raw
+
+
+def parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
+    """解析扩展列并按输出列名保序去重，非法项沿用跳过语义。
+
+    输出列名不含选盘时刻，同一输出指定不同时刻或不同字段时拒绝整个请求，
+    避免 JOIN 重名、静默覆盖或把一个时刻的值显示成另一个时刻。
+    """
+    columns: dict[str, tuple[str, str, str | None]] = {}
+    for part in ext_columns.split(","):
+        part = part.strip()
+        if "." not in part:
+            continue
+        config_id, field_name = part.split(".", 1)
+        at: str | None = None
+        if "@" in field_name:
+            field_name, at_raw = field_name.rsplit("@", 1)
+            try:
+                at = norm_ext_snapshot_at(at_raw)
+            except ValueError:
+                continue
+        config_id = config_id.strip()
+        field_name = field_name.strip()
+        if not config_id or not field_name or not is_valid_ext_ident(config_id) or "\x00" in field_name:
+            continue
+        spec = (config_id, field_name, at)
+        output = f"{config_id}__{field_name}"
+        previous = columns.get(output)
+        if previous is not None and previous != spec:
+            if previous[:2] == spec[:2]:
+                raise ValueError(f"扩展字段 {config_id}.{field_name} 不能同时指定不同选盘时刻")
+            raise ValueError(f"扩展字段输出列名冲突：{output}")
+        columns[output] = spec
+    return list(columns.values())
 
 
 def collapse_ext_rows_at(
@@ -814,9 +849,13 @@ def cast_df_to_schema(df: pl.DataFrame, fields: list[ExtField]) -> pl.DataFrame:
     """
     schema = df.schema
     for f in fields:
-        if f.name not in df.columns:
-            continue
         target = _POLARS_DTYPE_MAP.get(f.dtype, pl.Utf8)
+        if f.name not in df.columns:
+            # Optional observations may not exist yet (for example the first
+            # auction snapshot). Keep their declared type without inventing a value.
+            df = df.with_columns(pl.lit(None, dtype=target).alias(f.name))
+            schema[f.name] = target
+            continue
         src = schema[f.name]
         if isinstance(src, pl.List) and target == pl.Utf8:
             df = df.with_columns(
@@ -849,6 +888,9 @@ def write_ext_parquet(
     Returns:
         写入行数。
     """
+    if df.is_empty():
+        return 0
+
     # 缺省分区日期按北京日期, 与定时拉取 (ext_pull.fetch_and_ingest) 同口径
     snap = snapshot_date or cn_today()
     cfg_dir = _config_dir(config.id, data_dir)
@@ -862,17 +904,6 @@ def write_ext_parquet(
         # 快照: 与 config.json 同级，直接覆盖
         cfg_dir.mkdir(parents=True, exist_ok=True)
         out_path = cfg_dir / "part.parquet"
-
-        # 如果已有文件，合并去重后覆盖
-        if out_path.exists():
-            try:
-                existing = pl.read_parquet(out_path)
-                key = "symbol" if "symbol" in df.columns else df.columns[0]
-                df = pl.concat([existing, df]).unique(subset=[key], keep="last")
-            except Exception as e:
-                # schema 不一致 (列不同) 时 concat 失败 → 直接用新 df 覆盖。
-                # 记日志而非静默吞掉, 便于排查"数据结构错乱"类问题。
-                logger.warning("扩展表 %s 合并去重失败, 将覆盖写入: %s", config.id, e)
     else:
         # 时序: timeseries/ 下按日期分区
         out_dir = cfg_dir / "timeseries" / f"date={snap}"
@@ -885,29 +916,42 @@ def write_ext_parquet(
         if tf == PLATE_TS_FIELD and PLATE_TS_FIELD not in df.columns:
             df = df.with_columns(pl.lit(_pull_ts_value()).alias(PLATE_TS_FIELD))
 
-        # 如果已有文件，合并去重
-        if out_path.exists():
-            try:
-                existing = pl.read_parquet(out_path)
-                key: str | list[str] = "symbol" if "symbol" in df.columns else df.columns[0]
-                # 日内序列表 (配置 time_field): 同 symbol 同时刻去重, 不同盘并存
-                if tf and tf in df.columns:
-                    key = [key, tf]
-                df = pl.concat([existing, df]).unique(
-                    subset=[key] if isinstance(key, str) else key, keep="last"
-                )
-            except Exception as e:
-                logger.warning("扩展表 %s 合并去重失败, 将覆盖写入: %s", config.id, e)
+    tf = config.pull.time_field if config.pull and config.mode != "snapshot" else None
+    if tf and (tf not in df.columns or df[tf].null_count()):
+        raise ValueError(f"扩展数据时间字段 '{tf}' 缺失或为空, 原数据保持不变")
 
+    # Normalize configured types before merging: an initially empty float column
+    # and a later integer/float observation still belong to the same field.
     df = cast_df_to_schema(df, config.fields)
+    key = ["symbol" if "symbol" in df.columns else df.columns[0]]
+    if tf and tf in df.columns and tf not in key:
+        key.append(tf)
+
+    if out_path.exists():
+        existing = cast_df_to_schema(pl.read_parquet(out_path), config.fields)
+        old_schema, new_schema = existing.schema, df.schema
+        for name in old_schema.keys() & new_schema.keys():
+            old_type, new_type = old_schema[name], new_schema[name]
+            if (
+                old_type != new_type and old_type != pl.Null and new_type != pl.Null
+                and not (old_type.is_numeric() and new_type.is_numeric())
+            ):
+                raise ValueError(
+                    f"扩展字段 '{name}' 类型不兼容 ({old_type} / {new_type}), 原数据保持不变"
+                )
+        # Union optional columns by name; incompatible schemas must fail before
+        # atomic replacement, never fall back to discarding the existing rows.
+        df = pl.concat([existing, df], how="diagonal_relaxed")
+
+    df = df.unique(subset=key, keep="last", maintain_order=True)
     if config.mode != "snapshot":
         # 日内序列表: 分区内按 [symbol, 时间列] 升序落盘。读侧 (screener._load_ext_value_maps、
         # ext_factors 因子帧、板块资金流) 按 symbol unique(keep="last") 收敛到一行, 只认行序;
-        # 上面的合并去重不保序, 上游返回顺序也不保证时间序, 不排序时取到的是随机一盘
+        # 上游及不同批次不保证时间序, 不排序时可能把更早的盘次当作末盘
         tf = config.pull.time_field if config.pull else None
         if tf and tf in df.columns:
             df = df.sort(["symbol", tf] if "symbol" in df.columns else [tf], maintain_order=True)
-    # 原子写: 中断时半截文件会让下一次写入走「合并去重失败, 将覆盖写入」, 静默丢掉已有行
+    # 中断时保留旧分区, 避免读侧看到半截文件。
     atomic_write_parquet(df, out_path)
     logger.info("扩展表写入: %s → %s (%d 行)", config.id, out_path, len(df))
     # 扩展列已接入 enriched 帧/因子注册表: 写入后必须失效相关缓存
@@ -1011,7 +1055,9 @@ def rows_to_parquet(
     Returns:
         写入行数。
     """
-    df = pl.DataFrame(rows)
+    # Sparse fields can first appear in later snapshots, beyond Polars' default
+    # 100-row inference window. Infer across this response so those keys survive.
+    df = pl.DataFrame(rows, infer_schema_length=None)
     df = apply_config_mapping(df, config, data_dir)
     if "symbol" in df.columns:
         df = df.with_columns(pl.col("symbol").cast(pl.Utf8))

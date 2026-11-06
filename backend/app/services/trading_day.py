@@ -61,6 +61,17 @@ class _Cache:
 _CACHE = _Cache()
 
 
+def cached_verdict(now: datetime | None = None) -> bool | None:
+    """Read the current day's verdict without starting network work in API readers."""
+    now = now or cn_now()
+    if now.weekday() >= 5:
+        return False
+    with _CACHE_LOCK:
+        if _CACHE.day == now.date() and time.monotonic() - _CACHE.probed_at < _ttl_of(_CACHE.verdict):
+            return _CACHE.verdict
+    return None
+
+
 def reset_cache() -> None:
     """清空探针缓存 (测试用)。"""
     global _CACHE_EPOCH

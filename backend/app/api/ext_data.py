@@ -332,7 +332,9 @@ def _read_ext_dataframe(
 
 
 def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
-    if df.is_empty() or "symbol" not in df.columns or "name" in df.columns:
+    if df.is_empty() or "symbol" not in df.columns:
+        return df
+    if "name" in df.columns and df["name"].null_count() == 0:
         return df
     path = data_dir / "instruments" / "instruments.parquet"
     if not path.exists():
@@ -341,6 +343,15 @@ def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
         inst = pl.read_parquet(path)
         if "symbol" in inst.columns and "name" in inst.columns:
             inst = inst.select(["symbol", "name"]).unique(subset=["symbol"], keep="last")
+            if "name" in df.columns:
+                lookup_name = "__instrument_name"
+                while lookup_name in df.columns:
+                    lookup_name += "_"
+                return (
+                    df.join(inst.rename({"name": lookup_name}), on="symbol", how="left")
+                    .with_columns(pl.coalesce("name", lookup_name).alias("name"))
+                    .drop(lookup_name)
+                )
             return df.join(inst, on="symbol", how="left")
     except Exception:
         return df

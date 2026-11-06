@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.config import settings
-from app.db_safe import is_valid_ext_ident, quote_ident
+from app.db_safe import quote_ident
 from app.services import screener_work, strategy_cache, strategy_run_queue
 from app.services.screener import ScreenerService
 from app.services.shared_work import WorkBusyError
@@ -1392,31 +1392,10 @@ def limit_ladder(
 
 
 def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
-    """解析 'config_id1.field1@09:20,config_id2.field2' 为 [(config_id, field_name, at), ...]。
+    """解析并去重扩展列；同一输出列存在歧义时返回 400。"""
+    from app.services.ext_data import parse_ext_columns
 
-    可选 "@HH:MM[:SS]" 后缀: 日内多盘表取「该时刻或之前最近一盘」的值;
-    时刻非法时整条 spec 丢弃 (fail-closed, 不静默回退末盘造成口径混淆)。
-    """
-    from app.services.ext_data import norm_ext_snapshot_at
-
-    result = []
-    for part in ext_columns.split(","):
-        part = part.strip()
-        if "." not in part:
-            continue
-        config_id, field_name = part.split(".", 1)
-        at: str | None = None
-        if "@" in field_name:
-            field_name, at_raw = field_name.rsplit("@", 1)
-            try:
-                at = norm_ext_snapshot_at(at_raw)
-            except ValueError:
-                continue
-        config_id = config_id.strip()
-        field_name = field_name.strip()
-        if not config_id or not field_name:
-            continue
-        if not is_valid_ext_ident(config_id) or "\x00" in field_name:
-            continue
-        result.append((config_id, field_name, at))
-    return result
+    try:
+        return parse_ext_columns(ext_columns)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc

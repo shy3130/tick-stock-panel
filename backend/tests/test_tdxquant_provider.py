@@ -412,6 +412,21 @@ def test_realtime_indices_none_on_failure():
     assert _provider(fake).get_realtime_indices(["000001.SH"]) is None
 
 
+def test_realtime_symbols_can_supplement_etf_without_rounding_price():
+    fake = _FakeClient()
+    fake.snapshot_results = [{"159558.SZ": _snap_row(Now="0.827", LastClose="0.826")}]
+    records = _provider(fake).get_realtime_symbols(["159558.SZ"], asset_type="etf")
+    assert fake.snapshot_calls == [["159558.SZ"]]
+    assert records[0]["last_price"] == .827
+    assert records[0]["symbol"] == "159558.SZ"
+
+
+def test_realtime_symbols_failure_does_not_fake_empty_success():
+    fake = _FakeClient()
+    fake.snapshot_results = [tc.TdxQuantError("unavailable")]
+    assert _provider(fake).get_realtime_symbols(["159558.SZ"], asset_type="etf") is None
+
+
 # ---------------------------------------------------------------- provider: daily
 def _his_raw(*, dates=("20260102", "20260105"), volume="3123935.00", amount="386731.09") -> dict:
     return {

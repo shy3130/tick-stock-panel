@@ -13,10 +13,45 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
+
+
+class QuoteSubscription(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=64)
+
+
+@router.put("/subscriptions/{client_id}")
+def subscribe_quotes(
+    request: Request,
+    body: QuoteSubscription,
+    client_id: str = Path(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+):
+    """Renew a detail lease. The shared worker performs all upstream fetching."""
+    from app.services.quote_demand import LEASE_SECONDS
+
+    qs = _get_quote_service(request)
+    if qs is None:
+        raise HTTPException(503, "行情服务暂不可用，请稍后重试")
+    try:
+        qs.subscribe_quotes(client_id, body.symbols)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"lease_seconds": LEASE_SECONDS}
+
+
+@router.delete("/subscriptions/{client_id}")
+def unsubscribe_quotes(
+    request: Request,
+    client_id: str = Path(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+):
+    qs = _get_quote_service(request)
+    if qs is not None:
+        qs.unsubscribe_quotes(client_id)
+    return {"status": "ok"}
 
 
 def _get_quote_service(request: Request):

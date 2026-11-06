@@ -474,6 +474,22 @@ class TdxQuantProvider:
             logger.info("TdxQuant 实时行情拉取完成: %d 条(丢弃 %d 行无价快照)", len(records), dropped)
         return records
 
+    def get_realtime_symbols(self, symbols: list[str], *, asset_type: str = "stock") -> list[dict] | None:
+        """Targeted stock/ETF demand, using the same native snapshot and unit mapper."""
+        records = []
+        fallback_ms = int(time.time() * 1000)
+        for i in range(0, len(symbols), _SNAPSHOT_BATCH):
+            try:
+                rows = self._get_client().snapshot_batch(symbols[i:i + _SNAPSHOT_BATCH])
+            except TdxQuantError as exc:
+                logger.warning("TdxQuant 订阅行情补拉失败: %s", exc)
+                return records or None
+            for code, row in rows.items():
+                rec = _map_snapshot_row(code, row, fallback_ms)
+                if rec is not None:
+                    records.append(rec)
+        return records
+
     def get_realtime_indices(self, symbols: list[str]) -> list[dict] | None:
         """指数实时快照(可选插件协议, quote_service 鸭子类型调用)。
 

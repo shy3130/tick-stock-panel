@@ -19,11 +19,14 @@ _TRADE_DATE = date(2026, 1, 15)
 
 @pytest.fixture(autouse=True)
 def _isolated_settings_and_clock(monkeypatch):
+    from app.market_time import CN_TZ
+
     monkeypatch.setattr("app.services.preferences.load", lambda: {"minute_data_provider": "tickflow"})
     monkeypatch.setattr("app.services.preferences.get_daily_batch_compress", lambda: True)
     monkeypatch.setattr("app.services.preferences.get_minute_batch_compress", lambda: True)
     monkeypatch.setattr(kline, "cn_today", lambda: _TRADE_DATE)
     monkeypatch.setattr(kline, "cn_now", lambda: datetime(2026, 1, 15, 10, 30))
+    monkeypatch.setattr("app.services.quote_freshness.cn_now", lambda: datetime(2026, 1, 15, 10, 30, tzinfo=CN_TZ))
     monkeypatch.setattr(kline, "in_continuous_session", lambda: True)
 
 
