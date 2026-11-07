@@ -5,8 +5,8 @@
 
 实现数据集:
   - realtime     A 股全市场快照 (分页)
-  - daily        A 股日K, 原始价; 近端窗口走 daily-k-10d 全市场 dump(1 次请求),
-                 深窗口走单标的 historical 接口(≤10 年/次自动分片)
+  - daily        A 股原始日K; 少量标的优先批量,全市场走 10d/10 年 dump,
+                 dump 缺口由批量接口补齐,漏标的或请求失败回退单标的接口
   - adj_factor   A 股除权因子; adjustment-factors 事件 dump + 自家原始日K前收盘,
                  按交易所公式推导单事件比值, 涨跌停自检
   - financial    财务五表(股本除外): 三表多期序列 + 指标单期, 字段映射为 TickFlow
@@ -40,10 +40,11 @@ from pathlib import Path
 import polars as pl
 import pyarrow.parquet as pq
 
+from app.data_providers.base import ProviderRequestError
 from app.data_providers.normalizer import DAILY_COLS, normalize_daily
 from app.indicators.pipeline import filter_halt_days
 from app.plugins.fuyao import client as fuyao_client
-from app.plugins.fuyao.client import FuyaoClient, FuyaoError
+from app.plugins.fuyao.client import HISTORICAL_BATCH_LIMIT, FuyaoClient, FuyaoError
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ _RECENT_DUMP_DAYS = 12  # 窗口跨度 ≤ 此天数时优先走 10d dump(覆盖
 _PREV_CLOSE_BACKDAYS = 30  # 推导因子时向前找"除权日前收盘"的回看天数(容忍长期停牌)
 _DAILY_DUMP_BATCH_ROWS = 100_000
 _HIST_SYMBOL_BATCH = 50
+_HIST_SMALL_SYMBOL_LIMIT = HISTORICAL_BATCH_LIMIT
 _DAILY_DUMP_COLUMNS = [
     "thscode", "adjusted", "date_ms", "open_price", "high_price", "low_price",
     "close_price", "volume", "turnover",
@@ -470,12 +472,12 @@ class FuyaoProvider:
     ) -> pl.DataFrame:
         """A 股日K → 内部契约。原始价(adjust=none 锁定)、volume 股→手(floor /100)。
 
-        取数三档(逐级降级, 全部失败才空手而归):
-        - 近端窗口(跨度 ≤12 天): daily-k-10d dump(约 1MB), 1 次请求覆盖全部标的;
-        - 深窗口: daily-k 10 年全量 dump(约 172MB, 缓存覆盖起点即复用, 不追新 release),
+        - ≤10 只: 优先股票批量历史接口,每次最多10只,避免小查询下载全市场整包;
+        - 更大范围的近端窗口(跨度 ≤12 天): daily-k-10d dump(约 1MB);
+        - 更大范围的深窗口: daily-k 10 年全量 dump(约 172MB, 缓存覆盖起点即复用, 不追新 release),
           末端缺口由 10d dump 补尾 — 全市场深回填从"逐票 34 分钟"降为"一次下载+秒级筛选";
-        - 兜底: 单标的 historical 接口(窗口早于 dump 覆盖 / dump 不可用; 10 年自动分片,
-          逐标的节流 + 进度回调)。
+        - dump 缺口或不可用时走批量接口;漏标的或批量失败回退单标的 historical,
+          10 年自动分片、节流和进度回调保留;请求均失败时明确报错,不发布部分结果。
         """
         chunks = [
             df
@@ -501,12 +503,14 @@ class FuyaoProvider:
         """分批产出日K,供历史同步逐批落盘,避免全市场结果累积在内存。"""
         if not symbols or asset_type != "stock":
             return
+        symbols = list(dict.fromkeys(symbols))
         end_dt = end_time or datetime.now()
         start_dt = start_time or (end_dt - timedelta(days=365))
         start_d, end_d = start_dt.date(), end_dt.date()
         symset = set(symbols)
+        prefer_api = len(symbols) <= _HIST_SMALL_SYMBOL_LIMIT
 
-        if (end_d - start_d).days <= _RECENT_DUMP_DAYS:
+        if not prefer_api and (end_d - start_d).days <= _RECENT_DUMP_DAYS:
             try:
                 dump = self._daily10_for_window(start_d, end_d)
                 if _dump_covers(dump, start_d, end_d):
@@ -519,7 +523,7 @@ class FuyaoProvider:
             except FuyaoError as e:
                 logger.warning("扶摇 10d dump 不可用: %s", e)
 
-        dump_info = self._daily_dump_info()
+        dump_info = None if prefer_api else self._daily_dump_info()
         sources: list[tuple[str, date, date]] = []
         if dump_info:
             _, dump_min, dump_max = dump_info
@@ -587,13 +591,7 @@ class FuyaoProvider:
                     for i in range(0, len(symbols), _HIST_SYMBOL_BATCH)
                 ]
                 for batch in batches:
-                    rows: list[dict] = []
-                    for symbol in batch:
-                        rows.extend(_kline_rows(
-                            symbol,
-                            self._historical_bars(symbol, source_start, source_end),
-                        ))
-                        time.sleep(_HIST_INTERVAL_S)
+                    rows = self._historical_batch_rows(batch, source_start, source_end)
                     df = normalize_daily(rows, source=self.name)
                     done += 1
                     if on_chunk_done:
@@ -684,6 +682,35 @@ class FuyaoProvider:
         out = filter_halt_days(out)
         cols = [c for c in DAILY_COLS if c in out.columns]
         return out.select(cols).sort(["symbol", "date"]) if not out.is_empty() else out.select(cols)
+
+    def _historical_batch_rows(self, symbols: list[str], start_d: date, end_d: date) -> list[dict]:
+        """每组至多10只、每片至多10年;只为缺组回退,合法空组不重复拉取。"""
+        client = self._get_client()
+        out: list[dict] = []
+        start, end = _ms_of_date(start_d), _ms_of_date(end_d)
+        while start <= end:
+            chunk_end = min(end, start + _HIST_MAX_SPAN_MS - 1)
+            for offset in range(0, len(symbols), HISTORICAL_BATCH_LIMIT):
+                batch = symbols[offset:offset + HISTORICAL_BATCH_LIMIT]
+                try:
+                    grouped = client.historical_kline_batch(batch, start, chunk_end)
+                except FuyaoError as err:
+                    logger.warning("扶摇批量日K不可用,回退单标的接口 (%d 只): %s", len(batch), err)
+                    grouped = {}
+                time.sleep(_HIST_INTERVAL_S)
+                for symbol in batch:
+                    if symbol in grouped:
+                        bars = grouped[symbol]
+                    else:
+                        try:
+                            bars = client.historical_kline(symbol, start, chunk_end, adjust="none")
+                        except FuyaoError as err:
+                            # 同步层会丢弃暂存帧,避免一部分标的成功后误报整轮完成。
+                            raise ProviderRequestError(f"扶摇日K补查失败 {symbol}: {err}") from err
+                        time.sleep(_HIST_INTERVAL_S)
+                    out.extend(_kline_rows(symbol, bars))
+            start = chunk_end + 1
+        return out
 
     def _historical_bars(self, symbol: str, start_d: date, end_d: date) -> list[dict]:
         """按 ≤10 年窗口分片拉取单标的原始日K。中途失败软返回已得行, 不抛出。"""
@@ -1170,7 +1197,7 @@ class FuyaoProvider:
                     df = self.get_adj_factors(
                         syms, datetime.now() - timedelta(days=365), datetime.now()
                     )
-            except FuyaoError as e:
+            except (FuyaoError, ProviderRequestError) as e:
                 return {"provider": self.name, "dataset": dataset, "rows": 0, "error": str(e)}
             head = df.head(5).to_dicts()
             for row in head:  # date/datetime → ISO 字符串, 保证 JSON 可序列化

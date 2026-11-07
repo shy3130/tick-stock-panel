@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 import pytest
 
+from app.data_providers.base import ProviderRequestError
 from app.plugins.fuyao import client as fc
 from app.plugins.fuyao import provider as fp
 from app.plugins.fuyao.provider import FuyaoProvider
@@ -618,6 +619,10 @@ class _FakeHistClient:
             raise fc.FuyaoError("扶摇接口错误 code=4001: 频率超限")
         return [b for b in self.bars.get(thscode, []) if start_ms <= b["date_ms"] <= end_ms]
 
+    def historical_kline_batch(self, thscodes, start_ms, end_ms):
+        # 旧用例专门覆盖整包与旧接口兜底;批量成功契约由独立用例覆盖。
+        raise fc.FuyaoError("测试旧接口回退")
+
     def dump_download_url(self, dump_kind):
         raise fc.FuyaoError("测试环境无 dump")
 
@@ -630,6 +635,7 @@ def _hist_provider(monkeypatch, fake: _FakeHistClient, allow_dumps: bool = False
     monkeypatch.setattr(fp, "fuyao_client", type("M", (), {"FuyaoClient": lambda **kw: fake}))
     monkeypatch.setattr(fp, "get_api_key", lambda: "test-key")
     monkeypatch.setattr(fp, "_HIST_INTERVAL_S", 0.0)
+    monkeypatch.setattr(fp, "_HIST_SMALL_SYMBOL_LIMIT", 0)
     if not allow_dumps:
         # API 路径测试必须与开发机真实 dump 缓存隔离; dump 测试显式传 allow_dumps=True。
         p._ensure_daily_big_dump = lambda start_d: None  # type: ignore[assignment]
@@ -737,12 +743,12 @@ def test_daily_api_deep_window_splits_into_10y_chunks(monkeypatch):
         assert b["start"] == a["end"] + 1  # 连续且不重叠
 
 
-def test_daily_api_soft_fail_per_symbol(monkeypatch):
-    """单标的失败软跳过, 不阻断其余标的。"""
+def test_daily_api_failure_after_batch_fallback_is_explicit(monkeypatch):
+    """批量与旧接口均失败时不得把缺失的股票视为成功。"""
     bars = {"000001.SZ": [_bar(date(2026, 8, 27), 11.05)]}
     provider = _hist_provider(monkeypatch, _FakeHistClient(bars, error_syms=("600519.SH",)))
-    df = provider.get_daily(["600519.SH", "000001.SZ"], datetime(2026, 8, 1), datetime(2026, 8, 28))
-    assert df["symbol"].unique().to_list() == ["000001.SZ"]
+    with pytest.raises(ProviderRequestError, match=r"600519\.SH"):
+        provider.get_daily(["600519.SH", "000001.SZ"], datetime(2026, 8, 1), datetime(2026, 8, 28))
 
 
 def test_iter_daily_api_is_bounded_by_symbol_batch(monkeypatch):
