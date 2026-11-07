@@ -313,3 +313,103 @@ def test_terminal_fallback_failure_rolls_back_staging_and_keeps_existing_data(mo
     assert len(client.batch_calls) == 6
     assert target.read_bytes() == before
     assert not (tmp_path / ".daily_sync_staging").exists()
+
+
+def _unknown_symbol_response(request):
+    unknown = "000004.SZ"
+    if request.url.path.endswith("historical-batch"):
+        symbols = request.url.params["thscodes"].split(",")
+        if unknown not in symbols:
+            bar = {**_bar(), "date_ms": int(request.url.params["start"])}
+            return httpx.Response(200, json=_payload([_group(symbol, [bar]) for symbol in symbols]))
+    elif request.url.params["thscode"] != unknown:
+        bar = {**_bar(), "date_ms": int(request.url.params["start"])}
+        return httpx.Response(200, json={"code": 0, "data": {"item": [bar]}})
+    return httpx.Response(200, json={"code": 1002, "message": f"Unknown thscode: {unknown}"})
+
+
+def test_unknown_symbol_does_not_discard_other_stocks(monkeypatch, caplog):
+    client, calls = _http_client(monkeypatch, _unknown_symbol_response)
+    try:
+        df = _provider(monkeypatch, client).get_daily(
+            ["000004.SZ", "000001.SZ"], datetime(2026, 11, 6), datetime(2026, 11, 6),
+        )
+    finally:
+        client.close()
+    assert df["symbol"].to_list() == ["000001.SZ"]
+    assert df["close"].to_list() == [11.63]
+    assert df["volume"].to_list() == [16126.0]
+    assert "000004.SZ" in caplog.text and "未覆盖" in caplog.text
+    assert len(calls) == 3  # 整批拒绝后仅在源内单票兜底,不跨数据源。
+
+
+def test_unknown_symbol_is_not_retried_in_later_history_windows(monkeypatch):
+    client, calls = _http_client(monkeypatch, _unknown_symbol_response)
+    try:
+        df = _provider(monkeypatch, client).get_daily(
+            ["000004.SZ", "000001.SZ"], datetime(1990, 1, 1), datetime(2026, 11, 6),
+        )
+    finally:
+        client.close()
+    assert set(df["symbol"]) == {"000001.SZ"}
+    unknown_calls = [r for r in calls if r.url.params.get("thscode") == "000004.SZ"]
+    batches = [r for r in calls if r.url.path.endswith("historical-batch")]
+    assert len(unknown_calls) == 1 and len(batches) > 1
+    assert all(r.url.params["thscodes"] == "000001.SZ" for r in batches[1:])
+
+
+@pytest.mark.parametrize(("code", "message"), [
+    (1002, "invalid start parameter"),
+    (1002, "Unknown thscode: 600519.SH"),
+    (1001, "Unknown thscode: 000004.SZ"),
+    (4001, "频率超限"),
+])
+def test_other_errors_are_not_misclassified_as_unsupported_symbols(monkeypatch, code, message):
+    client, _ = _http_client(monkeypatch, {"code": code, "message": message})
+    try:
+        with pytest.raises(ProviderRequestError, match="补查失败"):
+            _provider(monkeypatch, client).get_daily(
+                ["000004.SZ"], datetime(2026, 11, 6), datetime(2026, 11, 6),
+            )
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("code", [1002, "1002"])
+def test_single_history_retains_structured_unknown_symbol_error(monkeypatch, code):
+    client, _ = _http_client(monkeypatch, {"code": code, "message": "Unknown thscode: 000004.SZ"})
+    try:
+        with pytest.raises(fc.FuyaoUnknownSymbolError) as caught:
+            client.historical_kline("000004.SZ", START, START)
+    finally:
+        client.close()
+    assert caught.value.symbol == "000004.SZ"
+    assert "Unknown thscode: 000004.SZ" in str(caught.value)
+
+
+def test_unknown_symbol_preserves_local_history_and_reports_zero_rows(monkeypatch, tmp_path):
+    from polars.testing import assert_frame_equal
+
+    client, _ = _http_client(monkeypatch, _unknown_symbol_response)
+    repo = KlineRepository(DataStore(tmp_path))
+    provider = _provider(monkeypatch, client)
+    monkeypatch.setattr(kline_sync.preferences, "get_daily_data_provider", lambda: "fuyao")
+    monkeypatch.setattr("app.data_providers.custom.provider_has_dataset", lambda *_: True)
+    monkeypatch.setattr("app.data_providers.custom.get_provider", lambda _: provider)
+    target = tmp_path / "kline_daily" / f"date={DAY}" / "part.parquet"
+    target.parent.mkdir(parents=True)
+    old = pl.DataFrame({"symbol": ["000004.SZ"], "date": [DAY], "close": [9.0]})
+    old.write_parquet(target)
+    zero, failed = [], []
+    try:
+        written = kline_sync.sync_and_persist_daily_batch(
+            ["000004.SZ", "000001.SZ"], repo, object(),
+            start_date=datetime(2026, 11, 6), end_date=datetime(2026, 11, 6),
+            zero_row_out=zero, failed_out=failed,
+        )
+    finally:
+        client.close()
+    assert written == 1 and zero == ["000004.SZ"] and failed == []
+    stored = pl.concat([pl.read_parquet(p) for p in target.parent.glob("*.parquet")], how="diagonal_relaxed")
+    assert set(stored["symbol"]) == {"000004.SZ", "000001.SZ"}
+    assert_frame_equal(stored.filter(pl.col("symbol") == "000004.SZ").select(old.columns), old)

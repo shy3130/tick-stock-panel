@@ -44,7 +44,12 @@ from app.data_providers.base import ProviderRequestError
 from app.data_providers.normalizer import DAILY_COLS, normalize_daily
 from app.indicators.pipeline import filter_halt_days
 from app.plugins.fuyao import client as fuyao_client
-from app.plugins.fuyao.client import HISTORICAL_BATCH_LIMIT, FuyaoClient, FuyaoError
+from app.plugins.fuyao.client import (
+    HISTORICAL_BATCH_LIMIT,
+    FuyaoClient,
+    FuyaoError,
+    FuyaoUnknownSymbolError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -687,11 +692,14 @@ class FuyaoProvider:
         """每组至多10只、每片至多10年;只为缺组回退,合法空组不重复拉取。"""
         client = self._get_client()
         out: list[dict] = []
+        unknown_symbols: set[str] = set()
         start, end = _ms_of_date(start_d), _ms_of_date(end_d)
         while start <= end:
             chunk_end = min(end, start + _HIST_MAX_SPAN_MS - 1)
             for offset in range(0, len(symbols), HISTORICAL_BATCH_LIMIT):
-                batch = symbols[offset:offset + HISTORICAL_BATCH_LIMIT]
+                batch = [s for s in symbols[offset:offset + HISTORICAL_BATCH_LIMIT] if s not in unknown_symbols]
+                if not batch:
+                    continue
                 try:
                     grouped = client.historical_kline_batch(batch, start, chunk_end)
                 except FuyaoError as err:
@@ -705,6 +713,11 @@ class FuyaoProvider:
                         try:
                             bars = client.historical_kline(symbol, start, chunk_end, adjust="none")
                         except FuyaoError as err:
+                            if isinstance(err, FuyaoUnknownSymbolError) and err.symbol == symbol:
+                                unknown_symbols.add(symbol)
+                                logger.warning("扶摇历史日K未覆盖 %s,本轮跳过并保留本地历史", symbol)
+                                time.sleep(_HIST_INTERVAL_S)
+                                continue
                             # 同步层会丢弃暂存帧,避免一部分标的成功后误报整轮完成。
                             raise ProviderRequestError(f"扶摇日K补查失败 {symbol}: {err}") from err
                         time.sleep(_HIST_INTERVAL_S)
