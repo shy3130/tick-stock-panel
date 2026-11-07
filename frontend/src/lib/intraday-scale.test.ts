@@ -1,29 +1,30 @@
 import { expect, it } from 'vitest'
 import { formatAxisPercent, intradayScale } from './intraday-scale'
 
-it('fits an index to the observed highs and lows even when yesterday close is outside the session', () => {
+it('centers a falling index on yesterday close while covering the observed highs and lows', () => {
   const scale = intradayScale([5059.65, 5160.75, 5128.90], 5211.79)!
-  expect(scale.range.min).toBeLessThan(5059.65)
-  expect(scale.range.min).toBeGreaterThan(5050)
-  expect(scale.range.max).toBeGreaterThan(5160.75)
-  expect(scale.range.max).toBeLessThan(5170)
-  expect(scale.centered).toBe(false)
-  expect(scale.ticks.every(tick => tick.percent! < 0)).toBe(true)
+  expect(scale.range.min).toBeLessThanOrEqual(5059.65)
+  expect(scale.range.max).toBeGreaterThan(5211.79)
+  expect((scale.range.min + scale.range.max) / 2).toBeCloseTo(5211.79)
+  expect(scale.centered).toBe(true)
+  expect(scale.ticks[2]).toEqual({ price: 5211.79, percent: 0 })
+  expect(scale.ticks[0].percent).toBeCloseTo(-scale.ticks[4].percent!)
 })
 
-it('does not force a gap-up session back to yesterday close and keeps both axes aligned', () => {
-  const scale = intradayScale([12, 13, 12.5], 10)!
-  expect(scale.range.min).toBeGreaterThan(11.9)
-  expect(scale.range.max).toBeLessThan(13.1)
+it.each([[12, 13, 12.5], [7, 8, 7.5]])('uses the same symmetric range for a one-sided session: %j', (...prices) => {
+  const scale = intradayScale(prices, 10)!
+  expect(scale.range).toEqual({ min: 7, max: 13 })
+  expect(scale.centered).toBe(true)
+  expect(scale.ticks[2]).toEqual({ price: 10, percent: 0 })
   for (const tick of scale.ticks) expect(tick.percent).toBeCloseTo((tick.price / 10 - 1) * 100)
 })
 
-it('retains a zero reference tick inside the adaptive range without forcing symmetry', () => {
+it('keeps zero at the middle tick and both axes symmetric when prices cross yesterday close', () => {
   const scale = intradayScale([13.3, 13.59, 13.18, 13.47], 13.34)!
-  expect(scale.centered).toBe(false)
-  expect(scale.ticks).toContainEqual({ price: 13.34, percent: 0 })
-  expect(scale.range.min).toBeCloseTo(13.16)
-  expect(scale.range.max).toBeCloseTo(13.61)
+  expect(scale.centered).toBe(true)
+  expect(scale.ticks[2]).toEqual({ price: 13.34, percent: 0 })
+  expect(scale.range.min).toBeCloseTo(13.34 * 0.98)
+  expect(scale.range.max).toBeCloseTo(13.34 * 1.02)
   for (const tick of scale.ticks) expect(tick.percent).toBeCloseTo((tick.price / 13.34 - 1) * 100)
 })
 
@@ -41,10 +42,11 @@ it('keeps flat, low-priced and ETF ranges legible and covers all actual extrema'
   const flat = intradayScale([12], 12)!
   expect(flat.range.max - flat.range.min).toBeCloseTo(0.072)
   const etf = intradayScale([0.761, 0.762], 0.76, 3)!
+  expect((etf.range.min + etf.range.max) / 2).toBeCloseTo(0.76)
   expect(etf.range.min).toBeGreaterThan(0)
   expect(new Set(etf.ticks.map(tick => tick.price.toFixed(3))).size).toBe(5)
   const limit = intradayScale([9, 11, 14], 10)!
-  expect(limit.range).toEqual({ min: 8.8, max: 14.2 })
+  expect(limit.range).toEqual({ min: 6, max: 14 })
 })
 
 it('handles missing references and extreme gains without a fictitious zero axis or negative prices', () => {

@@ -15,8 +15,14 @@ export function intradayScale(values: (number | null | undefined)[], reference?:
   const low = Math.min(...prices), high = Math.max(...prices)
   const limits = base != null && limitRange && Number.isFinite(limitRange.min) && Number.isFinite(limitRange.max)
     && limitRange.min > 0 && limitRange.min < base && limitRange.max > base ? limitRange : undefined
-  let range: IntradayScale['range']
-  if (mode === 'limit' && base != null) {
+  // 无有效昨收或对称展开会产生非正价格时，退回实际高低点量程。
+  const padding = Math.max(high === low ? high * 0.003 : (high - low) * 0.04, minMove * 2)
+  let range = { min: Math.max(Math.min(minMove, low / 2), low - padding), max: high + padding }
+  if (limits) {
+    range.min = Math.min(low, Math.max(range.min, limits.min))
+    range.max = Math.max(high, Math.min(range.max, limits.max))
+  }
+  if (base != null) {
     const limitSpan = limits ? Math.max(base - limits.min, limits.max - base) : undefined
     const minimum = Math.min(Math.max(base * 0.003, minMove * 2), limitSpan ?? Infinity)
     const half = Math.max(Math.abs(high - base), Math.abs(low - base), minimum)
@@ -27,17 +33,9 @@ export function intradayScale(values: (number | null | undefined)[], reference?:
     // 刻度取整不能把实际 10.01% 的限价量程扩成 12%；真实超带数据仍完整显示。
     const bounded = limitSpan != null ? Math.max(half, Math.min(rounded, limitSpan)) : rounded
     const span = bounded >= base && half < base ? half : bounded
+    // 两种模式都以昨收为中轴；调用方仅在涨跌停模式把真实限价加入 values。
     if (span < base) range = { min: base - span, max: base + span }
-    else range = { min: Math.min(low, base), max: Math.max(high, base) }
-  } else {
-    // 自适应只跟随实际高低点；昨收是参考线，不强制进入量程或占据中点。
-    const padding = Math.max(high === low ? high * 0.003 : (high - low) * 0.04, minMove * 2)
-    range = { min: Math.max(Math.min(minMove, low / 2), low - padding), max: high + padding }
-    if (limits) {
-      // 留白不越过真实限价；实际超带数据仍需完整显示。
-      range.min = Math.min(low, Math.max(range.min, limits.min))
-      range.max = Math.max(high, Math.min(range.max, limits.max))
-    }
+    else if (mode === 'limit') range = { min: Math.min(low, base), max: Math.max(high, base) }
   }
   if (range.max <= range.min) range = { min: low / 2, max: high + minMove * 2 }
   const centered = base != null && Math.abs((range.min + range.max) / 2 - base) < 1e-9
