@@ -33,15 +33,15 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/useSharedQueries', () => ({
   useCapabilities: () => ({ data: { capabilities: { 'kline.minute.batch': true } } }),
 }))
-vi.mock('@/components/EChartsCandlestick', () => ({
-  EChartsCandlestick: ({ data, onDateClick }: {
+vi.mock('@/components/charts/LightweightDaily', () => ({
+  LightweightDaily: ({ data, onDateClick }: {
     data: { date: string }[]; onDateClick: (date: string) => void
   }) => <div>{data.map(row => (
     <button key={row.date} data-day={row.date} onClick={() => onDateClick(row.date)}>{row.date}</button>
   ))}</div>,
 }))
-vi.mock('@/components/EChartsIntraday', () => ({
-  EChartsIntraday: ({ data, date }: { data: MinuteResponse['rows']; date: string }) => {
+vi.mock('@/components/charts/LightweightIntraday', () => ({
+  LightweightIntraday: ({ data, date }: { data: MinuteResponse['rows']; date: string }) => {
     const [mount] = useState(() => ++fixtures.mounts)
     return <div data-chart data-mount={mount}>{`${date}|${data[0].datetime}|${data[0].close}`}</div>
   },

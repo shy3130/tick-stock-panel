@@ -247,6 +247,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           series={levelsQ.data?.series}
           seriesDates={levelsQ.data?.dates}
           defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
+          scopeKey={symbol}
           height={480}
         />
       </div>

@@ -17,7 +17,7 @@ const native = vi.hoisted(() => {
   const handlers: Record<string, (event: any) => void> = {}
   const series: any[] = []
   const stretch = vi.fn()
-  const timeScale = { width: () => 500, getVisibleLogicalRange: vi.fn(() => ({ from: 0, to: 10 })),
+  const timeScale = { width: () => 500, applyOptions: vi.fn(), getVisibleLogicalRange: vi.fn(() => ({ from: 0, to: 10 })),
     setVisibleLogicalRange: vi.fn(), fitContent: vi.fn(),
     subscribeSizeChange: vi.fn((cb: any) => { handlers.resize = cb }), unsubscribeSizeChange: vi.fn(),
     subscribeVisibleLogicalRangeChange: vi.fn((cb: any) => { handlers.zoom = cb }), unsubscribeVisibleLogicalRangeChange: vi.fn() }
@@ -664,4 +664,32 @@ it('keeps trade directions and prices readable when fitting a long holding perio
   expect(native.markers.setMarkers.mock.calls.at(-1)![0]).toMatchObject([
     { text: '买 10.00', shape: 'arrowUp' }, { text: '卖 11.00', shape: 'arrowDown' },
   ])
+})
+
+it('reports the crosshair price and pixel scale for level hit testing', async () => {
+  const onCrosshairMove = vi.fn()
+  await act(async () => root.render(<FinancialPlot scope="analysis" series={model} height={400} paneHeights={[300]}
+    onCrosshairMove={onCrosshairMove} />))
+  native.series[0].coordinateToPrice.mockImplementation((y: number) => 100 - y)
+  await act(async () => native.handlers.hover({ time: '2026-11-04', paneIndex: 0, point: { x: 10, y: 20 } }))
+  expect(onCrosshairMove).toHaveBeenLastCalledWith({ time: '2026-11-04', price: 80, pixelsPerPrice: 1 })
+  await act(async () => native.handlers.hover({ paneIndex: 0 }))
+  expect(onCrosshairMove).toHaveBeenLastCalledWith(null)
+  await act(async () => native.handlers.hover({ time: '2026-11-04', paneIndex: 1, point: { x: 10, y: 20 } }))
+  expect(onCrosshairMove).toHaveBeenLastCalledWith(null)
+})
+
+it('reserves a right label band in pixels and applies per-series line widths', async () => {
+  await act(async () => root.render(<FinancialPlot scope="analysis" series={[{ ...model[0], lineWidth: 2 }]}
+    height={400} paneHeights={[300]} rightOffsetPixels={140} />))
+  expect(native.createChart.mock.calls[0][1]).toMatchObject({ timeScale: { rightOffset: 0, rightOffsetPixels: 140 } })
+  expect(native.chart.addSeries.mock.calls[0][1].lineWidth).toBe(2)
+})
+
+it('keeps the requested candle count visible while reserving the right label band', async () => {
+  const rows = Array.from({ length: 200 }, (_, index) => ({ time: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10), value: 10 }))
+  await act(async () => root.render(<FinancialPlot scope="analysis" series={[{ id: 'price', type: 'Line', pane: 0, data: rows }]}
+    height={400} paneHeights={[300]} visibleBars={120} rightOffsetPixels={140} />))
+  expect(native.createChart.mock.calls[0][1]).toMatchObject({ timeScale: { fixRightEdge: false, rightOffsetPixels: 140 } })
+  expect(native.timeScale.applyOptions).toHaveBeenLastCalledWith({ rightOffsetPixels: 140 })
 })

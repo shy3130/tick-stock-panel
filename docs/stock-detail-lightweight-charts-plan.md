@@ -199,3 +199,11 @@ StockPreviewDialogContent
 - `KlineRow` 和 `ChartMarker.event` 仅新增可选字段/事件类型。`_latest_live_candle` 为现有全量、增量日K共同透传八个原始价与异动字段，缺失时清空，防止实时更新后残留旧标记；复用内存快照，无新查询、扫描或缓存。旧 ECharts 消费者不接入新增翘板标记。升级合并时复核 `api/kline.py` 的实时行投影及日K事件映射。
 - 前端新回归在旧代码下 6 项失败，后端新回归有 3 项失败。最终定向前端 42 项、全量前端 84 个文件 595 项、后端五个文件 36 项回归及构建通过。Ruff 对涉及的两个 Python 文件报告 21 条告警，与基线比较没有新增；测试文件无告警，未顺手修改历史问题。
 - 浏览器响应样例核对黄色涨停、玫紫/蓝紫炸板、青蓝跌停、薄荷青/钢蓝翘板同屏配色，确认收阴信号为 false 时仍能按原始价识别翘板。明暗主题的实际画布与收阳/收阴悬停说明一致，390px 窄屏无横向溢出，未捕获异常为空，关闭后图表宿主归零。样例只存在于验证浏览器，截图与日志位于忽略的 `output/`。
+
+## 18. 个股分析页与指数页迁移（2026-11-07）
+
+- 范围：个股分析页「关键价位分析」日 K（原 ECharts 专用实现）与指数页左右两块图（原 `EChartsCandlestick` / `EChartsIntraday`），统一改用现有 lightweight-charts 封装。旧 ECharts 组件保留给其它调用方，不删除依赖。
+- 个股分析：新增 `components/stock-analysis/analysis-chart-model.ts` 纯模型，负责 rows 归一化、通道曲线按日期对齐、价位/枢轴档位过滤、右侧标签与十字线命中；`AnalysisKChart.tsx` 只保留价位开关、档位和下方价位面板，渲染交给 `FinancialPlot`。复用 `ChartAnnotations` 扩展：价位线宽度、只画标签（通道曲线最新值）、标签宽度/优先级避让、标签自定义颜色；`FinancialPlot` 扩展：`rightOffsetPixels` 右侧标签带（与 `fixRightEdge` 互斥）、`onCrosshairMove` 十字线价格命中、按系列 `lineWidth`。交互与旧版一致：价位组开关、枢轴档位、默认近 6 个月、悬浮双向联动、无量价 tooltip；底部 ECharts 缩放滑块改为原生拖拽/滚轮缩放。
+- 指数页：日 K 使用 `LightweightDaily`（信息栏、MA、成交量、MACD、量比标签），分时使用 `LightweightIntraday`（左百分比轴/右价格轴、自适应、指数无均线与涨跌停线），保留指数切换、日期区间、分钟能力缺失提示、点击日 K 切分时与分时悬浮价格联动日 K 横线。
+- 回归：新增 `analysis-chart-model.test.ts`、`AnalysisKChart.test.tsx` 与 `ChartAnnotations`/`FinancialPlot` 的标签带、命中、避让测试；`Indices.test.tsx` 的组件 mock 改为 lightweight 组件并保留原日期隔离断言。全量 `pnpm exec vitest run` 103 个文件、699 项测试通过，`pnpm build`、`git diff --check` 通过。
+- 浏览器实页：Chromium 核对个股分析（明暗主题、价位组、枢轴档位、面板↔图悬浮联动、缩放/平移、股票↔指数切换、1280px）与指数页（默认可看、切换指数、点击日 K 切分时、分时悬浮联动、明暗主题、390px、无分钟能力提示），控制台与页面异常为空；个股分析页与指数页均不再请求 echarts chunk。390px 下个股分析页主列被既有 `grid-cols-[1fr_288px]` 布局压成 0 宽为改动前已有问题，本次未处理。截图位于忽略的 `output/playwright/tv-analysis-migration/`。

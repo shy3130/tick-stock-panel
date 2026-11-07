@@ -4,8 +4,10 @@ import { ChartAnnotations, type AnnotationData } from './ChartAnnotations'
 const dates = ['2026-11-03', '2026-11-04', '2026-11-05']
 function setup(data: AnnotationData) {
   const painted: { text: string; x: number; y: number; color: string }[] = []
-  const ctx = { fillStyle: '', save: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(), restore: vi.fn(),
-    fillRect: vi.fn(), fillText: vi.fn(), setLineDash: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(),
+  const strokeWidths: number[] = []
+  const ctx = { fillStyle: '', lineWidth: 1, save: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(), restore: vi.fn(),
+    fillRect: vi.fn(), fillText: vi.fn(), setLineDash: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(),
+    stroke: vi.fn(() => { strokeWidths.push(ctx.lineWidth) }),
     measureText: (text: string) => ({ width: text.length * 5 }),
   }
   ctx.fillText.mockImplementation((text: string, x: number, y: number) => { painted.push({ text, x, y, color: ctx.fillStyle }) })
@@ -20,7 +22,7 @@ function setup(data: AnnotationData) {
   }) }, series: { priceToCoordinate, getPane: () => ({ getHeight: () => 200 }) } } as never)
   annotation.update(data)
   const draw = (width = 300) => annotation.paneViews()[0].renderer()!.draw({ useMediaCoordinateSpace: (cb: any) => cb({ context: ctx, mediaSize: { width, height: 200 } }) } as never)
-  return { annotation, ctx, draw, painted, requestUpdate, priceToCoordinate }
+  return { annotation, ctx, draw, painted, strokeWidths, requestUpdate, priceToCoordinate }
 }
 
 it('bounds price lines and range backgrounds by trading dates, ignoring expired and invalid annotations', () => {
@@ -153,4 +155,45 @@ it('supports zero and negative percentage ticks and keeps the center and officia
     priceLines: [{ value: 10.2, axisLabel: true }] })
   priceToCoordinate.mockImplementation(value => 200 - value * 10)
   expect(annotation.priceAxisViews().map(view => view.visible?.())).toEqual([true, false, false])
+})
+
+it('honors per-line widths and draws label-only curve values in the right band', () => {
+  const { ctx, painted, strokeWidths, draw } = setup({ dates, priceLines: [
+    { value: 10, color: '#F97316', width: 2, label: '成交密集区 11.96' },
+    { value: 12, color: '#F97316', label: '布林上轨 12.30', noLine: true },
+  ] })
+  draw()
+  expect(ctx.stroke).toHaveBeenCalledTimes(1)
+  expect(strokeWidths).toEqual([2])
+  expect(painted.map(item => item.text)).toEqual(['布林上轨 12.30', '成交密集区 11.96'])
+  for (const item of painted) {
+    expect(item.x).toBeGreaterThan(300 - 320)
+    expect(item.x + item.text.length * 5).toBe(295)
+    expect(item.color).toBe('#F97316')
+  }
+})
+
+it('draws marker labels with their own color instead of the chart text color', () => {
+  const { painted, draw } = setup({ dates, labels: [{ time: dates[1], value: 10, text: '涨停', color: '#FACC15' }] })
+  draw()
+  expect(painted).toEqual([{ text: '涨停', x: 15, y: 96, color: '#FACC15' }])
+})
+
+it('keeps level labels from overlapping in the right band and draws the prioritized one', () => {
+  const { painted, draw } = setup({ dates, priceLines: [
+    { value: 10, color: '#111111', label: '低位 A' },
+    { value: 10.05, color: '#222222', label: '低位 B' },
+    { value: 10.02, color: '#333333', label: '悬浮价位', labelPriority: 5 },
+  ] })
+  draw()
+  expect(painted.map(item => item.text)).toEqual(['悬浮价位'])
+})
+
+it('keeps level labels that are far enough apart', () => {
+  const { painted, draw } = setup({ dates, priceLines: [
+    { value: 10, color: '#111111', label: 'A' },
+    { value: 12, color: '#222222', label: 'B' },
+  ] })
+  draw()
+  expect(painted.map(item => item.text).sort()).toEqual(['A', 'B'])
 })
