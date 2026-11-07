@@ -611,6 +611,18 @@ def _minute_raw(rows: list[tuple[str, object, float, float, float, float, float,
     }
 
 
+def test_minute_stream_groups_small_frames_without_changing_request_policy(monkeypatch):
+    fake = _FakeClient()
+    fake.his_default = _minute_raw([("20261106", "093100", 10, 11, 9, 10.5, 10000, 10.5)])
+    monkeypatch.setattr(tp, "_MINUTE_INTERVAL_S", 0)
+    source = _provider(fake)
+    stream = source.iter_minute([f"{i:06d}.SZ" for i in range(120)], None, datetime(2026, 11, 6, 15))
+    first = next(stream)
+    assert first.height == 50 and len(fake.his_calls) == 50
+    assert [part.height for part in stream] == [50, 20]
+    assert len(fake.his_calls) == 120
+
+
 def test_minute_units_and_wallclock_datetime():
     fake = _FakeClient()
     fake.his = {"600519.SH": _minute_raw([

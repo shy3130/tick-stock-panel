@@ -13,9 +13,9 @@ from datetime import datetime
 
 import pytest
 
+from app.data_providers.base import ProviderRequestError
 from app.services import kline_sync
 from app.services.kline_sync import SDKCallTimeoutError, _sdk_call_with_deadline
-
 
 # ── 包装器单元行为 ──────────────────────────────────────────────────────
 
@@ -67,14 +67,13 @@ def test_minute_loop_timeout_keeps_heartbeat(monkeypatch):
     monkeypatch.setattr(kline_sync, "get_client", lambda: _HangingClient())
 
     beats: list[tuple[int, int, str]] = []
-    df = kline_sync.sync_minute_batch(
-        ["600000.SH", "000001.SZ"],
-        start_time=datetime(2026, 8, 3), end_time=datetime(2026, 8, 7),
-        batch_size=1, rpm=None,
-        on_chunk_done=lambda cur, total, seg: beats.append((cur, total, seg)),
-    )
-
-    assert df.is_empty()
+    with pytest.raises(ProviderRequestError, match="未完成"):
+        kline_sync.sync_minute_batch(
+            ["600000.SH", "000001.SZ"],
+            start_time=datetime(2026, 8, 3), end_time=datetime(2026, 8, 7),
+            batch_size=1, rpm=None,
+            on_chunk_done=lambda cur, total, seg: beats.append((cur, total, seg)),
+        )
     assert [b[0] for b in beats] == [1, 2]  # 每个超时分块都推进心跳
     assert beats[0][1] == 2
 
