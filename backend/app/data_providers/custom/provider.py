@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,7 +13,7 @@ import httpx
 import polars as pl
 
 from app.config import settings
-from app.data_providers.base import AssetType
+from app.data_providers.base import AssetType, ProviderRequestError
 from app.data_providers.custom.config import CustomSourceConfig, DatasetConfig
 from app.data_providers.custom.mapper import (
     apply_transforms,
@@ -21,6 +21,7 @@ from app.data_providers.custom.mapper import (
     extract_rows,
     map_rows,
 )
+from app.data_providers.minute_stream import RequestPacer
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
 from app.market_time import cn_now
 from app.tickflow.rate_limits import chunked, sleep_between_batches
@@ -102,6 +103,7 @@ class GenericHTTPProvider:
         self.config = config
         self.name = config.name
         self._client = httpx.Client(timeout=30.0)
+        self._minute_pacer = RequestPacer()
 
     def close(self) -> None:
         self._client.close()
@@ -305,7 +307,15 @@ class GenericHTTPProvider:
         配置的参数名注入请求 (GET → params, POST → body), 用于上游需区分
         stock/ETF/index 或固定频率的场景。
         """
-        return self._fetch_minute_dataset(
+        frames = list(self.iter_minute(symbols, start_time, end_time, asset_type, freq, on_chunk_done))
+        parts = [frame for frame in frames if not frame.is_empty()]
+        return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
+
+    def iter_minute(
+        self, symbols: list[str], start_time: datetime | None, end_time: datetime | None,
+        asset_type: AssetType = "stock", freq: str = "1m", on_chunk_done=None,
+    ) -> Iterator[pl.DataFrame]:
+        yield from self._iter_minute_dataset(
             "minute", symbols, start_time, end_time, asset_type, freq, on_chunk_done,
         )
 
@@ -339,27 +349,39 @@ class GenericHTTPProvider:
         freq: str = "1m",
         on_chunk_done: Callable[[int, int], None] | None = None,
     ) -> pl.DataFrame:
+        parts = [df for df in self._iter_minute_dataset(
+            ds_name, symbols, start_time, end_time, asset_type, freq, on_chunk_done,
+        ) if not df.is_empty()]
+        return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
+
+    def _iter_minute_dataset(
+        self, ds_name: str, symbols: list[str], start_time: datetime | None,
+        end_time: datetime | None, asset_type: AssetType, freq: str, on_chunk_done,
+    ) -> Iterator[pl.DataFrame]:
+        if not symbols:
+            return
         cfg = self._dataset(ds_name)
         override: dict[str, Any] = {}
         if cfg.asset_type_param:
             override[cfg.asset_type_param] = asset_type
         if cfg.freq_param:
             override[cfg.freq_param] = freq
-        frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, cfg.batch)
         for i, chunk in enumerate(chunks):
-            sleep_between_batches(i, cfg.rpm)
-            rows = self._request_rows(
-                cfg, symbols=chunk, start_time=start_time, end_time=end_time,
-                override_params=override or None, override_body=override or None,
-            )
+            self._minute_pacer.wait(ds_name, cfg.rpm,
+                                    (lambda cur=i: on_chunk_done(cur, len(chunks))) if on_chunk_done else None)
+            try:
+                rows = self._request_rows(
+                    cfg, symbols=chunk, start_time=start_time, end_time=end_time,
+                    override_params=override or None, override_body=override or None,
+                )
+            except Exception as exc:  # history failures must reach the task
+                raise ProviderRequestError(f"自定义源 {self.name} 分钟请求失败: {type(exc).__name__}") from exc
             df = self._mapped_frame(cfg, rows)
             df = self._normalize_minute(df)
-            if not df.is_empty():
-                frames.append(df)
+            yield df
             if on_chunk_done:
                 on_chunk_done(i + 1, len(chunks))
-        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     def get_financials(
         self,

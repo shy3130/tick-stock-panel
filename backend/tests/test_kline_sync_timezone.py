@@ -143,7 +143,7 @@ def _capture_tickflow_minute_batch(monkeypatch) -> tuple[list[tuple[datetime, da
 
     monkeypatch.setattr(kline_sync, "_try_custom_minute", lambda *a, **kw: (None, True))
     monkeypatch.setattr(kline_sync, "get_client", lambda: _FakeClient())
-    monkeypatch.setattr(kline_sync, "_datetime_to_ms", _spy_to_ms)
+    monkeypatch.setattr("app.data_providers.tickflow_provider._datetime_to_ms", _spy_to_ms)
     return windows, offsets
 
 

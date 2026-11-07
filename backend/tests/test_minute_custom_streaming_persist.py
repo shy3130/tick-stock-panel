@@ -2,7 +2,7 @@
 
 实测背景 (2026-09-30): 全市场分钟同步走自定义源时整表攒齐后一次落盘,
 后端中途重启 (热重载) 丢掉 4h 进度、0 行落盘。修复: sync_minute_batch 的
-持久化路径按 _CUSTOM_MINUTE_CHUNK 块拉取、每块立即 on_segment 落盘。
+持久化路径消费 Provider 流式批次;旧接口仍接收完整请求,分批由源自己负责。
 """
 
 from __future__ import annotations
@@ -42,20 +42,22 @@ def _minute_df(symbols: list[str]) -> pl.DataFrame:
     )
 
 
-def test_persist_path_pulls_and_persists_per_chunk(monkeypatch):
-    """120 只 → 3 块 (50/50/20): 每块单独调用自定义源并立即 on_segment;
-    进度按块计数 cur==total; 流式路径返回空 df (原契约)。"""
+def test_persist_path_keeps_legacy_get_minute_contract(monkeypatch):
+    """旧源仍一次收到120只,不被宿主二次拆批。"""
     calls: list[list[str]] = []
     segs: list[pl.DataFrame] = []
     progress: list[tuple[int, int, str]] = []
 
-    def fake_try(symbols, **kwargs):
-        calls.append(list(symbols))
-        assert kwargs.get("on_chunk_done") is None, "块内不应再转发进度回调"
-        return _minute_df(symbols), False
+    from types import SimpleNamespace
 
-    monkeypatch.setattr(kline_sync, "_try_custom_minute", fake_try)
-    monkeypatch.setattr(kline_sync, "_CUSTOM_MINUTE_CHUNK", 50)
+    def fetch(symbols, **kwargs):
+        calls.append(list(symbols))
+        kwargs["on_chunk_done"](1, 1)
+        return _minute_df(symbols)
+
+    source = SimpleNamespace(get_minute=fetch)
+    monkeypatch.setattr(kline_sync, "_selected_minute_provider_name", lambda: "legacy")
+    monkeypatch.setattr(kline_sync, "_resolve_minute_provider", lambda _: (source, False, None))
 
     out = kline_sync.sync_minute_batch(
         [f"{i:06d}.SZ" for i in range(120)],
@@ -63,10 +65,10 @@ def test_persist_path_pulls_and_persists_per_chunk(monkeypatch):
         on_segment=segs.append,
     )
 
-    assert [len(c) for c in calls] == [50, 50, 20]
-    assert len(segs) == 3
+    assert [len(c) for c in calls] == [120]
+    assert len(segs) == 1
     assert sum(len(s) for s in segs) == 120
-    assert progress == [(1, 3, "custom"), (2, 3, "custom"), (3, 3, "custom")]
+    assert progress == [(1, 1, "custom")]
     assert out.is_empty()
 
 
@@ -95,7 +97,6 @@ def test_persist_path_falls_through_to_tickflow_on_provider_failure(monkeypatch)
         return pl.DataFrame(schema=_MINUTE_DF_SCHEMA), True  # fallback
 
     monkeypatch.setattr(kline_sync, "_try_custom_minute", fake_try)
-    monkeypatch.setattr(kline_sync, "_CUSTOM_MINUTE_CHUNK", 50)
 
     class _FakeTF:
         class klines:  # noqa: N801 - 与 tickflow SDK 形状一致即可
@@ -106,10 +107,12 @@ def test_persist_path_falls_through_to_tickflow_on_provider_failure(monkeypatch)
     monkeypatch.setattr(kline_sync, "get_client", lambda: _FakeTF())
     # TickFlow 分段路径会构造时间段并逐块调用; 这里只验证"落到了 TickFlow
     # 路径"(自定义源不再被继续调用), SDK 层抛错被 sync_minute_batch 捕获计数。
-    kline_sync.sync_minute_batch(
-        [f"{i:06d}.SZ" for i in range(60)],
-        on_segment=segs.append,
-    )
+    from app.data_providers.base import ProviderRequestError
+    with pytest.raises(ProviderRequestError, match="未完成"):
+        kline_sync.sync_minute_batch(
+            [f"{i:06d}.SZ" for i in range(60)],
+            on_segment=segs.append,
+        )
     assert len(calls) == 1  # 首块即 fallback, 不空打剩余块
     assert segs == []
 

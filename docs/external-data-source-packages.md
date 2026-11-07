@@ -58,6 +58,13 @@ requires: []                   # 现有宿主发行包版本约束，例如 'htt
 
 `Provider.name`、`config.datasets` 与清单必须一致，并实现声明能力的方法及 `close()`。接口、单位、复权和分钟时区契约见 [插件开发指南](plugin-development.md)。已安装但缺凭据或运行失败的源保留标识并显示不可用，不因名字暂时消失而换源。
 
+声明 `minute` 的包可额外实现 `iter_minute(symbols, start_time, end_time, asset_type="stock", freq="1m", on_chunk_done=None)`，逐帧返回标准分钟 DataFrame。
+这是 `plugin_api_version: 1` 的可选能力，不要求旧包升级清单。历史分钟同步一次交付完整标的列表，
+分批、时间分段、限频和同源兜底交给插件；旧包仅有 `get_minute` 时继续一次调用该方法，宿主不另拆批。
+流式接口需要限制每帧大小，并原样传递进度回调的取消异常；取数失败应明确抛错，不能伪装成合法空数据。
+在途流式迭代结束或显式关闭后才释放旧实例，避免更新配置或 Key 时中断连接。
+旧包的内存峰值仍由其自身实现决定；宿主不会改写已安装插件文件或已有配置。
+
 声明 `api_key_env` 的插件必须在 entry 模块实现 `probe_api_key(key) -> (bool, reason)`，使用候选 Key 试探而不是读取当前已保存的 Key。Provider 实例读取 `secrets_store.get_env_backed_secret('<name>_api_key', '<ENV>')`，不要按请求重新读取 Key，否则无法保证在途调用使用原凭据。异常和探测原因不得包含 Key、鉴权头或带凭据的 URL。
 
 可选 `test_dataset(dataset, symbols)` 沿用现有接口，返回 `{provider, dataset, rows, columns, preview, error?}`。实现有界样本请求、超时、分页上限；不要因试拉触发全历史同步。

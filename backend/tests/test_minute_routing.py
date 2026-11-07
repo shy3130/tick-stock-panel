@@ -18,10 +18,10 @@ from unittest.mock import MagicMock
 
 import httpx
 import polars as pl
+import pytest
 from polars.testing import assert_frame_equal
 
 from app.services import kline_sync
-
 
 # ---------- 辅助 ----------
 
@@ -65,6 +65,9 @@ def _setup_custom_provider(monkeypatch, provider: object, has_dataset: bool = Tr
     )
     monkeypatch.setattr("app.data_providers.custom.names", lambda: {"mock_src"})
     provider.config.datasets = {"minute": object()} if has_dataset else {}
+    # 旧接口用例不声明可选流式能力,避免 MagicMock 自动虚构 iter_minute。
+    if isinstance(provider, MagicMock):
+        provider.iter_minute = None
     monkeypatch.setattr(
         "app.data_providers.custom.provider_has_dataset",
         lambda name, ds: has_dataset,
@@ -533,9 +536,9 @@ def test_sync_and_persist_minute_custom_failure_does_not_call_tickflow(monkeypat
     repo._write_lock = Lock()
     capset = CapabilitySet({Cap.KLINE_MINUTE_BATCH: CapabilityLimits()})
 
-    written = kline_sync.sync_and_persist_minute(["600519.SH"], repo, capset)
-
-    assert written == 0
+    from app.data_providers.base import ProviderRequestError
+    with pytest.raises(ProviderRequestError, match="取数失败"):
+        kline_sync.sync_and_persist_minute(["600519.SH"], repo, capset)
     write_spy.assert_not_called()
     get_client_spy.assert_not_called()
 
@@ -1175,6 +1178,7 @@ def test_get_minute_batch_normal_open_not_treated_as_leading_hole(monkeypatch):
 def test_minute_refresh_is_healthy_requires_recent_round(monkeypatch):
     """is_healthy 三条件: 偏好开 + 线程活 + 最近一轮距现在 ≤ max(2×间隔, 30s)。"""
     import time as time_mod
+
     from app.services import minute_refresh as mr
 
     svc = mr.MinuteRefreshService(MagicMock())  # is_healthy 不触达 repo
@@ -1244,8 +1248,10 @@ def _compress_mock_env(monkeypatch, *, compress_on, accept="gzip, deflate"):
 def test_get_minute_batch_gzip_response_when_enabled(monkeypatch):
     """开关开 + 客户端接受 gzip + 响应超阈值 → 返回 gzip Response, 解压后 JSON 完整。"""
     import gzip as gzip_mod
-    from app.api import kline as kline_api
+
     from fastapi import Response
+
+    from app.api import kline as kline_api
 
     mock_request, _ = _compress_mock_env(monkeypatch, compress_on=True)
     result = kline_api.get_minute_batch(
@@ -1261,8 +1267,9 @@ def test_get_minute_batch_gzip_response_when_enabled(monkeypatch):
 
 def test_get_minute_batch_plain_when_disabled(monkeypatch):
     """开关关 → 不压缩, 返回 JSON bytes 的未压缩 Response (无 Content-Encoding)。"""
-    from app.api import kline as kline_api
     from fastapi import Response
+
+    from app.api import kline as kline_api
 
     mock_request, _ = _compress_mock_env(monkeypatch, compress_on=False)
     result = kline_api.get_minute_batch(
@@ -1320,8 +1327,10 @@ def test_daily_batch_gzip_when_enabled(monkeypatch):
     """日K压缩开 + 接受 gzip → 压缩 Response, 解压 JSON 完整。"""
     import gzip as gzip_mod
     import json as json_mod
-    from app.api import kline as kline_api
+
     from fastapi import Response
+
+    from app.api import kline as kline_api
 
     req = _daily_mock_env(monkeypatch, compress_on=True)
     result = kline_api.get_daily_batch(req, {"symbols": ["600519.SH"], "days": 20})
@@ -1346,9 +1355,11 @@ def test_daily_batch_plain_when_disabled(monkeypatch):
 def test_daily_batch_independent_from_minute_switch(monkeypatch):
     """日K与分时独立: 分时关、日K开 → 日K仍压缩 (helper 按 pref_key 走各自 getter)。"""
     import gzip as gzip_mod
+
+    from fastapi import Response
+
     from app.api import kline as kline_api
     from app.services import preferences as prefs
-    from fastapi import Response
 
     monkeypatch.setattr(prefs, "get_minute_batch_compress", lambda: False)
     req = _daily_mock_env(monkeypatch, compress_on=True)
@@ -1363,6 +1374,7 @@ def test_preferences_parallel_saves_do_not_lose_each_other(tmp_path, monkeypatch
     后写者会把先写者的更新覆盖掉。
     """
     import threading
+
     from app.services import preferences as prefs
 
     monkeypatch.setattr(prefs, "_path", lambda: tmp_path / "preferences.json")

@@ -229,6 +229,9 @@ balance_sheet 是资产、在 shares 是股本),无法分别映射,需要上游�
 ## 请求约定
 
 - `daily` / `adj_factor` 会按 `batch` 切分 symbols。
+- `minute` 由 HTTP Provider 自己按 `batch` 发请求并流式返回，核心不再额外按 50 只拆批。
+  `rpm` 在同一源实例的连续调用之间继续限速，避免每次首批都跳过等待；`timeout` 沿用原配置。
+  历史落盘逐帧保存，后续请求失败会明确标记未完成，已写入数据保留，不切换数据源。
 - POST 请求会发送 JSON body: `symbols`、`start_time`、`end_time`。
 - GET 请求会发送 query 参数: `symbols=000001.SZ,600000.SH`。
 - `realtime` 必须是全市场快照接口,不支持逐个 symbol 拉实时行情。
@@ -251,6 +254,9 @@ freq_param: period
 ```
 
 配置后，分钟请求会分别传入 `stock` / `etf` / `index` 和 `1m`；留空时不向上游发送这两个参数，以兼容已有数据源。
+
+现有 YAML、Key 和本地分钟分区无需迁移。更新已注册的源配置时，在途流式拉取使用原实例，
+结束后才释放旧连接；新调用使用新实例。盘中 `full_minute` 仍由独立刷新服务调度。
 
 ### 请求超时
 

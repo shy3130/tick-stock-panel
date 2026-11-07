@@ -29,7 +29,7 @@ from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-_PROVIDERS: dict[str, GenericHTTPProvider] = {}
+_PROVIDERS: dict[str, ManagedProvider] = {}
 _LOAD_ERRORS: list[dict] = []
 
 # 内置插件状态: {name: {available, status, runtime, ...}} 供设置页独立分类展示。
@@ -70,7 +70,7 @@ def load_all(path: Path | None = None) -> None:
                 _LOAD_ERRORS.append({"path": str(file), "name": config.name, "errors": errors})
                 provider.close()
                 continue
-            _PROVIDERS[config.name] = provider
+            _PROVIDERS[config.name] = ManagedProvider(provider, builtin=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("custom data source load failed %s: %s", file, e)
             _LOAD_ERRORS.append({"path": str(file), "errors": [str(e)]})
@@ -317,7 +317,7 @@ def errors() -> list[dict]:
     return list(_LOAD_ERRORS)
 
 
-def get_provider(name: str) -> GenericHTTPProvider:
+def get_provider(name: str) -> ManagedProvider:
     provider = _PROVIDERS.get((name or "").lower())
     if provider is None:
         raise ValueError(f"Custom data source not found or invalid: {name}")
