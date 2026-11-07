@@ -32,6 +32,7 @@ from app.data_providers.minute_normalizer import (
 from app.data_providers.minute_stream import iter_minute_frames
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import CN_TZ, cn_now, cn_today
+from app.parquet import scan_daily_parquet
 from app.services import minute_adjust, preferences
 from app.services.shared_work import SharedWork, WorkBusyError
 from app.tickflow.capabilities import Cap, CapabilitySet
@@ -479,7 +480,8 @@ def _persist_daily_chunks(chunks, repo: KlineRepository) -> int:
                 for index, staged in enumerate(files):
                     replace_with_retry(staged, target_dir / f"part-stream-{index}.parquet")
                 continue
-            base = pl.scan_parquet(existing).collect(engine="streaming")
+            # 当天分区可能混有实时快照写的 quote_ts 列, 按存储 schema 读才不抛 SchemaError。
+            base = scan_daily_parquet(existing).collect(engine="streaming")
             incoming = pl.scan_parquet(files).collect(engine="streaming")
             merged = pl.concat([base, incoming], how="diagonal_relaxed").unique(
                 subset=["symbol", "date"], keep="last"
