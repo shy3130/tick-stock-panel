@@ -30,6 +30,19 @@ _PAGE_INTERVAL_S = 0.15  # 页间隔, 降低触发限频 (code=4001) 的概率
 class FuyaoError(Exception):
     """扶摇接口错误(配置缺失 / 网络失败 / 信封 code != 0)。"""
 
+    def __init__(self, message: str = "", *, code: int | str | None = None, api_message: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.api_message = api_message
+
+
+class FuyaoUnknownSymbolError(FuyaoError):
+    """单标的历史接口明确拒绝当前代码;不代表整个数据源不可用。"""
+
+    def __init__(self, symbol: str, message: str) -> None:
+        super().__init__(message, code=1002, api_message=f"Unknown thscode: {symbol}")
+        self.symbol = symbol
+
 
 class FuyaoClient:
     """扶摇 REST 客户端 (线程安全: httpx.Client 可并发复用)。"""
@@ -62,7 +75,9 @@ class FuyaoClient:
             raise FuyaoError(f"响应不是 JSON: {path}") from e
         code = payload.get("code")
         if code not in (0, "0", None):
-            raise FuyaoError(f"扶摇接口错误 code={code}: {payload.get('message', '')} ({path})")
+            message = payload.get("message", "")
+            raise FuyaoError(f"扶摇接口错误 code={code}: {message} ({path})",
+                             code=code, api_message=message if isinstance(message, str) else "")
         return payload.get("data") or {}
 
     # ---- 快照 ----
@@ -149,16 +164,22 @@ class FuyaoClient:
         返回 data.item 原始行: {date_ms, open_price, high_price, low_price,
         close_price, volume(股), turnover(元)}。
         """
-        data = self._get(
-            "/api/a-share/prices/historical",
-            {
-                "thscode": thscode,
-                "interval": "1d",
-                "adjust": adjust,
-                "start": int(start_ms),
-                "end": int(end_ms),
-            },
-        )
+        try:
+            data = self._get(
+                "/api/a-share/prices/historical",
+                {
+                    "thscode": thscode,
+                    "interval": "1d",
+                    "adjust": adjust,
+                    "start": int(start_ms),
+                    "end": int(end_ms),
+                },
+            )
+        except FuyaoError as err:
+            # 1002 也用于参数错误,只有明确匹配当前代码的响应才表示未覆盖。
+            if str(err.code) == "1002" and err.api_message.strip() == f"Unknown thscode: {thscode}":
+                raise FuyaoUnknownSymbolError(thscode, str(err)) from err
+            raise
         rows = data.get("item")
         return rows if isinstance(rows, list) else []
 

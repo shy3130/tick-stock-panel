@@ -397,7 +397,7 @@ uv run --extra dev python -m ruff check app/plugins/<your_plugin>/ tests/test_<y
 
 TdxQuant 在 SDK 清理响应前检查服务端错误, 保留错误原因并脱敏; 明确的凭据/额度拒绝不重试, 实时分钟轮立即熔断。历史分钟请求失败会通过 `app.data_providers.base.ProviderRequestError` 传递到任务层并标记失败, 不转换成成功的 0 行或跨源重试; 其他插件也可用该异常显式声明请求失败。带时区的分钟请求窗口在插件边界归一为北京墙钟, 再与原生分钟列比较。正常停牌、休市或窗口内无数据的空结果保留原语义。
 
-Fuyao 股票批量历史日K固定请求 `interval=1d&adjust=none`，并核对响应口径、标的分组、必要字段与日期范围。按 `thscode` 对齐分组，合法空组不重复补查；漏组或批量端点无权限、限频、不可用时回退原单只接口，仍使用原价。旧接口也请求失败则抛 `ProviderRequestError`，现有流式同步丢弃本轮暂存数据，保留正式分区；设置页试拉显示错误。仅升级股票日K，指数/ETF 路由、除权因子计算、Key 优先级、配置和 Parquet schema 均不变；无新增缓存，沿用现有整包缓存及仓库发布、视图刷新链路。批量端点文档见 [Fuyao 批量历史 K 线](https://fuyao.aicubes.cn/docs/api-reference/prices/#historical-batch)。
+Fuyao 股票批量历史日K固定请求 `interval=1d&adjust=none`，并核对响应口径、标的分组、必要字段与日期范围。按 `thscode` 对齐分组，合法空组不重复补查；漏组或批量端点无权限、限频、不可用时回退原单只接口，仍使用原价。单只接口明确返回 `code=1002` 且消息为当前代码的 `Unknown thscode: <symbol>` 时，仅跳过该源未覆盖的标的，保留其本地历史，由核心原有 `zero_row_out` 回报本轮 0 行；同一补查会话的后续时间片不再重复请求该代码。其他参数错误、权限、限频和网络失败仍抛 `ProviderRequestError`，现有流式同步丢弃本轮暂存数据，保留正式分区；设置页试拉显示错误。仅升级股票日K，指数/ETF 路由、除权因子计算、Key 优先级、配置和 Parquet schema 均不变；无新增缓存，沿用现有整包缓存及仓库发布、视图刷新链路。批量端点文档见 [Fuyao 批量历史 K 线](https://fuyao.aicubes.cn/docs/api-reference/prices/#historical-batch)。
 
 除权事件也在原生 `get_cw_data` 响应上执行上述检查：SDK 1.2.2 的 `get_divid_factors` 会将服务端失败与正常无事件都转换为空 DataFrame，不能用 DataFrame 是否为空判断请求成功。插件按 SDK 的 `Date/Type/Value` 契约解析事件，保留每 10 股单位及闭区间日期筛选；正常无事件返回空列表，事件或配价请求失败则中止本轮、保留原有因子文件，并向任务层及数据源试拉返回明确错误。
 
