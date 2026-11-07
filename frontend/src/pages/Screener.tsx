@@ -757,6 +757,8 @@ export function Screener() {
   })
 
   const handleRun = (s: ScreenerStrategy) => {
+    // 缓存命中时不会发起新计算，须主动清除上个卡片的错误和订阅。
+    run.reset()
     handleStrategySwitch(s.id)
     setActiveStrategy(s.id)
     setShowAll(false)

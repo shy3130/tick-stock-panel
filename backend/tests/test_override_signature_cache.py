@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.services import screener_work
+from app.services.shared_work import WorkBusyError
 from app.strategy import config as strat_config
 
 
@@ -95,3 +98,55 @@ def test_basic_filter_cleaning_preserved(tmp_path):
 
 def test_load_missing_override_returns_empty(tmp_path):
     assert strat_config.load_override(tmp_path, "never_saved") == {}
+
+
+@pytest.mark.parametrize("basic_filter", [{}, {"amount_min": None}, {
+    "amount_min": None, "price_min": 0, "enabled": False,
+}])
+def test_matching_single_override_keeps_batch_values_and_saved_files_unchanged(tmp_path, basic_filter):
+    saved = {"basic_filter": basic_filter, "params": {"optional": None, "enabled": False, "count": 0}}
+    strat_config.save_override(tmp_path, "s1", saved)
+    path = tmp_path / "user_data" / "strategy_overrides" / "s1.json"
+    original = path.read_bytes()
+    single = strat_config.load_override(tmp_path, "s1")
+    batch = strat_config.list_overrides(tmp_path)
+    assert batch["s1"] == saved
+    assert strat_config.normalize_override(batch["s1"]) == single
+    assert batch["s1"] == saved
+    assert batch["s1"]["params"] == saved["params"]
+    if basic_filter.get("enabled") is False:
+        assert single["basic_filter"] == {"price_min": 0, "enabled": False}
+    else:
+        assert "basic_filter" not in single
+    batch["s1"]["params"]["count"] = 99
+    assert strat_config.load_override(tmp_path, "s1")["params"]["count"] == 0
+    assert strat_config.list_overrides(tmp_path)["s1"]["params"]["count"] == 0
+    assert path.read_bytes() == original
+
+
+def test_screening_accepts_unchanged_legacy_null_filters_and_still_rejects_real_edits(tmp_path):
+    strat_config.save_override(tmp_path, "s1", {"basic_filter": {"amount_min": None}, "params": {"period": 5}})
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    loaded = {"s1": strat_config.load_override(tmp_path, "s1")}
+    identity = screener_work.identity_for_inputs(repo, None, "stock", loaded, normalized_inputs=True)
+    screener_work.assert_current(repo, None, "stock", identity)
+
+    strat_config.save_override(tmp_path, "s1", {"basic_filter": {"amount_min": None}, "params": {"period": 6}})
+    with pytest.raises(WorkBusyError, match="策略参数已变化"):
+        screener_work.identity_for_inputs(repo, None, "stock", loaded, normalized_inputs=True)
+    with pytest.raises(WorkBusyError, match="策略定义、参数或日K修补状态已变化"):
+        screener_work.assert_current(repo, None, "stock", identity)
+
+
+@pytest.mark.parametrize("before,after", [({"amount_min": None}, {}), ({}, {"amount_min": None})])
+def test_screening_rejects_adding_or_removing_an_explicit_null_in_captured_batch_inputs(tmp_path, before, after):
+    saved = {"basic_filter": before, "params": {"period": 5}}
+    strat_config.save_override(tmp_path, "s1", saved)
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    captured = strat_config.list_overrides(tmp_path)
+    screener_work.identity_for_inputs(repo, None, "stock", captured)
+
+    strat_config.save_override(tmp_path, "s1", {"basic_filter": after, "params": {"period": 5}})
+
+    with pytest.raises(WorkBusyError, match="策略参数已变化"):
+        screener_work.identity_for_inputs(repo, None, "stock", captured)

@@ -49,11 +49,17 @@ def assert_current(repo, engine, asset_type: str, expected: tuple) -> None:
         raise WorkBusyError("策略定义、参数或日K修补状态已变化，请重新计算")
 
 
-def identity_for_inputs(repo, engine, asset_type: str, overrides_map: dict) -> tuple:
+def identity_for_inputs(repo, engine, asset_type: str, overrides_map: dict, *, normalized_inputs: bool = False) -> tuple:
     identity = hard_identity(repo, engine, asset_type)
     current = strategy_config.list_overrides(Path(repo.store.data_dir))
-    if any((current.get(sid) or {}) != (value or {}) for sid, value in overrides_map.items()):
-        raise WorkBusyError("策略参数已变化，请重新计算")
+    for sid, value in overrides_map.items():
+        raw = current.get(sid) or {}
+        # 单跑使用 load_override 的空值清理结果，批量仍严格比对原始配置，
+        # 以免把批量输入中显式 null 的增删误当成无变化。
+        if normalized_inputs and isinstance(raw, dict):
+            raw = strategy_config.normalize_override(raw)
+        if raw != (value or {}):
+            raise WorkBusyError("策略参数已变化，请重新计算")
     return identity
 
 

@@ -4,6 +4,8 @@ import types
 from datetime import date
 from typing import ClassVar
 
+import pytest
+
 from app.api import screener as screener_api
 from app.services.screener import ScreenerResult
 
@@ -108,6 +110,30 @@ def test_single_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path
     assert context_call["overrides_map"] == {"builtin_strategy": saved}
     assert run_call["params"] == saved["params"]
     assert run_call["overrides"] == saved
+
+
+@pytest.mark.parametrize("timeframe", ["1d", "1m"])
+@pytest.mark.parametrize("asset_type", ["stock", "etf"])
+def test_single_run_accepts_legacy_null_filter_without_reporting_changed_params(monkeypatch, tmp_path, timeframe, asset_type):
+    engine = _CapturingStrategyEngine()
+    request = _api_request(tmp_path, engine)
+    _install_api_fakes(monkeypatch)
+    saved = {"params": {"threshold": 3.0, "enabled": False},
+             "basic_filter": {"amount_min": None, "price_min": 0, "enabled": False}}
+    screener_api.strategy_config.save_override(tmp_path, "builtin_strategy", saved)
+    path = tmp_path / "user_data" / "strategy_overrides" / "builtin_strategy.json"
+    before = path.read_bytes()
+
+    payload = screener_api.run_preset(screener_api.PresetRequest(
+        strategy_id="builtin_strategy", as_of=date(2026, 7, 15),
+        asset_type=asset_type, timeframe=timeframe, ensure=True,
+    ), request)
+
+    assert payload["strategy"] == "builtin_strategy"
+    run_call = next(call for call in engine.calls if call["kind"] == "run")
+    assert run_call["params"] == saved["params"]
+    assert run_call["overrides"]["basic_filter"] == {"price_min": 0, "enabled": False}
+    assert path.read_bytes() == before
 
 
 def test_batch_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path):
