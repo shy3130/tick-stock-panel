@@ -5,13 +5,23 @@ import type { PlotAxisTick } from '@/lib/lightweight-model'
 export interface AnnotationData {
   dates: string[]
   ranges?: ChartRange[]
-  priceLines?: (ChartPriceLine & { axisLabel?: boolean; axisLabelTextColor?: string; opacity?: number })[]
+  priceLines?: (ChartPriceLine & {
+    axisLabel?: boolean
+    axisLabelTextColor?: string
+    opacity?: number
+    /** 线宽；悬浮高亮时用 2 */
+    width?: number
+    /** 只画右侧文字标签、不画水平线（通道曲线最新值用） */
+    noLine?: boolean
+    /** 标签避让优先级：数值越大越优先保留（悬浮价位 > 普通价位 > 曲线） */
+    labelPriority?: number
+  })[]
   axisTicks?: PlotAxisTick[]
   gridTicks?: number[]
   gridColor?: string
   precision?: number
   verticals?: { time: Time; label?: string; color?: string }[]
-  labels?: { time: Time; value: number; text: string }[]
+  labels?: { time: Time; value: number; text: string; color?: string }[]
   textColor?: string
   title?: string
   readouts?: { text: string; color?: string }[]
@@ -126,6 +136,7 @@ export class ChartAnnotations implements ISeriesPrimitive<Time> {
         ctx.fillRect(x1, 0, Math.max(1, x2 - x1), height)
         if (range.label) { ctx.fillStyle = this.data.textColor ?? '#A1A1AA'; ctx.fillText(range.label, Math.max(x1 + 5, 5), 15) }
       }
+      const pendingLabels: { text: string; end: number; y: number; color: string; priority: number }[] = []
       for (const line of this.data.priceLines ?? []) {
         if (this.data.dates.length && ((line.start && line.start > this.data.dates.at(-1)!) || (line.end && line.end < this.data.dates[0]))) continue
         const y = series.priceToCoordinate(line.value)
@@ -133,11 +144,24 @@ export class ChartAnnotations implements ISeriesPrimitive<Time> {
         const start = line.start ? coordinate(line.start) : 0
         const end = line.end ? coordinate(line.end, true) : width
         if (start == null || end == null || end < start) continue
-        ctx.globalAlpha = line.opacity ?? 1
-        ctx.strokeStyle = line.color ?? '#3B82F6'; ctx.lineWidth = 1; ctx.setLineDash([4, 4])
-        ctx.beginPath(); ctx.moveTo(start, y); ctx.lineTo(end, y); ctx.stroke(); ctx.setLineDash([])
-        ctx.globalAlpha = 1
-        if (line.label) { ctx.fillStyle = ctx.strokeStyle; ctx.fillText(line.label, Math.max(5, Math.min(end - ctx.measureText(line.label).width - 5, width - 10)), y - 5) }
+        ctx.strokeStyle = line.color ?? '#3B82F6'; ctx.lineWidth = line.width ?? 1
+        // noLine: 只画右侧标签(通道曲线最新值),不画水平线。
+        if (!line.noLine) {
+          ctx.globalAlpha = line.opacity ?? 1
+          ctx.setLineDash([4, 4])
+          ctx.beginPath(); ctx.moveTo(start, y); ctx.lineTo(end, y); ctx.stroke(); ctx.setLineDash([])
+          ctx.globalAlpha = 1
+        }
+        if (line.label) pendingLabels.push({ text: line.label, end, y: y - 5, color: line.color ?? '#3B82F6', priority: line.labelPriority ?? 0 })
+      }
+      // 右侧标签带按优先级从上到下排布，彼此过近时只保留优先级更高的标签。
+      const placedLabels: number[] = []
+      pendingLabels.sort((a, b) => (b.priority - a.priority) || (a.y - b.y))
+      for (const item of pendingLabels) {
+        if (placedLabels.some(placed => Math.abs(placed - item.y) < 12)) continue
+        placedLabels.push(item.y)
+        ctx.fillStyle = item.color
+        ctx.fillText(item.text, Math.max(5, Math.min(item.end - ctx.measureText(item.text).width - 5, width - 10)), item.y)
       }
       let verticalLabelRight = -Infinity
       for (const line of this.data.verticals ?? []) {
@@ -161,7 +185,7 @@ export class ChartAnnotations implements ISeriesPrimitive<Time> {
         const textWidth = ctx.measureText(label.text).width
         if (x - textWidth / 2 < labelRight + 4) continue
         if (this.data.readouts?.length && y - 4 < headerBottom + 12) continue
-        ctx.fillStyle = this.data.textColor ?? '#A1A1AA'
+        ctx.fillStyle = label.color ?? this.data.textColor ?? '#A1A1AA'
         ctx.fillText(label.text, x - textWidth / 2, Math.max(28, y - 4))
         labelRight = x + textWidth / 2
       }

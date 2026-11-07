@@ -15,6 +15,8 @@ export interface PlotSeries {
   pane: number
   data: PlotData[]
   color?: string
+  /** 线宽(默认 1)；悬浮高亮时加粗 */
+  lineWidth?: 1 | 2 | 3 | 4
   priceFormat?: 'price' | 'volume' | 'percent'
   priceScaleId?: 'left'
   axisTicks?: PlotAxisTick[]

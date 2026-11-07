@@ -29,10 +29,14 @@ interface Props {
   paneReadouts?: AnnotationData['readouts'][]
   linkedPrice?: number | null
   onHover?: (time: string | null) => void
+  /** 十字线价格与像素比例(仅主价格 pane)，供价位命中判断使用 */
+  onCrosshairMove?: (point: { time: string; price: number; pixelsPerPrice: number } | null) => void
   onSelect?: (time: string) => void
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   currentPrice?: number
   pricePrecision?: number
+  /** 右侧预留空白带宽度(px)，给价位文字标签留位置 */
+  rightOffsetPixels?: number
 }
 
 export function updatePlotData(series: ISeriesApi<SeriesType>, previous: PlotData[], next: PlotData[]) {
@@ -78,7 +82,10 @@ export function FinancialPlot(props: Props) {
       rightPriceScale: { borderVisible: false, minimumWidth: 58, entireTextOnly: !!propsRef.current.intraday,
         scaleMargins: propsRef.current.intraday ? PRICE_MARGINS.intraday : PRICE_MARGINS.daily },
       timeScale: { borderColor: theme.border, minimumHeight: CHART_LAYOUT.timeAxis,
-        rightOffset: 0, fixLeftEdge: true, fixRightEdge: !propsRef.current.intraday, timeVisible: !!propsRef.current.intraday,
+        // 右侧像素留白与 fixRightEdge 互斥: 固定右缘会钳制 rightOffset。
+        rightOffset: 0, fixLeftEdge: true, fixRightEdge: !propsRef.current.intraday && !propsRef.current.rightOffsetPixels,
+        timeVisible: !!propsRef.current.intraday,
+        ...(propsRef.current.rightOffsetPixels ? { rightOffsetPixels: propsRef.current.rightOffsetPixels } : {}),
         lockVisibleTimeRangeOnResize: propsRef.current.visibleBars === 'all',
         // 20 日约 4820 个分钟位置，窄屏也要能完整适配所选时段。
         minBarSpacing: propsRef.current.intraday ? 0.01 : 0.5,
@@ -97,7 +104,22 @@ export function FinancialPlot(props: Props) {
           const y = event.paneIndex === 0 ? event.point?.y : undefined
           annotationRef.current.setHoverY(y); leftAnnotation.current.setHoverY(y)
         }
-        propsRef.current.onHover?.(event.time != null ? timeKey(event.time) : null)
+        const time = event.time != null ? timeKey(event.time) : null
+        propsRef.current.onHover?.(time)
+        const reportCrosshair = propsRef.current.onCrosshairMove
+        if (reportCrosshair) {
+          const primarySpec = propsRef.current.series.find(s => s.pane === 0 && s.visible !== false && s.priceScaleId !== 'left')
+          const primary = primarySpec && seriesRef.current.get(primarySpec.id)
+          const point = event.point
+          if (event.paneIndex === 0 && point && time && primary) {
+            const price = primary.api.coordinateToPrice(point.y)
+            const upper = primary.api.coordinateToPrice(1)
+            const lower = primary.api.coordinateToPrice(0)
+            const step = upper != null && lower != null ? upper - lower : null
+            reportCrosshair(price != null && Number.isFinite(price) && step != null && Number.isFinite(step) && step !== 0
+              ? { time, price, pixelsPerPrice: Math.abs(step) } : null)
+          } else reportCrosshair(null)
+        }
       })
     }
     const select = (event: MouseEventParams<Time>) => {
@@ -157,8 +179,8 @@ export function FinancialPlot(props: Props) {
       layout: { panes: { enableResize: !intraday } },
       rightPriceScale: { ...(intraday ? { autoScale: true } : {}), entireTextOnly: intraday,
         scaleMargins: intraday ? PRICE_MARGINS.intraday : PRICE_MARGINS.daily },
-      timeScale: { timeVisible: intraday, fixRightEdge: !intraday, rightOffset: 0, minBarSpacing: intraday ? 0.01 : 0.5,
-        lockVisibleTimeRangeOnResize: props.visibleBars === 'all' },
+      timeScale: { timeVisible: intraday, fixRightEdge: !intraday && !props.rightOffsetPixels, rightOffset: 0,
+        minBarSpacing: intraday ? 0.01 : 0.5, lockVisibleTimeRangeOnResize: props.visibleBars === 'all' },
     })
   }, [props.intraday, props.visibleBars])
 
@@ -190,7 +212,7 @@ export function FinancialPlot(props: Props) {
       chart.removeSeries(item.api); seriesRef.current.delete(id)
     }
     for (const spec of props.series) {
-      const options = { ...(spec.color ? { color: spec.color } : {}), lineWidth: 1 as const, lastValueVisible: false, priceLineVisible: false,
+      const options = { ...(spec.color ? { color: spec.color } : {}), lineWidth: spec.lineWidth ?? 1, lastValueVisible: false, priceLineVisible: false,
         ...(spec.priceScaleId ? { priceScaleId: spec.priceScaleId, lineVisible: false } : {}),
         crosshairMarkerVisible: false, visible: spec.visible ?? true,
         priceFormat: spec.priceFormat === 'volume' ? { type: 'custom' as const, formatter: fmtBigNum, minMove: 1 }
@@ -263,7 +285,15 @@ export function FinancialPlot(props: Props) {
       else if (count > 0) {
         // 默认每格约 12 px；宽窗不画粗柱，窄窗也保留可读的实体和间隔。
         const bars = props.visibleBars ?? Math.max(32, Math.min(90, Math.round(chart.timeScale().width() / 12)))
-        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, count - bars), to: count - 1 })
+        const offsetPixels = props.rightOffsetPixels
+        if (offsetPixels && chart.timeScale().width() > offsetPixels) {
+          // 右侧像素留白按比例换算成额外的空白 bar，保证标签带出现后可见蜡烛数不变。
+          const extra = offsetPixels * bars / (chart.timeScale().width() - offsetPixels)
+          chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, count - bars - extra), to: count - 1 })
+          chart.timeScale().applyOptions({ rightOffsetPixels: offsetPixels })
+        } else {
+          chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, count - bars), to: count - 1 })
+        }
       }
     } else if (view) chart.timeScale().setVisibleLogicalRange(view)
     if (reset) props.onHover?.(null)
