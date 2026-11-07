@@ -102,7 +102,7 @@ def _user_data_root() -> Path:
            数据放包内 (≤0.3.6 的 exe 同级 data) 等于每次覆盖安装都被清空;
            App Support 是 mac 用户数据惯例位置, 替换 .app 永不触碰,
            也规避向 /Applications 包内写入的权限问题。包内旧数据由
-           KlineRepository._migrate_legacy_data_dir() 首次启动自动搬出。
+           recover_desktop_data() 在后端启动前恢复旧配置。
          - Windows/Linux: exe 同级的 data/ 子目录 (<安装目录>/data/)
            —— 与程序同处一个总目录 (用户选择的安装目录), 视觉直观, 便于备份/迁移。
       3. 非 frozen: 源码使用项目根 data/；官方 Docker 使用应用目录下的 data/
@@ -115,7 +115,7 @@ def _user_data_root() -> Path:
       - 数据安全: Inno Setup 覆盖安装(升级)时只往 {app} 写新程序文件, 不会清空
         目录里不在安装清单上的运行时文件 (data/ 即此类), 故覆盖安装不丢数据。
         (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/tsp.iss 的 [UninstallDelete]。)
-    旧版本数据迁移: 见 KlineRepository._migrate_legacy_data_dir(), 老用户首次启动自动搬迁。
+    旧版本恢复由 app.services.data_dir_upgrade 处理，已有配置优先并保留原配置备份。
     """
     # 打包桌面版
     if _IS_FROZEN:

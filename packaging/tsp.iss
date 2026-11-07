@@ -39,8 +39,9 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 ; 默认装到 D 盘 (非系统盘), 用户可在向导中改任意位置
-; 若 D 盘不存在, [Code] 段 InitializeWizard 会自动回退到用户目录
-DefaultDirName=D:\TSP
+; 仅新装使用计算默认值；旧安装位置和 /DIR 由 Inno Setup 原生处理。
+DefaultDirName={code:GetDefaultInstallDir}
+UsePreviousAppDir=yes
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
@@ -82,7 +83,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; 把 PyInstaller 产出的整个文件夹搬进安装目录
 ; Source 路径相对于 .iss 文件所在目录
-Source: "..\backend\dist\TSP\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 打包目录即使生成过运行时 data，也不得把它装进用户已有数据目录。
+Source: "..\backend\dist\TSP\*"; DestDir: "{app}"; Excludes: "\data,\data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; .NET 按 EXE 文件名读取同目录配置，不能放进 PyInstaller 的 _internal。
 Source: "TSP.exe.config"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -142,16 +144,12 @@ begin
   Result := True;
 end;
 
-procedure InitializeWizard();
-var
-  DefaultDir: String;
+function GetDefaultInstallDir(Param: String): String;
 begin
-  // D 盘存在 → 用 D 盘; 否则回退用户目录 (无需管理员权限)
-  if not DirExists('D:\') then
-  begin
-    DefaultDir := ExpandConstant('{localappdata}\Programs\TSP');
-    WizardForm.DirEdit.Text := DefaultDir;
-  end;
+  if DirExists('D:\') then
+    Result := 'D:\TSP'
+  else
+    Result := ExpandConstant('{localappdata}\Programs\TSP');
 end;
 
 // ── 安装完成后: 通知外壳刷新图标缓存 ─────────────────────────────

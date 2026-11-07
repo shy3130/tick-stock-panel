@@ -68,7 +68,7 @@ def test_darwin_bundle_data_migrates_to_new_location(tmp_path, monkeypatch):
 
     assert (new_dir / "user_data" / "secrets.json").exists()
     assert (new_dir / "kline_daily_enriched" / "date=2026-10-10" / "part.parquet").exists()
-    assert not bundle_data.exists()  # 旧包内目录已清空
+    assert (bundle_data / "user_data" / "secrets.json").exists()  # 保留原配置供回退
 
 
 def test_migration_skips_when_new_location_has_data(tmp_path, monkeypatch):
@@ -113,7 +113,7 @@ def test_windows_sibling_legacy_still_migrates(tmp_path, monkeypatch):
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
 
     assert (new_dir / "user_data" / "secrets.json").exists()
-    assert not legacy.exists()
+    assert (legacy / "user_data" / "secrets.json").exists()
 
 
 def test_migration_same_path_guard(tmp_path, monkeypatch):
@@ -178,10 +178,10 @@ def test_migration_rescues_secrets_when_new_has_data(tmp_path, monkeypatch):
     assert (new_dir / "kline_daily_enriched" / "part.parquet").exists()
 
 
-def test_migration_no_rescue_when_dest_secrets_exists(tmp_path, monkeypatch):
-    """新目录已有 secrets.json (用户已重新配置) → 绝不覆盖。"""
+def test_migration_keeps_existing_credential_file_as_one_configuration(tmp_path, monkeypatch):
+    """旧地址/账号不能与新 Key 拼接；已有凭据整份优先。"""
     new_dir, bundle_data = _setup_skip_migration(tmp_path)
-    (bundle_data / "user_data" / "secrets.json").write_text('{"legacy": 1}', encoding="utf-8")
+    (bundle_data / "user_data" / "secrets.json").write_text('{"mine": 2, "legacy": 1}', encoding="utf-8")
     (new_dir / "user_data" / "secrets.json").write_text('{"mine": 1}', encoding="utf-8")
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -230,10 +230,10 @@ def test_migration_rescues_preferences_when_new_has_data(tmp_path, monkeypatch):
     assert (bundle_data / "user_data" / "preferences.json").exists()
 
 
-def test_migration_no_rescue_when_dest_preferences_exists(tmp_path, monkeypatch):
-    """新目录已有 preferences.json (新版已在使用) → 绝不覆盖。"""
+def test_migration_only_fills_missing_preference_fields(tmp_path, monkeypatch):
+    """新目录已有偏好优先，旧文件只补缺失字段。"""
     new_dir, bundle_data = _setup_skip_migration(tmp_path)
-    (bundle_data / "user_data" / "preferences.json").write_text('{"legacy": true}', encoding="utf-8")
+    (bundle_data / "user_data" / "preferences.json").write_text('{"mine": false, "legacy": true}', encoding="utf-8")
     (new_dir / "user_data" / "preferences.json").write_text('{"mine": true}', encoding="utf-8")
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -242,4 +242,4 @@ def test_migration_no_rescue_when_dest_preferences_exists(tmp_path, monkeypatch)
 
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
 
-    assert (new_dir / "user_data" / "preferences.json").read_text(encoding="utf-8") == '{"mine": true}'
+    assert json.loads((new_dir / "user_data" / "preferences.json").read_text(encoding="utf-8")) == {"mine": True, "legacy": True}

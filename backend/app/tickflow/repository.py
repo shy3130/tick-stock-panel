@@ -12,10 +12,8 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import sys
 import threading
 import time
 import uuid
@@ -116,37 +114,6 @@ def _last_available_rows(df: pl.DataFrame, cutoff: date) -> pl.DataFrame:
     )
 
 
-def _rescue_legacy_user_data(legacy_dir: Path, data_dir: Path) -> None:
-    """整体迁移被跳过时, 单独捞回新目录缺失的关键 user_data 文件。
-
-    场景: macOS ≤0.3.6 用户升级后先跑过新版 (新 data 已有行情), 再从废纸篓
-    把旧包数据恢复进新包 — has_new_data 守卫会跳过整目录搬迁, 但两类文件
-    是用户重新配置成本最高的, 旧有新无时应单独找回:
-      - secrets.json (AI/数据源密钥)
-      - preferences.json (onboarding_completed/界面偏好 — 丢失会让
-        onboarding_completed 回落默认 False, 升级后全屏引导重弹, 表现为
-        「明明同步过数据, 升级后又被要求获取数据」)
-    任何异常只记警告, 绝不影响启动。
-    """
-    import shutil
-
-    for name, note in (("secrets.json", "密钥"), ("preferences.json", "偏好")):
-        source = legacy_dir / "user_data" / name
-        dest = data_dir / "user_data" / name
-        if not source.is_file() or dest.exists():
-            continue
-        try:
-            data = json.loads(source.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or not data:
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            # copy2 保留源文件权限位 (secrets.json 为 0600)
-            shutil.copy2(source, dest)
-            logger.info("rescued legacy %s (%s) %s -> %s", name, note, source, dest)
-        except (OSError, ValueError) as e:
-            logger.warning("legacy %s rescue skipped: %s", name, e)
-
-
 class DataStore:
     """唯一的存储入口 — 进程启动时创建。"""
 
@@ -197,76 +164,10 @@ class DataStore:
             self._register_views()
 
     def _migrate_legacy_data_dir(self) -> None:
-        """把旧版数据目录迁移到当前位置 (打包桌面版, 首次启动自动搬迁)。
+        """Compatibility entry for frozen workers and callers outside desktop.main."""
+        from app.services.data_dir_upgrade import recover_desktop_data
 
-        legacy 候选 (逐个尝试, 命中即搬):
-          1. data_dir.parent / "TickFlowStockPanel_Data" —— Windows 旧版兄弟目录
-             (旧版 data_dir = exe_dir.parent / "TickFlowStockPanel_Data", 新版改子目录)。
-          2. macOS ≤0.3.6 的 .app 包内数据 (exe 同级 data/) —— 数据在包内时
-             覆盖安装替换 App 会连数据一起进废纸篓; 修复后 data 移到
-             ~/Library/Application Support/TSP, 用户把包内数据找回/恢复进新包
-             (或从 dmg 直接运行过) 的场景由此接住并搬出。
-
-        策略 (仅打包桌面版触发, 开发/Docker 不受影响):
-          1. 旧目录存在且新 data/ 还基本为空 → 整目录搬迁 (shutil.move, 跨盘符安全)。
-          2. 新旧目录都已有数据 (用户在两套路径都跑过) → 不自动搬, 仅记日志, 避免覆盖。
-          3. 旧目录不存在 → 新装用户, 无需迁移。
-        所有异常都吞掉只记警告 —— 数据迁移失败绝不能阻塞应用启动。
-        """
-        # 仅打包桌面版需要迁移; 开发/Docker 模式 _PROJECT_ROOT/data 本就是唯一路径
-        if not getattr(sys, "frozen", False):
-            return
-
-        import shutil
-
-        try:
-            candidates: list[Path] = [
-                self.data_dir.parent / "TickFlowStockPanel_Data",
-            ]
-            if sys.platform == "darwin":
-                candidates.append(Path(sys.executable).resolve().parent / "data")
-
-            for legacy_dir in candidates:
-                if not legacy_dir.exists():
-                    continue
-                if legacy_dir.resolve() == self.data_dir.resolve():
-                    continue  # 防御: 同一路径 (理论上不会出现) 不做任何事
-
-                # 新 data/ 目录里已有实质性内容 → 用户已在新路径跑过, 不覆盖
-                # (用 .parquet 作为"有真实数据"的判据, 避免空子目录误判)
-                has_new_data = any(self.data_dir.rglob("*.parquet")) or any(
-                    self.data_dir.rglob("*.jsonl")
-                )
-                if has_new_data:
-                    # 整体搬迁会被守卫跳过, 但密钥/偏好等关键 user_data 文件单独捞回 (见函数 docstring)
-                    _rescue_legacy_user_data(legacy_dir, self.data_dir)
-                    logger.info(
-                        "legacy data dir %s exists but new %s already has data, skip migration",
-                        legacy_dir, self.data_dir,
-                    )
-                    continue
-
-                logger.info("migrating legacy data %s -> %s", legacy_dir, self.data_dir)
-                # 逐项 move 而非整目录 move: data/ 可能已被 __init__ 创建了空子目录,
-                # 直接 shutil.move(legacy, data) 会因目标已存在失败。
-                for item in legacy_dir.iterdir():
-                    dest = self.data_dir / item.name
-                    if dest.exists():
-                        # 同名子目录 (如 kline_daily): 合并内容
-                        if dest.is_dir():
-                            shutil.move(str(item), str(dest / item.name))
-                        else:
-                            item.unlink()  # 同名文件, 以新路径为准, 删旧
-                    else:
-                        shutil.move(str(item), str(dest))
-                # 搬完后清理空的旧目录
-                try:
-                    shutil.rmtree(legacy_dir)
-                except OSError:
-                    logger.warning("legacy dir %s not empty, kept", legacy_dir)
-                logger.info("legacy data migration done")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("legacy data migration failed (startup continues): %s", e)
+        recover_desktop_data(self.data_dir)
 
     def _register_views(self) -> None:
         """把 Parquet 目录挂载为 DuckDB 视图(§7.3)。"""

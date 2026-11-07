@@ -423,6 +423,12 @@ def main() -> int:
             return 0
         instance_acquired = True
 
+        # Restore before app.main imports or its startup log reads Key/prefs.
+        from app.config import settings
+        from app.services.data_dir_upgrade import recover_desktop_data
+
+        recover_desktop_data(settings.data_dir)
+
         # 撞挖掘锁只降级, 其他预检异常必须同样落盘、弹框并释放桌面锁。
         conflict = _precheck_mining_lock()
         if conflict is not None:
