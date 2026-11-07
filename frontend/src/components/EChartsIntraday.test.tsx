@@ -123,8 +123,14 @@ it('single and multi-day index charts ignore stock VWAP and limit metadata when 
     expect(host.textContent).not.toContain('涨跌停')
     const option = chart.setOption.mock.calls.at(-1)![0]
     expect(option.series.some((series: any) => series.name?.includes('均价'))).toBe(false)
-    expect(option.yAxis[0].min).toBeGreaterThan(5050)
-    expect(option.yAxis[0].max).toBeLessThan(5170)
+    if (multi) {
+      expect(option.yAxis[0].min).toBeGreaterThan(5050)
+      expect(option.yAxis[0].max).toBeLessThan(5170)
+    } else {
+      expect(option.yAxis[0].min).toBeLessThanOrEqual(5059.65)
+      expect(option.yAxis[0].max).toBeGreaterThan(5211.79)
+      expect((option.yAxis[0].min + option.yAxis[0].max) / 2).toBeCloseTo(5211.79)
+    }
     if (!multi) expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual([5211.79])
   }
 })
@@ -149,7 +155,7 @@ it('no_limit day: adaptive y-axis covers data far beyond the ±10% band', async 
   expect(axis.max).toBeGreaterThanOrEqual(57.77)
 })
 
-it('regular stock: adaptive fits actual extrema and limit mode retains the full limit band', async () => {
+it('regular stock: adaptive centers yesterday close and limit mode retains the full limit band', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   const host = document.createElement('div')
@@ -167,7 +173,7 @@ it('regular stock: adaptive fits actual extrema and limit mode retains the full 
     />,
   ))
   const axis = lastYAxis()
-  expect(axis.min).toBeCloseTo(19.92, 6)
+  expect(axis.min).toBeCloseTo(18, 6)
   expect(axis.max).toBeCloseTo(22, 6)
   await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === '涨跌停')!.click())
   expect(lastYAxis().min).toBeCloseTo(18, 6)

@@ -107,10 +107,12 @@ export function LightweightIntraday({ symbol, assetType, data, sessions: supplie
         <span className="ml-2 font-mono text-[10px] text-muted">{supplied ? `${sessions.length} 个交易日` : date}</span>
       </span>
       {sessions.length === 1 && scale && !reference && <span className="text-[10px] text-muted">昨收缺失 · 仅价格轴</span>}
-      {showLimitLines && assetType === 'index' && <span className="text-[10px] text-muted" title="按分时最高、最低点自动适配">自适应</span>}
+      {showLimitLines && assetType === 'index' && <span className="text-[10px] text-muted" title={scale?.centered ? '以昨收为中轴，按最大涨跌幅对称适配' : '按分时最高、最低点自动适配'}>自适应</span>}
       {showLimitLines && assetType !== 'index' && <div className="inline-flex rounded border border-border/70 p-0.5" role="group" aria-label="分时纵轴范围">
         {(['adaptive', 'limit'] as const).map(option => <button key={option} type="button" aria-pressed={mode === option}
-          disabled={option === 'limit' && !limits} title={option === 'limit' && !limits ? '当日无有效涨跌停价格' : undefined}
+          disabled={option === 'limit' && !limits} title={option === 'adaptive'
+            ? scale?.centered ? '以昨收为中轴，按最大涨跌幅对称适配' : '按分时最高、最低点自动适配'
+            : !limits ? '当日无有效涨跌停价格' : undefined}
           onClick={() => setYMode(option)} className={`rounded px-2 py-0.5 text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-40 ${mode === option ? 'bg-accent/15 text-accent' : 'text-muted hover:text-foreground'}`}>
           {option === 'adaptive' ? '自适应' : '涨跌停'}
         </button>)}

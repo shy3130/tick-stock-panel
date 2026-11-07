@@ -112,7 +112,7 @@ it('draws bounded replay prices across the selected minute session and omits the
   } finally { updates.mockRestore() }
 })
 
-it('fits index extrema, hides the invalid average and removes limit controls and annotations on asset switches', async () => {
+it('centers index extrema on yesterday close, hides invalid averages and clears limit controls on asset switches', async () => {
   const updates = vi.spyOn(ChartAnnotations.prototype, 'update')
   try {
     const render = async (assetType: 'stock' | 'index') => act(async () => root.render(<LightweightIntraday
@@ -132,9 +132,11 @@ it('fits index extrema, hides the invalid average and removes limit controls and
     expect(range.minValue).toBeGreaterThan(5050)
     expect(range.minValue).toBeLessThan(5059.65)
     expect(range.maxValue).toBeGreaterThan(5160.75)
-    expect(range.maxValue).toBeLessThan(5170)
+    expect((range.minValue + range.maxValue) / 2).toBeCloseTo(5211.79)
+    expect(range.maxValue).toBeLessThan(5400)
     const annotations = updates.mock.calls.map(([value]) => value).filter(value => value.dates.includes('2026-11-06')).at(-1)!
     expect(annotations.priceLines?.map(line => line.value)).toEqual([5211.79])
+    expect(annotations.axisTicks).toContainEqual(expect.objectContaining({ value: 5211.79, priority: 3 }))
     expect(annotations.axisTicks?.some(tick => tick.priority === 2)).toBe(false)
   } finally { updates.mockRestore() }
 })
@@ -278,7 +280,7 @@ it('intraday keeps missing open blank and honors authoritative and no-limit pric
   const price = native.series[1]
   expect(price.applyOptions.mock.calls.at(-1)[0].autoscaleInfoProvider().priceRange).toEqual({ minValue: 7, maxValue: 13 })
   await render(true)
-  expect(price.applyOptions.mock.calls.at(-1)[0].autoscaleInfoProvider().priceRange).toEqual({ minValue: 11.96, maxValue: 13.04 })
+  expect(price.applyOptions.mock.calls.at(-1)[0].autoscaleInfoProvider().priceRange).toEqual({ minValue: 7, maxValue: 13 })
   expect(limit.disabled).toBe(true)
 })
 
@@ -315,14 +317,8 @@ it('labels both axes at actual limit prices and percentages in adaptive and limi
         const price = native.series[1]
         const options = price.applyOptions.mock.calls.at(-1)?.[0] ?? native.chart.addSeries.mock.calls[1][1]
         const range = options.autoscaleInfoProvider().priceRange
-        const limitMode = [...host.querySelectorAll('button')].some(button => button.textContent === '涨跌停' && button.getAttribute('aria-pressed') === 'true')
-        if (limitMode) {
-          expect(range.maxValue).toBeCloseTo(base + Math.max(up - base, base - down))
-          expect((range.minValue + range.maxValue) / 2).toBeCloseTo(base)
-        } else {
-          expect(range.minValue).toBeCloseTo(down)
-          expect(range.maxValue).toBeCloseTo(up)
-        }
+        expect(range.maxValue).toBeCloseTo(base + Math.max(up - base, base - down))
+        expect((range.minValue + range.maxValue) / 2).toBeCloseTo(base)
       }
       verify()
       for (const mode of ['涨跌停', '自适应']) {
@@ -431,7 +427,7 @@ it('identifies the shared lunch slot when hovering instead of presenting the com
   expect(host.textContent).toContain('午间衔接')
 })
 
-it('fits actual extrema without letting yesterday close, an outlying average or distant alerts distort the range', async () => {
+it('centers yesterday close and fits actual extrema without outlying averages or distant alerts distorting the range', async () => {
   const row = { datetime: '2026-11-05 09:30:00', open: 12, high: 13, low: 12, close: 12.5, volume: 10, amount: 14000 }
   const render = async (rows: MinuteKlineRow[] = [row], prevClose = 10, priceLines: { value: number; end?: string }[] = []) => act(async () => root.render(
     <LightweightIntraday symbol="ETF" date="2026-11-05" data={rows} prevClose={prevClose} priceLines={priceLines} />))
@@ -441,11 +437,11 @@ it('fits actual extrema without letting yesterday close, an outlying average or 
     const options = price.applyOptions.mock.calls.at(-1)?.[0] ?? native.chart.addSeries.mock.calls[1][1]
     return options.autoscaleInfoProvider().priceRange
   }
-  expect(priceRange()).toEqual({ minValue: 11.96, maxValue: 13.04 })
+  expect(priceRange()).toEqual({ minValue: 7, maxValue: 13 })
   await render([row], 10, [{ value: 15 }, { value: 50, end: '2026-11-04' }, { value: NaN }])
-  expect(priceRange()).toEqual({ minValue: 11.96, maxValue: 13.04 })
+  expect(priceRange()).toEqual({ minValue: 7, maxValue: 13 })
   await render([{ ...row, amount: null }])
-  expect(priceRange()).toEqual({ minValue: 11.96, maxValue: 13.04 })
+  expect(priceRange()).toEqual({ minValue: 7, maxValue: 13 })
   expect(host.textContent).toContain('高 13.00')
   await render([{ ...row, high: 12, low: 12, close: 12, amount: 12000 }], 12)
   expect(priceRange().minValue).toBeGreaterThan(0)
@@ -483,6 +479,8 @@ it('links ETF price and percentage scales, including the single-session tab, and
   expect(leftCall[1].priceFormat.formatter(1)).toBe('+1.00%')
   const right = priceCall[1].autoscaleInfoProvider().priceRange
   const left = leftCall[1].autoscaleInfoProvider().priceRange
+  expect((right.minValue + right.maxValue) / 2).toBeCloseTo(0.76)
+  expect(left.minValue).toBeCloseTo(-left.maxValue)
   expect(left.minValue).toBeCloseTo((right.minValue / 0.76 - 1) * 100)
   expect(left.maxValue).toBeCloseTo((right.maxValue / 0.76 - 1) * 100)
   expect(priceCall[1].priceFormat.tickmarksFormatter([0.76])).toEqual([''])
