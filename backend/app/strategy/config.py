@@ -44,6 +44,19 @@ def _path(data_dir: Path, strategy_id: str, *, ensure_dir: bool = True) -> Path:
     return d / f"{strategy_id}.json"
 
 
+def normalize_override(data: dict) -> dict:
+    """返回单项读取使用的有效配置，不改写输入或保存文件。"""
+    data = copy.deepcopy(data)
+    bf = data.get("basic_filter")
+    if isinstance(bf, dict):
+        cleaned = {k: v for k, v in bf.items() if v is not None}
+        if cleaned:
+            data["basic_filter"] = cleaned
+        else:
+            del data["basic_filter"]
+    return data
+
+
 def load_override(data_dir: Path, strategy_id: str) -> dict:
     """读取策略的用户覆盖配置，不存在返回空 dict (带 mtime 签名缓存, 返回深拷贝)"""
     p = _path(data_dir, strategy_id, ensure_dir=False)
@@ -58,15 +71,7 @@ def load_override(data_dir: Path, strategy_id: str) -> dict:
     if cached is not None and sig == _override_cache_sig.get(key):
         return copy.deepcopy(cached)
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        # 清理 basic_filter 中值为 None/空的键（避免固化无意义的空值）
-        bf = data.get("basic_filter")
-        if isinstance(bf, dict):
-            cleaned = {k: v for k, v in bf.items() if v is not None}
-            if cleaned:
-                data["basic_filter"] = cleaned
-            else:
-                del data["basic_filter"]
+        data = normalize_override(json.loads(p.read_text(encoding="utf-8")))
         _override_cache[key] = data
         _override_cache_sig[key] = sig
         return copy.deepcopy(data)

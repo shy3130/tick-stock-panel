@@ -523,7 +523,7 @@ def run_preset(req: PresetRequest, request: Request):
     ext_values = _load_ext_value_maps(repo, req.ext_columns, as_of=str(as_of))
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
     identity = screener_work.identity_for_inputs(repo, getattr(request.app.state, "strategy_engine", None),
-                                                req.asset_type, {req.strategy_id: overrides})
+                                                req.asset_type, {req.strategy_id: overrides}, normalized_inputs=True)
     engine = getattr(request.app.state, "strategy_engine", None)
     if not engine:
         raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
