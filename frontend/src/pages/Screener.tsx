@@ -27,6 +27,7 @@ import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDi
 import { DefaultStrategyParamsDialog } from '@/components/screener/DefaultStrategyParamsDialog'
 import { ResourceTransferButton } from '@/components/ResourceTransferDialog'
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
+import { cn } from '@/lib/cn'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
 import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { CompositeStrategyDialog } from '@/components/screener/CompositeStrategyDialog'
@@ -71,7 +72,8 @@ export function Screener() {
   const [showStore, setShowStore] = useState(false)
   const [showDefaultParams, setShowDefaultParams] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
-  const { pool, addToPool, removeFromPool, reorderPool, prune } = useStrategyPool()
+  const strategyPool = useStrategyPool()
+  const { pool, addToPool, removeFromPool, prune, metaMap, groups, handleStrategyDeleted } = strategyPool
   const [cardSize, setCardSize] = useState<CardSize>(loadCardSize)
   // 日k蜡烛图显示开关（仅当 candle 列可见时才有意义；持久化）
   const [dailyKChartVisible, setDailyKChartVisible] = useState<boolean>(() => storage.screenerCandle.get(true))
@@ -277,11 +279,38 @@ export function Screener() {
   const visiblePool = useMemo(() => pool.filter(id => availableStrategyIds.has(id)), [pool, availableStrategyIds])
 
   // 卡片显示: 按周期筛选 (all=全部, 1d=仅日线, 1m=仅分钟); 未声明 timeframes 视为日线
+  // 顺序 = 池顺序 (排序/分组/归档在策略池弹窗左侧管理)
   const displayPool = useMemo(() => visiblePool.filter(id => {
     if (tfFilter === 'all') return true
     const isMinute = strategyMap.get(id)?.timeframes?.includes('1m') ?? false
     return tfFilter === '1m' ? isMinute : !isMinute
   }), [visiblePool, strategyMap, tfFilter])
+
+  // 分组横向 tab: [全部][未分组][各分组...], 按组过滤卡片 (与弹窗分组 chip 交互一致);
+  // 无分组时退化为平铺 (不渲染 tab 行)
+  const [poolGroupTab, setPoolGroupTab] = useState<string>(() => storage.screenerPoolGroupTab.get('all'))
+  const changePoolGroupTab = (tab: string) => {
+    setPoolGroupTab(tab)
+    storage.screenerPoolGroupTab.set(tab)
+  }
+  const poolGroupTabs = useMemo(() => {
+    if (groups.length === 0) return null
+    const groupIdSet = new Set(groups.map(g => g.id))
+    const tabs = groups
+      .map(g => ({ key: g.id, name: g.name, ids: displayPool.filter(id => metaMap.get(id)?.group === g.id) }))
+      .filter(tab => tab.ids.length > 0)
+    const ungrouped = displayPool.filter(id => {
+      const g = metaMap.get(id)?.group
+      return !g || !groupIdSet.has(g)
+    })
+    if (ungrouped.length > 0) tabs.unshift({ key: 'none', name: '未分组', ids: ungrouped })
+    return tabs
+  }, [groups, displayPool, metaMap])
+  // tab 失效 (分组删除/当前无成员) 时回退全部
+  const activePoolTab = poolGroupTabs?.some(tab => tab.key === poolGroupTab) ? poolGroupTab : 'all'
+  const activePoolIds = poolGroupTabs
+    ? (activePoolTab === 'all' ? displayPool : poolGroupTabs.find(tab => tab.key === activePoolTab)!.ids)
+    : displayPool
 
   // runAll/盘后缓存只覆盖日线策略; 分钟策略不落盘后缓存 (strategy_cache 为日线语义),
   // 由下方 runAllMinute 进入页面时异步批量计算点亮卡片
@@ -299,7 +328,7 @@ export function Screener() {
   // 关键: 仅当本次拉取成功且返回非空列表时才 prune。
   // 拉取中/失败/返回空(如引擎 reload 瞬时把某策略跳过)时一律不碰池,
   // 否则会把用户池里仍有效的 ID 永久清空并写入 localStorage,导致卡片全没。
-  // 日线/分钟池按周期隔离, 各自用自身周期的列表清理, 互不影响。
+  // 日线/分钟已共用一个池, 必须用完整列表清理, 不按当前周期误删。
   useEffect(() => {
     if (strategies.isError) return        // 拉取失败: 不 prune
     if (!strategies.isSuccess) return     // 加载中: 不 prune
@@ -886,6 +915,36 @@ export function Screener() {
     })
   }
 
+  // 策略卡片渲染 (分组分区与平铺共用); 归档/分组在策略池弹窗左侧管理
+  const renderPoolCards = (ids: string[]) => ids.map(id => {
+    const s = strategyMap.get(id)
+    if (!s) return null
+    const isMinute = s.timeframes?.includes('1m') ?? false
+    const selfRunning = run.isPending && activeStrategy === s.id
+    // 分钟批量计算中: 卡片脉冲占位, 算完数字自动点亮
+    const minuteRunning = isMinute && runAllMinute.isPending
+    return (
+      <StrategyCard
+        key={s.id}
+        name={s.name}
+        description={s.description}
+        source={s.source}
+        active={activeStrategy === s.id}
+        count={hitCounts[id]}
+        expiredCount={expiredCounts[id]}
+        loading={runAll.isPending}
+        computing={pendingRunIds.has(id) || selfRunning || minuteRunning}
+        awaitRun={hitCounts[id] == null && isMinute && !selfRunning && !minuteRunning}
+        cardSize={cardSize}
+        onRun={() => handleRun(s)}
+        disabled={run.isPending && activeStrategy === s.id}
+        onSettings={() => setSettingsStrategyId(s.id)}
+        monitored={strategyMonitorMap.has(`${assetType}:${s.id}`)}
+        onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
+        timeframeBadge={isMinute ? '分钟' : undefined}
+      />
+    )
+  })
 
   return (
     <>
@@ -985,7 +1044,7 @@ export function Screener() {
                 </button>
               ))}
             </div>
-            {/* 策略池按钮 */}
+            {/* 策略库按钮 */}
             <button
               onClick={() => setShowPoolDialog(true)}
               className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
@@ -993,7 +1052,7 @@ export function Screener() {
                 hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
             >
               <Layers className="h-3.5 w-3.5" />
-              策略池
+              策略库
               <span className="ml-0.5 min-w-[28px] h-4 flex items-center justify-center rounded-full bg-accent/15 text-accent text-[10px] font-bold">
                 {visiblePool.length}/{strategyPresets.length}
               </span>
@@ -1069,8 +1128,8 @@ export function Screener() {
             <div className="py-4 text-center border border-dashed border-border rounded-btn">
               <div className="text-sm text-muted">
                 {pool.length === 0
-                  ? '策略池为空，点击右上角「策略池」按钮添加策略'
-                  : '当前周期筛选下无策略，切换周期筛选或编辑策略池'}
+                  ? '策略池为空，点击右上角「策略库」按钮添加策略'
+                  : '当前周期筛选下无策略，切换周期筛选或编辑策略库'}
               </div>
               {/* 池空时补文档入口: 用户此刻最需要的是「怎么造一个策略」, 而文档路径
                   在界面上不可发现 —— 补上下文提到的三份指南, 与其它页引用 docs 同款
@@ -1087,37 +1146,21 @@ export function Screener() {
               )}
             </div>
           )}
-          <div className={cardWrapCls(cardSize)}>
-            {displayPool.map(id => {
-              const s = strategyMap.get(id)
-              if (!s) return null
-              const isMinute = s.timeframes?.includes('1m') ?? false
-              const selfRunning = run.isPending && activeStrategy === s.id
-              // 分钟批量计算中: 卡片脉冲占位, 算完数字自动点亮
-              const minuteRunning = isMinute && runAllMinute.isPending
-              return (
-                <StrategyCard
-                  key={s.id}
-                  name={s.name}
-                  description={s.description}
-                  source={s.source}
-                  active={activeStrategy === s.id}
-                  count={hitCounts[id]}
-                  expiredCount={expiredCounts[id]}
-                  loading={runAll.isPending}
-                  computing={pendingRunIds.has(id) || selfRunning || minuteRunning}
-                  awaitRun={hitCounts[id] == null && isMinute && !selfRunning && !minuteRunning}
-                  cardSize={cardSize}
-                  onRun={() => handleRun(s)}
-                  disabled={run.isPending && activeStrategy === s.id}
-                  onSettings={() => setSettingsStrategyId(s.id)}
-                  monitored={strategyMonitorMap.has(`${assetType}:${s.id}`)}
-                  onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
-                  timeframeBadge={isMinute ? '分钟' : undefined}
-                />
-              )
-            })}
-          </div>
+          {poolGroupTabs && (
+            <div className="mb-2 flex flex-wrap items-center gap-1 border-b border-border/60 pb-2" role="tablist" aria-label="策略分组">
+              <button type="button" role="tab" aria-selected={activePoolTab === 'all'} onClick={() => changePoolGroupTab('all')}
+                className={cn('rounded-btn px-2.5 py-1 text-[11px] transition-colors', activePoolTab === 'all' ? 'bg-accent/10 font-medium text-accent' : 'text-secondary hover:bg-elevated hover:text-foreground')}>
+                全部<span className="ml-1 tabular-nums text-muted">{displayPool.length}</span>
+              </button>
+              {poolGroupTabs.map(tab => (
+                <button key={tab.key} type="button" role="tab" aria-selected={activePoolTab === tab.key} onClick={() => changePoolGroupTab(tab.key)}
+                  className={cn('rounded-btn px-2.5 py-1 text-[11px] transition-colors', activePoolTab === tab.key ? 'bg-accent/10 font-medium text-accent' : 'text-secondary hover:bg-elevated hover:text-foreground')}>
+                  {tab.name}<span className="ml-1 tabular-nums text-muted">{tab.ids.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className={cardWrapCls(cardSize)}>{renderPoolCards(activePoolIds)}</div>
         </section>
         )}
 
@@ -1391,7 +1434,7 @@ export function Screener() {
         }}
         onDeleted={() => {
           if (settingsStrategyId) {
-            removeFromPool(settingsStrategyId)
+            handleStrategyDeleted(settingsStrategyId)
             const rules = storage.strategyRules.get({})
             delete rules[settingsStrategyId]; storage.strategyRules.set(rules)
             setStrategyLimits(prev => { const next = {...prev}; delete next[settingsStrategyId]; return next })
@@ -1402,17 +1445,15 @@ export function Screener() {
 
       {showPoolDialog && (
         <StrategyPoolDialog
-          pool={pool}
-          onConfirm={(newPool) => {
-            // 新增的日线策略立即自动扫描, 免去手动点刷新; 纯排序/删除不重跑
-            if (assetType === 'stock') {
-              const prev = new Set(pool)
-              const addedDaily = newPool.filter(
-                id => !prev.has(id) && !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false),
+          pool={strategyPool}
+          onAdded={(addedIds) => {
+            // 新勾选的日线策略立即自动扫描, 免去手动点刷新; 纯排序/归档/删除不重跑
+            if (assetType === 'stock' && addedIds.length > 0) {
+              const addedDaily = addedIds.filter(
+                id => !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false),
               )
               if (addedDaily.length > 0) requestRunAll({ date: asOf || undefined, strategyIds: addedDaily, ensure: true })
             }
-            reorderPool(newPool)
           }}
           onClose={() => setShowPoolDialog(false)}
         />
@@ -1428,7 +1469,7 @@ export function Screener() {
             toast('AI 策略已保存为草稿，请在策略池「AI」标签发布后使用', 'success')
             return
           }
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
+          const data = await qc.fetchQuery({ queryKey: [...QK.screenerStrategies('all'), 'all'], queryFn: () => api.screenerStrategies(undefined, 'all'), staleTime: 0 })
           if (!data.presets.some(s => s.id === id)) {
             throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
           }
@@ -1445,7 +1486,7 @@ export function Screener() {
         open={showComposite}
         onClose={() => setShowComposite(false)}
         onSavedId={async id => {
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
+          const data = await qc.fetchQuery({ queryKey: [...QK.screenerStrategies('all'), 'all'], queryFn: () => api.screenerStrategies(undefined, 'all'), staleTime: 0 })
           addToPool(id)
           // 新建叠加策略为日线时立即扫描, 免去手动点刷新 (分钟策略仍手动单跑)
           const preset = data.presets.find(s => s.id === id)

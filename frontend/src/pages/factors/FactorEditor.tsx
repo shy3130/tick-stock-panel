@@ -5,6 +5,7 @@ import { ChevronRight, CircleAlert, CircleCheck, FlaskConical, PenLine, Play, Sa
 import { toast } from '@/components/Toast'
 import { api, type FactorTrialResponse, type FactorValidateResponse } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { selectableDefinitions, definitionOptionLabel } from '@/lib/definitionOptions'
 
 const INPUT_CLS = 'w-full rounded-input border border-border bg-surface px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none'
 const CHIP_CLS = 'shrink-0 rounded-btn border border-border bg-base/60 px-1.5 py-0.5 font-mono text-[10px] text-secondary transition-colors hover:border-accent/40 hover:text-accent cursor-pointer'
@@ -107,9 +108,9 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
     queryFn: api.factorColumns,
     staleTime: 300_000,
   })
-  const customFactors = (library.data?.factors ?? []).filter(item => item.kind === 'custom')
+  const customFactors = selectableDefinitions((library.data?.factors ?? []).filter(item => item.kind === 'custom'), [editId ?? '', editing?.id ?? ''])
   const fieldGroups = useMemo(() => {
-    const cols = columns.data?.columns ?? []
+    const cols = selectableDefinitions(columns.data?.columns ?? [])
     const groups: Record<string, typeof cols> = {}
     for (const col of cols) (groups[col.group] ??= []).push(col)
     return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b, 'zh'))
@@ -247,7 +248,7 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
             >
               <option value="">编辑已有因子…</option>
               {customFactors.map(item => (
-                <option key={item.id} value={item.id}>{item.label} ({item.id} v{item.version})</option>
+                <option key={item.id} value={item.id}>{definitionOptionLabel(item)} ({item.id} v{item.version})</option>
               ))}
             </select>
           )}

@@ -134,10 +134,15 @@ class FactorColumnsResponse(BaseModel):
 
 
 @router.get("/factor/columns")
-def factor_columns():
+def factor_columns(request: Request):
     """返回可用的因子列列表 (含运行期注册的自定义/复合因子)。"""
+    from app.factors import store
     from app.factors.registry import factor_columns_view
-    return {"columns": factor_columns_view()}
+
+    archived = {item["id"]: item.get("archived") is True
+                for item in store.load_all(request.app.state.repo.store.data_dir)}
+    return {"columns": [{**item, "archived": archived.get(item["id"], False)}
+                        for item in factor_columns_view()]}
 
 
 class FactorBacktestRequest(BaseModel):

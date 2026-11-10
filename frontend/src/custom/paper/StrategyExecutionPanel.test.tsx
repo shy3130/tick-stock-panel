@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StrategyExecutionPanel } from './StrategyExecutionPanel'
 import { executionApi, sourceFromReport, type ExecutionPreview } from './executionClient'
+import { api, type StrategyDetail } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({ api: {
   screenerStrategies: vi.fn(async () => ({ presets: [{ id: 'demo', name: '示例策略' }] })),
@@ -69,6 +70,20 @@ it('clears a reviewed snapshot when source changes and resets the dialog when re
   await click('绑定参数快照')
   expect((document.querySelector('select[aria-label="回测候选"]') as HTMLSelectElement).value).toBe('')
   expect(button('预览并核对参数').disabled).toBe(true)
+})
+
+it('does not offer archived strategies when creating an execution binding', async () => {
+  vi.mocked(api.screenerStrategies).mockResolvedValueOnce({ presets: [
+    { id: 'active', name: '活跃策略', library: { group: 'g', group_name: '观察组', archived: false } },
+    { id: 'old', name: '归档策略', library: { group: 'g', group_name: '观察组', archived: true } },
+  ] as StrategyDetail[], load_errors: [], legacy_migration: undefined })
+  await render()
+  await click('绑定参数快照')
+  await select('参数来源', 'strategy')
+  const choice = document.querySelector('select[aria-label="策略"]')!
+  expect(choice.textContent).toContain('活跃策略')
+  expect(choice.textContent).not.toContain('归档策略')
+  expect(choice.querySelector('optgroup')?.label).toBe('观察组')
 })
 
 it('isolates accounts and reports loading failures without showing another account binding', async () => {

@@ -10,6 +10,7 @@ import { api } from '@/lib/api'
 const state = vi.hoisted(() => ({
   pool: ['minute', 'daily'],
   prune: vi.fn(),
+  builderSaved: null as null | ((id: string, researchOnly?: boolean) => Promise<void>),
   prefs: { screener_auto_run: false },
   status: { enriched: { latest_date: '2026-11-06', earliest_date: '2026-01-01' } },
 }))
@@ -30,7 +31,19 @@ vi.mock('@/lib/useSharedQueries', () => ({
   useQuoteStatus: () => ({ data: { running: false, is_trading_hours: false } }),
 }))
 vi.mock('@/lib/useStrategyPool', () => ({ useStrategyPool: () => ({
-  pool: state.pool, prune: state.prune, addToPool: vi.fn(), removeFromPool: vi.fn(), reorderPool: vi.fn(),
+  pool: state.pool,
+  groups: [],
+  groupNames: new Map(),
+  metaMap: new Map(state.pool.map(id => [id, { group: null, archived: false, archived_at: null, added_at: '2026-01-01T00:00:00' }])),
+  archivedIds: [],
+  isLoading: false,
+  isError: false,
+  addToPool: vi.fn(), removeFromPool: vi.fn(), reorderPool: vi.fn(),
+  archiveStrategy: vi.fn(), unarchiveStrategy: vi.fn(), discardRecord: vi.fn(),
+  setStrategyGroup: vi.fn(), createGroup: vi.fn(), renameGroup: vi.fn(),
+  reorderGroups: vi.fn(), deleteGroup: vi.fn(),
+  handleStrategyDeleted: vi.fn(),
+  prune: state.prune, isInPool: (id: string) => state.pool.includes(id),
 }) }))
 vi.mock('@/lib/useSharedMutations', () => ({ useWatchlistBatchAdd: () => ({ mutate: vi.fn(), isPending: false }) }))
 vi.mock('@/lib/screener-columns', () => ({
@@ -39,6 +52,10 @@ vi.mock('@/lib/screener-columns', () => ({
   saveScreenerColumnConfig: vi.fn(), refreshExtColumns: (columns: unknown) => columns,
 }))
 vi.mock('@/components/ListColumnCustomizer', () => ({ ListColumnCustomizer: () => null }))
+vi.mock('@/components/screener/StrategyBuilderDialog', () => ({ StrategyBuilderDialog: (props: { onSavedId: typeof state.builderSaved }) => {
+  state.builderSaved = props.onSavedId
+  return null
+} }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: () => null }))
 vi.mock('@/components/screener/ScreenerTable', () => ({
   ScreenerTable: ({ rows }: { rows: { symbol: string }[] }) => <output>{rows.map(row => row.symbol).join(',')}</output>,
@@ -94,6 +111,18 @@ async function render() {
   ))
   await tick()
 }
+
+it('refreshes the complete daily and minute library before adding a saved minute strategy', async () => {
+  const all = (await api.screenerStrategies(undefined, 'all')).presets
+  vi.mocked(api.screenerStrategies).mockImplementation(async (_asset, timeframe = '1d') => ({
+    presets: timeframe === 'all' ? all : all.filter(item => item.timeframes.includes('1d')),
+    load_errors: [], legacy_migration: undefined,
+  }))
+  await render()
+  await act(async () => { await state.builderSaved!('minute', false) })
+  expect(api.screenerStrategies).toHaveBeenLastCalledWith(undefined, 'all')
+  expect(api.screenerRunAll).not.toHaveBeenCalled()
+})
 
 async function clickCard(name: string) {
   const button = [...host.querySelectorAll('button')].find(el => el.textContent?.includes(name))

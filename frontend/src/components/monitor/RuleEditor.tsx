@@ -5,6 +5,7 @@ import { Activity, BarChart3, Building2, ChartNoAxesCombined, Check, ChevronDown
 import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
+import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { boardTag } from '@/components/stock-table/primitives'
 import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
 import { SignalPicker } from '@/components/screener/SignalPicker'
@@ -434,12 +435,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     return `${target.name} ${target.symbol ?? ''} ${target.value ?? ''}`.toLowerCase().includes(query)
   }).slice(0, 100)
   const thresholdConds = draft.conditions.filter(c => c.op !== 'truth')
-  const strategyPresets = strategies.data?.presets ?? []
+  const strategyPresets = selectableStrategies(strategies.data?.presets ?? [], draft.strategy_id ? [draft.strategy_id] : [])
   const normalizedStrategyQuery = strategyQuery.trim().toLowerCase()
   const visibleStrategies = strategyPresets.filter(strategy => {
     if (strategyCategory !== 'all' && strategy.source !== strategyCategory) return false
     if (!normalizedStrategyQuery) return true
-    return [strategy.name, strategy.id, strategy.description, ...(strategy.tags ?? [])]
+    return [strategy.name, strategy.id, strategy.description, strategy.library?.group_name, ...(strategy.tags ?? [])]
       .some(value => String(value ?? '').toLowerCase().includes(normalizedStrategyQuery))
   })
   const strategyCategories = [
@@ -1391,7 +1392,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className={`shrink-0 rounded border px-1 py-px text-[9px] font-medium ${sourceMeta.className}`}>{sourceMeta.label}</span>
-                      <span className="truncate text-xs font-medium text-foreground">{strategy.name}</span>
+                      <span className="truncate text-xs font-medium text-foreground">{strategyOptionLabel(strategy)}</span>
                     </span>
                     <span className="mt-1 block truncate text-[10px] text-muted" title={summary}>{summary}</span>
                   </span>

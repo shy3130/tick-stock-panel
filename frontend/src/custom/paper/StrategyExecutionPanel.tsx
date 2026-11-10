@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileInput, Pause, Play, SlidersHorizontal, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { StrategyOptions } from '@/components/StrategyOptions'
 import { useBacktestTask } from '@/lib/backtestTask'
 import { Modal } from '@/components/Modal'
 import { executionApi, executionKey, executionListKey, sourceFromReport, type ExecutionBinding, type ExecutionPreview, type ExecutionSource } from './executionClient'
@@ -56,7 +57,7 @@ function BindingDialog({ account, binding, onClose }: { account: string; binding
         <option value="candidate">已保存的回测候选</option><option value="strategy">当前策略配置</option><option value="report">回测结果 / 配置 JSON</option>
       </select></label>
       {kind === 'candidate' && <label className="block text-xs text-muted">回测候选<select aria-label="回测候选" className={input} value={id} disabled={busy || candidates.isPending} onChange={e => { setId(e.target.value); reset() }}><option value="">{candidates.isPending ? '加载中…' : '请选择回测候选'}</option>{candidates.data?.items.filter(c => c.kind === 'strategy').map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select>{!candidates.isPending && !candidates.isError && !candidates.data?.items.some(c => c.kind === 'strategy') && <span className="mt-1 block">暂无候选，可在回测完成后保存候选，或选择其他来源。</span>}{candidates.isError && <span role="alert" className="text-danger">{candidates.error.message}</span>}</label>}
-      {kind === 'strategy' && <label className="block text-xs text-muted">策略<select aria-label="策略" className={input} value={id} disabled={busy || strategies.isPending} onChange={e => { setId(e.target.value); reset() }}><option value="">请选择日线策略</option>{strategies.data?.presets.map(s => <option value={s.id} key={s.id}>{s.name}</option>)}</select>{strategies.isError && <span role="alert" className="text-danger">{strategies.error.message}</span>}<span className="mt-1 block">冻结已保存调参，仓位默认最多 10 仓、敞口 100%；精确复用回测请选回测候选或结果。</span></label>}
+      {kind === 'strategy' && <label className="block text-xs text-muted">策略<select aria-label="策略" className={input} value={id} disabled={busy || strategies.isPending} onChange={e => { setId(e.target.value); reset() }}><option value="">请选择日线策略</option><StrategyOptions strategies={strategies.data?.presets ?? []} selected={[id]} /></select>{strategies.isError && <span role="alert" className="text-danger">{strategies.error.message}</span>}<span className="mt-1 block">冻结已保存调参，仓位默认最多 10 仓、敞口 100%；精确复用回测请选回测候选或结果。</span></label>}
       {kind === 'report' && <div className="space-y-2 text-xs"><label className="block text-muted">读取回测 JSON<input aria-label="读取回测 JSON" type="file" accept=".json,application/json" className={input} disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]
         reset(); setReport(null)

@@ -434,6 +434,7 @@ export interface ScreenerStrategy {
   source?: string
   /** 支持的周期, 如 ['1d'] / ['1m'] (分钟策略) */
   timeframes?: string[]
+  library?: StrategyLibraryInfo | null
 }
 
 export interface StrategyLoadError {
@@ -909,6 +910,7 @@ export interface StrategyDetail {
   tags: string[]
   source: 'custom' | 'ai' | 'composite'
   research_only?: boolean
+  library?: StrategyLibraryInfo | null
   execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy' | 'composite' | 'minute_filter'
   asset_types: string[]
   timeframes: string[]
@@ -938,6 +940,37 @@ export interface StrategyDetail {
 }
 
 export type ScoringDirection = 'high' | 'low'
+
+// ===== Strategy Pool v2 (池成员 + 策略库分组/归档) =====
+
+export interface StrategyPoolGroup {
+  id: string
+  name: string
+}
+
+/** 策略库元数据 — 库级属性, 与是否在池中无关 */
+export interface StrategyLibraryMeta {
+  /** 自定义分组; null = 未分组 (「自定义/AI/叠加」是来源分类, 不在此) */
+  group: string | null
+  /** 已归档 (可逆): 策略库与选择器隐藏, 同时移出池 */
+  archived: boolean
+  archived_at: string | null
+  /** 加入时间 (策略保存/首次被引擎看到时登记; 排序依据) */
+  added_at: string | null
+}
+
+export interface StrategyLibraryInfo extends StrategyLibraryMeta {
+  group_name: string | null
+}
+
+export interface StrategyPoolSnapshot {
+  /** 旧服务/测试快照允许缺失; 新服务用它丢弃晚到的旧响应。 */
+  revision?: number
+  groups: StrategyPoolGroup[]
+  /** 参与扫描的策略 ID 有序列表 (纯顺序, 不带属性) */
+  pool: string[]
+  meta: Record<string, StrategyLibraryMeta>
+}
 
 export interface StrategyBuildResult {
   code: string
@@ -995,6 +1028,11 @@ export interface CustomSignal {
   min_bars?: number
   /** 显式输出列名 (缺省 csg_{id}); 迁移自内置的定义沿用 signal_* 原列名, 编辑保存须原样回传 */
   column?: string
+  /** 已归档 (可逆): 信号库/选择器隐藏, 但仍照常编译注入, 引用它的策略不受影响 */
+  archived?: boolean
+  archived_at?: string | null
+  /** 创建时间 (旧定义可能缺失 → undefined, 排序时回退名称) */
+  created_at?: string | null
 }
 
 export interface CustomSignalFieldGroup {
@@ -1474,6 +1512,7 @@ export interface FactorColumn {
   label: string
   group: string
   desc: string
+  archived?: boolean
 }
 
 // ===== Factor Library (注册表, P1) =====
@@ -1495,6 +1534,8 @@ export interface FactorLibraryItem {
   stability: FactorStability
   /** 完整生命周期状态; 内置因子无盘上定义 → null (stability 是它的二元投影) */
   status: 'draft' | 'active' | 'watch' | 'retired' | null
+  /** 已归档 (可逆): 不再出现在因子库/选择器, 但注册表照常计算, 引用方不受影响 */
+  archived: boolean
   scale_free: boolean
   dependencies: string[]
 }
@@ -2353,6 +2394,8 @@ export interface DefinitionsCatalogItem {
   id: string
   label: string
   enabled?: boolean
+  /** 已归档 (可逆): 选择器默认隐藏, 正被引用的仍显示 */
+  archived?: boolean
   timeframe?: string
   lang: string
   status?: string
@@ -3784,6 +3827,13 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ group }) },
     ),
 
+  /** 归档/恢复因子 (可逆): 只改标记位, 不注销注册表 */
+  factorArchive: (factorId: string, archived: boolean) =>
+    request<{ ok: boolean; id: string; archived: boolean }>(
+      `/api/factors/custom/${encodeURIComponent(factorId)}/${archived ? 'archive' : 'unarchive'}`,
+      { method: 'POST' },
+    ),
+
   factorRun: (payload: {
     factor_name: string
     symbols?: string[] | null
@@ -4788,6 +4838,64 @@ export const api = {
   strategyReload: () =>
     request<{ ok: boolean; count: number }>('/api/strategies/reload', { method: 'POST' }),
 
+  // ===== Strategy Pool v2 (池成员 / 策略库分组与归档) =====
+  strategyPoolSnapshot: (signal?: AbortSignal) =>
+    request<StrategyPoolSnapshot>('/api/strategy-pool', { signal }),
+
+  /** 池的整体替换 (纯 ID 顺序; 已归档策略会被后端拒绝) */
+  strategyPoolSetEntries: (ids: string[], onlyIfEmpty = false, expectedRevision?: number) =>
+    request<StrategyPoolSnapshot>('/api/strategy-pool/entries', {
+      method: 'PUT',
+      body: JSON.stringify({ pool: ids, only_if_empty: onlyIfEmpty, expected_revision: expectedRevision }),
+    }),
+
+  strategyPoolAdd: (strategyId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/entries/${encodeURIComponent(strategyId)}`, { method: 'POST' }),
+
+  strategyPoolRemove: (strategyId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/entries/${encodeURIComponent(strategyId)}`, { method: 'DELETE' }),
+
+  /** 归档策略 (库级, 可逆): 移入档案库并移出池; 不删除策略文件 */
+  strategyPoolArchiveStrategy: (strategyId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/strategies/${encodeURIComponent(strategyId)}/archive`, { method: 'POST' }),
+
+  /** 恢复策略: 回到策略库 (不自动回池) */
+  strategyPoolUnarchiveStrategy: (strategyId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/strategies/${encodeURIComponent(strategyId)}/unarchive`, { method: 'POST' }),
+
+  /** 删除策略的库级记录 (清理档案库中已删除的策略) */
+  strategyPoolDiscardRecord: (strategyId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/strategies/${encodeURIComponent(strategyId)}/record`, { method: 'DELETE' }),
+
+  /** 设置策略的自定义分组 (null = 未分组) */
+  strategyPoolSetStrategyGroup: (strategyId: string, group: string | null) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/strategies/${encodeURIComponent(strategyId)}/group`, {
+      method: 'POST',
+      body: JSON.stringify({ group }),
+    }),
+
+  strategyPoolCreateGroup: (name: string) =>
+    request<StrategyPoolSnapshot & { group: StrategyPoolGroup }>('/api/strategy-pool/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  strategyPoolRenameGroup: (groupId: string, name: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/groups/${encodeURIComponent(groupId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    }),
+
+  strategyPoolReorderGroups: (orderedIds: string[]) =>
+    request<StrategyPoolSnapshot>('/api/strategy-pool/groups/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }),
+
+  /** 删除分组定义; 组内策略保留转未分组 */
+  strategyPoolDeleteGroup: (groupId: string) =>
+    request<StrategyPoolSnapshot>(`/api/strategy-pool/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' }),
+
   // ===== Custom Signals (自定义信号) =====
   customSignalsList: () =>
     request<{ signals: CustomSignal[] }>('/api/custom-signals'),
@@ -4803,6 +4911,10 @@ export const api = {
 
   customSignalDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/custom-signals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 归档/恢复信号 (可逆): 只改标记位, 不影响编译注入 */
+  customSignalArchive: (id: string, archived: boolean) =>
+    request<{ ok: boolean; signal: CustomSignal }>(`/api/custom-signals/${encodeURIComponent(id)}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' }),
 
   customSignalsAiGenerate: (description: string) =>
     request<CustomSignalAIGenerateResult>('/api/custom-signals/ai/generate', {

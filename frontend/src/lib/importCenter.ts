@@ -1,8 +1,10 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { packToExtension } from '@/extensions/runtime'
 import { QK } from './queryKeys'
+import { notifyStrategyLibraryChanged, STRATEGY_LIBRARY_QUERY_KEYS } from './strategyLibrary'
 
 export const RESOURCE_INVALIDATE_KEYS = [
+  ...STRATEGY_LIBRARY_QUERY_KEYS,
   QK.resourceCatalog, QK.definitions, QK.customSignals, QK.customSignalsOptions, QK.factorColumns,
   QK.factorLibrary('all').slice(0, 1), QK.screenerStrategies().slice(0, 1), QK.strategyDetail('').slice(0, 1),
   QK.screenerCached().slice(0, 1), QK.screener, QK.monitorRuleOptions, QK.watchlist, QK.strategyLinkOptions().slice(0, 1),
@@ -10,6 +12,7 @@ export const RESOURCE_INVALIDATE_KEYS = [
 
 export async function refreshResourceQueries(qc: QueryClient) {
   await Promise.allSettled(RESOURCE_INVALIDATE_KEYS.map(queryKey => qc.invalidateQueries({ queryKey })))
+  notifyStrategyLibraryChanged()
 }
 
 export async function inspectPageModule(url: string, expectedId?: string) {

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { StrategyDetail, StrategyParamDef } from '@/lib/api'
 import { paramDisplayLabel, visibleParams } from '@/lib/strategyParams'
+import { StrategyOptions } from '@/components/StrategyOptions'
 
 /** 参数扫描配置的共享逻辑与 UI — 优化器与 walk-forward 复用。 */
 
@@ -140,9 +141,9 @@ export function StrategySelect({ strategies, value, onChange }: {
   onChange: (id: string) => void
 }) {
   return (
-    <select value={value} onChange={e => onChange(e.target.value)} className={INPUT_CLS}>
+    <select aria-label="选择策略" value={value} onChange={e => onChange(e.target.value)} className={INPUT_CLS}>
       <option value="">选择策略…</option>
-      {strategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      <StrategyOptions strategies={strategies} selected={[value]} />
     </select>
   )
 }

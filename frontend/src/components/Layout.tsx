@@ -24,6 +24,7 @@ import {
 } from '@/lib/useSharedMutations'
 import { QK, MINUTE_DATA_QUERY_PREFIXES } from '@/lib/queryKeys'
 import { setUiPref } from '@/lib/uiPrefs'
+import { useStrategyLibrarySync } from '@/lib/strategyLibrary'
 import { getPageScale } from '@/lib/pageZoom'
 import { setKlineBatchLimits } from '@/lib/klineBatchLimits'
 import { compareByDefaultNav, defaultNavIndex, seedHiddenForNewUser } from '@/lib/navOrder'
@@ -370,6 +371,7 @@ function AIConfigBadge({ configured, model }: { configured?: boolean; model?: st
 type NavState = 'expanded' | 'rail' | 'hidden'
 
 export function Layout() {
+  useStrategyLibrarySync()
   // ===== 共享 hooks (替代内联 useQuery) =====
   const { data: settingsState } = useSettings()
   const { data: matrix } = useCapabilityMatrix()

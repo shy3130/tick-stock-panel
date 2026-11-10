@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db_safe import quote_ident
-from app.services import screener_work, strategy_cache, strategy_run_queue
+from app.services import screener_work, strategy_cache, strategy_pool, strategy_run_queue
 from app.services.screener import ScreenerService
 from app.services.shared_work import WorkBusyError
 from app.strategy import config as strategy_config
@@ -460,6 +460,7 @@ def strategies(
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
     presets = []
+    library = strategy_pool.library_metadata(data_dir)
     for meta in engine.list_strategies():
         if meta.get("research_only"):
             continue
@@ -473,6 +474,7 @@ def strategies(
             **meta,
             "name": overrides.get("name") or meta["name"],
             "description": overrides.get("description") or meta.get("description", ""),
+            "library": library.get(sid),
         })
 
     return {"presets": presets, "load_errors": engine.load_errors()}

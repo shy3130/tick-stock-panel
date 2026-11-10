@@ -20,6 +20,7 @@ import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, History
 import { createPortal } from 'react-dom'
 import { api, type PaperCompareRow, type PaperFill, type PaperHolding, type PaperOrder, type PaperRound } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { useQuoteStatus } from '@/lib/useSharedQueries'
 import { cn } from '@/lib/cn'
 import { fmtPct, priceColorClass } from '@/lib/format'
@@ -257,13 +258,14 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
 
   const autoQuery = (autoId ? (autoName || autoId) : autoSearch).trim().toLowerCase()
   const autoOptions: SuggestOption[] = autoKind === 'strategy'
-    ? (strategiesQ.data?.presets ?? [])
+    ? selectableStrategies(strategiesQ.data?.presets ?? [], [autoId])
         .filter(s => !autoQuery || s.name.toLowerCase().includes(autoQuery) || s.id.toLowerCase().includes(autoQuery) || (s.tags ?? []).some(t => t.toLowerCase().includes(autoQuery)))
         .map(s => ({
           value: s.id,
-          label: s.name || s.id,
+          label: strategyOptionLabel(s),
           desc: s.description || undefined,
           badges: [
+            ...(s.library?.group_name ? [s.library.group_name] : []),
             ...(s.timeframes ?? []).map(tf => tf === '1d' ? '日线' : tf === '1m' ? '分钟' : tf),
             ...(s.tags ?? []).slice(0, 2),
           ].slice(0, 3),
@@ -1284,12 +1286,12 @@ function AutoRuleForm({ acc, onDone, onCancel }: { acc: string; onDone: () => vo
   const idQuery = matchId.trim().toLowerCase()
   const idOptions: SuggestOption[] = (() => {
     if (matchKind === 'strategy') {
-      return (strategiesQ.data?.presets ?? [])
+      return selectableStrategies(strategiesQ.data?.presets ?? [], [matchId])
         .filter(s => !idQuery || s.name.toLowerCase().includes(idQuery) || s.id.toLowerCase().includes(idQuery))
         .slice(0, 8)
         .map(s => ({
           value: s.id,
-          label: s.name || s.id,
+          label: strategyOptionLabel(s),
           hint: <span className="shrink-0 font-mono text-[10px] text-muted">{s.id}</span>,
         }))
     }
@@ -1878,7 +1880,7 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
     if (row.kind === 'rule') setSide(s => (s === 'auto' ? 'buy' : s))
   }
   const addAllStrategies = () => {
-    const presets = (strategiesQ.data?.presets ?? []).slice(0, 20)
+    const presets = selectableStrategies(strategiesQ.data?.presets ?? []).slice(0, 20)
     setRows(prev => {
       const seen = new Set(prev.map(r => r.matchId))
       return [...prev, ...presets.filter(p => !seen.has(p.id)).map(p => ({ name: p.name || p.id, kind: 'strategy' as const, matchId: p.id }))]
@@ -1893,13 +1895,14 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
   const quickQuery = quickId.trim().toLowerCase()
   const quickOptions: SuggestOption[] = quickKind === 'strategy'
-    ? (strategiesQ.data?.presets ?? [])
+    ? selectableStrategies(strategiesQ.data?.presets ?? [], [quickId])
         .filter(s => !quickQuery || s.name.toLowerCase().includes(quickQuery) || s.id.toLowerCase().includes(quickQuery) || (s.tags ?? []).some(t => t.toLowerCase().includes(quickQuery)))
         .map(s => ({
           value: s.id,
-          label: s.name || s.id,
+          label: strategyOptionLabel(s),
           desc: s.description || undefined,
           badges: [
+            ...(s.library?.group_name ? [s.library.group_name] : []),
             ...(s.timeframes ?? []).map(tf => tf === '1d' ? '日线' : tf === '1m' ? '分钟' : tf),
             ...(s.tags ?? []).slice(0, 2),
           ].slice(0, 3),
@@ -1956,11 +1959,11 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
             {quickKind === 'strategy' && (
               <button
                 onClick={addAllStrategies}
-                disabled={(strategiesQ.data?.presets ?? []).length === 0}
+                disabled={selectableStrategies(strategiesQ.data?.presets ?? []).length === 0}
                 className="rounded-btn border border-border px-2.5 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
                 title="把现有策略各开一个账户 (最多 20 个)"
               >
-                全部策略一键加入 ({Math.min((strategiesQ.data?.presets ?? []).length, 20)})
+                全部策略一键加入 ({Math.min(selectableStrategies(strategiesQ.data?.presets ?? []).length, 20)})
               </button>
             )}
           </div>

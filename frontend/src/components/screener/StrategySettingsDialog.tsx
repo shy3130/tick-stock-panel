@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { X, Settings2, RotateCcw, Save, Filter, Star, TrendingUp, Sparkles, Layers, Plus, Trash2, SlidersHorizontal } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection, type CustomSignalCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { groupParams, visibleParams } from '@/lib/strategyParams'
 import { toast } from '@/components/Toast'
@@ -321,7 +322,12 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   // 点击子策略名打开其配置编辑(composite 专属; 子策略必非 composite, 不会再嵌套)
   const [editingChildId, setEditingChildId] = useState<string | null>(null)
   // 可选子策略列表 + 添加面板开关(composite 设置用)
-  const [allStrategies, setAllStrategies] = useState<{ id: string; name: string; source?: string }[]>([])
+  const childStrategiesQuery = useQuery({
+    queryKey: QK.screenerStrategies('all'),
+    queryFn: () => api.screenerStrategies(),
+    enabled: !!strategyId && detail?.source === 'composite',
+  })
+  const allStrategies = (childStrategiesQuery.data?.presets ?? []).filter(s => s.id !== strategyId && s.source !== 'composite')
   const [showAddChild, setShowAddChild] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -406,12 +412,6 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     api.strategyGet(strategyId)
       .then(d => {
         loadIntoState(d)
-        // composite 策略: 加载全部可选子策略(排除自身和其他 composite)供添加
-        if (d.source === 'composite') {
-          api.screenerStrategies().then(data => {
-            setAllStrategies((data.presets ?? []).filter(s => s.id !== strategyId && s.source !== 'composite'))
-          }).catch(() => setAllStrategies([]))
-        }
       })
       .catch(() => setDetail(null))
       .finally(() => setLoading(false))
@@ -846,7 +846,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                         ai: 'border-purple-500/25 bg-purple-500/10 text-purple-400',
                       }
                       const selectedIds = new Set(compositeChildren.map(c => c.id))
-                      const candidates = allStrategies.filter(s => !selectedIds.has(s.id))
+                      const candidates = selectableStrategies(allStrategies).filter(s => !selectedIds.has(s.id))
                       return (
                       <div className="space-y-3">
                         <p className="text-[11px] leading-5 text-muted/70">叠加策略按权重融合子策略的结果；点击子策略名可单独编辑其配置。</p>
@@ -901,7 +901,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                                           title="点击编辑该子策略的配置"
                                           className="truncate text-left text-xs font-medium text-foreground transition-colors hover:text-accent cursor-pointer"
                                         >
-                                          {c.name || c.id}
+                                          {strategyOptionLabel(allStrategies.find(s => s.id === c.id) ?? c)}
                                         </button>
                                         {c.source && (
                                           <span className={`shrink-0 rounded border px-1 text-[8px] ${SRC_CLS[c.source] ?? ''}`}>{SRC_LABEL[c.source] ?? c.source}</span>
