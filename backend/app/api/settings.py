@@ -1347,8 +1347,13 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
                     mr_store.migrate_strategy_monitors(data_dir, [], {})
                 # reload 规则到引擎
                 monitor_engine.set_rules(mr_store.load_all(data_dir))
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 配置已落盘, 但规则迁移/重载失败 => 界面显示「已开启策略监控」而引擎空转。
+                # 静默会让用户以为配置生效, 排障时无从下手 —— 必须留痕(#490 同款教训)。
+                logger.warning(
+                    "策略监控配置已保存, 但规则迁移/重载失败, 监控可能未生效",
+                    exc_info=True,
+                )
 
     return result
 

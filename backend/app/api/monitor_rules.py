@@ -166,8 +166,9 @@ def get_options(request: Request):
                     ),
                     "label": cs.get("name", cs["id"]),
                 })
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        # 自定义信号加载失败 => 规则编辑器的信号下拉框少项, 用户会误以为信号丢了。
+        logger.warning("加载自定义信号失败, 信号列表可能不完整", exc_info=True)
 
     sector_service = getattr(request.app.state, "sector_monitor_service", None)
     sector_targets = sector_service.list_targets() if sector_service is not None else {
