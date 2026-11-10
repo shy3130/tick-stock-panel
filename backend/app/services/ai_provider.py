@@ -78,6 +78,11 @@ Message = dict[str, str]
 
 logger = logging.getLogger(__name__)
 
+
+class AIToolProtocolError(RuntimeError):
+    """可直接展示的工具协议错误，不包含上游响应或子进程内部输出。"""
+
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
@@ -281,6 +286,13 @@ def is_codex_cli_provider(provider: str | None = None) -> bool:
     return (provider or current_ai_provider()) == CODEX_CLI_PROVIDER
 
 
+def supports_ai_tools(provider: str | None = None) -> bool:
+    """接入适配器是否支持工具协议；具体模型/CLI 的响应仍须运行期校验。"""
+    return (provider or current_ai_provider()) in {
+        OPENAI_PROVIDER, OPENAI_COMPAT_PROVIDER, CODEX_CLI_PROVIDER,
+    }
+
+
 def normalize_codex_model(model: str) -> str:
     value = model.strip()
     aliases = {
@@ -392,7 +404,7 @@ async def generate_ai_text(
 
 
 async def generate_ai_text_with_tools(
-    messages: Sequence[Message],
+    messages: Sequence[dict],
     tools: Sequence[dict],
     *,
     execute_tool,
@@ -401,16 +413,17 @@ async def generate_ai_text_with_tools(
     timeout: float = 180.0,
     max_rounds: int = 4,
 ) -> list[dict]:
-    """OpenAI 原生 tools 有界循环: 调用 → 逐条执行工具 → role:tool 回填 → 循环。
+    """通用有界工具循环: 调用 → 执行调用方工具 → role:tool 回填 → 循环。
 
-    与 generate_ai_text 的差异: 这里返回「完整 messages」(含 tool 往返), 最后一条
-    assistant 消息承载最终文本; 调用方可扫描 role:tool 消息重建逐轮证据 (回测指标)。
+    返回完整 messages (含 tool 往返)，可扫描 role:tool 重建执行证据。
+    轮次耗尽时可能停在工具结果，调用方须检查是否存在最终正文。
     execute_tool 为 async (name, args) -> dict, 返回 {"ok": bool, "result"|"error"},
-    由调用方注入 (见 services.tool_catalog.execute_tool)。tools 是硬能力依赖
-    (Codex CLI 无 tools= 协议), 故入口 fail-closed, 不做纯文本降级。
+    工具 schema 与执行回调由调用方注入，不依赖 AI 助手扩展或其工具目录。
+    OpenAI 两种协议及 Codex 结构化输出共用此循环；Codex 响应先做结构校验，
+    各工具的参数、权限和动作确认仍由调用方的执行回调负责。
     """
-    if is_codex_cli_provider():
-        raise RuntimeError("当前 AI 供应商不支持工具调用迭代, 请改用 OpenAI 兼容模型")
+    if not supports_ai_tools():
+        raise AIToolProtocolError("当前 AI 接入不支持工具调用，请选择支持工具调用的 AI 接入方式")
 
     max_tokens = _resolve_max_tokens(max_tokens)
     if not tools:
@@ -421,7 +434,13 @@ async def generate_ai_text_with_tools(
 
     for _ in range(max_rounds):
         _check_input_budget(req_messages, max_tokens=max_tokens)
-        if is_responses_protocol():
+        if is_codex_cli_provider():
+            from app.services import ai_codex_tools
+
+            message = await ai_codex_tools.run_message_once(
+                req_messages, tool_schemas, max_tokens=max_tokens, timeout=timeout,
+            )
+        elif is_responses_protocol():
             from app.services import ai_responses
 
             message = await ai_responses.run_message_once(

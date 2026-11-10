@@ -939,7 +939,12 @@ def save_strategy_code_core(
 def ai_status(request: Request):
     """Check whether the selected AI provider is configured."""
     from app import secrets_store
-    from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        supports_ai_tools,
+    )
 
     has_key = bool(secrets_store.get_ai_key())
     model = current_ai_model()
@@ -949,6 +954,7 @@ def ai_status(request: Request):
         "has_key": has_key,
         "has_model": bool(model),
         "provider": provider,
+        "supports_tools": supports_ai_tools(provider),
     }
 
 
@@ -1160,14 +1166,13 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
 @router.post("/ai/iterate")
 async def ai_iterate(req: AIIterateRequest, request: Request):
     """生成→回测→诊断→修改 的有界闭环 (只读回测, 产物为 ai_ 草稿, 不自动上线)。"""
-    from app.services.ai_provider import is_codex_cli_provider
+    from app.services.ai_provider import AIToolProtocolError, supports_ai_tools
     from app.strategy.ai_iterator import AIStrategyIterator
 
-    # Codex CLI 无 tools= 协议, 迭代能力边界在入口 fail-closed (不静默降级为纯文本)。
-    if is_codex_cli_provider():
+    if not supports_ai_tools():
         raise HTTPException(
             status_code=400,
-            detail="当前 AI 供应商不支持工具调用迭代, 请改用 OpenAI 兼容模型",
+            detail="当前 AI 接入不支持工具调用，请选择支持工具调用的 AI 接入方式",
         )
 
     engine = _get_engine(request)
@@ -1182,7 +1187,7 @@ async def ai_iterate(req: AIIterateRequest, request: Request):
             prompt, engine=engine, data_dir=str(data_dir), execution_backend=req.execution_backend,
             repo=request.app.state.repo,
         )
-    except ValueError as e:
+    except (ValueError, AIToolProtocolError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception:
         # 内部异常详情只进日志, 不透给客户端 (§8)
