@@ -1,19 +1,44 @@
-import { useMemo, useRef, useState } from 'react'
-import * as echarts from 'echarts'
-import { useECharts } from './useECharts'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createChart, AreaSeries, BaselineSeries, LineSeries, ColorType, CrosshairMode, LineStyle, LineType,
+  type AutoscaleInfo, type IChartApi, type ISeriesApi, type SeriesType, type Time, type MouseEventParams } from 'lightweight-charts'
 import type { StrategyBacktestResult } from '@/lib/api'
 import { useChartTheme } from '@/lib/theme'
+import { timeKey } from '@/lib/lightweight-model'
+
+/**
+ * 回测净值图 — TradingView lightweight-charts v5:
+ *   窗格0 主图: 策略净值(面积, 右轴资金) + 同期基准指数(虚线, 左轴点位)
+ *              + 仓位(浅黄色阶梯面积, 独立 0–100% 刻度覆盖整个主图)
+ *   窗格1 回撤 (BaselineSeries 锚 0 向下填充)
+ * 双窗格共享时间轴: 联动缩放/十字线, 与个股分析页 (FinancialPlot) 手感一致。
+ * 惯用法 (视口保持/主题增量更新/清理) 沿用 FinancialPlot 的成熟模式。
+ */
 
 interface Props {
   result: StrategyBacktestResult
 }
 
+const NAV_COLOR = '#3b82f6'
+const BENCHMARK_COLOR = '#64748b'
+const DRAWDOWN_COLOR = '#f04438'
+const MAIN_PRICE_MARGINS = { top: 0.08, bottom: 0.06 }
+
+const moneyFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+const axisMoneyFmt = (v: number) => {
+  if (Math.abs(v) >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}亿`
+  if (Math.abs(v) >= 10_000) return `${(v / 10_000).toFixed(0)}万`
+  return moneyFmt.format(v)
+}
+
 export function StrategyNavChart({ result }: Props) {
   const ct = useChartTheme()
-  // 可点击隐藏的图例(series name 为 key)。策略净值/回撤保持常显。
+  // 图例点选显隐 (策略净值/回撤常显)。隐藏即从窗格移除, 窗格拓扑随之重建。
   const [hidden, setHidden] = useState<Set<string>>(new Set())
-  // 保存上一次 dataZoom 的 start/end, 切换图例重绘(notMerge:true)时回填, 避免缩放窗口复位。
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<number | null>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<SeriesType>[]>([])
+  const runRef = useRef<string | number | null>(null)
   const toggleLegend = (name: string) =>
     setHidden(prev => {
       const next = new Set(prev)
@@ -21,234 +46,180 @@ export function StrategyNavChart({ result }: Props) {
       else next.add(name)
       return next
     })
-  const option = useMemo(() => {
-    if (!result.equity_curve.length) return null
 
-    // 回填上次 dataZoom 的 start/end, 切换图例(notMerge:true 全量重绘)时不丢失缩放窗口。
-    const prevInstance = containerRef.current ? echarts.getInstanceByDom(containerRef.current) : null
-    const prevZoom = (prevInstance?.getOption() as any)?.dataZoom?.[0]
-    const zoomStart = prevZoom && typeof prevZoom.start === 'number' ? prevZoom.start : undefined
-    const zoomEnd = prevZoom && typeof prevZoom.end === 'number' ? prevZoom.end : undefined
-
-    const moneyFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
-    const valueFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    const axisMoneyFmt = (v: number) => {
-      if (Math.abs(v) >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}亿`
-      if (Math.abs(v) >= 10_000) return `${(v / 10_000).toFixed(0)}万`
-      return moneyFmt.format(v)
-    }
-    const dates = result.equity_curve.map(r => r.date.slice(0, 10))
-    const navValues = result.equity_curve.map(r => r.value)
+  // 行数据: 同一时间轴对齐净值/基准/仓位/回撤 (基准缺失日插 whitespace 保持缺口)
+  const rows = useMemo(() => {
+    if (result.equity_curve.length < 2) return []
     const benchmarkByDate = new Map((result.benchmark_curve ?? []).map(r => [r.date.slice(0, 10), r.close ?? r.value]))
-    const benchmarkValues = dates.map(d => benchmarkByDate.get(d) ?? null)
-    const hasBenchmark = benchmarkValues.some(v => v != null)
-    const ddValues = result.drawdown_curve.map(r => r.value * 100)
-    const positionValues = result.equity_curve.map(r => {
-      if (r.exposure != null) return r.exposure * 100
-      if (r.cash != null && r.value > 0) {
-        return Math.max(0, Math.min(100, (1 - r.cash / r.value) * 100))
+    const ddByDate = new Map(result.drawdown_curve.map(r => [r.date.slice(0, 10), r.value * 100]))
+    return result.equity_curve.map(r => {
+      const date = r.date.slice(0, 10)
+      const position = r.exposure != null ? r.exposure * 100
+        : r.cash != null && r.value > 0 ? Math.max(0, Math.min(100, (1 - r.cash / r.value) * 100))
+          : null
+      return {
+        date,
+        nav: r.value,
+        benchmark: benchmarkByDate.get(date) ?? null,
+        position,
+        drawdown: ddByDate.get(date) ?? null,
       }
-      return null
     })
-    const hasPosition = positionValues.some(v => v != null)
-    const navColor = '#3b82f6'
-    const benchmarkColor = '#64748b'
-    const drawdownColor = '#f04438'
-    const positionColor = '#f59e0b'
+  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id])
 
-    return {
-      animation: false,
-      axisPointer: {
-        link: [{ xAxisIndex: 'all' }],
-        label: { backgroundColor: ct.crosshairLabelBg },
-      },
-      grid: [
-        { left: 64, right: hasBenchmark ? 64 : 16, top: 14, bottom: '40%' },
-        { left: 64, right: hasBenchmark ? 64 : 16, top: '68%', bottom: 46 },
-      ],
-      xAxis: [
-        {
-          type: 'category', data: dates, gridIndex: 0,
-          axisLabel: { show: false }, axisTick: { show: false },
-          axisPointer: { show: true, type: 'line' },
-          axisLine: { lineStyle: { color: ct.border } },
-        },
-        {
-          type: 'category', data: dates, gridIndex: 1,
-          axisLabel: { color: ct.text, fontSize: 10, interval: Math.floor(dates.length / 6) },
-          axisTick: { show: false },
-          axisPointer: { show: true, type: 'line' },
-          axisLine: { lineStyle: { color: ct.border } },
-        },
-      ],
-      yAxis: [
-        {
-          type: 'value', gridIndex: 0,
-          scale: true,
-          name: hasBenchmark ? '上证点位' : '策略资金',
-          nameTextStyle: { color: hasBenchmark ? ct.text : ct.text, fontSize: 10, padding: [0, 0, 4, 0] },
-          axisLabel: {
-            color: hasBenchmark ? ct.text : ct.text,
-            fontSize: 10,
-            formatter: hasBenchmark ? ((v: number) => v.toFixed(0)) : axisMoneyFmt,
-          },
-          splitLine: { lineStyle: { color: ct.grid } },
-          axisLine: { show: false },
-        },
-        {
-          type: 'value', gridIndex: 0,
-          position: 'right',
-          scale: true,
-          name: hasBenchmark ? '策略资金' : '',
-          nameTextStyle: { color: ct.text, fontSize: 10, padding: [0, 0, 4, 0] },
-          axisLabel: {
-            show: hasBenchmark,
-            color: ct.text,
-            fontSize: 10,
-            formatter: axisMoneyFmt,
-          },
-          splitLine: { show: false },
-          axisLine: { show: false },
-        },
-        {
-          type: 'value', gridIndex: 1,
-          position: 'right',
-          max: 0,
-          axisLabel: {
-            color: ct.text, fontSize: 10,
-            formatter: (v: number) => `${v.toFixed(1)}%`,
-          },
-          splitLine: { lineStyle: { color: ct.grid } },
-          axisLine: { show: false },
-        },
-        ...(hasPosition ? [{
-          type: 'value',
-          gridIndex: 0,
-          min: 0,
-          max: 100,
-          show: false,
-          splitLine: { show: false },
-          axisLine: { show: false },
-        }] : []),
-      ],
-      dataZoom: [
-        {
-          type: 'inside',
-          xAxisIndex: [0, 1],
-          filterMode: 'filter',
-          zoomOnMouseWheel: true,
-          moveOnMouseMove: true,
-          moveOnMouseWheel: false,
-          ...(zoomStart !== undefined ? { start: zoomStart } : {}),
-          ...(zoomEnd !== undefined ? { end: zoomEnd } : {}),
-        },
-        {
-          type: 'slider',
-          xAxisIndex: [0, 1],
-          filterMode: 'filter',
-          height: 16,
-          bottom: 10,
-          borderColor: ct.border,
-          backgroundColor: ct.zoomFill,
-          fillerColor: 'rgba(59,130,246,0.18)',
-          handleStyle: { color: ct.text, borderColor: '#94a3b8' },
-          textStyle: { color: ct.text, fontSize: 10 },
-          brushSelect: false,
-          ...(zoomStart !== undefined ? { start: zoomStart } : {}),
-          ...(zoomEnd !== undefined ? { end: zoomEnd } : {}),
-        },
-      ],
-      tooltip: {
-        trigger: 'axis',
-        backgroundColor: ct.tooltipBg,
-        borderColor: ct.tooltipBorder,
-        textStyle: { color: ct.tooltipText, fontSize: 12 },
-        formatter: (params: any) => {
-          const date = params[0]?.axisValue ?? ''
-          let html = `<div style="font-size:11px;color:${ct.text};margin-bottom:4px">${date}</div>`
-          for (const p of params) {
-            if (p.value == null) continue
-            const isDrawdown = p.seriesName === '回撤'
-            const isBenchmark = p.seriesName === '同期上证指数'
-            const isPosition = p.seriesName === '仓位'
-            html += `<div style="display:flex;justify-content:space-between;gap:16px">
-              <span style="color:${p.color}">${p.seriesName}</span>
-              <span style="font-family:monospace">${
-                isDrawdown || isPosition
-                  ? `${(p.value as number).toFixed(2)}%`
-                  : isBenchmark
-                    ? `${valueFmt.format(p.value as number)} 点`
-                    : moneyFmt.format(p.value as number)
-              }</span>
-            </div>`
-          }
-          return html
-        },
-      },
-      series: [
-        {
-          name: '净值',
-          type: 'line',
-          xAxisIndex: 0,
-          yAxisIndex: hasBenchmark ? 1 : 0,
-          data: navValues,
-          symbol: 'none',
-          itemStyle: { color: navColor },
-          lineStyle: { color: navColor, width: 2.2 },
-          areaStyle: {
-            color: {
-              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(59,130,246,0.15)' },
-                { offset: 1, color: 'rgba(59,130,246,0.01)' },
-              ],
-            } as any,
-          },
-        },
-        ...(hasBenchmark && !hidden.has('同期上证指数') ? [{
-          name: '同期上证指数',
-          type: 'line',
-          xAxisIndex: 0,
-          yAxisIndex: 0,
-          data: benchmarkValues,
-          symbol: 'none',
-          connectNulls: true,
-          itemStyle: { color: benchmarkColor },
-          lineStyle: { color: benchmarkColor, opacity: 0.55, width: 1, type: 'dashed' },
-        }] : []),
-        {
-          name: '回撤',
-          type: 'line',
-          xAxisIndex: 1,
-          yAxisIndex: 2,
-          data: ddValues,
-          symbol: 'none',
-          itemStyle: { color: drawdownColor },
-          lineStyle: { color: drawdownColor, opacity: 0.65, width: 1 },
-          areaStyle: { color: 'rgba(240,68,56,0.12)' },
-        },
-        ...(hasPosition && !hidden.has('仓位') ? [{
-          name: '仓位',
-          type: 'line',
-          step: 'end',
-          xAxisIndex: 0,
-          yAxisIndex: 3,
-          data: positionValues,
-          symbol: 'none',
-          itemStyle: { color: positionColor },
-          lineStyle: { color: positionColor, width: 1.2 },
-          areaStyle: { color: 'rgba(245,158,11,0.08)' },
-          z: 1,
-        }] : []),
-      ],
-    } as any
-  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct, hidden])
+  const hasPosition = rows.some(r => r.position != null)
+  const hasBenchmark = rows.some(r => r.benchmark != null)
+  const showPosition = hasPosition && !hidden.has('仓位')
+  const showBenchmark = hasBenchmark && !hidden.has('同期上证指数')
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const hasData = rows.length > 0
 
-  const chartRef = useECharts(option, [result.run_id, ct], containerRef)
+  useEffect(() => {
+    if (!hasData || !hostRef.current) return
+    const theme = ct
+    const chart = createChart(hostRef.current, {
+      autoSize: true,
+      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: theme.text,
+        fontFamily: 'JetBrains Mono, monospace', fontSize: 10, attributionLogo: false,
+        panes: { separatorColor: theme.border, separatorHoverColor: theme.crosshair, enableResize: true } },
+      grid: { vertLines: { visible: false }, horzLines: { color: theme.grid } },
+      crosshair: { mode: CrosshairMode.Normal,
+        vertLine: { color: theme.crosshair, labelBackgroundColor: theme.crosshairLabelBg },
+        horzLine: { color: theme.crosshair, labelBackgroundColor: theme.crosshairLabelBg } },
+      rightPriceScale: { borderVisible: false, minimumWidth: 52, scaleMargins: MAIN_PRICE_MARGINS },
+      leftPriceScale: { visible: false, borderVisible: false, minimumWidth: 44, scaleMargins: MAIN_PRICE_MARGINS },
+      timeScale: { borderColor: theme.border, fixLeftEdge: true, fixRightEdge: true, minBarSpacing: 0.5,
+        tickMarkFormatter: (time: Time) => timeKey(time).slice(2, 10) },
+      localization: { locale: 'zh-CN', timeFormatter: (time: Time) => timeKey(time) },
+    })
+    chartRef.current = chart
+    const onMove = (event: MouseEventParams<Time>) => {
+      if (event.time == null) { setHover(null); return }
+      const key = timeKey(event.time)
+      setHover(rowsRef.current.findIndex(r => r.date === key))
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => {
+      chart.unsubscribeCrosshairMove(onMove)
+      chart.remove()
+      chartRef.current = null
+      seriesRef.current = []
+      runRef.current = null
+    }
+    // 空状态会移除宿主节点, 数据恢复后必须给新节点重新挂载图表。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasData])
+
+  // 主题变化: 增量 applyOptions, 不重建实例/序列
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      layout: { textColor: ct.text, panes: { separatorColor: ct.border } },
+      grid: { horzLines: { color: ct.grid } },
+      timeScale: { borderColor: ct.border },
+      crosshair: { vertLine: { color: ct.crosshair, labelBackgroundColor: ct.crosshairLabelBg },
+        horzLine: { color: ct.crosshair, labelBackgroundColor: ct.crosshairLabelBg } },
+    })
+  }, [ct])
+
+  // 序列重建: 数据或图例拓扑变化时全量重建; 同一 run_id 内保留缩放窗口。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const sameRun = runRef.current === (result.run_id ?? null)
+    const view = sameRun ? chart.timeScale().getVisibleLogicalRange() : null
+    runRef.current = result.run_id ?? null
+    for (const series of seriesRef.current) { try { chart.removeSeries(series) } catch { /* 实例已销毁 */ } }
+    seriesRef.current = []
+    if (rows.length === 0) return
+
+    // 仓位与净值共用主图区, 各自保留资金与百分比刻度; 回撤紧接其下。
+    const nav = chart.addSeries(AreaSeries, {
+      lineColor: NAV_COLOR, lineWidth: 1, topColor: 'rgba(59,130,246,0.14)', bottomColor: 'rgba(59,130,246,0.01)',
+      priceFormat: { type: 'custom', formatter: axisMoneyFmt, minMove: 0.01 },
+    }, 0)
+    nav.setData(rows.map(r => ({ time: r.date as Time, value: r.nav })))
+    seriesRef.current.push(nav)
+
+    if (showBenchmark) {
+      const benchmark = chart.addSeries(LineSeries, {
+        color: BENCHMARK_COLOR, lineWidth: 1, lineStyle: LineStyle.Dashed,
+        priceScaleId: 'left',
+        priceFormat: { type: 'custom', formatter: (v: number) => v.toFixed(0), minMove: 0.01 },
+      }, 0)
+      benchmark.setData(rows.map(r => r.benchmark != null ? { time: r.date as Time, value: r.benchmark } : { time: r.date as Time }))
+      seriesRef.current.push(benchmark)
+    }
+    chart.applyOptions({ leftPriceScale: { visible: showBenchmark } })
+    // 重建窗格时恢复主图边距, 避免沿用回撤窗格的零上边距。
+    chart.priceScale('right', 0).applyOptions({ scaleMargins: MAIN_PRICE_MARGINS })
+    chart.priceScale('left', 0).applyOptions({ scaleMargins: MAIN_PRICE_MARGINS })
+
+    if (showPosition) {
+      const position = chart.addSeries(BaselineSeries, {
+        // 以 0% 为填充基线, 空仓不着色。
+        baseValue: { type: 'price', price: 0 }, lineType: LineType.WithSteps,
+        lineVisible: false, crosshairMarkerVisible: false,
+        topLineColor: 'transparent', bottomLineColor: 'transparent',
+        topFillColor1: 'rgba(245,158,11,0.08)', topFillColor2: 'rgba(245,158,11,0.015)',
+        bottomFillColor1: 'transparent', bottomFillColor2: 'transparent',
+        priceScaleId: 'position', priceLineVisible: false, lastValueVisible: false,
+        priceFormat: { type: 'custom', formatter: (v: number) => `${v.toFixed(0)}%`, minMove: 0.01 },
+        // 固定 0-100 满刻度, 不随数据缩放
+        autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+      }, 0)
+      position.setData(rows.filter(r => r.position != null).map(r => ({ time: r.date as Time, value: r.position! })))
+      position.setSeriesOrder(0)
+      seriesRef.current.push(position)
+      chart.priceScale('position').applyOptions({ scaleMargins: MAIN_PRICE_MARGINS })
+    }
+
+    // 回撤用 BaselineSeries 锚 0: 0 → 回撤线之间填充, 深度一眼可读
+    const drawdown = chart.addSeries(BaselineSeries, {
+      baseValue: { type: 'price', price: 0 },
+      // 基准填充不参与自动缩放, 局部负回撤区间也须保留 0% 参照。
+      autoscaleInfoProvider: (getRange: () => AutoscaleInfo | null) => {
+        const info = getRange()
+        if (!info?.priceRange) return info
+        const minValue = Math.min(info.priceRange.minValue, 0)
+        const maxValue = Math.max(info.priceRange.maxValue, 0)
+        return {
+          ...info,
+          priceRange: {
+            // 全程无回撤时仍让 0% 贴上沿, 避免图形库把退化范围对称展开。
+            minValue: minValue === 0 && maxValue === 0 ? -1 : minValue,
+            maxValue,
+          },
+        }
+      },
+      topLineColor: 'rgba(240,68,56,0.25)', topFillColor1: 'rgba(240,68,56,0.02)', topFillColor2: 'rgba(240,68,56,0.02)',
+      bottomLineColor: DRAWDOWN_COLOR, bottomFillColor1: 'rgba(240,68,56,0.05)', bottomFillColor2: 'rgba(240,68,56,0.24)',
+      lineWidth: 1,
+      priceFormat: { type: 'custom', formatter: (v: number) => `${v.toFixed(1)}%`, minMove: 0.01 },
+    }, 1)
+    drawdown.setData(rows.filter(r => r.drawdown != null).map(r => ({ time: r.date as Time, value: r.drawdown! })))
+    seriesRef.current.push(drawdown)
+    chart.priceScale('right', 1).applyOptions({ entireTextOnly: true, scaleMargins: { top: 0, bottom: MAIN_PRICE_MARGINS.bottom } })
+
+    // 窗格高度配比: 主图为主, 回撤为辅
+    const panes = chart.panes()
+    panes[0]?.setStretchFactor(0.7)
+    panes[1]?.setStretchFactor(0.3)
+
+    if (view) chart.timeScale().setVisibleLogicalRange(view)
+    else chart.timeScale().fitContent()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, showPosition, showBenchmark, result.run_id])
+
+  const hoverRow = hover != null && rows[hover] ? rows[hover] : null
+
+  if (rows.length === 0) {
+    return <div className="flex h-[340px] items-center justify-center text-xs text-muted">净值数据不足，无法绘制曲线</div>
+  }
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-4 px-4 pb-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-4 pb-2">
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
           <span className="w-3 h-0.5 rounded bg-[#3b82f6]" />
           策略净值
@@ -257,35 +228,32 @@ export function StrategyNavChart({ result }: Props) {
           <span className="w-3 h-0.5 rounded bg-[#f04438]" />
           回撤
         </span>
-        {result.equity_curve.some(r => r.exposure != null || (r.cash != null && r.value > 0)) && (
-          <button
-            type="button"
-            onClick={() => toggleLegend('仓位')}
-            title="点击显示/隐藏"
-            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${
-              hidden.has('仓位') ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            <span className="w-3 h-0.5 rounded bg-[#f59e0b]" />
+        {hasPosition && (
+          <button type="button" onClick={() => toggleLegend('仓位')} title="点击显示/隐藏"
+            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${showPosition ? 'opacity-100' : 'opacity-40'}`}>
+            <span className="h-2.5 w-3 rounded-sm bg-amber-500/15" />
             仓位
           </button>
         )}
-        {(result.benchmark_curve?.length ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() => toggleLegend('同期上证指数')}
-            title="点击显示/隐藏"
-            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${
-              hidden.has('同期上证指数') ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
+        {hasBenchmark && (
+          <button type="button" onClick={() => toggleLegend('同期上证指数')} title="点击显示/隐藏"
+            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${showBenchmark ? 'opacity-100' : 'opacity-40'}`}>
             <span className="w-3 h-0.5 rounded border-t border-dashed border-[#64748b]" />
             同期上证指数
           </button>
         )}
-        <span className="ml-auto text-[10px] text-muted">滚轮缩放 · 拖动平移</span>
+        {/* 悬停读数: 十字线所在日期各序列当前值 */}
+        <span className="ml-auto flex items-center gap-3 font-mono text-[10px] text-muted">
+          {hoverRow ? <>
+            <span>{hoverRow.date}</span>
+            <span className="text-[#3b82f6]">{moneyFmt.format(hoverRow.nav)}</span>
+            {showBenchmark && hoverRow.benchmark != null && <span className="text-[#94a3b8]">{hoverRow.benchmark.toFixed(2)}点</span>}
+            {showPosition && hoverRow.position != null && <span className="text-[#f59e0b]">{hoverRow.position.toFixed(0)}%</span>}
+            {hoverRow.drawdown != null && <span className="text-[#f04438]">{hoverRow.drawdown.toFixed(1)}%</span>}
+          </> : <span>滚轮缩放 · 拖动平移 · 悬停读数</span>}
+        </span>
       </div>
-      <div ref={chartRef} className="h-[282px]" />
+      <div ref={hostRef} className="h-[340px]" />
     </div>
   )
 }

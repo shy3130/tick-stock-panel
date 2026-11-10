@@ -2166,7 +2166,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              强制重跑
+              重跑
             </button>
           </div>
         )}
@@ -2408,8 +2408,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
               <span>候选样本 <b className="text-foreground num">{result.stats.n_candidates ?? 0}</b> (标的×信号日)</span>
               <span>信号天数 <b className="text-foreground num">{result.stats.n_days ?? 0}</b></span>
               <span>日均候选 <b className="text-foreground num">{result.stats.avg_daily_candidates ?? 0}</b></span>
-              <span>最佳 <b className="text-bull num">{fmtPct(result.stats.best)}</b></span>
-              <span>最差 <b className="text-bear num">{fmtPct(result.stats.worst)}</b></span>
+              <span>最佳 <b className={`num ${priceColorClass(result.stats.best)}`}>{fmtPct(result.stats.best)}</b></span>
+              <span>最差 <b className={`num ${priceColorClass(result.stats.worst)}`}>{fmtPct(result.stats.worst)}</b></span>
               <span>基准(上证) <b className="text-foreground num">{fmtPct(result.stats.benchmark_return)}</b></span>
             </div>
 
@@ -2860,8 +2860,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                             {fmtPct(r.total_return)}
                           </td>
                           <td className="px-4 py-2 text-right num">{fmtPct(r.win_rate)}</td>
-                          <td className="px-4 py-2 text-right num text-bull">{fmtPct(r.best)}</td>
-                        <td className="px-4 py-2 text-right num text-bear">{fmtPct(r.worst)}</td>
+                          <td className={`px-4 py-2 text-right num ${priceColorClass(r.best)}`}>{fmtPct(r.best)}</td>
+                        <td className={`px-4 py-2 text-right num ${priceColorClass(r.worst)}`}>{fmtPct(r.worst)}</td>
                       </tr>
                       ))}
                     </tbody>

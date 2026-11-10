@@ -154,9 +154,9 @@ export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, 
                       <div className="text-right">
                         <div className="text-muted">最佳 / 最差</div>
                         <div className="num">
-                          <span className="text-bull">{fmtPct(stat.best)}</span>
+                          <span className={priceColorClass(stat.best)}>{fmtPct(stat.best)}</span>
                           <span className="text-muted"> / </span>
-                          <span className="text-bear">{fmtPct(stat.worst)}</span>
+                          <span className={priceColorClass(stat.worst)}>{fmtPct(stat.worst)}</span>
                         </div>
                       </div>
                     </div>

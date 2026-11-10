@@ -311,5 +311,5 @@ export function FinancialPlot(props: Props) {
     markerRef.current?.setMarkers(markersForView(props.markers, compactRef.current))
   }, [props.annotations, props.markers, props.volumeLabels, props.paneTitles, props.paneReadouts, props.linkedPrice, props.series, props.pricePrecision, ct])
 
-  return <div ref={host} role="group" aria-label={props.intraday ? '分时价格与成交量图' : '日 K 与技术指标图'} data-chart-engine="lightweight" className="w-full min-w-0 [&_canvas]:!cursor-crosshair" style={{ height: props.height }} />
+  return <div ref={host} role="group" aria-label={props.intraday ? '分时价格与成交量图' : '日 K 与技术指标图'} data-chart-engine="lightweight" className="w-full min-w-0" style={{ height: props.height }} />
 }
