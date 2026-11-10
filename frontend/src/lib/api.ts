@@ -3547,6 +3547,11 @@ export const api = {
       `/api/watchlist/${encodeURIComponent(symbol)}/group`,
       { method: 'PUT', body: JSON.stringify({ group_id: groupId }) },
     ),
+  watchlistGroupTransfer: (source: string, target: string, symbols: string[], action: 'move' | 'copy') =>
+    request<{ symbols: WatchlistEntry[]; changed: number }>(
+      `/api/watchlist/groups/${encodeURIComponent(source)}/transfer`,
+      { method: 'POST', body: JSON.stringify({ target_group_id: target, symbols, action }), quiet: true },
+    ),
   watchlistGroupAddMember: (groupId: string, symbol: string) =>
     request<{ symbols: WatchlistEntry[] }>(
       `/api/watchlist/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(symbol)}`,

@@ -1603,6 +1603,7 @@ export function Watchlist() {
       )}
 
       <WatchlistGroupBar
+        entries={listEntries}
         groups={groups}
         counts={groupCounts}
         selected={selectedGroup}

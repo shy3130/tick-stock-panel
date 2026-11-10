@@ -356,6 +356,50 @@ def add_to_group(symbol: str, group_id: str) -> list[dict]:
         return out.to_dicts()
 
 
+def transfer_members(
+    source_group_id: str, target_group_id: str, symbols: list[str], action: str,
+) -> tuple[list[dict], int]:
+    """一次保存整批成员关系；过期的来源或选择不产生部分写入。"""
+    wanted = set(symbols)
+    if not wanted or action not in {"move", "copy"}:
+        raise ValueError("请选择自选标的及有效的分组操作")
+    if source_group_id == target_group_id:
+        raise ValueError("请选择其他目标分组")
+    if source_group_id == "all" and action != "copy":
+        raise ValueError("请先选中要移出的分组")
+    if source_group_id == "ungrouped" and action != "move":
+        raise ValueError("未分组标的请选择移动到目标分组")
+
+    with _LOCK:
+        groups = _read_groups()
+        _validate_group_id(target_group_id, groups)
+        if source_group_id not in {"all", "ungrouped"}:
+            _validate_group_id(source_group_id, groups)
+        rows = _read_entries().to_dicts()
+        selected = [row for row in rows if row["symbol"] in wanted]
+        if len(selected) != len(wanted):
+            raise ValueError("所选标的已不在自选中，请刷新后重试")
+        changed = 0
+        for row in selected:
+            previous = row["group_ids"] or []
+            in_source = (
+                source_group_id == "all"
+                or (source_group_id == "ungrouped" and not previous)
+                or source_group_id in previous
+            )
+            if not in_source:
+                raise ValueError("分组成员已变化，请刷新后重新选择")
+            members = [g for g in previous if action != "move" or g != source_group_id]
+            if target_group_id not in members:
+                members.append(target_group_id)
+            if members != previous:
+                row["group_ids"] = members
+                changed += 1
+        if changed:
+            _write_entries(pl.DataFrame(rows, schema=_ENTRY_SCHEMA))
+        return rows, changed
+
+
 def remove_from_group(symbol: str, group_id: str) -> list[dict]:
     """把标的移出一个分组(仅摘本组标签; 标的仍在自选, 可能落入未分组)。"""
     with _LOCK:
