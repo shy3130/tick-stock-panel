@@ -113,28 +113,49 @@ def check_python_syntax(files: list[Path]) -> list[Issue]:
 # ---------------------------------------------------------------- 规则 2: 吞异常
 
 
-def _handler_logs(handler: ast.ExceptHandler) -> bool:
-    """handler 体内是否有任何留痕动作(raise / 日志 / print / warnings)。"""
-    for node in ast.walk(handler):
-        if isinstance(node, ast.Raise):
-            return True
-        if isinstance(node, ast.Call):
-            fn = node.func
-            if isinstance(fn, ast.Attribute):
-                if fn.attr in {"warning", "warn", "error", "exception", "critical", "info"}:
-                    return True
-                if isinstance(fn.value, ast.Name) and fn.value.id in {"logger", "log"}:
-                    return True
-            if isinstance(fn, ast.Name) and fn.id == "print":
-                return True
-    return False
+_HANDLED = "handled"      # 有实际处理逻辑(含调用包装函数 re-raise), 不报
+_SKIP = "skip"            # continue/break: 跳过当前项但无痕迹
+_DEFAULT = "default"      # return 常量: 降级返回默认值
+_SILENT = "silent"        # pass / ... / 只有 docstring: 完全静默
 
 
-def check_swallowed_exception(files: list[Path]) -> list[Issue]:
+def _classify_handler(handler: ast.ExceptHandler) -> str:
+    """给 except 体分级。
+
+    关键教训: 初版只认 `ast.Raise` 节点, 于是 `_raise_candidate_error(exc)` 这种
+    「调用包装函数把异常转成业务异常抛出」被误判成吞异常 —— 本仓 45 条告警是误报。
+    尺子不准时先去校准尺子, 不要拿它去改业务代码。
+    """
+    body = [
+        node for node in handler.body
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    ]
+    if not body:
+        return _SILENT
+    if all(isinstance(node, ast.Pass) for node in body):
+        return _SILENT
+    if all(isinstance(node, (ast.Continue, ast.Break)) for node in body):
+        return _SKIP
+    if all(isinstance(node, ast.Return) for node in body):
+        if all(
+            node.value is None
+            or isinstance(node.value, (ast.Constant, ast.Name, ast.List, ast.Dict, ast.Tuple))
+            for node in body
+        ):
+            return _DEFAULT
+    return _HANDLED
+
+
+def check_swallowed_exception(files: list[Path], *, new_code: bool) -> list[Issue]:
     """R002 吞异常: except 捕获了却不留痕。
 
     事故: mining_process_lock 抛 PermissionError, 调用方只 `except MiningProcessLockError`
     + 兜底 `except Exception: pass`, 降级没生效、进程直接退出且无日志。
+
+    棘轮设计: 全仓存量有 64 处 `except ...: pass`, 多数是有意的(清理临时文件、
+    可选操作忽略失败)。一并判 ERROR 会让 CI 永久变红 —— 那又是一条没人看的规则。
+    因此: 存量判 WARN, 新增代码判 ERROR。新代码必须留痕, 存量逐步还。
+    既有代码若确实有意静默, 在该行加 `# noqa: R002` 显式承认。
     """
     issues: list[Issue] = []
     for p in files:
@@ -156,13 +177,26 @@ def check_swallowed_exception(files: list[Path]) -> list[Issue]:
                     "裸 `except:` 会连 KeyboardInterrupt/SystemExit 一起吞掉, 必须指名异常类型",
                 ))
                 continue
+            kind = _classify_handler(node)
             is_broad = isinstance(node.type, ast.Name) and node.type.id in {
                 "Exception", "BaseException",
             }
-            if is_broad and not _handler_logs(node):
+            if kind == _SILENT:
                 issues.append(Issue(
-                    "WARN", "R002-silent-catch", _rel(p), node.lineno,
-                    f"`except {node.type.id}` 捕获后既无 raise 也无日志, 故障会被静默掩埋",
+                    "ERROR" if new_code else "WARN", "R002-silent-catch", _rel(p), node.lineno,
+                    "捕获后什么都不做(pass): 故障被彻底掩埋, 至少记一条日志"
+                    + ("" if new_code else "; 若确属有意静默, 加 `# noqa: R002`"),
+                ))
+            elif kind == _SKIP and is_broad:
+                issues.append(Issue(
+                    "WARN", "R002-skip-without-trace", _rel(p), node.lineno,
+                    f"`except {node.type.id}` 后直接跳过, 无任何痕迹",
+                ))
+            elif kind == _DEFAULT and is_broad:
+                issues.append(Issue(
+                    "WARN", "R002-default-without-trace", _rel(p), node.lineno,
+                    f"`except {node.type.id}` 后静默返回默认值, "
+                    "调用方无法区分「确实为空」与「读失败」",
                 ))
     return issues
 
@@ -412,7 +446,7 @@ def main() -> int:
 
     issues: list[Issue] = []
     issues += check_python_syntax(py_files)
-    issues += check_swallowed_exception(py_files)
+    issues += check_swallowed_exception(py_files, new_code=staged is not None)
     issues += check_int8_overflow(py_files)
     issues += check_text_encoding(bat_files)
     issues += check_ps1_bom(ps1_files)
