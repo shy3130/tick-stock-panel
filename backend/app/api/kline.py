@@ -1503,19 +1503,17 @@ async def trigger_minute_sync(
 
             def _run():
                 from app.jobs.daily_pipeline import _refresh_single_view
-                from app.services.preferences import data_source_stamp
 
                 try:
                     if repair_targets:
                         added = remaining = 0
-                        source = data_source_stamp()
+                        source = kline_sync.minute_source_stamp()
                         for group_index, (day, group) in enumerate(repair_targets.items()):
                             on_chunk = partial(_on_chunk, group_index=group_index)
                             on_chunk(0, 1, day.isoformat())
-                            if source != data_source_stamp():
-                                raise RuntimeError("分钟数据源配置已变化，请重新补齐")
                             added += kline_sync.sync_and_persist_minute(
                                 group, repo, capset, repair_date=day, asset_type="stock", on_chunk_done=on_chunk,
+                                expected_source=source,
                             )
                             remaining += minute_gaps.count_remaining_gaps(
                                 repo.store.data_dir / "kline_minute", day, group, cn_now(),

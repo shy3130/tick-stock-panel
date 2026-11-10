@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
 import shutil
 import time
@@ -16,6 +18,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time
 from pathlib import Path
+from typing import NamedTuple
 
 import polars as pl
 
@@ -832,6 +835,31 @@ def _selected_minute_provider_name() -> str:
     return selected
 
 
+class MinuteSourceStamp(NamedTuple):
+    data_dir: Path
+    provider: str
+    fingerprint: bytes
+
+
+def minute_source_stamp() -> MinuteSourceStamp:
+    """分钟请求只随当前分钟源、该源的配置和凭据失效。"""
+    from app import secrets_store
+    from app.config import settings
+
+    name = _selected_minute_provider_name()
+    if name == "tickflow":
+        from app.tickflow.client import PAID_ENDPOINT
+
+        endpoint = secrets_store.load().get("tickflow_base_url") or PAID_ENDPOINT
+        config = (endpoint, secrets_store.get_tickflow_key())
+        fingerprint = hashlib.sha256(json.dumps(config).encode()).digest()
+    else:
+        from app.data_providers import custom
+
+        fingerprint = custom.minute_config_fingerprint(name)
+    return MinuteSourceStamp(settings.data_dir, name, fingerprint)
+
+
 def _resolve_minute_provider(
     provider_name: str,
 ) -> tuple[object | None, bool, str | None]:
@@ -1343,12 +1371,12 @@ def fetch_minute_single(
     capset: CapabilitySet,
     raw_basis: bool = False,
 ) -> pl.DataFrame:
-    source = preferences.data_source_stamp()
-    key = (source, capset, _selected_minute_provider_name(), symbol, trade_date, asset_type, raw_basis)
+    source = minute_source_stamp()
+    key = (source, capset, symbol, trade_date, asset_type, raw_basis)
 
     def fetch():
         frame = _fetch_minute_single(symbol, trade_date, asset_type, capset=capset, raw_basis=raw_basis)
-        if source != preferences.data_source_stamp():
+        if source != minute_source_stamp():
             raise WorkBusyError("分钟数据源配置已变化，请重新加载")
         return frame
 
@@ -1528,6 +1556,7 @@ def sync_and_persist_minute(
     *,
     asset_type: AssetType | None = None,
     repair_date: date | None = None,
+    expected_source: MinuteSourceStamp | None = None,
 ) -> int:
     """同步分钟 K 并存到 Parquet。返回写入行数。
 
@@ -1541,6 +1570,9 @@ def sync_and_persist_minute(
     """
     if not symbols:
         return 0
+    source_stamp = minute_source_stamp()
+    if expected_source is not None and source_stamp != expected_source:
+        raise WorkBusyError("分钟数据源配置已变化，请重新补齐")
     if asset_type is None:
         etf_set = repo.get_etf_symbol_set()
         etf_symbols = [symbol for symbol in symbols if symbol in etf_set]
@@ -1552,7 +1584,7 @@ def sync_and_persist_minute(
                     written += sync_and_persist_minute(
                         group, repo, capset, days=days, on_chunk_done=on_chunk_done,
                         extend_backward=extend_backward, force_full_days=force_full_days,
-                        asset_type=asset, repair_date=repair_date,
+                        asset_type=asset, repair_date=repair_date, expected_source=source_stamp,
                     )
             return written
         asset_type = "stock"
@@ -1560,8 +1592,7 @@ def sync_and_persist_minute(
         raise ValueError("分钟落库同步仅支持股票和 ETF")
 
     minute_table = "kline_etf_minute" if asset_type == "etf" else "kline_minute"
-    source_stamp = preferences.data_source_stamp()
-    minute_provider = _selected_minute_provider_name()
+    minute_provider = source_stamp.provider
     # 自定义源的能力和请求失败时都 fail-closed；共享能力集可能包含第三方源增补。
     _, fallback, resolve_err = _resolve_minute_provider(minute_provider)
     if resolve_err is not None:
@@ -1631,7 +1662,7 @@ def sync_and_persist_minute(
         with repo._write_lock:
             if raw_basis != minute_adjust.minute_basis_is_raw(repo.store.data_dir):
                 raise WorkBusyError("分钟价格基准已变化，请重新补齐")
-            if source_stamp != preferences.data_source_stamp():
+            if source_stamp != minute_source_stamp():
                 raise WorkBusyError("分钟数据源配置已变化，请重新补齐")
             if repair_date is not None:
                 written_box[0] += _write_minute_partition(seg_df, minute_dir, missing_only=True)
