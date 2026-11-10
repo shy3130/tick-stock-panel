@@ -373,3 +373,39 @@ def test_list_factors_exposes_lifecycle_status(tmp_path, cleanup_registry):
 
     builtin = next(item for item in payload["factors"] if item["kind"] == "base")
     assert builtin["status"] is None
+
+
+def test_child_references_protect_delete_and_reject_cyclic_update(tmp_path, cleanup_registry):
+    from types import SimpleNamespace
+
+    from app.factors import store
+    from app.factors.registry import get_factor
+
+    client = _client(with_engine=True)
+    client.app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    cleanup_registry.update(["uf_api_child", "uf_api_parent"])
+    for fid, formula in [("uf_api_child", "close"), ("uf_api_parent", "2 * uf_api_child")]:
+        assert client.post("/api/factors/custom", json={"id": fid, "label": fid, "formula": formula}).status_code == 200
+    res = client.delete("/api/factors/custom/uf_api_child")
+    assert res.status_code == 409
+    assert res.json()["detail"]["references"] == ["custom_factors/uf_api_parent.json"]
+    res = client.post("/api/factors/custom/uf_api_child/update", json={"label": "child", "formula": "uf_api_parent"})
+    assert res.status_code == 400
+    assert "cycle" in res.json()["detail"]
+    assert get_factor("uf_api_child").formula_text == "close"
+    assert next(d for d in store.load_all(tmp_path) if d["id"] == "uf_api_child")["formula"] == "close"
+
+
+def test_raw_price_is_available_in_trial_and_save(tmp_path, cleanup_registry):
+    from types import SimpleNamespace
+
+    client = _client(with_engine=True)
+    client.app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    engine = client.app.state.backtest_engine
+    engine.panel = engine.panel.with_columns((pl.col("close") * 2).alias("raw_close"))
+    trial = client.post("/api/factors/trial", json={"formula": "raw_close", "days": 20})
+    assert trial.status_code == 200
+    assert trial.json()["n_dates"] == 20
+    cleanup_registry.add("uf_raw_price")
+    saved = client.post("/api/factors/custom", json={"id": "uf_raw_price", "label": "raw", "formula": "raw_close"})
+    assert saved.status_code == 200

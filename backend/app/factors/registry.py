@@ -14,6 +14,7 @@ P1 边界 (诚实声明):
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -54,6 +55,18 @@ class FactorSpec:
     lang: str = "dsl"
     # composite 专用: ((成员 id, 权重), ...); 其余类型为空
     components: tuple[tuple[str, float], ...] = ()
+    # 保留中间引用; 子因子编辑后, 计算计划需要追踪其当前依赖。
+    # 每个直接输入及沿公式路径额外需要的历史根数。展开后的 dependencies 仅是注册时的快照。
+    input_windows: tuple[tuple[str, int], ...] = ()
+    declared_warmup: int = 1
+
+    @property
+    def inputs(self) -> frozenset[str]:
+        if self.input_windows:
+            return frozenset(name for name, _ in self.input_windows)
+        if self.components:
+            return frozenset(name for name, _ in self.components)
+        return self.dependencies
 
     def column_view(self) -> dict:
         """历史 FACTOR_COLUMNS 条目视图 (键与顺序兼容)。"""
@@ -304,14 +317,15 @@ _CATALOG: tuple[FactorSpec, ...] = (
     ),
 )
 
-_REGISTRY: dict[str, FactorSpec] = {}
+_REGISTRY: dict[str, FactorSpec] = {spec.id: spec for spec in _CATALOG}
+_REGISTRY_REVISION = 0
 _PREVIEW_REGISTRY: ContextVar[dict[str, FactorSpec] | None] = ContextVar("factor_preview_registry", default=None)
 
 
 @contextmanager
 def isolated_registry():
     """包预检使用进程注册表的副本; 传入因子不向其他请求/行情线程泄漏。"""
-    snapshot = dict(_REGISTRY)
+    snapshot = dict(_active_registry())
     token = _PREVIEW_REGISTRY.set(snapshot)
     try:
         yield snapshot
@@ -330,11 +344,21 @@ def register_factor(spec: FactorSpec) -> None:
     existing = active.get(spec.id)
     if existing is not None and existing.version >= spec.version:
         raise ValueError(f"factor id 已注册且版本未提升: {spec.id}")
+    if spec.inputs and spec.id in factor_calculation_order(spec.inputs):
+        raise ValueError(f"factor dependency cycle: {spec.id}")
     active[spec.id] = spec
+    _invalidate_compiled_formulas()
 
 
-for _spec in _CATALOG:
-    register_factor(_spec)
+def registry_cache_revision() -> int | None:
+    """预检上下文独立编译, 不读写进程级公式缓存。"""
+    return _REGISTRY_REVISION if _PREVIEW_REGISTRY.get() is None else None
+
+
+def _invalidate_compiled_formulas() -> None:
+    global _REGISTRY_REVISION
+    if _PREVIEW_REGISTRY.get() is None:
+        _REGISTRY_REVISION += 1
 
 
 def get_factor(fid: str) -> FactorSpec | None:
@@ -345,7 +369,10 @@ def unregister_factor(fid: str) -> FactorSpec | None:
     """注销动态注册的因子 (内置目录因子不可注销, fail-closed)。"""
     if any(spec.id == fid for spec in _CATALOG):
         raise ValueError(f"内置因子不可注销: {fid}")
-    return _active_registry().pop(fid, None)
+    removed = _active_registry().pop(fid, None)
+    if removed is not None:
+        _invalidate_compiled_formulas()
+    return removed
 
 
 def _ordered_specs() -> list[FactorSpec]:
@@ -389,21 +416,83 @@ def all_factors(
 
 def factor_dependencies(fids) -> frozenset[str]:
     """递归展开依赖到 enriched base 列; 未知 id 原样保留 (与 scoring_dependencies 历史语义一致)。"""
-    resolved: set[str] = set()
-    for fid in fids:
-        spec = get_factor(str(fid))
+    return frozenset(
+        fid for fid in factor_calculation_order(fids)
+        if (spec := get_factor(fid)) is None or not spec.inputs
+    )
+
+
+# 这些指标列在历史 parquet 中按需补算。把形成指标本身所需的窗口计入外层公式。
+_INDICATOR_HISTORY = {
+    **{f"ma{n}": n for n in (5, 10, 20, 30, 60)},
+    **{f"ema{n}": n for n in (5, 10, 20, 30, 60)},
+    **{f"momentum_{n}d": n + 1 for n in (5, 10, 20, 30, 60)},
+    **{f"rsi_{n}": n + 1 for n in (6, 14, 24)},
+    "vol_ma5": 5, "vol_ma10": 10, "vol_ratio_5d": 6,
+    "high_60d": 60, "low_60d": 60, "boll_upper": 20, "boll_lower": 20,
+    "annual_vol_20d": 21, "atr_14": 15,
+    "macd_dif": 26, "macd_dea": 35, "macd_hist": 35,
+    "kdj_k": 9, "kdj_d": 9, "kdj_j": 9,
+}
+
+
+def factor_warmup_bars(fids) -> int:
+    """沿当前依赖链累计窗口; 并列输入取最大值。"""
+    warmups = {}
+    for fid in factor_calculation_order(fids):
+        spec = get_factor(fid)
         if spec is None:
-            resolved.add(str(fid))
-        elif spec.dependencies:
-            resolved.update(spec.dependencies)
+            warmups[fid] = _INDICATOR_HISTORY.get(fid, 1)
+        elif spec.input_windows:
+            warmups[fid] = max(spec.declared_warmup, *(
+                warmups[name] + bars for name, bars in spec.input_windows
+            ))
+        elif spec.components:
+            warmups[fid] = max(warmups[name] for name in spec.inputs)
+        elif spec.inputs:
+            warmups[fid] = spec.warmup_bars - 1 + max(warmups[name] for name in spec.inputs)
         else:
-            resolved.add(spec.id)
-    return frozenset(resolved)
+            warmups[fid] = max(spec.warmup_bars, _INDICATOR_HISTORY.get(fid, 1))
+    return max(warmups.values(), default=1)
+
+
+def factor_calculation_order(fids) -> list[str]:
+    """计算依赖的拓扑顺序, 保留 DSL 引用的中间因子和组合成员。"""
+    ordered: list[str] = []
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(fid: str) -> None:
+        if fid in visiting:
+            raise ValueError(f"factor dependency cycle: {fid}")
+        if fid in visited:
+            return
+        visiting.add(fid)
+        spec = get_factor(fid)
+        for dependency in sorted(spec.inputs if spec is not None else ()):
+            visit(dependency)
+        visiting.remove(fid)
+        visited.add(fid)
+        ordered.append(fid)
+
+    for fid in sorted(fids):
+        visit(str(fid))
+    return ordered
 
 
 def factor_columns_view() -> list[dict]:
     """历史 FACTOR_COLUMNS 兼容视图 (顺序、键一致; 动态注册因子追加在末尾)。"""
     return [spec.column_view() for spec in _ordered_specs()]
+
+
+def missing_factor_ids(fids: Iterable[str]) -> list[str]:
+    """校验所选注册因子及其依赖的用户定义, 保留普通行情/指标输入列。"""
+    roots = set(fids)
+    known = {item["id"] for item in factor_columns_view()}
+    required = roots | {
+        name for name in factor_calculation_order(roots) if name.startswith(("uf_", "cf_"))
+    }
+    return sorted(required - known)
 
 
 def virtual_dependencies() -> dict[str, frozenset[str]]:

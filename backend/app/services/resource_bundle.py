@@ -152,14 +152,8 @@ def collect_resources(
         entries[f"user_data/custom_factors/{factor_id}.json"] = json.dumps(
             definition, ensure_ascii=False, indent=2
         ).encode("utf-8")
-        if definition.get("kind") == "composite":
-            # 编译后的依赖是已展开的输入列, 仍须保留成员定义本身。
-            for member in definition.get("members", {}):
-                _add_factor_ref(str(member))
-        # composite 成员递归在 definition_dependencies 内已展开为列名;
-        # 只要是自定义因子就继续收集, 内置列在 _add_factor_ref 里被跳过。
         try:
-            deps = definitions.definition_dependencies("factor", definition)
+            deps = _factor_refs(definition)
         except ValueError as e:
             summary.warnings.append(f"因子 {factor_id} 定义编译失败, 依赖未展开: {e}")
             return
@@ -684,7 +678,15 @@ def _factor_refs(doc: dict) -> set[str]:
     if doc.get("kind") == "composite":
         members = doc.get("members", {})
         return set(members) if isinstance(members, dict) else set()
-    return set(store.to_spec(doc).dependencies)
+    if doc.get("lang", "dsl") == "dsl":
+        from app.factors.dsl import compile_formula
+
+        compiled = compile_formula(doc.get("formula", ""))
+        # 预检先遍历包内引用, 再注册成员并做完整校验。
+        if any(error.code != "E001" for error in compiled.errors):
+            raise ValueError(compiled.errors[0].message)
+        return {name for name, _ in compiled.input_windows}
+    return set(store.to_spec(doc).inputs)
 
 
 def _condition_refs(conditions: list) -> set[str]:
@@ -1051,7 +1053,7 @@ def apply_resources(uploads: list[tuple[str, bytes]], *, selected: list[str], ov
             spec = specs.get(pending.pop())
             if spec is None:
                 continue
-            for fid in {*spec.dependencies, *(member for member, _ in spec.components)}:
+            for fid in spec.inputs:
                 if fid in specs and fid not in needed_factors:
                     needed_factors.add(fid)
                     pending.append(fid)

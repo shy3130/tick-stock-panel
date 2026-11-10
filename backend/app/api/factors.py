@@ -4,7 +4,6 @@ from __future__ import annotations
 import contextlib
 import json
 from collections.abc import Iterator
-from datetime import timedelta
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,7 +12,13 @@ from pydantic import BaseModel, Field
 from app.factors import store
 from app.factors.dsl import FACTOR_COLUMN, compile_formula
 from app.factors.py_expr import compile_python_expression
-from app.factors.registry import all_factors, unregister_factor
+from app.factors.registry import (
+    all_factors,
+    factor_dependencies,
+    factor_warmup_bars,
+    get_factor,
+    unregister_factor,
+)
 from app.market_time import cn_today
 
 router = APIRouter(prefix="/api/factors", tags=["factors"])
@@ -46,13 +51,13 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
                 "formula": spec.formula_text,
                 "direction": spec.direction,
                 "unit": spec.unit,
-                "warmup_bars": spec.warmup_bars,
+                "warmup_bars": factor_warmup_bars([spec.id]),
                 "pit": spec.pit,
                 "asset_types": sorted(spec.asset_types),
                 "stability": spec.stability,
                 "status": status_by_id.get(spec.id),
                 "scale_free": spec.scale_free,
-                "dependencies": sorted(spec.dependencies),
+                "dependencies": sorted(factor_dependencies([spec.id])) if spec.inputs else [],
             }
             for spec in specs
         ]
@@ -90,6 +95,20 @@ class FormulaTrialRequest(FormulaValidateRequest):
     days: int = Field(default=40, ge=20, le=120)
 
 
+def _trial_panel(request: Request, compiled, asset_type: str, days: int) -> pl.DataFrame:
+    from app.api.backtest import _get_engine
+    from app.backtest.factor import FactorBacktestService, FactorBatchConfig
+
+    today = cn_today()
+    names = sorted(set(compiled.dependencies).union(compiled.referenced_factors))
+    config = FactorBatchConfig(
+        factor_names=names, symbols=None, start=today, end=today, asset_type=asset_type,
+    )
+    return FactorBacktestService(_get_engine(request))._load_factor_panel(
+        config, names, warmup_bars=compiled.warmup_bars + days,
+    )
+
+
 @router.post("/trial")
 def trial_formula(req: FormulaTrialRequest, request: Request) -> dict:
     """公式试算: 最近 N 个交易日截面 Rank IC 快照 (复用回测面板与虚拟因子物化路径)。"""
@@ -99,29 +118,9 @@ def trial_formula(req: FormulaTrialRequest, request: Request) -> dict:
     if not compiled.ok:
         raise HTTPException(status_code=400, detail={"errors": [error.to_dict() for error in compiled.errors]})
 
-    from app.api.backtest import _get_engine
-
-    # 交易日 → 自然日换算 (A股年均 243 交易日 ≈ 1.48 自然日/交易日), 留 buffer
-    calendar_days = int((compiled.warmup_bars + req.days) * 1.6) + 15
-    start = cn_today() - timedelta(days=calendar_days)
-    # 面板基础物理列 (load_panel 只返回 parquet 物理列, 因子列由补算路径生成)
-    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
-    if "consecutive_limit_ups" in compiled.dependencies:
-        base_columns.append("consecutive_limit_ups")
-    engine = _get_engine(request)
-    panel = engine.load_panel(None, start, cn_today(), columns=base_columns, asset_type=req.asset_type)
+    panel = _trial_panel(request, compiled, req.asset_type, req.days)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前数据目录无可用历史数据, 无法试算")
-
-    # 复用检验引擎同一条补算路径 (compute_indicators + 虚拟因子物化), 禁止第二套计算逻辑
-    from app.backtest.factor import FactorBacktestService
-
-    physical = set(panel.columns)
-    to_compute = set(compiled.referenced_factors) | {
-        dep for dep in compiled.dependencies if dep not in physical
-    }
-    if to_compute:
-        panel = FactorBacktestService._compute_missing_factors(panel, to_compute)
 
     if compiled.frame_transform is None:
         raise HTTPException(status_code=500, detail="编译产物缺少帧变换")
@@ -260,20 +259,13 @@ def _trial_nonempty(request: Request, formula: str, asset_type: str = "stock") -
     compiled = compile_formula(formula)
     if not compiled.ok:
         raise HTTPException(status_code=400, detail={"errors": [e.to_dict() for e in compiled.errors]})
-    from app.api.backtest import _get_engine
-    from app.backtest.factor import FactorBacktestService
-
-    calendar_days = int((compiled.warmup_bars + 40) * 1.6) + 15
-    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
-    engine = _get_engine(request)
-    panel = engine.load_panel(None, cn_today() - timedelta(days=calendar_days), cn_today(), columns=base_columns, asset_type=asset_type)
+    panel = _trial_panel(request, compiled, asset_type, 40)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前无历史数据, 无法完成保存前试算 (fail-closed)")
-    physical = set(panel.columns)
-    to_compute = set(compiled.referenced_factors) | {d for d in compiled.dependencies if d not in physical}
-    if to_compute:
-        panel = FactorBacktestService._compute_missing_factors(panel, to_compute)
     prepared = compiled.frame_transform(panel) if compiled.frame_transform else None
+    if prepared is not None:
+        recent = prepared["date"].unique().sort().tail(40)
+        prepared = prepared.filter(pl.col("date") >= recent.min())
     if prepared is None or prepared[FACTOR_COLUMN].is_not_null().sum() == 0:
         raise HTTPException(status_code=400, detail="公式在最近 40 个交易日输出全为空, 拒绝保存")
 
@@ -422,8 +414,9 @@ def _find_references(data_dir, factor_id: str) -> list[str]:
     for definition in store.load_all(data_dir):
         if str(definition.get("id")) == factor_id:
             continue
+        spec = get_factor(str(definition.get("id")))
         members = definition.get("members")
-        if isinstance(members, dict) and factor_id in members:
+        if (isinstance(members, dict) and factor_id in members) or (spec and factor_id in spec.inputs):
             references.append(f"custom_factors/{definition.get('id')}.json")
     return references
 

@@ -139,11 +139,11 @@ async def _application_lifespan(app: FastAPI):
         logger.warning("signal seeding failed (ignored): %s", e)
     # 自定义/复合因子载入注册表 (P3); 单个失败只跳过该因子 (fail-隔离)
     with startup_phase(logger, "custom factor module import"):
-        from app.factors.store import load_into_registry
+        from app.factors.store import load_runtime_registry
 
     try:
         with startup_phase(logger, "custom factor registration"):
-            loaded_factors = load_into_registry(store.data_dir)
+            loaded_factors = load_runtime_registry(store.data_dir)
         if loaded_factors:
             logger.info("custom factors loaded: %s", len(loaded_factors))
     except Exception as exc:  # noqa: BLE001

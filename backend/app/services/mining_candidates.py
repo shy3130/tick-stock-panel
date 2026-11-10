@@ -20,9 +20,10 @@ import polars as pl
 import pyarrow.parquet as pq
 
 from app.backtest.candidates import CandidateStore
-from app.backtest.factor import FACTOR_COLUMNS
 from app.backtest.mining import compute_candidate_signature, evaluate_candidate_gate
+from app.factors.registry import missing_factor_ids
 from app.services.mining_jobs import SUCCESS_RUN_STATUSES, MiningRunStore
+from app.services.mining_schedule import verify_mining_factor_snapshot
 from app.strategy.ai_generator import AIStrategyGenerator
 from app.strategy.engine import StrategyEngine
 
@@ -30,7 +31,6 @@ _MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 _MAX_ARTIFACT_ROWS = 32
 _MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 _MAX_DEFINITION_BYTES = 16 * 1024
-_FACTOR_IDS = frozenset(str(item["id"]) for item in FACTOR_COLUMNS)
 _FACTOR_DEFINITION_FIELDS = frozenset({"kind", "factor_names", "scoring", "directions"})
 _EXISTING_DEFINITION_FIELDS = frozenset({"kind", "strategy_id"})
 _BACKLINK_FIELDS = frozenset({"promoted_candidate_id", "published_strategy_id"})
@@ -452,9 +452,10 @@ class MiningCandidateService:
                 raise ValueError("factor weights must be finite and positive")
             if directions[factor_name] not in {"high", "low"}:
                 raise ValueError("factor directions must be high or low")
-        unknown = sorted(set(factor_names) - _FACTOR_IDS)
+        unknown = missing_factor_ids(factor_names)
         if unknown:
             raise ValueError(f"factor candidate contains unknown factors: {unknown}")
+        verify_mining_factor_snapshot(factor_names, manifest.get("data_fingerprint"))
         selected = self._request(manifest).get("factor_names")
         if not isinstance(selected, list) or not set(factor_names) <= set(selected):
             raise ValueError("factor candidate contains factors absent from its origin request")

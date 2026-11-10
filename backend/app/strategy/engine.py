@@ -796,7 +796,7 @@ class StrategyEngine:
                 )
                 required = max(
                     required,
-                    int(strategy.matrix_strategy.required_warmup_bars(params)) + 1,
+                    self._matrix_history_bars(strategy, params),
                 )
             elif strategy.execution_backend == "composite":
                 # composite 预热 = 各子策略预热的 max。
@@ -859,7 +859,7 @@ class StrategyEngine:
             matrix_ids.append(strategy_id)
             max_warmup = max(
                 max_warmup,
-                int(strategy.matrix_strategy.required_warmup_bars(params)) + 1,
+                self._matrix_history_bars(strategy, params),
                 scoring_warmup_bars(
                     effective_scoring(
                         strategy.meta.get("scoring"),
@@ -1406,6 +1406,14 @@ class StrategyEngine:
                 self._shared_matrix_cache.clear()
                 self._shared_matrix_cache[fingerprint] = matrix
         return matrix
+
+    @staticmethod
+    def _matrix_history_bars(strategy: StrategyDef, params: dict) -> int:
+        from app.factors.registry import factor_warmup_bars
+
+        required = int(strategy.matrix_strategy.required_warmup_bars(params)) + 1
+        fields = getattr(strategy.matrix_strategy, "required_fields_for_params", None)
+        return max(required, factor_warmup_bars(fields(params))) if callable(fields) else required
 
     @staticmethod
     def _matrix_field_columns(

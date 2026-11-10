@@ -14,7 +14,13 @@ from pathlib import Path
 from app.definitions import DefinitionKind, JsonDefinitionStore, register_kind
 from app.factors.dsl import compile_formula
 from app.factors.py_expr import compile_python_expression
-from app.factors.registry import FactorSpec, factor_dependencies, get_factor, register_factor
+from app.factors.registry import (
+    FactorSpec,
+    factor_dependencies,
+    factor_warmup_bars,
+    get_factor,
+    register_factor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +89,8 @@ def to_spec(definition: dict) -> FactorSpec:
                 lang="python",
                 version=int(definition.get("version", 1)),
                 dependencies=compiled.dependencies,
+                input_windows=compiled.input_windows,
+                declared_warmup=max(1, declared_warmup),
                 warmup_bars=max(declared_warmup, compiled.warmup_bars),
                 direction=str(definition.get("direction", "none")),  # type: ignore[arg-type]
                 stability="stable" if status == "active" else "experimental",
@@ -99,6 +107,7 @@ def to_spec(definition: dict) -> FactorSpec:
             kind="custom",
             version=int(definition.get("version", 1)),
             dependencies=frozenset(compiled.dependencies),
+            input_windows=compiled.input_windows,
             warmup_bars=compiled.warmup_bars,
             direction=str(definition.get("direction", "none")),  # type: ignore[arg-type]
             stability="stable" if status == "active" else "experimental",
@@ -126,22 +135,8 @@ def to_spec(definition: dict) -> FactorSpec:
         if get_factor(member_id) is None and member_id not in BASE_COLUMNS:
             raise ValueError(f"未知成员因子: {member_id}")
         components.append((member_id, weight))
-    # 环检测沿 components 链走 (依赖已展开, 看不到链路成员)
-    seen = {factor_id}
-    frontier = [member_id for member_id, _ in components]
-    while frontier:
-        current = frontier.pop()
-        if current in seen:
-            raise ValueError("composite 成员存在循环引用")
-        seen.add(current)
-        current_spec = get_factor(current)
-        if current_spec is not None and current_spec.kind == "composite":
-            frontier.extend(member_id for member_id, _ in current_spec.components)
-    dependencies = factor_dependencies([member_id for member_id, _ in components])
-    warmup = max(
-        ((get_factor(member_id).warmup_bars if get_factor(member_id) else 1) for member_id, _ in components),
-        default=1,
-    )
+    dependencies = factor_dependencies(members_raw)
+    warmup = factor_warmup_bars(members_raw)
     formula_text = " + ".join(
         f"{weight:g}*zscore({member_id})" for member_id, weight in components
     )
@@ -167,29 +162,37 @@ def register_definition(definition: dict) -> FactorSpec:
     return spec
 
 
+def load_runtime_registry(data_dir: Path) -> list[str]:
+    """启动时先同步扩展列, 再编译引用这些列的因子。"""
+    from app.factors.ext_factors import ensure_synced
+
+    ensure_synced(data_dir)
+    return load_into_registry(data_dir)
+
+
 def load_into_registry(data_dir: Path) -> list[str]:
     """启动期把存储中的因子注册进注册表; 单个失败只跳过并告警。
 
-    多轮加载: composite 成员可能引用尚未加载的 custom/其他 composite (文件按
-    字母序加载, cf_* 先于 uf_*), 失败的 composite 延后重试, 覆盖链式引用;
-    重试用尽仍失败的只告警不阻塞启动。
+    多轮加载: custom/复合成员可能引用字母序靠后的定义; 有进展时继续加载,
+    无进展时记录剩余错误, 不依赖文件名顺序或固定重试轮数。
     """
     loaded: list[str] = []
     pending = list(load_all(data_dir))
-    for round_index in range(3):
+    while pending:
         deferred: list[dict] = []
+        errors: list[tuple[dict, ValueError]] = []
         for definition in pending:
             try:
                 register_definition(definition)
                 loaded.append(str(definition["id"]))
             except ValueError as exc:
-                if round_index < 2 and str(definition.get("kind")) == "composite":
-                    deferred.append(definition)
-                else:
-                    logger.warning("custom factor 注册失败 %s: %s", definition.get("id"), exc)
-            except Exception as exc:
+                deferred.append(definition)
+                errors.append((definition, exc))
+            except Exception as exc:  # noqa: BLE001 — 单个损坏定义只隔离自身, 不阻断其余因子加载
                 logger.warning("custom factor 注册失败 %s: %s", definition.get("id"), exc)
-        if not deferred:
+        if len(deferred) == len(pending):
+            for definition, exc in errors:
+                logger.warning("custom factor 注册失败 %s: %s", definition.get("id"), exc)
             break
         pending = deferred
     return loaded

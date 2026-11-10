@@ -157,10 +157,11 @@ class FactorBacktestRequest(BaseModel):
 def factor_run(req: FactorBacktestRequest, request: Request):
     """因子回测 — IC/IR 分析 + 分层回测。"""
     from app.backtest.factor import FactorBacktestService, FactorConfig
-    from app.factors.registry import factor_columns_view
+    from app.factors.registry import missing_factor_ids
 
-    if req.factor_name not in {item["id"] for item in factor_columns_view()}:
-        raise HTTPException(status_code=400, detail=f"不支持的因子: {req.factor_name}")
+    invalid = missing_factor_ids([req.factor_name])
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"不支持的因子: {', '.join(invalid)}")
 
     engine = _get_engine(request)
     svc = FactorBacktestService(engine)
@@ -221,11 +222,10 @@ def factor_batch(req: FactorBatchRequest, request: Request):
         FactorBacktestService,
         FactorBatchConfig,
     )
-    from app.factors.registry import factor_columns_view
+    from app.factors.registry import missing_factor_ids
 
     factor_names = list(dict.fromkeys(req.factor_names))
-    allowed = {item["id"] for item in factor_columns_view()}
-    invalid = [name for name in factor_names if name not in allowed]
+    invalid = missing_factor_ids(factor_names)
     if invalid:
         raise HTTPException(status_code=400, detail=f"不支持的因子: {', '.join(invalid)}")
 

@@ -103,6 +103,7 @@ def _write_mining_market_data(
     *,
     days: int = 219,
     assets: int = 4,
+    liquidity_scale: float = 1.0,
 ) -> None:
     symbols = [f"60000{asset}.SH" for asset in range(assets)]
     for offset in range(days):
@@ -117,8 +118,8 @@ def _write_mining_market_data(
                 "high": close * 1.01,
                 "low": close * 0.99,
                 "close": close,
-                "volume": 1000.0 + asset_id * 100.0,
-                "amount": close * (100000.0 + asset_id * 1000.0),
+                "volume": (1000.0 + asset_id * 100.0) * liquidity_scale,
+                "amount": close * (100000.0 + asset_id * 1000.0) * liquidity_scale,
                 "raw_close": close,
                 "raw_high": close * 1.01,
                 "raw_low": close * 0.99,
@@ -260,6 +261,56 @@ def test_spawn_mining_writes_four_artifacts_and_returns_compact_summary(tmp_path
         if name == "folds":
             assert "n_dates" in frame.columns
             assert frame.filter(pl.col("regime_state") == "overall")["n_dates"].min() > 0
+
+def test_spawn_custom_factor_mining_and_promote_candidate(tmp_path):
+    from app.backtest.candidates import CandidateStore
+    from app.factors.registry import isolated_registry
+    from app.factors.store import load_into_registry, save_one
+    from app.services.mining_candidates import MiningCandidateService
+    from app.services.mining_schedule import mining_factor_snapshot
+    from app.strategy.engine import StrategyEngine
+
+    start = date(2023, 1, 2)
+    data_dir = tmp_path / "data"
+    _write_mining_market_data(data_dir, start, days=439, liquidity_scale=100.0)
+    # 父定义排在子定义前, worker 必须从磁盘按依赖加载。
+    save_one(data_dir, {"id": "uf_a_worker", "kind": "custom", "label": "嵌套因子",
+                        "formula": "uf_z_history + ma20_bias"})
+    save_one(data_dir, {"id": "uf_z_history", "kind": "custom", "label": "长窗口",
+                        "formula": "ts_mean(turnover_rate, 200)"})
+    with isolated_registry():
+        load_into_registry(data_dir)
+        snapshot = mining_factor_snapshot(["uf_a_worker"])
+    store = MiningRunStore(data_dir)
+    manifest = store.create({
+        "factor_names": ["uf_a_worker"], "strategy_ids": [], "symbols": None,
+        "asset_type": "stock", "start": (start + timedelta(days=220)).isoformat(),
+        "end": (start + timedelta(days=438)).isoformat(), "budget_profile": "exploratory",
+        "forward_horizon": 1, "commission_pct": 0.0, "stamp_tax_pct": 0.0,
+        "slippage_bps": 0.0, "max_combination_factors": 1, "beam_width": 2,
+        "max_finalists": 2, "require_regime": False,
+    }, {"generation": get_enriched_generation(data_dir, "stock"), "factors": snapshot}, run_id="custom_mining")
+    store.transition_status(manifest["run_id"], "running")
+    result = run_worker_task(make_worker_task("mining", data_dir, {
+        "run_id": manifest["run_id"], "request": manifest["request"],
+        "data_fingerprint": manifest["data_fingerprint"], "source": "manual",
+    }))
+    assert result["status"] in {"succeeded", "succeeded_with_budget_exhausted"}
+    assert result["worker"]["worker_exitcode"] == 0
+    assert result["selected_factor_count"] == 1
+    assert result["candidate_count"] > 0
+    # 与 manager 的完成回调一致, 将 worker 返回的真实摘要落盘。
+    store.write_summary(manifest["run_id"], result)
+    store.transition_status(manifest["run_id"], result["status"])
+    candidates = pl.read_parquet(store.artifact_path(manifest["run_id"], "candidates"))
+    with isolated_registry():
+        assert set(load_into_registry(data_dir)) == {"uf_a_worker", "uf_z_history"}
+        service = MiningCandidateService(data_dir, store, CandidateStore(data_dir),
+            StrategyEngine(strategy_dirs=[]), strategy_cache_invalidator=lambda _root: None)
+        candidate = service.promote(manifest["run_id"], candidates["signature"][0])
+        assert candidate["config"]["factor_names"] == ["uf_a_worker"]
+        assert candidate["status"] == "pending"
+
 
 def test_spawn_mining_benchmarks_strategy_on_every_outer_fold(tmp_path):
     start = date(2023, 1, 2)

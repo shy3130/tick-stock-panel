@@ -60,6 +60,7 @@ class CompiledPyExpr:
     dependencies: frozenset[str] = frozenset()
     referenced_factors: frozenset[str] = frozenset()
     warmup_bars: int = 1
+    input_windows: tuple[tuple[str, int], ...] = ()
     cross_sectional: bool = False
     formula_text: str = ""
 
@@ -103,6 +104,12 @@ def _window_warmup(tree: ast.Module) -> int:
             for kw in node.keywords:
                 if kw.arg == "window_size" and isinstance(kw.value, ast.Constant):
                     span = float(kw.value.value)
+        elif name in {"shift", "diff", "pct_change"}:
+            lag = next((kw.value for kw in node.keywords if kw.arg == "n"), None)
+            if lag is None:
+                lag = node.args[0] if node.args else ast.Constant(1)
+            if isinstance(lag, ast.Constant) and isinstance(lag.value, int) and lag.value > 0:
+                span = lag.value
         elif name == "ewm_mean":
             for kw in node.keywords:
                 if kw.arg == "span" and isinstance(kw.value, ast.Constant):
@@ -192,22 +199,28 @@ def compile_python_expression(source: str) -> CompiledPyExpr:
         return CompiledPyExpr(ok=False, errors=[DslError("E214", "至少通过 ctx.col 引用一个输入列")], formula_text=source)
 
     # 引用名里命中注册表因子 id 的, 单列为 referenced_factors (成员须先物化)
-    try:
-        from app.factors.registry import get_factor
-        referenced = frozenset(c for c in ctx.columns if get_factor(c) is not None)
-    except Exception:  # noqa: BLE001 — 注册表不可用不阻断编译 (引用展开交由物化期)
-        referenced = frozenset()
+    from app.factors.registry import factor_warmup_bars, get_factor
+
+    referenced = frozenset(c for c in ctx.columns if get_factor(c) is not None)
+    bars = _window_warmup(tree)
     return CompiledPyExpr(
         ok=True,
         expr=result,
         dependencies=frozenset(ctx.columns),
         referenced_factors=referenced,
-        warmup_bars=_window_warmup(tree) + 1,
+        warmup_bars=factor_warmup_bars(ctx.columns) + bars,
+        input_windows=tuple((name, bars) for name in sorted(ctx.columns)),
         formula_text=source,
     )
 
 
 @lru_cache(maxsize=256)
-def compile_python_expression_cached(source: str) -> CompiledPyExpr:
-    """带 LRU 缓存的编译入口 (与 compile_formula_cached 同形)。"""
+def _compile_cached(source: str, revision: int) -> CompiledPyExpr:
     return compile_python_expression(source)
+
+
+def compile_python_expression_cached(source: str) -> CompiledPyExpr:
+    from app.factors.registry import registry_cache_revision
+
+    revision = registry_cache_revision()
+    return compile_python_expression(source) if revision is None else _compile_cached(source, revision)

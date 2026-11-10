@@ -676,3 +676,17 @@ def test_intraday_signals_use_the_minute_feature_contract(env, tmp_path, monkeyp
     assert not any(entry["issues"] for entry in preview["entries"])
     apply(blob, preview)
     assert (dest / "user_data/custom_signals/minute_cross.json").exists()
+
+
+def test_export_and_restore_nested_factor_without_preloaded_child(env, tmp_path, monkeypatch):
+    parent = {**FACTOR, "id": "uf_a_parent", "formula": "ts_mean(uf_shared, 120)"}
+    write(tmp_path / "user_data/custom_factors/uf_a_parent.json", parent)
+    with registry.isolated_registry():
+        store.register_definition(parent)
+        blob = export(env, [{"kind": "factor", "id": parent["id"]}])
+        dest = fresh(tmp_path, monkeypatch)
+        registry.unregister_factor(parent["id"])
+        preview = inspect(blob)
+        assert apply(blob, preview)["imported"] == 2
+        assert {item["id"] for item in store.load_all(dest)} == {parent["id"], "uf_shared"}
+        assert registry.get_factor(parent["id"]).inputs == {"uf_shared"}

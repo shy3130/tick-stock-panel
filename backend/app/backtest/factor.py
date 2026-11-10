@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
@@ -18,12 +18,13 @@ import numpy as np
 import polars as pl
 
 from app.backtest import stats_v2
-from app.backtest.engine import BacktestEngine
+from app.backtest.engine import BacktestEngine, history_load_start
 from app.backtest.fundamentals import (
     FUNDAMENTAL_FACTOR_NAMES,
     attach_fundamental_factors,
     load_fundamental_snapshot,
 )
+from app.factors.registry import factor_calculation_order, factor_warmup_bars, get_factor
 from app.factors.registry import factor_columns_view as _factor_columns_view
 from app.strategy.scoring import (
     VIRTUAL_SCORING_DEPENDENCIES as DERIVED_FACTOR_DEPENDENCIES,
@@ -289,7 +290,7 @@ class FactorBacktestService:
             trading_dates=trading_dates,
         )
 
-        metadata = {item["id"]: item for item in FACTOR_COLUMNS}
+        metadata = {item["id"]: item for item in _factor_columns_view()}
         fundamentals_missing = (
             any(name in FUNDAMENTAL_FACTOR_NAMES for name in factor_names)
             and self._fundamentals_missing()
@@ -420,19 +421,17 @@ class FactorBacktestService:
         factor_names: list[str],
         *,
         expected_generation: str | None = None,
+        warmup_bars: int = 1,
     ) -> pl.DataFrame:
         panel_columns = [
             "symbol", "date", "open", "high", "low", "close", "volume", "amount",
             "turnover_rate",
         ]
-        if any(
-            name in ("limit_up_count_20d", "limit_up_count_60d")
-            for name in factor_names
-        ):
-            panel_columns.append("consecutive_limit_ups")
-        load_start = config.start
-        if any(name != "turnover_rate" for name in factor_names):
-            load_start = config.start - timedelta(days=FACTOR_WARMUP_DAYS)
+        from app.indicators.pipeline import ENRICHED_STORAGE_COLS
+
+        required = set(factor_calculation_order(factor_names))
+        panel_columns.extend(sorted((required & set(ENRICHED_STORAGE_COLS)) - set(panel_columns)))
+        load_start = self._factor_load_start(config, factor_names, warmup_bars=warmup_bars)
 
         load_kwargs = {
             "columns": panel_columns,
@@ -449,10 +448,7 @@ class FactorBacktestService:
         if panel.is_empty():
             return panel
 
-        missing = set(factor_names) - set(panel.columns)
-        if missing:
-            panel = self._compute_missing_factors(panel, missing)
-        fundamental_names = [name for name in factor_names if name in FUNDAMENTAL_FACTOR_NAMES]
+        fundamental_names = sorted(required & FUNDAMENTAL_FACTOR_NAMES)
         if fundamental_names:
             # 点时财务因子: 公告日门控, 无数据标的保持 null (不参与该日截面)。
             panel = attach_fundamental_factors(
@@ -460,7 +456,17 @@ class FactorBacktestService:
                 load_fundamental_snapshot(self._fundamentals_data_dir()),
                 fundamental_names,
             )
+        missing = set(factor_names) - set(panel.columns)
+        if missing:
+            panel = self._compute_missing_factors(panel, missing, data_dir=self._fundamentals_data_dir())
         return panel
+
+    def _factor_load_start(self, config, factor_names, *, warmup_bars: int = 1) -> date:
+        warmup_bars = max(warmup_bars, factor_warmup_bars(factor_names))
+        if set(factor_names) == {"turnover_rate"} and warmup_bars == 1:
+            return config.start
+        return history_load_start(self.engine, config.start, config.asset_type, warmup_bars,
+                                  minimum_days=FACTOR_WARMUP_DAYS)
 
     def _global_trading_dates(
         self,
@@ -689,6 +695,7 @@ class FactorBacktestService:
         factor_cols: set[str],
         *,
         assume_sorted: bool = False,
+        data_dir: Path | None = None,
     ) -> pl.DataFrame:
         required = {"symbol", "date", "open", "high", "low", "close", "volume"}
         if not required.issubset(panel.columns):
@@ -701,33 +708,19 @@ class FactorBacktestService:
         # compute_signals 同一原语, 历史帧不含快照 → 无未来函数)。
         from app.factors import ext_factors
 
-        if factor_cols & ext_factors.ext_factor_ids():
-            panel = ext_factors.attach_ext_columns(panel, include_snapshot=False)
+        ordered = factor_calculation_order(factor_cols)
+        if any(name.startswith("ext_") for name in ordered):
+            panel = ext_factors.attach_ext_columns(panel, include_snapshot=False, data_dir=data_dir)
 
-        from app.factors.registry import get_factor
         from app.indicators.pipeline import compute_indicators
 
         # custom/composite 因子走注册表→DSL/组合 的同一条物化路径 (P3, 与策略评分共用);
         # 其底层依赖 (如 change_pct/ma20) 先经内置补算路径物化, 再做 DSL/组合物化。
         registry_names = {
-            name for name in factor_cols
+            name for name in ordered
             if (spec := get_factor(name)) is not None and spec.kind in ("custom", "composite")
         }
-        if registry_names:
-            base_deps: set[str] = set()
-            for name in registry_names:
-                spec = get_factor(name)
-                if spec is not None:
-                    base_deps.update(spec.dependencies)
-            base_deps -= set(panel.columns) | registry_names
-            if base_deps:
-                panel = FactorBacktestService._compute_missing_factors(
-                    panel, base_deps, assume_sorted=assume_sorted,
-                )
-            panel = materialize_scoring_columns(panel, registry_names)
-            factor_cols = factor_cols - registry_names
-            if not factor_cols:
-                return panel
+        factor_cols = set(ordered) - registry_names - set(panel.columns)
 
         derived = factor_cols & set(DERIVED_FACTOR_DEPENDENCIES)
         indicator_columns = factor_cols - derived
@@ -738,7 +731,8 @@ class FactorBacktestService:
             needed=indicator_columns,
             assume_sorted=assume_sorted,
         )
-        return FactorBacktestService._compute_derived_factors(panel, derived)
+        panel = FactorBacktestService._compute_derived_factors(panel, derived)
+        return materialize_scoring_columns(panel, registry_names) if registry_names else panel
 
     @staticmethod
     def _compute_derived_factors(panel: pl.DataFrame, factor_cols: set[str]) -> pl.DataFrame:

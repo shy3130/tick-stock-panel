@@ -142,3 +142,14 @@ def test_staged_temp_columns_do_not_leak() -> None:
     warm = materialize_scoring_columns(frame, ["uf_c6"])
     assert cold.columns == warm.columns
     assert set(warm.columns) - set(frame.columns) == {"uf_c6"}
+
+
+def test_same_values_different_groups_do_not_reuse_cached_ranks():
+    from app.strategy.scoring import materialize_scoring_columns
+
+    _register("uf_group_rank", "rank(close)")
+    frame = _frame()
+    one_per_day = materialize_scoring_columns(frame, ["uf_group_rank"])
+    same_day = materialize_scoring_columns(frame.with_columns(pl.lit(1).alias("date")), ["uf_group_rank"])
+    assert one_per_day["uf_group_rank"].min() == 1
+    assert same_day["uf_group_rank"].min() == pytest.approx(1 / frame.height)
