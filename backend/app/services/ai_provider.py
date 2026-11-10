@@ -338,6 +338,8 @@ def codex_cli_available() -> bool:
     try:
         proc = subprocess.run(
             [*base, "--version"],
+            # Windows 桌面包无控制台, 不继承可能无效的标准输入句柄。
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=15,
             check=False,

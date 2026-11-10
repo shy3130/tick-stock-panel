@@ -706,6 +706,17 @@ def test_codex_cli_available_runs_version_check(monkeypatch):
     assert calls == [["codex", "--version"]]
 
 
+def test_codex_cli_available_without_console_stdin(monkeypatch):
+    def fake_run(args, **kwargs):
+        if kwargs.get("stdin") != ai_provider.subprocess.DEVNULL:
+            raise OSError(6, "The handle is invalid")
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
+    monkeypatch.setattr(ai_provider.subprocess, "run", fake_run)
+    assert ai_provider.codex_cli_available() is True
+
+
 def test_codex_cli_available_false_when_version_fails(monkeypatch):
     import subprocess
 

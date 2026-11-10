@@ -2,7 +2,7 @@
 
 原生 DLL 每进程加载一次且绑定一个 token: 主进程可能已用旧 Key 加载,
 候选 Key 无法在进程内替换, 因此探测必须另起进程(临时 lib 目录 +
-TDX_AI_DATA_LIB 指向), 结论以 JSON 回传。
+TDX_AI_DATA_LIB 指向), 结论通过临时 JSON 文件回传。
 
 可靠性设计(实测教训):
   - DLL 原生握手固定 ~30s(同 IP 并发会话疑似服务端节流), 超时必须 >45s;
@@ -42,8 +42,8 @@ def run_worker() -> int:
     """探测 worker — 必须在独立子进程内执行 (见 run 的拉起方式)。
 
     从环境变量读候选 Key 与进度目录, 各阶段进度写入 progress.json,
-    结论以单行 JSON 打到 stdout 供父进程解析。复用 client.materialize_lib
-    保持与主进程同一套物化/写 token 逻辑。
+    结论写入 result.json, 同时保留 stdout 输出供源码运行时诊断。
+    复用 client.materialize_lib 保持与主进程同一套物化/写 token 逻辑。
     """
     key = os.environ.pop(_PROBE_ENV_KEY, "")
     tmp = Path(os.environ.pop(_PROBE_ENV_TMP, ""))
@@ -57,6 +57,18 @@ def run_worker() -> int:
             progress.write_text(json.dumps({"stage": name, **extra}), encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
+
+    def report(payload: dict) -> None:
+        if key and payload.get("reason"):
+            payload["reason"] = str(payload["reason"]).replace(key, "[redacted]")
+        encoded = json.dumps(payload)
+        # Windows console=False 下 stdout 被 _guard_streams 替换为空流,
+        # 即使父进程 capture_output 也收不到 print, 必须用文件回传结论。
+        try:
+            (tmp / "result.json").write_text(encoded, encoding="utf-8")
+        except OSError:
+            logger.warning("TdxQuant 探测结果文件写入失败")
+        print(encoded)
 
     try:
         stage("imports")
@@ -86,14 +98,14 @@ def run_worker() -> int:
                     break
             except tc.TdxQuantAuthError as exc:
                 stage("done", ok=False)
-                print(json.dumps({"ok": False, "reason": str(exc)}))
+                report({"ok": False, "reason": str(exc)})
                 return 0
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(1.2)
         if not reachable:
             stage("done", ok=False)
-            print(json.dumps({"ok": False, "reason": "行情服务器连接失败(网络不可达)"}))
+            report({"ok": False, "reason": "行情服务器连接失败(网络不可达)"})
             return 0
 
         # 日K成功仅作辅助信号(会话按 IP 复用时错误 Key 也能通过), 明确拒绝则保留原因。
@@ -110,16 +122,16 @@ def run_worker() -> int:
             aux = "his_ok" if isinstance(v, dict) and v.get("Date") else "his_empty"
         except tc.TdxQuantAuthError as exc:
             stage("done", ok=False)
-            print(json.dumps({"ok": False, "reason": str(exc)}))
+            report({"ok": False, "reason": str(exc)})
             return 0
         except Exception:  # noqa: BLE001
             aux = "his_exc"
 
         stage("done", ok=True)
-        print(json.dumps({"ok": True, "reason": "", "aux": aux}))
+        report({"ok": True, "reason": "", "aux": aux})
     except Exception as exc:  # noqa: BLE001
         stage("exception", reason=str(exc)[:300])
-        print(json.dumps({"ok": False, "reason": str(exc)[:300]}))
+        report({"ok": False, "reason": str(exc)[:300]})
     return 0
 
 
@@ -139,7 +151,8 @@ def _tail(text: str, limit: int = 150) -> str:
     return lines[-1][:limit] if lines else "(空)"
 
 
-def run(api_key: str, timeout_s: float = 75.0) -> tuple[bool, str]:
+# 留出时间让后端在前端 75s 截止前回传阶段诊断, 避免浏览器先报笼统超时。
+def run(api_key: str, timeout_s: float = 60.0) -> tuple[bool, str]:
     """子进程探测候选 Key: 格式由调用方把关, 这里验证连通性(快照可达)。"""
     if not api_key:
         return False, "Key 为空"
@@ -162,6 +175,7 @@ def run(api_key: str, timeout_s: float = 75.0) -> tuple[bool, str]:
         try:
             proc = subprocess.run(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
@@ -171,21 +185,29 @@ def run(api_key: str, timeout_s: float = 75.0) -> tuple[bool, str]:
         except subprocess.TimeoutExpired:
             stage = _read_stage(tmp_dir)
             return False, f"探测超时({timeout_s:.0f}s, 停在阶段[{stage}]) — 原生握手约需 30s, 请检查网络后重试"
-        for line in reversed((proc.stdout or "").splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
+        except OSError:
+            return False, "探测进程启动失败，请检查客户端安装与运行权限"
+        if proc.returncode == 0:
+            try:
+                result = (Path(tmp_dir) / "result.json").read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                result = ""
+            for line in [result, *reversed((proc.stdout or "").splitlines())]:
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
-                    break
-                if payload.get("ok"):
+                    continue
+                if not isinstance(payload, dict) or not isinstance(payload.get("ok"), bool):
+                    continue
+                if payload["ok"]:
                     return True, "ok(连通正常; Key 有效性以首次拉取为准)"
-                return False, f"探测失败: {payload.get('reason', '未知原因')}"
-        # 无 JSON 结论: 原生层直接死亡(无输出)或入口即崩 — 用进度文件定位死点
+                reason = str(payload.get("reason") or "未知原因").replace(api_key, "[redacted]")
+                return False, f"探测失败: {reason}"
+        # 无有效结论或非零退出: 原生层直接死亡或入口即崩, 用进度文件定位死点。
         stage = _read_stage(tmp_dir)
         return False, (
             f"探测失败: 子进程死在阶段[{stage}], exit={proc.returncode}, "
             f"stderr={_tail(proc.stderr)}"
-        )
+        ).replace(api_key, "[redacted]")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
