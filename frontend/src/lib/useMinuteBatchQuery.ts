@@ -5,7 +5,7 @@ import { QK } from './queryKeys'
 
 export function useMinuteBatchQuery(
   symbols: string[],
-  options: { enabled: boolean; preferLocal: boolean; refetchInterval: number | false },
+  options: { enabled: boolean; preferLocal: boolean; refetchInterval: number | false | (() => number | false) },
 ) {
   const client = useQueryClient()
   const scope = JSON.stringify([symbols, options.preferLocal])
