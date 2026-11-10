@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, FlaskConical, PenLine, Search, Sparkles, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowRight, FlaskConical, PenLine, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { toast } from '@/components/Toast'
 import { api, type FactorLibraryItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { refreshResourceQueries } from '@/lib/importCenter'
 import { GenerateFactorStrategyDialog } from './GenerateFactorStrategyDialog'
 
 const INPUT_CLS = 'rounded-input border border-border bg-surface px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none'
@@ -32,6 +33,7 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
   const [kind, setKind] = useState('all')
   const [group, setGroup] = useState('all')
   const [status, setStatus] = useState('all')
+  const [view, setView] = useState<'library' | 'archive'>('library')
   const [detail, setDetail] = useState<FactorLibraryItem | null>(null)
 
   const lib = useQuery({
@@ -40,12 +42,25 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
     // 注册表近乎静态 (只在保存/删除自定义因子时变化, 届时主动 invalidate), 切 tab 不再闪 loading
     staleTime: 60_000,
   })
-  const factors = lib.data?.factors ?? []
+  const allFactors = lib.data?.factors ?? []
+  const archivedCount = allFactors.filter(item => item.archived).length
+  // 因子库隐藏已归档; 档案库只看已归档 — 归档可逆, 定义与计算均不受影响
+  const factors = view === 'archive' ? allFactors.filter(item => item.archived) : allFactors.filter(item => !item.archived)
 
   const groups = useMemo(
     () => Array.from(new Set(factors.map(item => item.group))).sort((a, b) => a.localeCompare(b, 'zh')),
     [factors],
   )
+
+  const queryClient = useQueryClient()
+  const setArchived = useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) => api.factorArchive(id, archived),
+    onSuccess: (_data, variables) => {
+      toast(variables.archived ? '已归档到档案库，可随时恢复' : '已恢复到因子库', 'success')
+      void refreshResourceQueries(queryClient)
+    },
+    onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
+  })
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase()
@@ -108,6 +123,14 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
           <option value="retired">退役</option>
         </select>
         <span className="ml-auto text-[10px] text-muted">{lib.isLoading ? '加载中…' : `${filtered.length} / ${factors.length} 个因子`}</span>
+        <div className="flex shrink-0 items-center rounded-btn border border-border p-0.5" role="tablist" aria-label="因子库视图">
+          {([['library', '因子库'], ['archive', `档案库 ${archivedCount}`]] as const).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={view === id} onClick={() => setView(id)}
+              className={`rounded px-2 py-1 text-[11px] transition-colors ${view === id ? 'bg-accent/10 font-medium text-accent' : 'text-secondary hover:text-foreground'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -120,7 +143,11 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
           <div className="p-6 text-center text-xs text-muted">因子库加载中…</div>
         )}
         {!lib.isLoading && !lib.isError && filtered.length === 0 && (
-          <div className="p-6 text-center text-xs text-muted">无匹配因子</div>
+          <div className="p-6 text-center text-xs text-muted">
+            {view === 'archive'
+              ? (archivedCount > 0 ? '筛选条件下无归档因子' : '档案库为空。在因子详情里点「归档」收藏不用的因子，可随时恢复。')
+              : '无匹配因子'}
+          </div>
         )}
         {!lib.isLoading && grouped.length > 0 && (
           <div className="space-y-4 p-3">
@@ -139,6 +166,12 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
                       onOpen={setDetail}
                       onInspect={onInspect}
                       onEdit={onEdit}
+                      onSetArchived={
+                        // 归档只对盘上定义 (自定义/复合) 有意义; 内置因子无 archived 状态
+                        (item.kind === 'custom' || item.kind === 'composite') && !setArchived.isPending
+                          ? next => setArchived.mutate({ id: item.id, archived: next })
+                          : undefined
+                      }
                     />
                   ))}
                 </div>
@@ -160,11 +193,14 @@ function FactorCard({
   onOpen,
   onInspect,
   onEdit,
+  onSetArchived,
 }: {
   item: FactorLibraryItem
   onOpen: (item: FactorLibraryItem) => void
   onInspect: (factorId: string) => void
   onEdit?: (factorId: string) => void
+  /** 归档/恢复回调; 档案库视图给恢复, 因子库详情里给归档 (undefined 时隐藏) */
+  onSetArchived?: (archived: boolean) => void
 }) {
   const assetLabel = item.asset_types.includes('stock') && item.asset_types.includes('etf')
     ? '股票/ETF'
@@ -180,9 +216,13 @@ function FactorCard({
         <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${KIND_META[item.kind].cls}`}>
           {KIND_META[item.kind].label}
         </span>
-        <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${statusOf(item).cls}`}>
-          {statusOf(item).label}
-        </span>
+        {item.archived ? (
+          <span className="inline-flex shrink-0 rounded-btn bg-muted/15 px-1.5 py-0.5 text-[10px] font-medium text-muted">已归档</span>
+        ) : (
+          <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${statusOf(item).cls}`}>
+            {statusOf(item).label}
+          </span>
+        )}
         {item.pit && (
           <span className="shrink-0 text-[10px] text-amber-500" title="点时数据: 仅使用公告日不晚于当日的财务数据">点时</span>
         )}
@@ -194,7 +234,7 @@ function FactorCard({
           {item.warmup_bars > 1 ? `预热 ${item.warmup_bars} 日` : '无预热'} · {assetLabel}
         </span>
         <div className="flex shrink-0 items-center gap-0.5">
-          {item.kind === 'custom' && onEdit && (
+          {item.kind === 'custom' && onEdit && !item.archived && (
             <button
               type="button"
               onClick={event => { event.stopPropagation(); onEdit(item.id) }}
@@ -202,6 +242,16 @@ function FactorCard({
               title="在编辑器中打开该公式"
             >
               编辑
+            </button>
+          )}
+          {onSetArchived && (
+            <button
+              type="button"
+              onClick={event => { event.stopPropagation(); onSetArchived(!item.archived) }}
+              className="inline-flex items-center gap-0.5 rounded-btn px-2 py-1 text-[10px] text-secondary transition-colors hover:bg-warning/10 hover:text-warning"
+              title={item.archived ? '恢复到因子库 (归档可逆, 不影响计算)' : '归档到档案库 (可恢复, 不删除因子)'}
+            >
+              {item.archived ? <><ArchiveRestore className="h-3 w-3" />恢复</> : <><Archive className="h-3 w-3" />归档</>}
             </button>
           )}
           <button
@@ -238,6 +288,15 @@ function FactorDetailModal({
       onClose()
     },
     onError: (error: Error) => toast(`状态更新失败 · ${error.message}`, 'error'),
+  })
+  const setArchived = useMutation({
+    mutationFn: (archived: boolean) => api.factorArchive(item.id, archived),
+    onSuccess: (_data, archived) => {
+      toast(archived ? `${item.label} 已归档，可在档案库恢复` : `${item.label} 已恢复到因子库`, 'success')
+      void refreshResourceQueries(queryClient)
+      onClose()
+    },
+    onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
   })
   const isDynamic = item.kind === 'custom' || item.kind === 'composite'
   const [groupDraft, setGroupDraft] = useState(item.group)
@@ -305,9 +364,13 @@ function FactorDetailModal({
             <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${KIND_META[item.kind].cls}`}>
               {KIND_META[item.kind].label}
             </span>
-            <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${statusOf(item).cls}`}>
-              {statusOf(item).label}
-            </span>
+            {item.archived ? (
+              <span className="inline-flex shrink-0 rounded-btn bg-muted/15 px-1.5 py-0.5 text-[10px] font-medium text-muted">已归档</span>
+            ) : (
+              <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${statusOf(item).cls}`}>
+                {statusOf(item).label}
+              </span>
+            )}
           </div>
           <div className="mt-1 font-mono text-[11px] text-muted">{item.id}</div>
         </div>
@@ -368,6 +431,22 @@ function FactorDetailModal({
                 </button>
               ))}
               <span className="text-[10px] text-muted" title="生命周期语义">编辑公式后自动回草稿</span>
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="w-10 shrink-0 text-[11px] text-muted">归档</span>
+              <button
+                type="button"
+                onClick={() => setArchived.mutate(!item.archived)}
+                disabled={setArchived.isPending}
+                className={`inline-flex items-center gap-1 rounded-btn border px-2 py-0.5 text-[10px] transition-colors disabled:opacity-40 ${item.archived
+                  ? 'border-accent/60 bg-accent/10 font-medium text-accent'
+                  : 'border-border text-secondary hover:border-warning/40 hover:text-warning'
+                }`}
+                title="归档可逆: 收进档案库, 不删除定义、不影响引用它的策略与评分列"
+              >
+                {item.archived ? <><ArchiveRestore className="h-3 w-3" />恢复到因子库</> : <><Archive className="h-3 w-3" />归档到档案库</>}
+              </button>
+              {item.archived && <span className="text-[10px] text-muted">已归档 · 仍在参与计算, 引用方不受影响</span>}
             </div>
           </div>
         )}

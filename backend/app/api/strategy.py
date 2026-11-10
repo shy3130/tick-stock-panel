@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import logging
 import math
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
+from app.services import strategy_pool
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.strategy import config as strategy_config
 from app.strategy.ai_generator import (
@@ -337,6 +339,7 @@ def list_strategies(
     engine = _get_engine(request)
     data_dir = _data_dir(request)
     all_overrides = strategy_config.list_overrides(data_dir)
+    library = strategy_pool.library_metadata(data_dir)
 
     result = []
     # include_research=True 时返回 research_only 草稿(供前端「草稿」分区展示/发布)。
@@ -351,7 +354,7 @@ def list_strategies(
         sid = meta["id"]
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
-        result.append(_strategy_detail(s, overrides, engine))
+        result.append({**_strategy_detail(s, overrides, engine), "library": library.get(sid)})
     payload: dict = {"strategies": result, "load_errors": engine.load_errors()}
     # 去内置化一次性迁移摘要 (启动时执行过才有): 前端提示一次后本地记忆
     migration = getattr(request.app.state, "legacy_migration", None)
@@ -365,7 +368,8 @@ def get_strategy(strategy_id: str, request: Request):
     engine = _get_engine(request)
     s = _get_public_strategy(engine, strategy_id)
     overrides = strategy_config.load_override(_data_dir(request), strategy_id)
-    return _strategy_detail(s, overrides or None, engine)
+    library = strategy_pool.library_metadata(_data_dir(request))
+    return {**_strategy_detail(s, overrides or None, engine), "library": library.get(strategy_id)}
 
 
 # ── 执行策略 ─────────────────────────────────────────────────────────
@@ -917,6 +921,10 @@ def save_strategy_code_core(
         engine.reload()
         raise ValueError(f"策略保存失败: {e}") from e
 
+    # 登记加入时间 (策略库「按加入时间排序」的依据; 幂等, 已登记不动)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
+
     return {
         "ok": True,
         "strategy_id": sid,
@@ -1309,6 +1317,10 @@ def _save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request
 
     _invalidate_strategy_runtime(request)
 
+    # 登记加入时间 (同自定义策略保存路径; 幂等)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
+
     return {
         "ok": True,
         "strategy_id": sid,
@@ -1379,6 +1391,9 @@ def publish_ai_strategy(strategy_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"策略发布失败: {e}") from e
 
     _invalidate_strategy_runtime(request)
+    # 发布即进入公开库, 登记加入时间 (幂等)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
     return {"ok": True, "strategy_id": sid}
 
 

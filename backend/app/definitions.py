@@ -303,6 +303,7 @@ def catalog(data_dir: Path) -> list[dict]:
             "id": sig.get("id"),
             "label": sig.get("name") or sig.get("id"),
             "enabled": sig.get("enabled") is not False,
+            "archived": sig.get("archived") is True,
             "timeframe": sig.get("timeframe") or "daily",
             "lang": "conditions",
             "dependencies": sorted(definition_dependencies("signal", sig)),
@@ -314,6 +315,7 @@ def catalog(data_dir: Path) -> list[dict]:
             "label": definition.get("label") or definition.get("id"),
             "lang": str(definition.get("lang", "dsl")),
             "status": str(definition.get("status", "draft")),
+            "archived": definition.get("archived") is True,
         }
         try:
             spec = factor_store.to_spec(definition)

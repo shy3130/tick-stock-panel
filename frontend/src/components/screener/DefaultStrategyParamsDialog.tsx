@@ -11,6 +11,7 @@ import { storage, type DefaultStrategyBasicFilter } from '@/lib/storage'
 import { color } from '@/lib/colors'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { selectableStrategies } from '@/lib/strategyLibrary'
 import { RangeField, ALL_BOARDS } from './StrategySettingsDialog'
 
 /** 与自定义策略模板内置默认一致 (CUSTOM_TEMPLATE 的 basic_filter 段) */
@@ -46,7 +47,8 @@ export function DefaultStrategyParamsDialog({ show, onClose }: Props) {
     queryFn: () => api.screenerStrategies(undefined, 'all'),
     enabled: show,
   })
-  const strategyCount = strategiesQuery.data?.presets?.length ?? 0
+  const strategyChoices = selectableStrategies(strategiesQuery.data?.presets ?? [])
+  const strategyCount = strategyChoices.length
 
   // 重新打开时重置表单与一键应用状态
   useEffect(() => {
@@ -69,7 +71,7 @@ export function DefaultStrategyParamsDialog({ show, onClose }: Props) {
   }
 
   const applyToAll = async () => {
-    const ids = (strategiesQuery.data?.presets ?? []).map(p => p.id)
+    const ids = strategyChoices.map(p => p.id)
     if (!ids.length) return
     setApplyPhase('applying')
     setApplyProgress({ done: 0, total: ids.length, failed: 0 })

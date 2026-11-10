@@ -46,11 +46,14 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
     const list = (customSignalsQuery.data?.signals ?? [])
       .filter(s => s.enabled && s.timeframe !== 'intraday')
       .filter(s => !filterCustomByKind || s.kind === kind || s.kind === 'both')
+      // 已归档信号不再供新选择; 但已被当前策略选中的仍要显示 (否则已生效配置
+      // 会在界面里凭空消失, 无法察觉/移除) — 标记 archived 供渲染降淡提示
+      .filter(s => !s.archived || signals.includes(s.column ?? `csg_${s.id}`))
     // 列名 = 显式 column (迁移定义沿用 signal_*) 或默认 csg_{id}
     const names: Record<string, string> = {}
     for (const cs of list) names[cs.column ?? `csg_${cs.id}`] = cs.name
     return { list, names }
-  }, [customSignalsQuery.data, kind, filterCustomByKind])
+  }, [customSignalsQuery.data, kind, filterCustomByKind, signals])
 
   const toggle = (sig: string) => {
     const next = signals.includes(sig) ? signals.filter(x => x !== sig) : [...signals, sig]
@@ -94,13 +97,13 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
             key={id}
             type="button"
             onClick={() => toggle(id)}
-            title="信号库定义, 可在信号库编辑"
-            className={`${btnCls} relative ${signals.includes(id) ? active : idle}`}
+            title={cs.archived ? '该信号已归档 (仍在生效), 可在信号库 · 档案库恢复' : '信号库定义, 可在信号库编辑'}
+            className={`${btnCls} relative ${signals.includes(id) ? active : idle} ${cs.archived ? 'opacity-60' : ''}`}
           >
-            {customOptions.names[id]}
-            <span className="pointer-events-none absolute -top-1 -right-1 rounded-full border border-border bg-base p-px">
-              <PenLine className="h-2 w-2 text-muted" />
-            </span>
+        {customOptions.names[id]}
+        <span className="pointer-events-none absolute -top-1 -right-1 rounded-full border border-border bg-base p-px">
+          <PenLine className="h-2 w-2 text-muted" />
+        </span>
           </button>
         )
       })}

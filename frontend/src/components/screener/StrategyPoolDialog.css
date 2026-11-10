@@ -1,0 +1,53 @@
+.strategy-library-dialog {
+  container: strategy-library / inline-size;
+}
+
+.strategy-library-dialog .strategy-library-desktop-tabs {
+  display: none;
+}
+
+/* 按面板实际宽度切换, 兼容应用缩放后与浏览器视口不同的可用空间。 */
+@container strategy-library (min-width: 640px) {
+  .strategy-library-dialog .strategy-library-filter-fields {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .strategy-library-dialog .strategy-library-search {
+    grid-column: span 1;
+  }
+
+  .strategy-library-dialog .strategy-library-strategy-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .strategy-library-dialog .strategy-library-row-actions {
+    margin-left: 0;
+  }
+
+  .strategy-library-dialog .strategy-library-strategy-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@container strategy-library (min-width: 960px) {
+  .strategy-library-dialog .strategy-library-panels {
+    grid-template-columns: minmax(0, 1fr) clamp(20rem, 28%, 24rem);
+  }
+
+  .strategy-library-dialog .strategy-library-pane,
+  .strategy-library-dialog .strategy-library-desktop-tabs {
+    display: flex;
+  }
+
+  .strategy-library-dialog .strategy-library-mobile-tabs {
+    display: none;
+  }
+
+  .strategy-library-dialog .strategy-library-catalog {
+    border-inline-end: 1px solid hsl(var(--border));
+  }
+}

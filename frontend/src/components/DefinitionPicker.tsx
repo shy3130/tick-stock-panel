@@ -83,12 +83,14 @@ export function DefinitionPicker({ kinds = ['signal', 'factor'], onSelect, selec
     const kw = search.trim().toLowerCase()
     return all.filter((it) =>
       (kindFilter === 'all' || it.kind === kindFilter)
+      // 已归档定义不供新选择; 正被选中的仍显示 (带已归档标记), 否则已生效引用凭空消失
+      && (!it.archived || it.id === selectedId)
       && (!kw || it.id.toLowerCase().includes(kw) || it.label.toLowerCase().includes(kw)),
     )
-  }, [listQ.data, kindFilter, search])
+  }, [listQ.data, kindFilter, search, selectedId])
 
   const counts = useMemo(() => {
-    const all = listQ.data?.items ?? []
+    const all = (listQ.data?.items ?? []).filter((it) => !it.archived)
     return {
       signal: all.filter((it) => it.kind === 'signal').length,
       factor: all.filter((it) => it.kind === 'factor').length,
@@ -176,6 +178,9 @@ export function DefinitionPicker({ kinds = ['signal', 'factor'], onSelect, selec
                     )}
                     {it.kind === 'signal' && it.enabled === false && (
                       <span className="rounded-full bg-warning/10 px-1.5 py-px text-[10px] text-warning">已停用</span>
+                    )}
+                    {it.archived && (
+                      <span className="rounded-full bg-muted/15 px-1.5 py-px text-[10px] text-muted" title="已归档 (仍在参与计算), 可在对应库的档案库恢复">已归档</span>
                     )}
                     {it.kind === 'factor' && it.status && it.status !== 'active' && (
                       <span className="rounded-full bg-elevated px-1.5 py-px text-[10px] text-muted">{it.status}</span>

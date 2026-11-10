@@ -43,10 +43,16 @@ export const storage = {
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
-  /** 策略池 (screener) — 统一池 (日线+分钟共用, 执行按各自声明周期路由) */
+  /** 策略池 (screener) — v2 起为后端存储的影子副本 (回滚保险), 池本体见 /api/strategy-pool */
   strategyPool:         kv<string[]>('strategy-pool'),
   /** 旧分钟隔离池 — 仅作一次性迁移读取源, 迁移完成后移除该 key */
   strategyPoolMinute:   kv<string[]>('strategy-pool-1m'),
+  /** 策略池 → 后端存储的一次性上载完成标记 (旧本地池先于后端偏好同步时兜底) */
+  strategyPoolV2Migrated: kv<boolean>('tsp-strategy-pool-v2-migrated'),
+  /** 策略库弹窗·左侧策略池排序 (视图偏好: 默认 / 加入时间 / 名称) */
+  screenerPoolSort:     kv<string>('screener-pool-sort'),
+  /** 策略页卡片区·分组 tab (视图偏好: all=全部 / none=未分组 / 分组id) */
+  screenerPoolGroupTab: kv<string>('screener-pool-group-tab'),
 
   /** 自选列表列配置 */
   watchlistColumns:     kv<unknown[]>('watchlist_columns'),

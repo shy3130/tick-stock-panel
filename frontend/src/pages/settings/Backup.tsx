@@ -13,13 +13,16 @@ import type { ConfigBackupApplyResult, ConfigBackupInspect } from '@/lib/api'
 import { toast } from '@/components/Toast'
 import { Modal } from '@/components/Modal'
 import { QK } from '@/lib/queryKeys'
+import { notifyStrategyLibraryChanged, STRATEGY_LIBRARY_QUERY_KEYS } from '@/lib/strategyLibrary'
 
 /** 类别选项 — key 与后端 config_backup._CATEGORY_LABELS 一一对应 */
 export const CATEGORY_OPTIONS: { key: string; label: string; desc: string; sensitive?: boolean }[] = [
   { key: 'strategies',         label: '策略源码',       desc: '自定义 / AI / 组合策略' },
   { key: 'strategy_overrides', label: '策略调参',       desc: '参数覆盖' },
+  { key: 'strategy_pool',      label: '策略库与策略池', desc: '自定义分组、归档状态、加入时间与池顺序' },
   { key: 'custom_signals',     label: '自定义信号',     desc: '信号库中的自定义信号' },
   { key: 'custom_factors',     label: '自定义因子',     desc: '自定义与组合因子' },
+  { key: 'position_policies',  label: '仓位策略',       desc: '自定义仓位计算配置与源码' },
   { key: 'monitor_rules',      label: '监控规则',       desc: '监控中心规则' },
   { key: 'watchlist',          label: '自选股与分组',   desc: '自选列表与分组定义' },
   { key: 'lots',               label: '批量持仓',       desc: '批量交易持仓记录' },
@@ -54,6 +57,11 @@ export const INVALIDATE_KEYS: readonly (readonly unknown[])[] = [
   QK.lots,
   QK.paperAll,
   QK.soundPacks,
+  QK.definitions,
+  QK.factorColumns,
+  QK.resourceCatalog,
+  QK.positionPolicies,
+  ...STRATEGY_LIBRARY_QUERY_KEYS,
   ['alerts'],
   // 参数化键按前缀失效 (与 Screener/FactorEditor 的既有做法一致)
   ['screener-strategies'],
@@ -171,6 +179,7 @@ export function SettingsBackupPanel({ mode = 'all' }: { mode?: 'all' | 'export' 
       const failed = r.categories.reduce((s, c) => s + c.failed.length, 0)
       toast(failed > 0 ? `导入完成: ${imported} 项成功, ${failed} 项失败` : `导入完成: ${imported} 项`, failed > 0 ? 'error' : 'success')
       INVALIDATE_KEYS.forEach((k) => qc.invalidateQueries({ queryKey: k }))
+      notifyStrategyLibraryChanged()
     },
     onError: () => setConfirming(false),
   })

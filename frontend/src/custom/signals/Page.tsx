@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Settings2, Trash2, Zap } from 'lucide-react'
+import { Archive, ArchiveRestore, Plus, Settings2, Trash2, Zap } from 'lucide-react'
 import { api, type CustomSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { refreshResourceQueries } from '@/lib/importCenter'
 import { type SignalKind } from '@/lib/signals'
 import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
+import { toast } from '@/components/Toast'
 import { Skeleton } from '@/components/data/Skeleton'
 import { PageHeader } from '@/components/PageHeader'
 import { AnchorWrap } from '@/lib/useCardFlash'
@@ -43,10 +45,14 @@ function SignalsBody({ highlight }: { highlight: string }) {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<CustomSignal | null>(null)
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
+  const [view, setView] = useState<'library' | 'archive'>('library')
   const resetDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fields = options.data?.fields ?? []
-  const signals = list.data?.signals ?? []
+  const allSignals = list.data?.signals ?? []
+  const archivedSignals = allSignals.filter(sig => sig.archived)
+  // 信号库隐藏已归档, 档案库只看已归档 — 归档可逆, 不删除定义、不影响已引用它的策略
+  const signals = view === 'archive' ? archivedSignals : allSignals.filter(sig => !sig.archived)
   const enabledCustomSignals = signals.filter(sig => sig.enabled).length
 
   useEffect(() => () => {
@@ -82,6 +88,15 @@ function SignalsBody({ highlight }: { highlight: string }) {
     },
   })
 
+  const setArchived = useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) => api.customSignalArchive(id, archived),
+    onSuccess: (_data, variables) => {
+      toast(variables.archived ? '已归档到档案库，可随时恢复' : '已恢复到信号库', 'success')
+      void refreshResourceQueries(qc)
+    },
+    onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
+  })
+
   const toggleEnabled = (sig: CustomSignal) => {
     api.customSignalSave({ ...sig, enabled: !sig.enabled }).then(() => qc.invalidateQueries({ queryKey: QK.customSignals }))
   }
@@ -99,12 +114,28 @@ function SignalsBody({ highlight }: { highlight: string }) {
 
   return (
     <div className="space-y-4">
-      {/* 紧凑工具条: 统计 + 新建 */}
+      {/* 紧凑工具条: 统计 + 视图切换 + 新建 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex h-7 items-center gap-1.5 rounded-btn border border-border bg-surface/80 px-2.5 text-[11px] font-medium text-secondary sm:text-xs">
-          条件信号
-          <span className="rounded bg-elevated px-1 py-px font-mono text-[10px] text-muted">{signals.length}</span>
-          <span className="text-muted">· {enabledCustomSignals} 个已启用</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex h-7 items-center gap-1.5 rounded-btn border border-border bg-surface/80 px-2.5 text-[11px] font-medium text-secondary sm:text-xs">
+            条件信号
+            <span className="rounded bg-elevated px-1 py-px font-mono text-[10px] text-muted">{signals.length}</span>
+            <span className="text-muted">· {enabledCustomSignals} 个已启用</span>
+          </div>
+          <div className="inline-flex h-7 items-center rounded-btn border border-border p-0.5" role="tablist" aria-label="信号库视图">
+            {([['library', '信号库'], ['archive', `档案库 ${archivedSignals.length}`]] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={view === id}
+                onClick={() => setView(id)}
+                className={`rounded px-2 py-0.5 text-[11px] transition-colors ${view === id ? 'bg-accent/10 font-medium text-accent' : 'text-secondary hover:text-foreground'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-[11px] text-muted">信号保存为 <span className="font-mono text-secondary">csg_*</span> 列，条件字段可用行情指标、涨跌停判定价与全部注册因子</span>
@@ -131,10 +162,33 @@ function SignalsBody({ highlight }: { highlight: string }) {
                         {KIND_LABEL[sig.kind]}
                       </span>
                       {!sig.enabled && <span className="rounded bg-muted/10 px-1.5 py-0.5 text-[10px] text-muted">已停用</span>}
+                      {sig.archived && <span className="rounded bg-muted/15 px-1.5 py-0.5 text-[10px] text-muted">已归档</span>}
                     </div>
                     <p className="mt-1 truncate font-mono text-[11px] text-muted">{sig.column ?? `csg_${sig.id}`}</p>
+                    {sig.archived && sig.archived_at && (
+                      <p className="mt-1 text-[10px] text-muted/80">归档于 {sig.archived_at.slice(0, 16).replace('T', ' ')}</p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    {sig.archived ? (
+                      <button
+                        onClick={() => setArchived.mutate({ id: sig.id, archived: false })}
+                        disabled={setArchived.isPending}
+                        title="恢复到信号库 (归档可逆, 不影响计算)"
+                        className="inline-flex cursor-pointer items-center gap-1 rounded border border-accent/30 px-1.5 py-0.5 text-[10px] text-accent hover:bg-accent/10 disabled:opacity-50"
+                      >
+                        <ArchiveRestore className="h-3 w-3" />恢复
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setArchived.mutate({ id: sig.id, archived: true })}
+                        disabled={setArchived.isPending}
+                        title="归档到档案库 (可恢复, 不删除信号)"
+                        className="cursor-pointer rounded p-1 text-muted hover:bg-warning/10 hover:text-warning disabled:opacity-50"
+                      >
+                        <Archive className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button onClick={() => toggleEnabled(sig)} title={sig.enabled ? '停用' : '启用'} className={`cursor-pointer rounded p-1 ${sig.enabled ? 'text-emerald-400 hover:bg-emerald-400/10' : 'text-muted hover:bg-elevated'}`}>
                       <Zap className="h-3.5 w-3.5" />
                     </button>
@@ -188,7 +242,9 @@ function SignalsBody({ highlight }: { highlight: string }) {
               ))}
             {!list.isLoading && signals.length === 0 && (
               <div className="rounded-card border border-dashed border-border px-5 py-10 text-center text-sm text-muted md:col-span-2">
-                信号库为空。可用「字段 + 运算符 + 值」组合条件创建，或从检验页因子行一键生成；也可让 AI 按描述生成。
+                {view === 'archive'
+                  ? '档案库为空。信号卡右上角的归档按钮可把不用的信号收进这里，可随时恢复。'
+                  : '信号库为空。可用「字段 + 运算符 + 值」组合条件创建，或从检验页因子行一键生成；也可让 AI 按描述生成。'}
               </div>
             )}
           </div>

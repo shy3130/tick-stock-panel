@@ -34,12 +34,15 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
     """
     specs = all_factors(asset_type=asset_type)
     status_by_id: dict[str, str] = {}
+    archived_by_id: dict[str, bool] = {}
     # 数据目录不可用时退化为不带 status — 内置因子列表不因此不可用
     with contextlib.suppress(HTTPException):
-        status_by_id = {
-            str(definition.get("id")): str(definition.get("status", "draft"))
+        disk = {
+            str(definition.get("id")): definition
             for definition in store.load_all(_data_dir(request))
         }
+        status_by_id = {fid: str(d.get("status", "draft")) for fid, d in disk.items()}
+        archived_by_id = {fid: d.get("archived") is True for fid, d in disk.items()}
     return {
         "factors": [
             {
@@ -56,6 +59,7 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
                 "asset_types": sorted(spec.asset_types),
                 "stability": spec.stability,
                 "status": status_by_id.get(spec.id),
+                "archived": archived_by_id.get(spec.id, False),
                 "scale_free": spec.scale_free,
                 "dependencies": sorted(factor_dependencies([spec.id])) if spec.inputs else [],
             }
@@ -285,6 +289,7 @@ def create_custom_factor(req: CustomFactorCreateRequest, request: Request) -> di
         "description": req.description,
         "direction": req.direction,
         "status": "draft",
+        "archived": False,
         "created_at": store._now(),
         "updated_at": store._now(),
     }
@@ -316,6 +321,7 @@ def create_composite_factor(req: CompositeFactorCreateRequest, request: Request)
         "description": req.description,
         "direction": req.direction,
         "status": "draft",
+        "archived": False,
         "created_at": store._now(),
         "updated_at": store._now(),
     }
@@ -475,6 +481,36 @@ def update_factor_status(factor_id: str, req: FactorStatusRequest, request: Requ
 
 class FactorGroupRequest(BaseModel):
     group: str = Field(..., min_length=1, max_length=24)
+
+
+def _set_factor_archived(factor_id: str, archived: bool, request: Request) -> dict:
+    """归档/恢复自定义或复合因子 (可逆): 只改标记位, 不注销注册表 ——
+    已引用该因子的策略/信号/评分列照常计算, 归档只影响因子库与选择器可见性。"""
+    data_dir = _data_dir(request)
+    target = None
+    for definition in store.load_all(data_dir):
+        if str(definition.get("id")) == factor_id:
+            target = definition
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target["archived"] = archived
+    target["archived_at"] = store._now() if archived else None
+    target["updated_at"] = store._now()
+    store.save_one(data_dir, target)
+    return {"ok": True, "id": factor_id, "archived": archived}
+
+
+@router.post("/custom/{factor_id}/archive")
+def archive_factor(factor_id: str, request: Request) -> dict:
+    """归档因子: 移入档案库, 可随时恢复; 不删除定义文件。"""
+    return _set_factor_archived(factor_id, True, request)
+
+
+@router.post("/custom/{factor_id}/unarchive")
+def unarchive_factor(factor_id: str, request: Request) -> dict:
+    """恢复因子: 档案库移回因子库。"""
+    return _set_factor_archived(factor_id, False, request)
 
 
 @router.post("/custom/{factor_id}/group")

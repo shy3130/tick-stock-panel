@@ -9,6 +9,7 @@ import { WatchlistGroupMenu } from '@/components/WatchlistAddMenu'
 import { api, type FactorBatchItem, type FactorBatchResult, type FactorColumn } from '@/lib/api'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { QK } from '@/lib/queryKeys'
+import { selectableDefinitions, definitionOptionLabel } from '@/lib/definitionOptions'
 import { FactorBacktest } from './FactorBacktest'
 import { MiningWorkbench } from './MiningWorkbench'
 import { AutoMiningDialog } from './AutoMiningDialog'
@@ -214,7 +215,7 @@ function BatchDiscovery({
     }
     return counts
   }, [watchlistEntries])
-  const allColumns = useMemo(() => columns.data?.columns ?? [], [columns.data])
+  const allColumns = useMemo(() => selectableDefinitions(columns.data?.columns ?? []), [columns.data])
   const columnsByGroup = useMemo(() => {
     const groups: Record<string, FactorColumn[]> = {}
     for (const column of allColumns) (groups[column.group] ??= []).push(column)
@@ -252,12 +253,12 @@ function BatchDiscovery({
     // useDeferredValue: 输入即时回显, 过滤计算让位渲染不掉帧
     const query = deferredFactorQuery.trim().toLowerCase()
     const groups: Record<string, FactorColumn[]> = {}
-    for (const column of columns.data?.columns ?? []) {
+    for (const column of selectableDefinitions(columns.data?.columns ?? [], selected)) {
       if (query && !`${column.id} ${column.label} ${column.desc}`.toLowerCase().includes(query)) continue
       ;(groups[column.group] ??= []).push(column)
     }
     return groups
-  }, [columns.data, deferredFactorQuery])
+  }, [columns.data, deferredFactorQuery, selected])
 
   // 可取消的批量运行: 调用方持有 AbortController, 界面「取消」即时中止;
   // 因子清单由调用方传入 (空态「立即快速体检」在 setState 生效前就要发起)
@@ -474,7 +475,7 @@ function BatchDiscovery({
                           onChange={() => toggleFactor(item.id)}
                           className="h-3.5 w-3.5 shrink-0 accent-accent"
                         />
-                        <span className="min-w-0 truncate" title={`${item.label} (${item.id}) · ${item.desc}`}>{item.label}</span>
+                        <span className="min-w-0 truncate" title={`${item.label} (${item.id}) · ${item.desc}`}>{definitionOptionLabel(item)}</span>
                       </label>
                     )
                   })}

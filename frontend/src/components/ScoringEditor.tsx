@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { api, type FactorColumn, type ScoringDirection } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { definitionOptionLabel } from '@/lib/definitionOptions'
 
 interface Props {
   value: Record<string, number>
@@ -124,7 +125,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
     staleTime: 5 * 60_000,
   })
   const factorLabels = useMemo(() => Object.fromEntries(
-    (factors.data?.columns ?? []).map(item => [item.id, item.label]),
+    (factors.data?.columns ?? []).map(item => [item.id, definitionOptionLabel(item)]),
   ), [factors.data])
   const factorGroups = useMemo(() => {
     const groups: Record<string, FactorColumn[]> = {}
@@ -196,7 +197,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
               {factors.isLoading ? '加载因子目录…' : factors.isError ? '因子目录加载失败' : '选择评分因子'}
             </option>
             {Object.entries(factorGroups).map(([group, items]) => {
-              const available = items.filter(item => !(item.id in draft))
+              const available = items.filter(item => !item.archived && !(item.id in draft))
               return available.length > 0 ? (
                 <optgroup key={group} label={group}>
                   {available.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}

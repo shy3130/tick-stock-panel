@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { DailyResultStaleNotice } from '@/components/data/DailyDataHealthNotice'
 import { Play, Square, Trophy, Mountain, GitBranch, CheckCircle2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 import { fmtPct } from '@/lib/format'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
@@ -59,7 +60,7 @@ function num(v: number | null | undefined, digits = 3): string {
 
 export function StrategyOptimizer() {
   const task = useRobustTask()
-  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: () => api.strategyList() })
+  const { data: stratData } = useQuery({ queryKey: QK.strategyList(), queryFn: () => api.strategyList() })
   const strategies: StrategyDetail[] = stratData?.strategies ?? []
 
   // 切策略: 有任务在跑时先真正取消 (关 SSE + 后端 cancel + 清 localStorage), 不能静默丢

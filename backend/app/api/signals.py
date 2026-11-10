@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -56,6 +57,13 @@ class SignalModel(BaseModel):
     # 显式输出列名 (None → csg_{id}); 迁移自内置的定义沿用 signal_* 原列名,
     # 编辑保存时必须原样回传, 否则列名漂移会静默断开下游引用。
     column: str | None = None
+    # 归档 (可逆, 不影响计算): 已归档信号不再出现在信号库/选择器, 但仍照常
+    # 编译注入 —— 已引用它的策略/监控不受影响 (fail-closed 的优雅降级口径)。
+    # None = 未携带 (编辑旧载荷) → 保留盘上原值, 不会被默认值静默取消归档。
+    archived: bool | None = None
+    archived_at: str | None = None
+    # 创建时间 (排序展示用); 旧定义缺失时首次保存补写, 之后由前端原样回传。
+    created_at: str | None = None
 
 
 class IntradayReplayRequest(BaseModel):
@@ -178,7 +186,7 @@ def save_signal(req: SignalModel, request: Request):
     try:
         custom_signals.validate(sig)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     # 显式列名冲突闸: 两个定义输出同一列 (如改名另存仍带 signal_* column)
     # 会让后者静默覆盖前者的注入, 必须显式拒绝。
     if sig.get("column"):
@@ -191,6 +199,20 @@ def save_signal(req: SignalModel, request: Request):
                     status_code=400,
                     detail=f"列名 {sig['column']} 已被信号 {existing['id']} 占用",
                 )
+    # created_at / archived 治理: 新建补写; 编辑时载荷未携带的字段保留盘上原值
+    # (时间不能漂移; 归档不能被缺省值静默翻转)。
+    existing_def = custom_signals.load_one(_data_dir(request), sig["id"])
+    prev_archived = bool(existing_def.get("archived")) if existing_def else False
+    archived = req.archived if req.archived is not None else prev_archived
+    sig["archived"] = archived
+    if archived:
+        sig["archived_at"] = req.archived_at or (
+            existing_def.get("archived_at") if existing_def else None
+        ) or _now()
+    else:
+        sig["archived_at"] = None
+    if not sig.get("created_at"):
+        sig["created_at"] = (existing_def.get("created_at") if existing_def else None) or _now()
     custom_signals.save_one(_data_dir(request), sig)
     _invalidate(request)
     return {"ok": True, "signal": sig}
@@ -229,6 +251,39 @@ async def ai_generate_signal(req: AIGenerateRequest):
         return custom_signals_ai.parse_and_validate(text)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ── 归档 / 恢复 (可逆, 不删除文件, 不影响计算) ──────────
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _set_archived(signal_id: str, archived: bool, request: Request) -> dict:
+    """归档/恢复单个信号: 只改标记位, 不触发缓存失效 —— 信号仍照常编译注入,
+    已引用它的策略/监控不受影响; 归档只影响管理界面与选择器的可见性。"""
+    if not custom_signals.ID_RE.match(signal_id):
+        raise HTTPException(status_code=400, detail="信号 id 非法")
+    sig = custom_signals.load_one(_data_dir(request), signal_id)
+    if sig is None:
+        raise HTTPException(status_code=404, detail="信号不存在")
+    sig["archived"] = archived
+    sig["archived_at"] = _now() if archived else None
+    if not sig.get("created_at"):
+        sig["created_at"] = _now()
+    custom_signals.save_one(_data_dir(request), sig)
+    return {"ok": True, "signal": sig}
+
+
+@router.post("/{signal_id}/archive")
+def archive_signal(signal_id: str, request: Request):
+    return _set_archived(signal_id, True, request)
+
+
+@router.post("/{signal_id}/unarchive")
+def unarchive_signal(signal_id: str, request: Request):
+    return _set_archived(signal_id, False, request)
 
 
 # ── 删除 ───────────────────────────────────────────────

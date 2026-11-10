@@ -147,6 +147,11 @@ def load_all(data_dir: Path) -> list[dict]:
     return _STORE.load_all(data_dir)
 
 
+def load_one(data_dir: Path, signal_id: str) -> dict | None:
+    """读取单个信号定义; 不存在或损坏返回 None。"""
+    return _STORE.load_one(data_dir, signal_id)
+
+
 def save_one(data_dir: Path, sig: dict) -> None:
     _STORE.save_one(data_dir, sig)
 

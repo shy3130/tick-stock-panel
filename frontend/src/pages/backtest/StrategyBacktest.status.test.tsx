@@ -8,11 +8,14 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StrategyBacktest } from './StrategyBacktest'
-import type { DataStatus } from '@/lib/api'
+import type { DataStatus, StrategyDetail } from '@/lib/api'
+import { storage } from '@/lib/storage'
+import { QK } from '@/lib/queryKeys'
 
 vi.mock('@/lib/api', () => ({
   api: {
   dataStatus: vi.fn(),
+  dataIntegrity: vi.fn(async () => ({ report: null, blocking_assets: [], data_revisions: {} })),
   screenerStrategies: vi.fn(async () => ({ presets: [] })),
   strategyGet: vi.fn(async () => ({})),
   watchlistList: vi.fn(async () => ({ items: [] })),
@@ -45,9 +48,12 @@ let host: HTMLDivElement
 let root: Root
 let client: QueryClient
 
-beforeEach(() => {
+beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   sessionStorage.clear()
+  localStorage.clear()
+  const { api } = await import('@/lib/api')
+  vi.mocked(api.screenerStrategies).mockResolvedValue({ presets: [], load_errors: [], legacy_migration: undefined })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -104,4 +110,43 @@ it('真实统计就绪且确无数据: 提示缺数据并禁用回测', async ()
   await renderPage()
   expect(host.textContent).toContain('缺少股票指标数据')
   expect(runButton()!.disabled).toBe(true)
+})
+
+const libraryStrategies = [
+  { id: 'grouped', name: '观察组策略', source: 'custom', library: { group: 'g', group_name: '观察组', archived: false } },
+  { id: 'ungrouped', name: '未分组策略', source: 'custom' },
+  { id: 'archived', name: '归档策略', source: 'ai', library: { group: 'g', group_name: '观察组', archived: true } },
+] as unknown as StrategyDetail[]
+
+it('策略回测隐藏新选择中的归档策略并支持自定义分组', async () => {
+  const { api } = await import('@/lib/api')
+  vi.mocked(api.dataStatus).mockResolvedValue(busy)
+  vi.mocked(api.screenerStrategies).mockResolvedValue({ presets: libraryStrategies, load_errors: [], legacy_migration: undefined })
+  await renderPage()
+  expect(host.textContent).toContain('观察组策略')
+  expect(host.textContent).toContain('未分组策略')
+  expect(host.textContent).not.toContain('归档策略')
+  const filter = host.querySelector<HTMLSelectElement>('select[aria-label="策略分组"]')!
+  await act(async () => { filter.value = 'g'; filter.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(host.textContent).not.toContain('未分组策略')
+  expect(host.textContent).toContain('观察组策略')
+})
+
+it('已保存的归档策略仍能载入, 恢复后缓存刷新可重新选择', async () => {
+  const { api } = await import('@/lib/api')
+  vi.mocked(api.dataStatus).mockResolvedValue(busy)
+  vi.mocked(api.screenerStrategies).mockResolvedValue({ presets: libraryStrategies, load_errors: [], legacy_migration: undefined })
+  vi.mocked(api.strategyGet).mockResolvedValue({
+    ...libraryStrategies[2], params: [], params_defaults: {}, basic_filter: {}, scoring: {},
+    scoring_directions: {}, entry_signals: [], exit_signals: [], asset_types: ['stock'], timeframes: ['1d'],
+  } as StrategyDetail)
+  storage.strategyBacktestLast.set({ selectedStrategy: 'archived' } as Parameters<typeof storage.strategyBacktestLast.set>[0])
+  await renderPage()
+  expect(host.textContent).toContain('归档策略（已归档）')
+  expect(api.strategyGet).toHaveBeenCalledWith('archived')
+  await act(async () => client.setQueryData(QK.screenerStrategies('stock', 'all'), {
+    presets: libraryStrategies.map(item => item.id === 'archived' ? { ...item, library: { ...item.library, archived: false } } : item),
+  }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(host.textContent).not.toContain('归档策略（已归档）')
 })

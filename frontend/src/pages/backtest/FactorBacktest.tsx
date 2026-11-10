@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { toast } from '@/components/Toast'
 import { QK } from '@/lib/queryKeys'
+import { selectableDefinitions, definitionOptionLabel } from '@/lib/definitionOptions'
 import { FactorICChart } from './charts/FactorICChart'
 import { FactorGroupNavChart } from './charts/FactorGroupNavChart'
 import { factorResultCandidate } from './researchCandidates'
@@ -105,13 +106,13 @@ export function FactorBacktest({ initialFactorName = 'momentum_20d', autoRun = f
 
   // 按 group 分类的因子
   const factorGroups = useMemo(() => {
-    const cols = columns.data?.columns ?? []
+    const cols = selectableDefinitions(columns.data?.columns ?? [], [factorName])
     const groups: Record<string, FactorColumn[]> = {}
     for (const c of cols) {
       ;(groups[c.group] ??= []).push(c)
     }
     return groups
-  }, [columns.data])
+  }, [columns.data, factorName])
 
   // 当前因子描述
   const factorDesc = useMemo(() => {
@@ -219,7 +220,7 @@ export function FactorBacktest({ initialFactorName = 'momentum_20d', autoRun = f
             {Object.entries(factorGroups).map(([group, cols]) => (
               <optgroup key={group} label={group}>
                 {cols.map(c => (
-                  <option key={c.id} value={c.id}>{c.label}</option>
+                  <option key={c.id} value={c.id}>{definitionOptionLabel(c)}</option>
                 ))}
               </optgroup>
             ))}

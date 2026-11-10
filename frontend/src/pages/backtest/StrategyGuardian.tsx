@@ -113,7 +113,7 @@ function ConfigCard({ config }: { config: GuardianConfig }) {
 
 /** 手动入护: 任意策略 + 目标 (尾随参考基线, 首跑自动标定)。 */
 function AdoptCard({ onChanged }: { onChanged: () => void }) {
-  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: () => api.strategyList() })
+  const { data: stratData } = useQuery({ queryKey: QK.strategyList(), queryFn: () => api.strategyList() })
   const strategies = stratData?.strategies ?? []
   const [strategyId, setStrategyId] = useState('')
   const [objective, setObjective] = useState('sharpe')
