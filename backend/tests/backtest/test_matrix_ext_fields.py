@@ -17,6 +17,8 @@ import polars as pl
 import pytest
 
 from app.backtest.engine import BacktestEngine
+from app.backtest.matrix import MatrixCacheProfile
+from app.config import settings
 from app.factors.ext_factors import (
     numeric_timeseries_ext_columns,
 )
@@ -293,3 +295,152 @@ def test_matrix_backtest_ext_overlay_can_block_all(data_data_dir=None):
             matching="close_t", fees_pct=0, slippage_bps=0, max_positions=2,
         ))
         assert res.error is not None and "未产生买入信号" in res.error
+
+
+REMOVED_EXT_COL = "ext_ext_rq_ths_rank"
+
+
+def _service_with_other_ext_strategy(data_dir: Path, field: str):
+    from app.backtest.strategy import StrategyBacktestService, StrategyEngine
+
+    _write_strategy(data_dir)
+    source = _ALWAYS_ENTRY_STRATEGY.replace(
+        '"id": "ext_overlay_probe"', '"id": "legacy_ext_scoring"',
+    ).replace('"scoring": {}', f'"scoring": {{"{field}": 1.0}}')
+    path = data_dir / "strategies" / "custom" / "legacy_ext_scoring.py"
+    path.write_text(source, encoding="utf-8")
+    strategies = StrategyEngine(strategy_dirs=[path.parent])
+    assert strategies.has("legacy_ext_scoring"), strategies.load_errors()
+    return StrategyBacktestService(_engine(data_dir), strategies)
+
+
+@pytest.mark.parametrize("field", [EXT_COL, REMOVED_EXT_COL])
+def test_shared_disk_profile_excludes_other_strategy_ext_columns(data_dir, monkeypatch, field):
+    from app.backtest.strategy import build_matrix_cache_profile
+
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    service = _service_with_other_ext_strategy(data_dir, field)
+    profile = build_matrix_cache_profile(service.strategy_engine, "stock")
+    assert not any(name.startswith("ext_") for name in profile.field_columns)
+    assert "close" in profile.field_columns
+
+
+@pytest.mark.parametrize("field", [EXT_COL, REMOVED_EXT_COL])
+@pytest.mark.parametrize("disk_cache", [True, False])
+def test_other_strategy_ext_dependency_cannot_break_healthy_backtest(data_dir, monkeypatch, field, disk_cache):
+    from app.backtest.strategy import StrategyBacktestConfig
+
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", disk_cache)
+    service = _service_with_other_ext_strategy(data_dir, field)
+    source = data_dir / "strategies" / "custom" / "legacy_ext_scoring.py"
+    before = source.read_bytes()
+    result = service.run(StrategyBacktestConfig(
+        strategy_id="ext_overlay_probe", symbols=None, start=DATES[0], end=DATES[-1],
+        overrides={"basic_filter": {"enabled": False}},
+        matching="close_t", fees_pct=0, slippage_bps=0, max_positions=2,
+    ))
+    assert result.error is None, result.error
+    assert result.stats["n_trades"] > 0
+    assert source.read_bytes() == before
+
+
+def test_matrix_loader_filters_ext_columns_from_supplied_cache_profile(data_dir, monkeypatch):
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", True)
+    profile = MatrixCacheProfile(
+        field_columns=frozenset({"close", EXT_COL, REMOVED_EXT_COL}),
+        warmup_bars=1, forward_bars=1, max_disk_bytes=1024 * 1024, generation="legacy-profile",
+    )
+    market = _engine(data_dir).load_market_data_matrix_for_backtest(
+        None, DATES[0], DATES[-1], _plan(frozenset()), cache_profile=profile,
+    )
+    assert market.cache_status == "built"
+    assert EXT_COL not in market.fields and REMOVED_EXT_COL not in market.fields
+
+
+def test_cached_matrix_attaches_current_ext_data_despite_other_removed_dependency(data_dir, monkeypatch):
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", True)
+    profile = MatrixCacheProfile(
+        field_columns=frozenset({"close", EXT_COL, REMOVED_EXT_COL}),
+        warmup_bars=1, forward_bars=1, max_disk_bytes=1024 * 1024, generation="legacy-profile",
+    )
+    engine = _engine(data_dir)
+    plan = _plan(frozenset({EXT_COL}))
+    first = engine.load_market_data_matrix_for_backtest(
+        None, DATES[0], DATES[-1], plan, cache_profile=profile,
+    )
+    assert first.cache_status == "built"
+    row = list(first.timestamp_labels).index(DATES[0].isoformat())
+    col = list(first.symbols).index(SYMS[0])
+    assert first.fields[EXT_COL][row, col] == pytest.approx(15.0)
+
+    pl.DataFrame([
+        {"symbol": SYMS[0], "date": DATES[0].isoformat(), "rank": 35, "sname": "甲"},
+        {"symbol": SYMS[1], "date": DATES[0].isoformat(), "rank": 150, "sname": "乙"},
+    ]).write_parquet(
+        data_dir / "ext_data" / "ext_demo" / "timeseries" / f"date={DATES[0]}" / "part.parquet"
+    )
+    cached = engine.load_market_data_matrix_for_backtest(
+        None, DATES[0], DATES[-1], plan, cache_profile=profile,
+    )
+    assert cached.cache_status == "exact"
+    assert cached.fields[EXT_COL][row, col] == pytest.approx(35.0)
+    assert REMOVED_EXT_COL not in cached.fields
+    missing_row = list(cached.timestamp_labels).index(DATES[-1].isoformat())
+    missing_col = list(cached.symbols).index(SYMS[1])
+    assert np.isnan(cached.fields[EXT_COL][missing_row, missing_col])
+
+
+def test_matrix_prewarm_ignores_removed_ext_dependency(data_dir, monkeypatch):
+    from app.backtest.strategy import prewarm_matrix_cache
+
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", True)
+    service = _service_with_other_ext_strategy(data_dir, REMOVED_EXT_COL)
+    result = prewarm_matrix_cache(
+        service.engine, service.strategy_engine, asset_type="stock", latest_date=DATES[-1], years=1,
+    )
+    assert result["cache_status"] == "built"
+    assert result["bytes"] > 0
+
+
+def test_strategy_that_really_needs_removed_ext_reports_how_to_fix(data_dir, monkeypatch):
+    from app.backtest.strategy import StrategyBacktestConfig
+
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", True)
+    service = _service_with_other_ext_strategy(data_dir, REMOVED_EXT_COL)
+    result = service.run(StrategyBacktestConfig(
+        strategy_id="legacy_ext_scoring", symbols=None, start=DATES[0], end=DATES[-1],
+        overrides={"basic_filter": {"enabled": False}},
+        matching="close_t", fees_pct=0, slippage_bps=0, max_positions=2,
+    ))
+    assert result.error is not None and REMOVED_EXT_COL in result.error
+    assert "策略设置" in result.error and "移除或替换" in result.error
+    assert not result.trades
+
+
+@pytest.mark.parametrize("scoring", [{}, {EXT_COL: 1.0}])
+@pytest.mark.parametrize("optimized", [False, True])
+def test_legacy_strategy_recovers_after_replacing_removed_scoring(data_dir, monkeypatch, scoring, optimized):
+    from app.backtest.strategy import StrategyBacktestConfig
+    from app.strategy.config import load_override, save_override
+
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "backtest_matrix_disk_cache_enabled", True)
+    service = _service_with_other_ext_strategy(data_dir, REMOVED_EXT_COL)
+    source = data_dir / "strategies" / "custom" / "legacy_ext_scoring.py"
+    before = source.read_bytes()
+    save_override(data_dir, "legacy_ext_scoring", {
+        "basic_filter": {"enabled": False}, "scoring": scoring, "scoring_replace": True,
+    })
+    config = StrategyBacktestConfig(
+        strategy_id="legacy_ext_scoring", symbols=None, start=DATES[0], end=DATES[-1],
+        overrides=load_override(data_dir, "legacy_ext_scoring"),
+        matching="close_t", fees_pct=0, slippage_bps=0, max_positions=2,
+    )
+    prepared = service.prepare_matrix_optimization([config]) if optimized else None
+    result = service.run(config, prepared=prepared)
+    assert result.error is None, result.error
+    assert result.stats["n_trades"] > 0
+    assert source.read_bytes() == before

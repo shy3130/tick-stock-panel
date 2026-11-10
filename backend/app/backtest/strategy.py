@@ -430,10 +430,13 @@ def build_matrix_cache_profile(
     if not plans:
         raise ValueError(f"no matrix-native cache profile available for asset_type={asset_type!r}")
     merged = _merge_resolved_feature_plans(plans)
+    # 扩展字段按当前策略及其请求日期现场注入, 不属于共享 parquet/mmap 缓存。
     fields = frozenset(
-        set(merged.base_columns)
-        | set(merged.instrument_columns)
-        | set(merged.matrix_columns)
+        name
+        for name in (
+            set(merged.base_columns) | set(merged.instrument_columns) | set(merged.matrix_columns)
+        )
+        if not name.startswith("ext_")
     )
     generation_payload = json.dumps(
         {
