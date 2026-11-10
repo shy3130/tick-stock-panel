@@ -502,7 +502,9 @@ export function Layout() {
     if (refreshedMinuteJob.current === latestDataJob.id) return
     refreshedMinuteJob.current = latestDataJob.id
     // 复用常驻的任务轮询, 离开数据页后补拉结束也会刷新; 取消/失败可能已写入部分数据。
-    qc.invalidateQueries({ predicate: q => MINUTE_DATA_QUERY_PREFIXES.has(String(q.queryKey[0])) })
+    // 清掉列表增量游标，让下一次查询也能读回上次末根之前补入的早盘。
+    qc.resetQueries({ queryKey: QK.minuteBatch(), exact: true })
+    qc.invalidateQueries({ predicate: q => q.queryKey[0] !== QK.minuteBatch()[0] && MINUTE_DATA_QUERY_PREFIXES.has(String(q.queryKey[0])) })
     qc.invalidateQueries({ queryKey: QK.dataStatus })
   }, [latestDataJob?.id, latestDataJob?.status, qc])
   const navigate = useNavigate()

@@ -10,7 +10,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Download, Loader2, RefreshCw, Search } from 'lucide-react'
 import { api, type MinuteGapRow } from '@/lib/api'
-import { QK, MINUTE_DATA_QUERY_PREFIXES } from '@/lib/queryKeys'
+import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import './MinuteGapPanel.css'
 
@@ -20,7 +20,6 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
   const qc = useQueryClient()
   const [filter, setFilter] = useState('')
   const [page, setPage] = useState(0)
-  const [busySymbol, setBusySymbol] = useState<string | null>(null)
 
   const gaps = useQuery({
     queryKey: QK.minuteGaps,
@@ -28,29 +27,17 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
     staleTime: 30_000,
   })
 
-  const repair = useMutation({
-    mutationFn: (symbol: string) => api.syncMinuteSingle(symbol, 10),
-    onSuccess: (r, symbol) => {
-      const rows = (r as { rows?: number })?.rows ?? 0
-      toast(rows > 0 ? `${symbol} 已拉取 ${rows} 行分钟数据` : `${symbol} 未拉到新数据（源可能不提供该历史窗口）`, rows > 0 ? 'success' : 'error')
-      qc.invalidateQueries({ predicate: q => MINUTE_DATA_QUERY_PREFIXES.has(String(q.queryKey[0])) })
-      qc.invalidateQueries({ queryKey: QK.dataStatus })
-    },
-    onError: (e: unknown) => toast(`补齐失败: ${String((e as Error)?.message ?? e)}`, 'error'),
-    onSettled: () => setBusySymbol(null),
-  })
-
   const all = gaps.data?.gaps ?? []
   const filtered = useMemo(() => {
     const kw = filter.trim().toUpperCase()
     return kw ? all.filter(g => g.symbol.toUpperCase().includes(kw) || g.date.includes(kw)) : all
   }, [all, filter])
-  const repairSymbols = useMemo(() => [...new Set(filtered.map(g => g.symbol))], [filtered])
-  const batchRepair = useMutation({
-    mutationFn: (symbols: string[]) => api.repairMinuteGaps(symbols),
-    onSuccess: (result, symbols) => {
+  const repairTargets = useMemo(() => filtered.map(({ symbol, date }) => ({ symbol, date })), [filtered])
+  const repair = useMutation({
+    mutationFn: (targets: typeof repairTargets) => api.repairMinuteGaps(targets),
+    onSuccess: (result, targets) => {
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
-      toast(`已启动 ${symbols.length} 只标的的缺口补拉，可在数据页查看进度`, 'success')
+      toast(`已启动 ${targets.length} 条缺口的补拉，可在数据页查看进度`, 'success')
       onJobStart?.(result.job_id)
     },
   })
@@ -100,18 +87,18 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
           {all.length > 0 && (
             <button
               type="button"
-              onClick={() => batchRepair.mutate(repairSymbols)}
-              disabled={!hasCap || repairSymbols.length === 0 || busySymbol !== null || batchRepair.isPending || gaps.isFetching}
+              onClick={() => repair.mutate(repairTargets)}
+              disabled={!hasCap || repairTargets.length === 0 || repair.isPending || gaps.isFetching}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-btn bg-accent/90 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-accent disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
-              {batchRepair.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-              {batchRepair.isPending ? '正在启动…' : `一键补齐（${repairSymbols.length} 只）`}
+              {repair.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+              {repair.isPending ? '正在启动…' : `一键补齐（${repairTargets.length} 条）`}
             </button>
           )}
           <button
             type="button"
             onClick={() => gaps.refetch()}
-            disabled={gaps.isFetching || batchRepair.isPending || busySymbol !== null}
+            disabled={gaps.isFetching || repair.isPending}
             className="inline-flex shrink-0 items-center gap-1 rounded-btn border border-border px-2.5 py-1.5 text-[11px] text-secondary hover:text-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             <RefreshCw className={`h-3 w-3 ${gaps.isFetching ? 'animate-spin' : ''}`} />
@@ -126,14 +113,14 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
         </p>
       )}
 
-      {batchRepair.isError && (
+      {repair.isError && (
         <div role="alert" className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
-          批量补拉启动失败：{String((batchRepair.error as Error)?.message ?? batchRepair.error)}
+          补拉启动失败：{String((repair.error as Error)?.message ?? repair.error)}
         </div>
       )}
       {all.length > 0 && (
         <p className="text-[11px] leading-relaxed text-muted">
-          一键补齐处理{filter.trim() ? '当前筛选的' : '已列出的全部'} {filtered.length} 条缺口，跨页按 {repairSymbols.length} 只标的去重补拉；任务结束后更新体检结果。
+          一键补齐处理{filter.trim() ? '当前筛选的' : '已列出的全部'} {filtered.length} 条缺口，按每条记录的股票和交易日补拉，结束后复查。
           {gaps.data?.truncated && <span className="text-warning"> 本次体检列表已截断，仅处理已列出的记录。</span>}
         </p>
       )}
@@ -199,11 +186,11 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
                   <div className="minute-gap-repair">
                     <button
                       type="button"
-                      disabled={!hasCap || busySymbol !== null || batchRepair.isPending}
-                      onClick={() => { setBusySymbol(g.symbol); repair.mutate(g.symbol) }}
+                      disabled={!hasCap || repair.isPending}
+                      onClick={() => repair.mutate([{ symbol: g.symbol, date: g.date }])}
                       className="whitespace-nowrap rounded-btn border border-border px-2 py-1.5 text-[10px] text-secondary hover:border-accent hover:text-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                     >
-                      {busySymbol === g.symbol ? '补齐中…' : '尝试补齐'}
+                      尝试补齐
                     </button>
                   </div>
                 </li>
@@ -243,9 +230,7 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
 
       {!hasCap && <p className="text-[11px] text-muted">当前分钟数据源不可用，可查看本地缺口；配置可用数据源后可尝试补齐。</p>}
       <p className="border-t border-border/60 pt-3 text-[11px] leading-relaxed text-muted">
-        补齐会向当前分钟数据源重新拉取标的最近 10 个交易日窗口的分钟 K，批量操作沿用同一规则。
-        分钟源通常只提供最近一段时间的分钟数据，<span className="text-warning">超出窗口的历史缺口无法补齐</span>，
-        此时应视为永久残缺 —— 不影响已有数据的查看。
+        补拉按所选交易日向当前分钟源请求数据。若源已超出历史窗口或只返回部分时段，剩余缺口会保留在体检结果中。
       </p>
     </div>
   )

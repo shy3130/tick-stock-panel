@@ -117,6 +117,7 @@ it.each(['succeeded', 'failed'] as const)('离开数据页后, 分钟补拉 %s �
     <MemoryRouter><QueryClientProvider client={client}><Layout /></QueryClientProvider></MemoryRouter>,
   ))
   await act(async () => { await new Promise(r => setTimeout(r, 20)) })
-  keys.forEach(key => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
+  expect(client.getQueryData(QK.minuteBatch())).toBeUndefined()
+  keys.filter(key => key[0] !== 'minute-batch').forEach(key => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
   expect(client.getQueryState(unaffected)?.isInvalidated).toBe(false)
 })

@@ -55,14 +55,16 @@ function sinceBySymbol(data: MinuteBatchData, symbols: string[]): (sym: string) 
   return (sym: string) => lastOf.get(sym)
 }
 
+export function mergeMinuteRows(base: MinuteKlineRow[], patch: MinuteKlineRow[]): MinuteKlineRow[] {
+  const byTs = new Map(base.map(row => [row.datetime, row]))
+  for (const row of patch) byTs.set(row.datetime, row)
+  return Array.from(byTs.values()).sort((a, b) => (a.datetime < b.datetime ? -1 : a.datetime > b.datetime ? 1 : 0))
+}
+
 export function mergeInto(base: MinuteBatchData, patch: MinuteBatchData): MinuteBatchData {
   const merged: MinuteBatchData = { ...base }
   for (const [sym, rows] of Object.entries(patch)) {
-    const cache = merged[sym] ?? []
-    const byTs = new Map(cache.map(r => [r.datetime, r]))
-    for (const r of rows) byTs.set(r.datetime, r)   // 新值覆盖 (动态K定版)
-    merged[sym] = Array.from(byTs.values())
-      .sort((a, b) => (a.datetime < b.datetime ? -1 : a.datetime > b.datetime ? 1 : 0))
+    merged[sym] = mergeMinuteRows(merged[sym] ?? [], rows)
   }
   return merged
 }

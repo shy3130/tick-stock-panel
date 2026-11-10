@@ -6,7 +6,7 @@ import json
 import logging
 import math
 from datetime import date, timedelta
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,7 @@ from app.price_limits import (
     parse_listing_date,
     price_limit_pct,
 )
-from app.services import kline_sync, minute_adjust, trading_day
+from app.services import kline_sync, minute_adjust, minute_gaps, trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -1125,19 +1125,19 @@ def get_minute_range(
         if column in minute.columns
     ]
     sessions = []
+    daily_dir = repo.store.data_dir / ("kline_etf_daily" if asset_type == "etf" else "kline_daily")
     for trade_date in trade_dates:
-        rows = (
-            minute.filter(pl.col("_trade_date") == trade_date)
-            .sort("datetime")
-            .select(row_columns)
-            .to_dicts()
-        )
-        if rows:
-            sessions.append({
-                "date": trade_date.isoformat(),
-                "prev_close": previous_closes.get(trade_date),
-                "rows": rows,
-            })
+        day = minute.filter(pl.col("_trade_date") == trade_date).sort("datetime")
+        partial = False
+        if trade_date < end:
+            bad, _ = minute_gaps.incomplete_minute_groups(day, daily_dir, trade_date.isoformat(), minute_gaps.FULL_DAY_BARS)
+            partial = not bad.is_empty()
+        sessions.append({
+            "date": trade_date.isoformat(),
+            "prev_close": previous_closes.get(trade_date),
+            "rows": day.select(row_columns).to_dicts(),
+            "partial": partial,
+        })
 
     return _gzip_payload(
         request,
@@ -1396,13 +1396,30 @@ async def sync_minute(request: Request):
 @router.post("/repair_minute_gaps")
 async def repair_minute_gaps(request: Request, body: dict):
     """定向批量补拉缺口标的, 返回现有管道任务 ID; 不承诺源窗口外的缺口可补齐。"""
-    from app.services.minute_gaps import MAX_GAP_ROWS
-
-    symbols = body.get("symbols")
-    if not isinstance(symbols, list) or not symbols:
-        raise HTTPException(status_code=400, detail="symbols 必须是非空标的列表")
-    if len(symbols) > MAX_GAP_ROWS:
-        raise HTTPException(status_code=400, detail=f"一次最多补拉 {MAX_GAP_ROWS} 只标的")
+    repair_targets: dict[date, list[str]] = {}
+    if "targets" in body:
+        targets = body["targets"]
+        if "symbols" in body or not isinstance(targets, list) or not 1 <= len(targets) <= minute_gaps.MAX_GAP_ROWS:
+            raise HTTPException(status_code=400, detail=f"targets 必须单独传入 1 至 {minute_gaps.MAX_GAP_ROWS} 条缺口")
+        today = cn_today()
+        for target in targets:
+            if not isinstance(target, dict) or not isinstance(target.get("symbol"), str) or not target["symbol"].strip():
+                raise HTTPException(status_code=400, detail="缺口必须包含有效标的代码")
+            value = target.get("date")
+            try:
+                day = date.fromisoformat(value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="缺口日期必须为 YYYY-MM-DD") from None
+            if day.isoformat() != value or day > today:
+                raise HTTPException(status_code=400, detail="缺口日期必须为 YYYY-MM-DD 且不能在未来")
+            repair_targets.setdefault(day, []).append(target["symbol"].strip())
+        repair_targets = {day: list(dict.fromkeys(group)) for day, group in repair_targets.items()}
+        symbols = [s for group in repair_targets.values() for s in group]
+    else:
+        # 兼容旧客户端只按标的补拉最近窗口。
+        symbols = body.get("symbols")
+        if not isinstance(symbols, list) or not symbols or len(symbols) > minute_gaps.MAX_GAP_ROWS:
+            raise HTTPException(status_code=400, detail=f"symbols 必须是 1 至 {minute_gaps.MAX_GAP_ROWS} 只标的的列表")
     if any(not isinstance(symbol, str) or not symbol.strip() for symbol in symbols):
         raise HTTPException(status_code=400, detail="标的代码必须是非空字符串")
     symbols = list(dict.fromkeys(symbol.strip() for symbol in symbols))
@@ -1410,12 +1427,13 @@ async def repair_minute_gaps(request: Request, body: dict):
     if any(repo.resolve_asset_type(symbol) != "stock" for symbol in symbols):
         raise HTTPException(status_code=400, detail="分钟缺口补拉仅支持股票, ETF 和指数请使用各自的数据入口")
     return await trigger_minute_sync(
-        repo, request.app.state.capabilities, override_days=10, repair_symbols=symbols,
+        repo, request.app.state.capabilities, override_days=10, repair_symbols=symbols, repair_targets=repair_targets or None,
     )
 
 
 async def trigger_minute_sync(
     repo, capset, *, override_days=None, extend_flag=None, repair_symbols: list[str] | None = None,
+    repair_targets: dict[date, list[str]] | None = None,
 ) -> dict:
     """复用分钟同步的分块落盘、容量限制和取消机制; 缺口补拉限定标的且强制回溯。"""
     import asyncio
@@ -1475,41 +1493,64 @@ async def trigger_minute_sync(
             # extend=1 → 向前扩展; days>=365 也自动向前扩展
             extend_backward = bool(extend_flag) or days >= 365
 
-            def _on_chunk(done: int, total: int, seg_label: str) -> None:
+            group_count = len(repair_targets) if repair_targets else 1
+
+            def _on_chunk(done: int, total: int, seg_label: str, *, group_index: int = 0) -> None:
                 # 进度映射: 10% (标的池解析完) → 95%, 留 5% 给写入+刷新
-                pct = 10 + int((done / max(total, 1)) * 85)
+                pct = 10 + int((group_index + done / max(total, 1)) / group_count * 85)
                 action = "补拉缺口分钟K" if repair_symbols is not None else "拉取分钟K"
                 progress("sync_minute", pct, f"{action}… {done}/{total} 批 [{seg_label}]")
 
             def _run():
                 from app.jobs.daily_pipeline import _refresh_single_view
+                from app.services.preferences import data_source_stamp
 
                 try:
+                    if repair_targets:
+                        added = remaining = 0
+                        source = data_source_stamp()
+                        for group_index, (day, group) in enumerate(repair_targets.items()):
+                            on_chunk = partial(_on_chunk, group_index=group_index)
+                            on_chunk(0, 1, day.isoformat())
+                            if source != data_source_stamp():
+                                raise RuntimeError("分钟数据源配置已变化，请重新补齐")
+                            added += kline_sync.sync_and_persist_minute(
+                                group, repo, capset, repair_date=day, asset_type="stock", on_chunk_done=on_chunk,
+                            )
+                            remaining += minute_gaps.count_remaining_gaps(
+                                repo.store.data_dir / "kline_minute", day, group, cn_now(),
+                            )
+                        return {"minute_rows": added, "remaining_gaps": remaining,
+                                "requested_gaps": sum(map(len, repair_targets.values()))}
                     if repair_symbols is not None:
                         progress("sync_minute", 10, f"补拉 {len(universe)} 只缺口标的的分钟K…")
-                    return kline_sync.sync_and_persist_minute(
+                    written = kline_sync.sync_and_persist_minute(
                         universe, repo, capset, days=days,
                         extend_backward=extend_backward,
                         force_full_days=repair_symbols is not None,
                         on_chunk_done=_on_chunk,
                     )
+                    return {"minute_rows": written}
                 finally:
                     if repair_symbols is not None:
                         # 补拉分块已写入的数据在失败/取消后也要可见, 刷新仍占用原执行槽。
                         _refresh_single_view(repo, "kline_minute")
 
-            written = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
+            result = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
             if repair_symbols is None:
                 from app.jobs.daily_pipeline import _refresh_single_view
 
                 _refresh_single_view(repo, "kline_minute")
 
-            message = (
-                f"缺口分钟补拉完成, 写入 {written} 行; 是否补齐以体检结果为准"
-                if repair_symbols is not None else f"分钟 K 同步完成,{written} 行"
-            )
+            written = result["minute_rows"]
+            if repair_targets:
+                message = f"新增 {written} 根分钟 K，复查 {result['requested_gaps']} 条，仍有 {result['remaining_gaps']} 条缺口"
+            elif repair_symbols is not None:
+                message = f"缺口分钟补拉完成, 写入 {written} 行; 是否补齐以体检结果为准"
+            else:
+                message = f"分钟 K 同步完成,{written} 行"
             progress("done", 100, message)
-            job_store.succeed(job_id, {"minute_rows": written, "universe_size": len(universe)})
+            job_store.succeed(job_id, {**result, "universe_size": len(universe)})
             invalidate_storage_cache()
         except JobCancelledError:
             # 已由 terminate() 标记失败, 拉取线程在分块回调处自行退出
