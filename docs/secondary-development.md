@@ -21,7 +21,7 @@
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
-- 当前前端插槽：`layout.navigation.extra`、`stock-preview.footer`、`watchlist.toolbar`。
+- 当前前端插槽：`layout.navigation.extra`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
 - 个股详情公共入口（已实现）：源码扩展通过 `@/extensions/stockPreview` 的 `openStockPreview` / `closeStockPreview` 调用；运行时页面通过 `ctx.ui` 调用相同能力。复用原弹窗、查询和列表切股，不要求每个扩展自行挂载图表。
 - 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
@@ -126,6 +126,7 @@ export default extension
 
 ```text
 layout.navigation.extra
+stock-preview.tabs
 stock-preview.footer
 watchlist.toolbar
 ```
@@ -133,10 +134,27 @@ watchlist.toolbar
 各插槽 context 契约（均要求 `apiVersion: 1`，定义见 `frontend/src/extensions/types.ts` 的 `FrontendSlotContextMap`）：
 
 - `layout.navigation.extra`：`{ collapsed, pathname }`，侧边栏导航底部。
+- `stock-preview.tabs` 在个股详情顶部「日 K / 分时」右侧追加标签。组件接收当前证券的 `{ symbol: string, name: string | null }`。选中时挂载，离开时卸载。弹窗内切股会保留当前标签，并为新证券重新挂载组件。重新打开弹窗默认显示日 K。
 - `stock-preview.footer`：`{ symbol, name, view }`，个股详情对话框底部（日K/分时图表下方）；`view` 为 `'daily' | 'intraday'`。适合个股附加面板：龙虎榜、资金流、外部研究链接等。
 - `watchlist.toolbar`：`{ symbols, viewMode, selectedGroup, refresh }`，自选页工具栏末尾；`symbols` 为当前筛选视图中的标的，`refresh` 在扩展修改数据后调用以刷新自选增强数据。适合批量操作入口：自定义分析、导出、组合计算等。
 
 新增插槽前必须有真实用例，并同时定义 context 类型、异常隔离和测试；不能只在类型表中预留名字。
+
+#### 给个股详情添加一个标签
+
+在源码扩展 `frontend/src/custom/<namespace>/extension.tsx` 的 `slots` 数组加入以下注册项，把 `StockResearchTab` 换成自己的 React 组件。也可以将[完整示例](../frontend/src/custom/_template/extension.tsx.example)复制到该路径，重新构建前端后点击「个股研究」查看当前证券的代码和简称。
+
+```tsx
+{
+  name: 'stock-preview.tabs',
+  id: 'company-stock-research',
+  label: '个股研究',
+  order: 100,
+  component: StockResearchTab,
+}
+```
+
+`label` 是必填的非空标题，`id` 在本插槽内唯一。多个扩展标签按 `order` 升序排列（默认 100），同序按 `id` 排列。日期范围、分时周期、图表刷新和 `stock-preview.footer` 仅在内置图表视图显示。
 
 ### 3.3 当前路由与导航契约
 
