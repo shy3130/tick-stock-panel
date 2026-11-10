@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date as _date
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -97,6 +98,54 @@ def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
         return None
 
 
+def _read_minute_activity(part: Path, symbols: list[str] | None) -> pl.DataFrame:
+    frame = pl.scan_parquet(part, hive_partitioning=False)
+    columns = frame.collect_schema().names()
+    if symbols is not None:
+        frame = frame.filter(pl.col("symbol").is_in(symbols))
+    return frame.select("symbol", "datetime", *[c for c in ("volume", "amount") if c in columns]).collect()
+
+
+def incomplete_minute_groups(
+    df: pl.DataFrame, daily_dir: Path, date_str: str, expected: int,
+) -> tuple[pl.DataFrame, int]:
+    """用同一口径判定体检、定日修补复查与详情页中的残缺交易日。"""
+    inactive_count = 0
+    aggregations = [
+        pl.col("datetime").drop_nulls().n_unique().alias("n"),
+        pl.col("datetime").min().alias("first"),
+        pl.col("datetime").max().alias("last"),
+    ]
+    if {"volume", "amount"}.issubset(df.columns):
+        aggregations.append(
+            pl.all_horizontal(
+                (pl.col(c).cast(pl.Float64, strict=False) == 0).fill_null(False)
+                for c in ("volume", "amount")
+            ).all().alias("zero_activity")
+        )
+    agg = df.group_by("symbol").agg(aggregations)
+    if "zero_activity" in agg.columns and agg["zero_activity"].any():
+        daily_active = _daily_active_symbols(daily_dir, date_str)
+        if daily_active is not None:
+            inactive = agg.filter(
+                pl.col("zero_activity") & ~pl.col("symbol").is_in(list(daily_active))
+            )["symbol"].to_list()
+            inactive_count = len(inactive)
+            agg = agg.filter(~pl.col("symbol").is_in(inactive))
+    return agg.filter(pl.col("n") < expected * COMPLETE_RATIO), inactive_count
+
+
+def count_remaining_gaps(minute_dir: Path, trade_date: _date, symbols: list[str], now: datetime) -> int:
+    """复查刚补拉的分区。源返回空或分区里缺少指定标的时仍算未补齐。"""
+    part = minute_dir / f"date={trade_date}" / "part.parquet"
+    if not part.exists():
+        return len(symbols)
+    df = _read_minute_activity(part, symbols)
+    expected = _expected_bars_for(trade_date, now.date(), (now.hour, now.minute))
+    bad, _ = incomplete_minute_groups(df, minute_dir.parent / "kline_daily", trade_date.isoformat(), expected)
+    return len(symbols) - df["symbol"].n_unique() + bad.height
+
+
 def scan_minute_gaps(
     minute_dir: Path,
     *,
@@ -117,7 +166,6 @@ def scan_minute_gaps(
             "inactive_symbol_days": 0,
         }
 
-    symbol_set = set(symbols) if symbols else None
     date_set = set(dates) if dates else None
 
     gaps: list[MinuteGap] = []
@@ -139,47 +187,21 @@ def scan_minute_gaps(
         if expected <= 0:
             continue   # 未开盘的当日分区不判定
         try:
-            schema = pl.read_parquet_schema(part)
-            activity_columns = [c for c in ("volume", "amount") if c in schema]
-            df = pl.read_parquet(part, columns=["symbol", "datetime", *activity_columns])
+            df = _read_minute_activity(part, symbols or None)
         except Exception as e:  # noqa: BLE001
             logger.warning("分钟分区读取失败 %s: %s", part, e)
             continue
         scanned_dates += 1
         if df.is_empty():
-            complete_dates.append(date_str)
+            if not symbols:
+                complete_dates.append(date_str)
             continue
-        if symbol_set is not None:
-            df = df.filter(pl.col("symbol").is_in(list(symbol_set)))
-            if df.is_empty():
-                continue
         scanned_symbols.update(df["symbol"].unique().to_list())
 
-        aggregations = [
-            pl.len().alias("n"),
-            pl.col("datetime").min().alias("first"),
-            pl.col("datetime").max().alias("last"),
-        ]
-        if len(activity_columns) == 2:
-            aggregations.append(
-                pl.all_horizontal(
-                    (pl.col(c).cast(pl.Float64, strict=False) == 0).fill_null(False)
-                    for c in activity_columns
-                ).all().alias("zero_activity")
-            )
-        agg = df.group_by("symbol").agg(aggregations)
-        if "zero_activity" in agg.columns and agg["zero_activity"].any():
-            daily_active = _daily_active_symbols(minute_dir.parent / "kline_daily", date_str)
-            if daily_active is not None:
-                inactive = agg.filter(
-                    pl.col("zero_activity") & ~pl.col("symbol").is_in(list(daily_active))
-                )["symbol"].to_list()
-                inactive_symbol_days += len(inactive)
-                agg = agg.filter(~pl.col("symbol").is_in(inactive))
-        if agg.is_empty():
-            continue  # 无成交记录不标记为完整交易日, 也没有可补齐的分钟缺口
-        threshold = expected * COMPLETE_RATIO
-        bad = agg.filter(pl.col("n") < threshold)
+        bad, inactive = incomplete_minute_groups(df, minute_dir.parent / "kline_daily", date_str, expected)
+        inactive_symbol_days += inactive
+        if inactive == df["symbol"].n_unique():
+            continue
         if bad.is_empty():
             complete_dates.append(date_str)
             continue

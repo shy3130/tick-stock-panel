@@ -161,15 +161,24 @@ it('无分钟能力时禁用拉取和补齐, 仍能查看本地体检结果', as
   expect([...host.querySelectorAll('button')].find(b => b.textContent?.includes('一键补齐'))?.disabled).toBe(true)
 })
 
-it('一键补齐覆盖当前筛选的全部分页, 同一标的只提交一次', async () => {
+it('一键补齐覆盖当前筛选的全部分页, 保留同一标的不同交易日', async () => {
   const repeated = rows.map((r, i) => ({ ...r, symbol: rows[i % 12].symbol, date: i < 12 ? '2026-10-20' : '2026-10-21' }))
   vi.mocked(api.minuteGaps).mockResolvedValue({ ...report, gaps: repeated })
   await render()
   await click('数据体检')
   await click('一键补齐')
   expect(api.repairMinuteGaps).toHaveBeenCalledTimes(1)
-  expect(api.repairMinuteGaps).toHaveBeenCalledWith(rows.slice(0, 12).map(r => r.symbol))
+  expect(api.repairMinuteGaps).toHaveBeenCalledWith(repeated.map(({ symbol, date }) => ({ symbol, date })))
   expect(api.syncMinuteSingle).not.toHaveBeenCalled()
+  expect(onJobStart).toHaveBeenCalledWith('repair-job')
+})
+
+it('单行补齐只提交该标的和交易日', async () => {
+  await render()
+  await click('数据体检')
+  await click('下一页')
+  await click('尝试补齐')
+  expect(api.repairMinuteGaps).toHaveBeenCalledWith([{ symbol: rows[10].symbol, date: rows[10].date }])
   expect(onJobStart).toHaveBeenCalledWith('repair-job')
 })
 
@@ -180,7 +189,7 @@ it('一键补齐遵守代码筛选, 无匹配项时不能发起任务', async ()
   expect([...host.querySelectorAll('button')].find(b => b.textContent?.includes('一键补齐'))?.disabled).toBe(true)
   await filter('000001')
   await click('一键补齐')
-  expect(api.repairMinuteGaps).toHaveBeenCalledWith(['000001.SZ'])
+  expect(api.repairMinuteGaps).toHaveBeenCalledWith([{ symbol: '000001.SZ', date: '2026-10-20' }])
 })
 
 it('批量启动期间禁用重复操作, 失败后显示原因并恢复按钮', async () => {

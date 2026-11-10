@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
 
 import polars as pl
@@ -783,38 +784,42 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
 # ===== 分钟 K 同步 =====
 
-def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
-    """按 _trade_date 分区落盘分钟 K (读旧→concat→unique→原子写)。返回写入行数。
-
-    抽自原 sync_and_persist_minute 末尾的循环, 供流式落盘 (每段一次) 与一次性迁移共用。
-    """
+def _write_minute_partition(df: pl.DataFrame, minute_dir: Path, *, missing_only: bool = False) -> int:
+    """按日期原子合并。普通同步返回写入分区行数，定日修补与旧分区迁移只统计新增。"""
+    if df.is_empty():
+        return 0
+    keys = ["symbol", "datetime"]
+    df = df.drop_nulls(keys)
     if df.is_empty():
         return 0
     df = df.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
     written = 0
     for day_df in df.partition_by("_trade_date"):
-        trade_date = day_df["_trade_date"][0]
-        out = minute_dir / f"date={trade_date}" / "part.parquet"
-        out.parent.mkdir(parents=True, exist_ok=True)
+        out = minute_dir / f"date={day_df['_trade_date'][0]}" / "part.parquet"
+        incoming = day_df.drop("_trade_date")
+        if missing_only:
+            incoming = incoming.unique(subset=keys, keep="last")
         if out.exists():
-            existing = pl.read_parquet(out)
-            if "datetime" in existing.columns:
-                existing = existing.filter(pl.col("datetime").is_not_null())
-            new_rows = day_df.drop("_trade_date")
-            # 只对本次触及的 symbol 合并去重, 未触及行原样保留: 单股补齐时避免
-            # 为合并几行数据把全市场分区整体 unique 的写放大 (issue #305)。
-            touched = new_rows["symbol"].unique().to_list()
-            same = existing.filter(pl.col("symbol").is_in(touched))
-            other = existing.filter(~pl.col("symbol").is_in(touched))
-            merged = pl.concat([same, new_rows], how="diagonal_relaxed").unique(
-                subset=["symbol", "datetime"], keep="last",
-            )
-            day_df = pl.concat([other, merged], how="diagonal_relaxed")
+            existing = pl.read_parquet(out).filter(pl.col("datetime").is_not_null())
+            if missing_only:
+                # 老分区可能用毫秒，新数据用微秒。按北京墙钟对齐后仅插入缺失键。
+                incoming = incoming.with_columns(pl.col("datetime").cast(pl.Datetime("us")))
+                existing_keys = existing.select("symbol", pl.col("datetime").cast(pl.Datetime("us")))
+                incoming = incoming.join(existing_keys, on=keys, how="anti")
+                if incoming.is_empty():
+                    continue
+                merged = pl.concat([existing, incoming], how="diagonal_relaxed")
+            else:
+                # 普通同步允许更新已存在的分钟，只对触及的标的去重。
+                touched = pl.col("symbol").is_in(incoming["symbol"].unique().to_list())
+                updated = pl.concat([existing.filter(touched), incoming], how="diagonal_relaxed")
+                merged = pl.concat([existing.filter(~touched), updated.unique(subset=keys, keep="last")],
+                                   how="diagonal_relaxed")
         else:
-            day_df = day_df.drop("_trade_date")
-        day_df = day_df.sort("symbol", "datetime")
-        _atomic_write_parquet(day_df, out)
-        written += day_df.height
+            merged = incoming
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_parquet(merged.sort(keys), out)
+        written += incoming.height if missing_only else merged.height
     return written
 
 
@@ -1473,12 +1478,12 @@ def _cleanup_null_datetime_minute(repo: KlineRepository) -> None:
             "SELECT count(*) AS total, count(datetime) AS non_null FROM kline_minute"
         )
         if row and row[0] > 0 and (row[1] is None or row[1] == 0):
-            # 全部 datetime 为 null — 清除所有分钟 K parquet
-            n = 0
-            for f in minute_dir.rglob("*.parquet"):
-                f.unlink()
-                n += 1
-            logger.info("cleaned %d corrupted minute-K parquet files (null datetime)", n)
+            # 视图可能滞后于刚写入的分区，在写锁内按实际文件确认再清理。
+            with repo._write_lock:
+                for part in minute_dir.rglob("*.parquet"):
+                    times = pl.read_parquet(part, columns=["datetime"])["datetime"]
+                    if len(times) and times.null_count() == len(times):
+                        part.unlink()
     except Exception as e:  # noqa: BLE001
         logger.debug("minute cleanup check failed: %s", e)
 
@@ -1486,61 +1491,30 @@ def _cleanup_null_datetime_minute(repo: KlineRepository) -> None:
 def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
     """将旧版 symbol= 分区迁移为 date= 分区。迁移完成后删除旧目录。"""
     minute_dir = repo.store.data_dir / "kline_minute"
-    if not minute_dir.exists():
+    if next(minute_dir.glob("symbol=*/*.parquet"), None) is None:
         return
-
-    old_dirs = [d for d in minute_dir.iterdir() if d.is_dir() and d.name.startswith("symbol=")]
-    if not old_dirs:
-        return
-
-    logger.info("migrating %d symbol-partitioned minute-K dirs to date partition…", len(old_dirs))
-
-    all_frames: list[pl.DataFrame] = []
-    for sym_dir in old_dirs:
-        for pq in sym_dir.glob("*.parquet"):
-            try:
-                df = pl.read_parquet(pq)
-                if "datetime" in df.columns:
-                    df = df.filter(pl.col("datetime").is_not_null())
-                if not df.is_empty():
-                    all_frames.append(df)
-            except Exception:  # noqa: BLE001
-                pass
-
-    if not all_frames:
-        # 数据全部不可用，直接删旧目录
-        for d in old_dirs:
-            d.mkdir(parents=True, exist_ok=True)
-            for f in d.rglob("*"):
-                if f.is_file():
-                    f.unlink()
-            d.rmdir()
-        return
-
-    combined = pl.concat(all_frames, how="diagonal_relaxed")
-    combined = combined.unique(subset=["symbol", "datetime"], keep="last")
-
-    # 按日期写新分区
-    combined = combined.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
-    for day_df in combined.partition_by("_trade_date"):
-        trade_date = day_df["_trade_date"][0]
-        out = minute_dir / f"date={trade_date}" / "part.parquet"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        day_df = day_df.drop("_trade_date").sort("symbol", "datetime")
-        _atomic_write_parquet(day_df, out)
-
-    # 删旧目录
-    for d in old_dirs:
-        for f in d.rglob("*"):
-            if f.is_file():
-                f.unlink()
-        # 移除空目录
-        try:
-            d.rmdir()
-        except OSError:
-            pass
-
-    logger.info("minute-K migration done: %d rows migrated", combined.height)
+    with repo._write_lock:
+        sources = sorted(minute_dir.glob("symbol=*/*.parquet"))
+        frames = []
+        for part in sources:
+            df = pl.read_parquet(part)
+            if "datetime" not in df.columns:
+                raise ValueError(f"旧分钟分区缺少 datetime: {part.name}")
+            symbol = part.parent.name.removeprefix("symbol=")
+            df = df.with_columns(
+                (pl.col("symbol").fill_null(symbol) if "symbol" in df.columns else pl.lit(symbol)).alias("symbol")
+            )
+            frames.append(df)
+        if not frames:
+            return
+        # 全部读入且写入成功才删除源文件。中途失败可以安全重试。
+        added = _write_minute_partition(pl.concat(frames, how="diagonal_relaxed"), minute_dir, missing_only=True)
+        for part in sources:
+            part.unlink()
+        for folder in {part.parent for part in sources}:
+            if not any(folder.iterdir()):
+                folder.rmdir()
+        logger.info("minute-K migration done: %d rows added", added)
 
 
 def sync_and_persist_minute(
@@ -1553,6 +1527,7 @@ def sync_and_persist_minute(
     force_full_days: bool = False,
     *,
     asset_type: AssetType | None = None,
+    repair_date: date | None = None,
 ) -> int:
     """同步分钟 K 并存到 Parquet。返回写入行数。
 
@@ -1561,6 +1536,7 @@ def sync_and_persist_minute(
     使用 start_time / end_time 区间拉取, 确保所有标的覆盖同一时间段。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     force_full_days=True 时强制回溯 days 自然日 (不增量补, 用于个股补齐历史)。
+    repair_date 指定北京时间的单日窗口，只补缺失记录，返回实际新增根数。
     未指定资产类型时按维表拆分股票/ETF，分别取数、落盘与刷新视图。
     """
     if not symbols:
@@ -1576,7 +1552,7 @@ def sync_and_persist_minute(
                     written += sync_and_persist_minute(
                         group, repo, capset, days=days, on_chunk_done=on_chunk_done,
                         extend_backward=extend_backward, force_full_days=force_full_days,
-                        asset_type=asset,
+                        asset_type=asset, repair_date=repair_date,
                     )
             return written
         asset_type = "stock"
@@ -1600,7 +1576,8 @@ def sync_and_persist_minute(
     # 迁移:旧版 _normalize_minute 未转换 timestamp→datetime,导致全部 datetime 为 null
     # 检测到后直接清除(这些数据无法使用)
     if asset_type == "stock":
-        _cleanup_null_datetime_minute(repo)
+        if repair_date is None:
+            _cleanup_null_datetime_minute(repo)
         # 迁移:旧版按 symbol= 分区转为 date= 分区
         _migrate_symbol_to_date_partition(repo)
 
@@ -1608,32 +1585,26 @@ def sync_and_persist_minute(
     # 本地时间会让窗口整体错位 (UTC 容器上起点晚于终点, 增量补拉一个请求都发不出)。
     now = cn_now()
 
-    if extend_backward:
-        # 向前扩展模式: 从本地最早数据往前补, 叠加已有数据避免缺口。
-        earliest_dt = _earliest_minute_datetime(repo, asset_type)
-        # 按交易日换算自然日 (7/5 系数)。>41 交易日时 +10 天余量覆盖节假日。
-        # (分段由分钟源控制, TickFlow 沿用 segment_trading_days 选项。)
-        calendar_days = int(days * 7 / 5) + (10 if days > 41 else 0)
-        if earliest_dt:
-            end_time = earliest_dt
-            start_time = end_time - timedelta(days=calendar_days)
-        else:
-            # 本地无数据 → 从今天往前拉
-            start_time = now - timedelta(days=calendar_days)
-            end_time = now
+    if repair_date is not None:
+        start_time = datetime.combine(repair_date, clock_time(9, 25), CN_TZ)
+        end_time = min(datetime.combine(repair_date, clock_time(15, 5), CN_TZ), now)
+        if end_time <= start_time:
+            return 0
     else:
-        # 默认增量模式: 首次拉取回溯 N 天, 已有数据则从最新时间增量补到今天
-        # force_full_days=True: 强制回溯 days 自然日 (个股补齐历史, 不增量)
-        last_dt = _latest_minute_datetime(repo, asset_type)
-        if force_full_days:
-            # 按交易日换算自然日 (7/5 系数), 确保覆盖足够交易日
-            calendar_days = int(days * 7 / 5) + 5
-            start_time = now - timedelta(days=calendar_days)
-        elif last_dt:
-            start_time = last_dt
-        else:
-            start_time = now - timedelta(days=days)
         end_time = now
+        calendar_days = days
+        last_dt = None
+        if extend_backward:
+            end_time = _earliest_minute_datetime(repo, asset_type) or now
+            calendar_days = int(days * 7 / 5) + (10 if days > 41 else 0)
+        elif force_full_days:
+            calendar_days = int(days * 7 / 5) + 5
+        else:
+            last_dt = _latest_minute_datetime(repo, asset_type)
+        # 只有追尾增量沿用精确分钟。历史首日从开盘前取，避免继承点击时刻。
+        start_time = last_dt or datetime.combine(
+            end_time.date() - timedelta(days=calendar_days), clock_time(9, 25), CN_TZ,
+        )
 
     limit = resolve_limit(
         capset,
@@ -1646,15 +1617,26 @@ def sync_and_persist_minute(
     # 原生流式源每帧立即写盘, 核心不再积累全量;旧源仍保留 get_minute 返回契约。
     # 全量攒内存曾导致 1 年全市场分钟 K OOM 卡死 (3 亿行 / 数十 GB)。
     minute_dir = repo.store.data_dir / minute_table
+    raw_basis = minute_adjust.minute_basis_is_raw(repo.store.data_dir)
     written_box = [0]  # list 闭包, 绕过 Python 闭包外层赋值
 
     def _persist(seg_df: pl.DataFrame) -> None:
-        if source_stamp != preferences.data_source_stamp():
-            raise WorkBusyError("分钟数据源配置已变化，请重新补齐")
+        if repair_date is not None:
+            seg_df = seg_df.filter(
+                pl.col("symbol").is_in(symbols)
+                & pl.col("datetime").is_between(start_time.replace(tzinfo=None), end_time.replace(tzinfo=None))
+            )
         # 单股自动补齐可能与另一个补齐请求同时写同一日期分区。Windows 不允许
         # 替换仍被另一写入占用的临时文件,因此读-改-写必须复用仓库写锁。
         with repo._write_lock:
-            written_box[0] += _write_minute_partition(seg_df, minute_dir)
+            if raw_basis != minute_adjust.minute_basis_is_raw(repo.store.data_dir):
+                raise WorkBusyError("分钟价格基准已变化，请重新补齐")
+            if source_stamp != preferences.data_source_stamp():
+                raise WorkBusyError("分钟数据源配置已变化，请重新补齐")
+            if repair_date is not None:
+                written_box[0] += _write_minute_partition(seg_df, minute_dir, missing_only=True)
+            else:
+                written_box[0] += _write_minute_partition(seg_df, minute_dir)
 
     segment_days = preferences.get_minute_sync_segment_days()
     try:
@@ -1665,7 +1647,7 @@ def sync_and_persist_minute(
             segment_trading_days=segment_days,
             on_segment=_persist,
             asset_type=asset_type,
-            raw_basis=minute_adjust.minute_basis_is_raw(repo.store.data_dir),
+            raw_basis=raw_basis,
         )
     finally:
         # 后续批次失败时，先前已落盘的股票/ETF 分区仍需可查询。

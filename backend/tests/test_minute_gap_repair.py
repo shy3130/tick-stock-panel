@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import polars as pl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -13,7 +15,10 @@ from fastapi.testclient import TestClient
 from app.api import kline
 from app.services import heavy_job_limiter, pipeline_jobs, preferences
 from app.services.heavy_job_limiter import HeavyJobLimiter
+from app.services.kline_sync import sync_and_persist_minute
 from app.services.pipeline_jobs import JobStore
+from app.tickflow.capabilities import CapabilitySet
+from app.tickflow.repository import DataStore, KlineRepository
 
 
 def wait_for(predicate):
@@ -153,3 +158,63 @@ def test_cancelled_repair_refreshes_partial_data_and_releases_capacity(repair_en
     assert "用户停止" in env.store.get(job_id)["error"]
     assert env.store.get(job_id)["stage"] == "sync_minute"
     env.refresh.assert_called_once_with(env.repo, "kline_minute")
+
+@pytest.mark.parametrize("body", [
+    {"targets": []}, {"targets": [None]}, {"targets": [{"symbol": " "}]},
+    {"targets": [{"symbol": "600000.SH", "date": "20250103"}]},
+    {"targets": [{"symbol": "600000.SH", "date": "2999-01-03"}]},
+    {"targets": [{"symbol": "510300.SH", "date": "2025-01-03"}]},
+    {"symbols": ["600000.SH"], "targets": [{"symbol": "600000.SH", "date": "2025-01-03"}]},
+])
+def test_repair_rejects_invalid_date_targets(repair_env, body):
+    assert repair_env.client.post("/api/kline/repair_minute_gaps", json=body).status_code == 400
+    repair_env.sync.assert_not_called()
+
+
+def test_dated_job_rechecks_real_partitions_and_exposes_partial_source(repair_env, monkeypatch):
+    env = repair_env
+    root = env.repo.store.data_dir
+    repo = KlineRepository(DataStore(root))
+    env.client.app.state.repo = repo
+    env.client.app.state.capabilities = CapabilitySet()
+    symbol = "600000.SH"
+    days = [date(2025, 1, 2), date(2025, 1, 3)]
+    monkeypatch.setattr(kline, "cn_today", lambda: days[-1] + timedelta(days=1))
+    windows = []
+
+    def bars(day):
+        dt = datetime.combine(day, datetime.min.time())
+        timestamps = [dt + timedelta(hours=h, minutes=i) for h, m in [(9, 31), (13, 1)] for i in range(m, m + 120)]
+        return pl.DataFrame({"datetime": timestamps, "symbol": symbol, "open": 5., "high": 5., "low": 5.,
+                             "close": 5., "volume": 100., "amount": 500.})
+
+    class Source:
+        def get_minute(self, symbols, *, start_time, end_time, **_):
+            day = start_time.date()
+            assert end_time.date() == day
+            windows.append((day, symbols))
+            return bars(day) if day == days[0] else bars(day).tail(120)
+
+    monkeypatch.setattr(kline.kline_sync, "sync_and_persist_minute", sync_and_persist_minute)
+    monkeypatch.setattr(kline.kline_sync, "_selected_minute_provider_name", lambda: "test")
+    monkeypatch.setattr(kline.kline_sync, "_resolve_minute_provider", lambda _: (Source(), False, None))
+    for day in days:
+        kline.kline_sync._write_minute_partition(bars(day).tail(120), root / "kline_minute")
+    targets = [{"symbol": symbol, "date": d.isoformat()} for d in days]
+    for expected_added in [120, 0]:
+        response = env.client.post("/api/kline/repair_minute_gaps", json={"targets": [*targets, targets[0]]})
+        assert response.status_code == 200, response.text
+        job_id = response.json()["job_id"]
+        wait_for(lambda key=job_id: env.store.get(key)["status"] in ("succeeded", "failed"))
+        job = env.store.get(job_id)
+        assert job["status"] == "succeeded", job.get("error")
+        assert job["result"] == {"minute_rows": expected_added, "universe_size": 1,
+                                 "requested_gaps": 2, "remaining_gaps": 1}
+        wait_for(lambda: env.limiter.in_use == 0)
+    assert windows == [(d, [symbol]) for d in days] * 2
+    sessions = env.client.get("/api/kline/minute-range", params={"symbol": symbol, "days": 2}).json()["sessions"]
+    assert [(s["date"], s["partial"], len(s["rows"])) for s in sessions] == [
+        ("2025-01-02", False, 240), ("2025-01-03", True, 120),
+    ]
+    report = env.client.get("/api/kline/minute-gaps").json()
+    assert [(g["date"], g["first_time"]) for g in report["gaps"]] == [("2025-01-03", "13:01")]

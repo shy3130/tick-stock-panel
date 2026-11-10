@@ -124,3 +124,33 @@ it.each([[DAY, 1, true], ['2026-11-04', 1, false], [DAY, 2, false]] as const)(
     expect(api.syncMinuteSingle).not.toHaveBeenCalled()
   },
 )
+
+it.each(['echarts', 'lightweight'] as const)('%s: afternoon-only live data keeps local morning bars and flags a partial historical session', async renderer => {
+  const afternoon = { ...bars[0], datetime: `${DAY}T13:01:00` }
+  vi.mocked(api.klineMinute).mockResolvedValue({ symbol: SYMBOL, date: DAY, asset_type: 'stock', rows: [afternoon], source: 'live' })
+  vi.mocked(api.klineMinuteRange).mockResolvedValue({ symbol: SYMBOL, asset_type: 'stock', requested_days: 1, source: 'local',
+    sessions: [{ date: DAY, partial: true, prev_close: 0.75, rows: [...bars, afternoon] }],
+  })
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <StockMultiDayIntradayChart symbol={SYMBOL} days={1} renderer={renderer} />
+  </QueryClientProvider>))
+  await tick()
+  expect(host.querySelector('[data-testid="multi-count"]')?.textContent).toBe('3')
+  expect(host.textContent).toContain(`本地历史分时不完整：${DAY}`)
+  expect(api.syncMinuteSingle).not.toHaveBeenCalled()
+})
+
+it('reads repaired morning bars into an afternoon-only list cache', async () => {
+  const afternoon = bars.map(row => ({ ...row, datetime: row.datetime.replace('T09:', 'T13:') }))
+  vi.mocked(api.klineMinuteBatch).mockImplementation(async (_symbols, _date, _preferLocal, since) => ({
+    data: { [SYMBOL]: (available ? [...bars, ...afternoon] : afternoon).filter(row => !since || row.datetime >= since) },
+  }))
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <ListPreview /><StockMultiDayIntradayChart symbol={SYMBOL} days={1} />
+  </QueryClientProvider>))
+  await tick()
+  expect(host.querySelector('output')?.textContent).toBe('2')
+  await act(async () => completeSync())
+  await tick()
+  expect(host.querySelector('output')?.textContent).toBe('4')
+})

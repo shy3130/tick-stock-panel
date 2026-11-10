@@ -268,6 +268,7 @@ export interface MinuteKlineRow {
 
 export interface MinuteKlineSession {
   date: string
+  partial?: boolean
   prev_close: number | null
   rows: MinuteKlineRow[]
 }
@@ -3430,10 +3431,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbol, ...(days != null ? { days } : {}) }),
     }),
-  repairMinuteGaps: (symbols: string[]) =>
+  repairMinuteGaps: (targets: Pick<MinuteGapRow, 'symbol' | 'date'>[] | string[]) =>
     request<{ status: string; job_id: string }>('/api/kline/repair_minute_gaps', {
       method: 'POST',
-      body: JSON.stringify({ symbols }),
+      body: JSON.stringify(typeof targets[0] === 'string' ? { symbols: targets } : { targets }),
     }),
   clearMinute: () =>
     request<{ status: string; removed: number }>('/api/kline/clear_minute', {
@@ -5116,6 +5117,8 @@ export interface PipelineJob {
     enriched_days?: number
     index_count?: number
     index_daily_rows?: number
+    requested_gaps?: number
+    remaining_gaps?: number
     minute_rows?: number
     skipped_stages?: string[]
   } | null
