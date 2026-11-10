@@ -16,6 +16,8 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
 from app.services import tool_catalog
 from app.strategy import ai_iterator as it
 from app.strategy.ai_generator import AIStrategyGenerator as RealGen
@@ -338,3 +340,64 @@ def test_iterate_final_backtest_appended(monkeypatch):
     assert r1["change_summary"] == "改进夏普"
     assert r2["change_summary"] == "最终版回测"
     assert r2["stats"] == {"sharpe": 2.0}
+
+
+@pytest.mark.parametrize("old_cli", [False, True])
+def test_codex_iterate_api_runs_shared_tools_and_saves_research_draft(monkeypatch, tmp_path, old_cli):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app import secrets_store
+    from app.api.strategy import router
+    from app.services import ai_provider
+
+    class Generator(FakeGenerator):
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(it, "AIStrategyGenerator", Generator)
+    monkeypatch.setattr(secrets_store, "load", lambda: {
+        "ai_provider": "codex_cli", "ai_codex_model": "test-model",
+    })
+    monkeypatch.setattr(secrets_store, "get_ai_key", lambda: "")
+    calls = []
+
+    async def cli(messages, **kwargs):
+        if old_cli:
+            raise RuntimeError("unexpected argument '--output-schema'")
+        payload = json.loads(messages[-1]["content"])
+        if payload["messages"][-1]["role"] == "tool":
+            assert json.loads(payload["messages"][-1]["content"])["result"]["stats"]["sharpe"] == 1.5
+            return json.dumps({"content": V1_CODE, "tool_calls": []})
+        draft = next((tmp_path / "strategies" / "ai").glob("ai_*.py"))
+        return json.dumps({"content": "先验证回测", "tool_calls": [{
+            "name": "run_backtest", "arguments": json.dumps({"strategy_id": draft.stem}),
+        }]})
+
+    async def execute(name, args, **kwargs):
+        calls.append((name, args))
+        return {"ok": True, "result": {"stats": {"sharpe": 1.5, "n_trades": 10}}}
+
+    monkeypatch.setattr(ai_provider, "_run_codex_cli", cli)
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    app.state.strategy_engine = _FakeEngine()
+    with TestClient(app) as client:
+        response = client.post("/api/strategies/ai/iterate", json={
+            "name": "Codex 迭代", "rules": "均线向上", "max_rounds": 1,
+        })
+    if old_cli:
+        assert response.status_code == 400
+        assert "升级本机 Codex CLI" in response.json()["detail"]
+        assert calls == []
+        return
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert calls == [("run_backtest", {"strategy_id": result["draft_strategy_id"]})]
+    assert result["rounds"][0]["stats"]["sharpe"] == 1.5
+    draft = tmp_path / "strategies" / "ai" / f"{result['draft_strategy_id']}.py"
+    assert ast.literal_eval(find_meta_assignment(draft.read_text())[1])["research_only"] is True

@@ -259,8 +259,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [aiStatus, setAiStatus] = useState<{ configured: boolean } | null>(null)
-  const [checkedAi, setCheckedAi] = useState(false)
+  const [aiStatus, setAiStatus] = useState<Awaited<ReturnType<typeof api.strategyAiStatus>> | null>(null)
+  const supportsIteration = aiStatus?.supports_tools ?? (aiStatus?.provider !== 'codex_cli')
   const [loaded, setLoaded] = useState(false)
   const [iterateEnabled, setIterateEnabled] = useState(false)
   const [iterateRounds, setIterateRounds] = useState<AiIterateRound[]>([])
@@ -310,9 +310,14 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
 
   // 打开时检查 AI 状态
   useEffect(() => {
-    if (!open || checkedAi) return
-    api.strategyAiStatus().then(s => { setAiStatus(s); setCheckedAi(true) }).catch(() => setAiStatus({ configured: false }))
-  }, [open, checkedAi])
+    if (!open) return
+    let active = true
+    setAiStatus(null)
+    api.strategyAiStatus().then(s => { if (active) setAiStatus(s) }).catch(() => {
+      if (active) setAiStatus({ configured: false, has_key: false, has_model: false })
+    })
+    return () => { active = false }
+  }, [open])
 
   // 持久化
   const persist = useCallback(() => {
@@ -356,6 +361,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     setLoading(true); setError(''); setCode(''); setValidated(false); setIterateRounds([]); setIterateDraftId('')
     try {
       if (iterateEnabled) {
+        if (!supportsIteration) throw new Error('当前 AI 接入暂不支持自动迭代，可关闭迭代使用普通生成。')
         // AI 迭代: 生成 → 回测 → 诊断 → 修改 闭环, 草稿已由后端落盘
         const result = await api.strategyAiIterate({
           name: name.trim(), description: description.trim(), direction,
@@ -616,7 +622,9 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                     className="w-full h-28 px-3 py-2 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30" />
                 </div>
                 <button type="button" onClick={() => setIterateEnabled(v => !v)}
-                  className="flex w-full items-center justify-between rounded-lg border border-border/30 bg-surface/30 px-3 py-2 cursor-pointer select-none">
+                  aria-pressed={iterateEnabled}
+                  disabled={loading || !aiStatus?.configured || (!supportsIteration && !iterateEnabled)}
+                  className="flex w-full items-center justify-between rounded-lg border border-border/30 bg-surface/30 px-3 py-2 cursor-pointer select-none disabled:cursor-not-allowed disabled:opacity-50">
                   <span className="flex items-center gap-1.5 text-[11px] text-secondary">
                     <Terminal className="h-3.5 w-3.5 text-emerald-400" />
                     AI 迭代（自动回测诊断优化）
@@ -625,11 +633,14 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                     <span className={cn('inline-block h-4 w-4 rounded-full bg-white transform transition-transform', iterateEnabled ? 'translate-x-[18px]' : 'translate-x-[2px]')} />
                   </span>
                 </button>
+                {aiStatus?.configured && !supportsIteration && (
+                  <div role="status" className="text-[11px] text-muted">当前 AI 接入暂不支持自动迭代，仍可使用普通生成。</div>
+                )}
                 {iterateEnabled && (
                   <div className="text-[10px] text-muted/60 leading-relaxed">开启后 AI 会先回测再诊断修改，最多迭代 4 轮，耗时更长；结果保存为草稿，仍需你点「保存策略」加入策略池。</div>
                 )}
-                {error && <div className="text-[11px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">{error}</div>}
-                <button onClick={handleGenerate} disabled={loading || !name.trim() || !rules.trim()}
+                {error && <div role="alert" className="text-[11px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">{error}</div>}
+                <button onClick={handleGenerate} disabled={loading || !aiStatus?.configured || (iterateEnabled && !supportsIteration) || !name.trim() || !rules.trim()}
                   className="w-full h-10 rounded-xl bg-gradient-to-r from-amber-500/20 to-amber-500/10 border border-amber-400/30 text-amber-400 text-sm font-medium flex items-center justify-center gap-2 hover:from-amber-500/30 hover:to-amber-500/20 disabled:opacity-40 transition-all">
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   {loading ? (iterateEnabled ? 'AI 迭代中...' : 'AI 生成中...') : code ? '重新生成' : (iterateEnabled ? 'AI 迭代生成' : 'AI 生成策略')}

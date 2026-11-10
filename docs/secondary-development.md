@@ -20,6 +20,7 @@
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
+- 核心 AI 工具调用（已实现）：`app.services.ai_provider.generate_ai_text_with_tools` 接收调用方的工具 schema 与异步执行回调，统一支持 OpenAI Chat Completions / Responses 与 Codex CLI 结构化输出。策略迭代与可选 AI 助手共用核心适配；核心不依赖 `app.custom.assistant`，其他扩展可传入自己的工具，无需注册进助手目录。接入示例见下文「复用核心 AI 工具调用」。
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
 - 当前前端插槽：`layout.navigation.extra`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
@@ -301,6 +302,36 @@ def setup(registrar: BackendExtensionRegistrar) -> None:
 - 行为需要按资产类型或运行上下文选择。
 - 扩展只需要装饰默认结果，而不是完全替换算法。
 - 依赖缓存、仓库或通知服务，需要通过明确构造参数注入。
+
+### 4.5 复用核心 AI 工具调用
+
+其他扩展通过已有公共函数调用 AI 工具循环，不需要启用 AI 助手扩展：
+
+```python
+from app.services.ai_provider import generate_ai_text_with_tools, supports_ai_tools
+
+async def execute_tool(name: str, args: dict) -> dict:
+    # 调用方负责校验参数、限制可用工具及处理权限和动作确认。
+    if name != "lookup_local_status":
+        return {"ok": False, "error": "未知工具"}
+    return {"ok": True, "result": {"status": "ready"}}
+
+async def query_status() -> list[dict]:
+    if not supports_ai_tools():
+        raise RuntimeError("当前 AI 接入不支持工具调用")
+    return await generate_ai_text_with_tools(
+        [{"role": "user", "content": "查询本地状态"}],
+        [{"type": "function", "function": {
+            "name": "lookup_local_status",
+            "description": "读取扩展的本地状态",
+            "parameters": {"type": "object", "properties": {}},
+        }}],
+        execute_tool=execute_tool,
+        max_rounds=4,
+    )
+```
+
+返回值为完整消息列表，保留 `assistant.tool_calls`、`tool_call_id` 与工具返回值；最后一条消息不保证是正文（轮次预算用尽时可能停在工具结果），调用方须检查是否得到最终答案。`supports_ai_tools` 只描述当前适配器的协议能力，模型或 CLI 不兼容时仍会明确报错。工具实际执行始终交给注入的回调；该接口不会替扩展授权动作，也不会自动发布策略或把无效工具响应当成成功。
 
 ## 5. 直接修改源码
 

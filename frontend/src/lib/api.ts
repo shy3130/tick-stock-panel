@@ -5097,7 +5097,7 @@ export const api = {
 
   /** 检查 AI 配置状态 */
   strategyAiStatus: () =>
-    request<{ configured: boolean; has_key: boolean; has_model: boolean; provider?: string }>('/api/strategies/ai/status'),
+    request<{ configured: boolean; has_key: boolean; has_model: boolean; provider?: string; supports_tools?: boolean }>('/api/strategies/ai/status'),
 
   /** 测试 AI 连通性 */
   strategyAiTest: () =>
