@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import logging
 import math
 import re
 import shutil
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +26,7 @@ from app.data_providers.custom.config import (
     load_config,
 )
 from app.data_providers.custom.managed import ManagedProvider
-from app.data_providers.custom.provider import GenericHTTPProvider
+from app.data_providers.custom.provider import GenericHTTPProvider, _token_from_env
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -322,6 +324,25 @@ def get_provider(name: str) -> ManagedProvider:
     if provider is None:
         raise ValueError(f"Custom data source not found or invalid: {name}")
     return provider
+
+
+def minute_config_fingerprint(name: str) -> bytes:
+    """当前已加载分钟配置与生效凭据的摘要，供在途请求与缓存核对。"""
+    provider = _PROVIDERS.get(name)
+    if provider is None:
+        return b""
+    status = _PLUGIN_STATUS.get(name)
+    if status is not None:
+        env = status.get("api_key_env", "")
+        key = secrets_store.get_env_backed_secret(f"{name}_api_key", env) if env else ""
+        config = ("plugin", status.get("version"), status.get("available"), "minute" in status["datasets"], key)
+    else:
+        source = provider.config
+        minute = source.datasets.get("minute")
+        auth = source.auth
+        token = _token_from_env(auth.token_env) if auth.type != "none" else None
+        config = ("yaml", asdict(minute) if minute else None, asdict(auth), token)
+    return hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).digest()
 
 
 def create_provider(config: dict) -> GenericHTTPProvider:

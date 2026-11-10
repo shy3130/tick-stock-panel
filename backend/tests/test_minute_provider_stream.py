@@ -310,7 +310,6 @@ def test_stream_failure_preserves_queryable_partitions_and_retry_is_idempotent(m
     repo = KlineRepository(DataStore(tmp_path))
     source = StreamSource(size=1, fail=True)
     route(monkeypatch, source)
-    monkeypatch.setattr(kline_sync.preferences, "data_source_stamp", lambda: "same-source")
     monkeypatch.setattr(kline_sync.preferences, "get_minute_sync_segment_days", lambda: 20)
     other_table = "kline_minute" if asset_type == "etf" else "kline_etf_minute"
     kline_sync._write_minute_partition(frame(["other"]), tmp_path / other_table)
