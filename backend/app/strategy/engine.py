@@ -214,6 +214,9 @@ class StrategyDef:
     minute_daily_bars: int = 0
     # 模块 SCORING 常量的因子键 (custom_factor_* 排名策略用; 策略包闭包消费)
     scoring_columns: tuple[str, ...] = ()
+    # 模块 TAKE_PROFIT 常量（正收益比例, 如 0.10 = +10% 止盈）; 与 STOP_LOSS 对称,
+    # 供回测/实盘风控读取（此前遗漏, 模块常量不生效）
+    take_profit: float | None = None
 
 
 @dataclass
@@ -618,6 +621,7 @@ class StrategyEngine:
             entry_signals=getattr(mod, "ENTRY_SIGNALS", []),
             exit_signals=getattr(mod, "EXIT_SIGNALS", []),
             stop_loss=getattr(mod, "STOP_LOSS", None),
+            take_profit=getattr(mod, "TAKE_PROFIT", None),
             trailing_stop=getattr(mod, "TRAILING_STOP", None),
             trailing_take_profit_activate=getattr(mod, "TRAILING_TAKE_PROFIT_ACTIVATE", None),
             trailing_take_profit_drawdown=getattr(mod, "TRAILING_TAKE_PROFIT_DRAWDOWN", None),
