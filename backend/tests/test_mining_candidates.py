@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,13 +59,15 @@ def _create_run(
     definition: dict | None = None,
     status: str = "succeeded",
     run_id: str = "mining-run",
+    factor_names: list[str] | None = None,
+    fingerprint: dict | None = None,
 ) -> tuple[MiningRunStore, str, str]:
     definition = definition or _factor_definition()
     signature = compute_candidate_signature(definition)
     store = MiningRunStore(tmp_path)
     store.create(
         {
-            "factor_names": ["turnover_rate", "rsi_14"],
+            "factor_names": factor_names if factor_names is not None else ["turnover_rate", "rsi_14"],
             "strategy_ids": ["existing_daily", "ma_golden_cross"],
             "asset_type": "stock",
             "start": "2025-01-01",
@@ -74,7 +77,7 @@ def _create_run(
             "stamp_tax_pct": 0.0005,
             "slippage_bps": 5.0,
         },
-        {"generation": "test"},
+        fingerprint if fingerprint is not None else {"generation": "test"},
         run_id=run_id,
     )
     frame = pl.DataFrame({
@@ -169,6 +172,42 @@ def test_promote_rereads_artifact_and_repairs_backlink_idempotently(tmp_path) ->
     persisted = pl.read_parquet(store.artifact_path(run_id, "candidates")).row(0, named=True)
     assert persisted["promoted_candidate_id"] == first["id"]
     assert len(CandidateStore(tmp_path).list()) == 1
+
+
+@pytest.mark.parametrize("kind", ["custom", "composite"])
+def test_promote_and_publish_runtime_registered_factor(tmp_path, kind) -> None:
+    from app.backtest.matrix import build_market_data_matrix
+    from app.factors.registry import isolated_registry, unregister_factor
+    from app.factors.store import register_definition
+
+    with isolated_registry():
+        custom = "uf_promote_test"
+        register_definition({"id": custom, "kind": "custom", "label": "换手率",
+                             "formula": "turnover_rate * 2"})
+        factor = custom
+        if kind == "composite":
+            factor = "cf_promote_test"
+            register_definition({"id": factor, "kind": "composite", "label": "组合",
+                                 "members": {custom: 1.0, "turnover_rate": 0.5}})
+        definition = {"kind": "factor_rank", "factor_names": [factor],
+                      "scoring": {factor: 1.0}, "directions": {factor: "high"}}
+        store, run_id, signature = _create_run(tmp_path, definition=definition, factor_names=[factor])
+        service, engine = _real_service(tmp_path, store)
+        candidate = service.promote(run_id, signature)
+        assert candidate["config"]["factor_names"] == [factor]
+        assert service.promote(run_id, signature)["id"] == candidate["id"]
+        published = service.publish(run_id, signature)
+        strategy = engine.get(published["strategy_id"])
+        market = build_market_data_matrix(pl.DataFrame({
+            "symbol": ["A", "B", "C"], "date": [date(2026, 1, 2)] * 3,
+            "open": [10.0] * 3, "high": [11.0] * 3, "low": [9.0] * 3,
+            "close": [10.0] * 3, "volume": [1000.0] * 3, "turnover_rate": [1.0, 2.0, 3.0],
+        }), field_columns={"turnover_rate"})
+        signals = strategy.matrix_strategy.compute_signals(market, {"entry_score": 70.0, "exit_score": 40.0, "top_rank": 1})
+        assert signals.entry.tolist() == [[0, 0, 1]]
+        unregister_factor(factor)
+        with pytest.raises(ValueError, match="unknown factors"):
+            service.promote(run_id, signature)
 
 
 def test_promote_repairs_backlink_after_partial_failure(tmp_path, monkeypatch) -> None:
@@ -702,3 +741,39 @@ def test_publish_factor_records_guardian_baseline(tmp_path) -> None:
     guardian.append_check(result["strategy_id"], {"verdict": "healthy"})
     service.publish(run_id, signature)
     assert len(guardian.get(result["strategy_id"])["checks"]) == 1
+
+
+@pytest.mark.parametrize("mutation", ["delete", "edit", "metadata_only"])
+def test_candidate_uses_the_transitive_factor_definition_that_was_mined(tmp_path, mutation):
+    from app.factors.registry import isolated_registry, unregister_factor
+    from app.factors.store import register_definition
+    from app.services.mining_schedule import mining_factor_snapshot
+
+    child = {"id": "uf_leaf", "kind": "custom", "label": "leaf", "formula": "close"}
+    with isolated_registry():
+        register_definition(child)
+        register_definition({"id": "uf_middle", "label": "middle", "formula": "uf_leaf * 2"})
+        register_definition({"id": "cf_outer", "label": "outer", "kind": "composite",
+                             "members": {"uf_middle": 1, "turnover_rate": 1}})
+        definition = {"kind": "factor_rank", "factor_names": ["cf_outer"],
+                      "scoring": {"cf_outer": 1}, "directions": {"cf_outer": "high"}}
+        store, run_id, signature = _create_run(
+            tmp_path, definition=definition, factor_names=["cf_outer"],
+            fingerprint={"generation": "test", "factors": mining_factor_snapshot(["cf_outer"])},
+        )
+        service, _ = _real_service(tmp_path, store)
+        if mutation == "delete":
+            unregister_factor("uf_leaf")
+        elif mutation == "edit":
+            register_definition({**child, "version": 2, "formula": "open"})
+        else:
+            register_definition({**child, "version": 2, "label": "new label"})
+            assert service.promote(run_id, signature)["status"] == "pending"
+            return
+        for action in (service.promote, service.publish):
+            with pytest.raises(ValueError, match="uf_leaf"):
+                action(run_id, signature)
+        assert service.candidate_store.list() == []
+        record = pl.read_parquet(store.artifact_path(run_id, "candidates")).row(0, named=True)
+        assert record["promoted_candidate_id"] is None and record["published_strategy_id"] is None
+        assert not list((tmp_path / "strategies").rglob("mined_factor_*.py"))

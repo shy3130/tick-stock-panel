@@ -179,3 +179,9 @@ def test_python_factor_materializes_and_caches() -> None:
         assert again["uf_py_k"].equals(result["uf_py_k"])
     finally:
         unregister_factor("uf_py_k")
+
+
+def test_shift_and_rolling_warmup_accumulate():
+    compiled = compile_python_expression('ctx.col("close").shift(200).rolling_mean(80).over("symbol")')
+    assert compiled.ok
+    assert compiled.warmup_bars == 281

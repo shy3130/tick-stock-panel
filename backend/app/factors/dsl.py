@@ -22,7 +22,7 @@ from typing import Any
 
 import polars as pl
 
-from app.factors.registry import factor_dependencies, get_factor
+from app.factors.registry import factor_dependencies, factor_warmup_bars, get_factor
 
 FACTOR_COLUMN = "__dsl_factor__"
 
@@ -98,6 +98,7 @@ class CompiledFormula:
     dependencies: frozenset[str] = frozenset()  # 展开到 enriched base 列
     referenced_factors: frozenset[str] = frozenset()  # 引用的注册因子 id (含 virtual, 需物化)
     warmup_bars: int = 1
+    input_windows: tuple[tuple[str, int], ...] = ()
     cross_sectional: bool = False
     formula_text: str = ""
 
@@ -593,7 +594,6 @@ def compile_formula(text: str) -> CompiledFormula:
 
     dependencies: set[str] = set()
     referenced_factors: set[str] = set()
-    warmup = 1
     cross_sectional = False
     for name in identifiers:
         if name in BASE_COLUMNS:
@@ -604,12 +604,22 @@ def compile_formula(text: str) -> CompiledFormula:
             continue
         referenced_factors.add(name)
         dependencies.update(factor_dependencies([name]))
-        warmup = max(warmup, spec.warmup_bars)
 
-    for node_constants in constants_by_call.values():
-        n_value = node_constants.get("n")
-        if n_value is not None and n_value == int(n_value) and int(n_value) > 0:
-            warmup = max(warmup, int(n_value) + 1)
+    windows: dict[str, int] = {}
+
+    def collect_windows(node: dict, bars: int) -> None:
+        if node["kind"] == "col":
+            name = node["value"]
+            windows[name] = max(windows.get(name, 0), bars)
+        if node["kind"] == "call" and node["value"] in TS_OPERATORS:
+            n = constants_by_call.get(id(node), {}).get("n", 0)
+            if 0 <= n <= max(WINDOW_MAX, DELAY_MAX):
+                bars += int(n)
+        for child in node["children"]:
+            collect_windows(child, bars)
+
+    collect_windows(ast, 0)
+    warmup = max((factor_warmup_bars([name]) + bars for name, bars in windows.items()), default=1)
 
     def _find_cross(node: dict) -> None:
         nonlocal cross_sectional
@@ -624,6 +634,7 @@ def compile_formula(text: str) -> CompiledFormula:
         return CompiledFormula(
             ok=False, errors=errors, dependencies=frozenset(dependencies),
             referenced_factors=frozenset(referenced_factors),
+            input_windows=tuple(sorted(windows.items())),
             warmup_bars=warmup, cross_sectional=cross_sectional, formula_text=text,
         )
 
@@ -660,10 +671,11 @@ def compile_formula(text: str) -> CompiledFormula:
         return CompiledFormula(
             ok=False, errors=errors, dependencies=frozenset(dependencies),
             referenced_factors=frozenset(referenced_factors),
+            input_windows=tuple(sorted(windows.items())),
             warmup_bars=warmup, cross_sectional=cross_sectional, formula_text=text,
         )
 
-    # 阶段二: 提取截面算子的含窗口子树为临时列 (Polars 嵌套窗口会静默全 null)
+    # 阶段二: 把窗口算子的含窗口操作数先物化为临时列 (Polars 嵌套窗口会静默全 null)
     # worklist 逐层下钻; temps 后进先出反转即依赖顺序 (深层先算)。
     def _needs_symbol_window(node: dict) -> bool:
         kind = node["kind"]
@@ -683,14 +695,16 @@ def compile_formula(text: str) -> CompiledFormula:
     pending: list[dict] = [ast]
     while pending:
         current = pending.pop(0)
-        if current.get("kind") == "call" and current.get("value") in CROSS_OPERATORS:
-            operand = current["children"][0]
-            if _has_any_over(operand):
-                alias = f"__tsfx_{len(temp_roots)}__"
-                current["children"][0] = {"kind": "col", "value": alias, "children": [], "offset": operand["offset"]}
-                temp_roots.append({"alias": alias, "root": copy.deepcopy(operand)})
-                pending.append(temp_roots[-1]["root"])
-                continue  # 操作数已替换为临时列, 不再下钻原子树
+        if current["kind"] == "call" and current["value"] in TS_OPERATORS | CROSS_OPERATORS:
+            expr_count, _ = OPERATORS[current["value"]]
+            for index, operand in enumerate(current["children"][:expr_count]):
+                if _has_any_over(operand):
+                    alias = f"__tsfx_{len(temp_roots)}__"
+                    current["children"][index] = {
+                        "kind": "col", "value": alias, "children": [], "offset": operand["offset"],
+                    }
+                    temp_roots.append({"alias": alias, "root": operand})
+                    pending.append(operand)
         pending.extend(current.get("children", []))
 
     # 阶段三: 编译最终表达式与临时列表达式 (按依赖顺序: 深层在前)
@@ -714,6 +728,7 @@ def compile_formula(text: str) -> CompiledFormula:
             errors=errors or [DslError("E009", "产出类型非法: 无法编译为数值表达式")],
             dependencies=frozenset(dependencies),
             referenced_factors=frozenset(referenced_factors),
+            input_windows=tuple(sorted(windows.items())),
             warmup_bars=warmup, cross_sectional=cross_sectional, formula_text=text,
         )
     if needs_window:
@@ -721,16 +736,14 @@ def compile_formula(text: str) -> CompiledFormula:
     if is_bool:
         compiled = compiled.cast(pl.Float64)
 
-    # 运行期帧变换: 检查全部引用列 (基准依赖 + 引用因子) 存在, 否则 None (E013 fail-closed)
-    required_columns = set(dependencies) | set(referenced_factors)
     staged_exprs = temp_exprs  # 依赖顺序已排
 
     def frame_transform(frame: pl.DataFrame) -> pl.DataFrame | None:
-        if not required_columns.issubset(set(frame.columns)):
+        if not identifiers.issubset(frame.columns):
             return None
         result = frame
-        if staged_exprs:
-            result = result.with_columns(staged_exprs)
+        for stage in staged_exprs:
+            result = result.with_columns(stage)
         return result.with_columns(compiled.alias(FACTOR_COLUMN))
 
     return CompiledFormula(
@@ -740,15 +753,19 @@ def compile_formula(text: str) -> CompiledFormula:
         dependencies=frozenset(dependencies),
         referenced_factors=frozenset(referenced_factors),
         warmup_bars=warmup,
+        input_windows=tuple(sorted(windows.items())),
         cross_sectional=cross_sectional,
         formula_text=text,
     )
 
 
 @lru_cache(maxsize=256)
-def compile_formula_cached(text: str) -> CompiledFormula:
-    """带 LRU 缓存的编译入口 (公式文本 → 编译产物, 设计文档 §3.3)。
-
-    CompiledFormula 为不可变值对象 (frame_transform 闭包只读), 缓存共享安全。
-    """
+def _compile_cached(text: str, revision: int) -> CompiledFormula:
     return compile_formula(text)
+
+
+def compile_formula_cached(text: str) -> CompiledFormula:
+    from app.factors.registry import registry_cache_revision
+
+    revision = registry_cache_revision()
+    return compile_formula(text) if revision is None else _compile_cached(text, revision)

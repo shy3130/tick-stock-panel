@@ -6,6 +6,7 @@ from typing import Any
 
 import polars as pl
 
+from app.factors.registry import factor_calculation_order, factor_warmup_bars
 from app.factors.registry import (
     factor_dependencies as _registry_factor_dependencies,
 )
@@ -50,19 +51,7 @@ def effective_scoring_directions(overrides: Mapping[str, Any] | None) -> dict[st
 
 
 def scoring_warmup_bars(scoring: Mapping[str, Any]) -> int:
-    warmups: list[int] = [
-        _ROLLING_SCORING_WARMUP.get(str(name), 1)
-        for name, weight in scoring.items()
-        if weight
-    ]
-    # composite/custom 因子的预热来自注册表 (P3)
-    for name, weight in scoring.items():
-        if not weight:
-            continue
-        spec = _registry_get_factor(str(name))
-        if spec is not None and spec.kind in ("custom", "composite"):
-            warmups.append(spec.warmup_bars)
-    return max(warmups, default=1)
+    return factor_warmup_bars(name for name, weight in scoring.items() if weight)
 
 
 def scoring_dependencies(scoring: Mapping[str, Any]) -> set[str]:
@@ -288,6 +277,23 @@ def materialize_scoring_columns(
     frame: pl.DataFrame,
     names: Collection[str],
 ) -> pl.DataFrame:
+    requested = set(names)
+    # 按依赖层批算, 同层仍共享批量缓存命中/列附着。中间列仅在本次求值中可见。
+    depths: dict[str, int] = {}
+    layers: dict[int, list[str]] = {}
+    for name in factor_calculation_order(requested - set(frame.columns)):
+        spec = _registry_get_factor(name)
+        if name in frame.columns or spec is None or spec.kind == "base":
+            continue
+        depth = 1 + max((depths.get(dep, 0) for dep in spec.inputs), default=0)
+        depths[name] = depth
+        layers.setdefault(depth, []).append(name)
+    for layer in layers.values():
+        frame = _materialize_scoring_layer(frame, layer)
+    return frame.drop(depths.keys() - requested, strict=False)
+
+
+def _materialize_scoring_layer(frame: pl.DataFrame, names: Collection[str]) -> pl.DataFrame:
     # custom (DSL) 因子先物化: frame_transform 可能需要多阶段临时列 (嵌套窗口规避),
     # 与单表达式路径不同, 必须整体走帧变换 —— 与检验/试算共用同一条计算路径 (P3)。
     # P2b: 物化结果走内容寻址缓存 (键 = 定义 + 依赖列内容), 重复求值零成本;
@@ -314,7 +320,7 @@ def materialize_scoring_columns(
             continue
         key = cache_key(
             str(name), spec.formula_text, spec.version, frame,
-            set(spec.dependencies) | set(compiled.referenced_factors),
+            spec.inputs | ({"symbol", "date"} & set(frame.columns)),
         )
         if key is not None:
             cached = get_cached(key, frame.height)

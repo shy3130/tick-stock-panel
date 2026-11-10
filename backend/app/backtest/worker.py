@@ -231,14 +231,9 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         # 子进程不继承主进程的因子注册表; 自定义/复合因子 (uf_/cf_) 在任何
         # 涉及因子物化的 worker 任务里都依赖注册表, 启动时从存储加载。
         # 单个加载失败只跳过 (fail-open 跳过该因子), 与主进程启动行为一致。
-        from app.factors.store import load_into_registry
+        from app.factors.store import load_runtime_registry
 
-        load_into_registry(data_dir)
-        # 扩展数据因子 (ext_) 与 uf_/cf_ 同理只在主进程注册; 不同步时挖掘
-        # 请求携带的 ext 因子会因注册表缺失被拒 (unknown mining factors)。
-        from app.factors.ext_factors import ensure_synced
-
-        ensure_synced(data_dir)
+        load_runtime_registry(data_dir)
         strategy_engine = StrategyEngine(
             strategy_dirs=_strategy_dirs(data_dir),
             override_loader=lambda sid: strategy_config.load_override(data_dir, sid),

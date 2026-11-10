@@ -3910,6 +3910,11 @@ _MATRIX_COMPUTED_FEATURES = frozenset({
 def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
     if name in {"open", "high", "low", "close", "volume"} or name in market.fields:
         return market.field(name)
+    from app.factors.registry import get_factor
+
+    spec = get_factor(name)
+    if spec is not None and spec.kind in {"custom", "composite"}:
+        return _registered_matrix_feature(market, name)
     supported = (
         name in _MATRIX_COMPUTED_FEATURES
         or (name.startswith("ma") and name.endswith("_bias") and name[2:-5].isdigit())
@@ -3928,6 +3933,46 @@ def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             {"name": name},
             lambda: _compute_matrix_feature(market, name),
         )
+
+
+def _registered_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
+    from app.factors.registry import factor_calculation_order, get_factor
+    from app.strategy.scoring import materialize_scoring_columns
+
+    ordered = factor_calculation_order([name])
+    definitions = []
+    inputs = []
+    for fid in ordered:
+        spec = get_factor(fid)
+        if spec is not None and spec.kind in {"custom", "composite"}:
+            definitions.append((fid, spec.version, spec.lang, spec.formula_text, spec.components))
+        elif fid not in {"symbol", "date"}:
+            inputs.append(fid)
+    arrays = tuple(matrix_feature(market, fid) for fid in inputs)
+
+    def compute() -> np.ndarray:
+        # 只还原真实 K 线, 保持停牌期间时序窗口与 Polars 检验路径一致。
+        assets, times = np.nonzero(np.isfinite(market.close).T)
+        frame = pl.DataFrame({
+            "symbol": np.asarray(market.symbols)[assets],
+            "date": np.asarray(market.timestamp_labels, dtype="datetime64[D]")[times],
+            **{
+                fid: pl.Series(fid, values[times, assets], dtype=pl.Float64, nan_to_null=True)
+                for fid, values in zip(inputs, arrays, strict=True)
+            },
+        })
+        frame = materialize_scoring_columns(frame, [name])
+        if name not in frame.columns:
+            raise ValueError(f"factor {name} is missing required inputs")
+        result = np.full(market.shape, np.nan, dtype=np.float32)
+        result[times, assets] = frame[name].cast(pl.Float32).to_numpy()
+        return result
+
+    # 把全部依赖的定义与输入纳入键, 子因子改公式后父因子也必须重新计算。
+    return _cached_matrix_operation(
+        "registered_factor", (market.close, *arrays),
+        {"definitions": definitions, "inputs": inputs}, compute,
+    )
 
 
 def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:

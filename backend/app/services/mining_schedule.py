@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import threading
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from app.backtest.mining import (
     required_trading_bars,
     validation_config_for_profile,
 )
+from app.factors.registry import factor_calculation_order, get_factor
 from app.services import preferences
 from app.services.mining_preflight import enriched_partition_dates
 from app.services.regime_builder import load_regime_history, regime_path
@@ -110,12 +112,51 @@ def _build_data_fingerprint_once(
             request.get("strategy_ids") or [],
             data_dir,
         ),
+        "factors": mining_factor_snapshot(request.get("factor_names") or []),
     }
     payload = _canonical_json(components)
     return {
         **components,
         "digest": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
     }
+
+
+def mining_factor_snapshot(names: Iterable[str]) -> list[dict]:
+    snapshot = []
+    for fid in factor_calculation_order(names):
+        spec = get_factor(fid)
+        if spec is None:
+            continue
+        record = {
+            "id": fid, "version": spec.version, "formula": spec.formula_text,
+            "lang": spec.lang, "components": [[name, weight] for name, weight in spec.components],
+            "dependencies": sorted(spec.dependencies), "warmup_bars": spec.warmup_bars,
+        }
+        if spec.lang == "python":
+            record["declared_warmup"] = spec.declared_warmup
+        snapshot.append(record)
+    return snapshot
+
+
+def verify_mining_factor_snapshot(names: Iterable[str], fingerprint: Any) -> None:
+    # 旧任务没有因子快照, 仍按当前注册状态校验。新任务只核对该候选实际用到的定义。
+    if not isinstance(fingerprint, Mapping) or "factors" not in fingerprint:
+        return
+    records = fingerprint["factors"]
+    if not isinstance(records, list) or any(not isinstance(row, Mapping) for row in records):
+        raise ValueError("invalid mining factor snapshot")
+    saved = {row.get("id"): row for row in records}
+    for current in mining_factor_snapshot(names):
+        fid = current["id"]
+        if not fid.startswith(("uf_", "cf_")):
+            continue
+        previous = saved.get(fid)
+        # 改名、归档等不改变计算。组合权重保留完整精度, 不能仅比较公式的展示文本。
+        fields = ["lang", "formula", "components"]
+        if previous is not None and "declared_warmup" in previous:
+            fields.append("declared_warmup")
+        if previous is None or any(previous.get(k) != current.get(k) for k in fields):
+            raise ValueError(f"因子 {fid} 的计算定义已变化，请重新挖掘")
 
 
 def schedule_claim(day: date) -> str:

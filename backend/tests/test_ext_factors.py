@@ -492,7 +492,7 @@ def test_mining_worker_registry_must_include_ext_factors(data_dir):
     """回归: 挖掘 worker 只 load_into_registry (uf_/cf_) 时注册表缺 ext 因子,
     _decode_runtime_request 直接报 unknown mining factors (线上实测)。
 
-    worker 入口在 load_into_registry 后必须再 ensure_synced; 这里锁定两个状态
+    worker 入口必须同时同步扩展因子和用户因子; 这里锁定两个状态
     的 factor_columns_view 差异, 防止未来把 ensure_synced 从 worker 里删掉。
     """
     from app.backtest.mining_runtime import _decode_runtime_request
@@ -518,3 +518,15 @@ def test_mining_worker_registry_must_include_ext_factors(data_dir):
         _decode_runtime_request(payload, data_dir, strategy_engine=None)
     except ValueError as exc:
         assert "unknown mining factors" not in str(exc)
+
+
+def test_cold_load_can_register_custom_factor_using_ext_field(data_dir):
+    from app.factors import store
+    from app.factors.registry import isolated_registry
+
+    _mk_config(data_dir)
+    store.save_one(data_dir, {"id": "uf_hot", "kind": "custom", "label": "热度", "formula": f"{COL} * 2"})
+    with isolated_registry():
+        assert get_factor(COL) is None
+        assert store.load_runtime_registry(data_dir) == ["uf_hot"]
+        assert get_factor("uf_hot").inputs == {COL}

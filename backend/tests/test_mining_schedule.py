@@ -203,6 +203,22 @@ def test_selected_strategy_metadata_changes_with_same_size_source_edit(tmp_path)
     assert first[0]["source_tree"]["digest"] != second[0]["source_tree"]["digest"]
 
 
+def test_fingerprint_changes_when_a_nested_custom_factor_changes(tmp_path):
+    from app.factors.registry import isolated_registry
+    from app.factors.store import register_definition
+
+    repo = FakeRepo(tmp_path)
+    state = SimpleNamespace(strategy_engine=None)
+    request = {"asset_type": "stock", "strategy_ids": [], "factor_names": ["uf_parent"]}
+    with isolated_registry():
+        register_definition({"id": "uf_child", "label": "子因子", "formula": "close", "kind": "custom"})
+        register_definition({"id": "uf_parent", "label": "父因子", "formula": "uf_child * 2", "kind": "custom"})
+        first = mining_schedule.build_data_fingerprint(repo, state, request)
+        register_definition({"id": "uf_child", "label": "子因子", "formula": "open", "kind": "custom", "version": 2})
+        second = mining_schedule.build_data_fingerprint(repo, state, request)
+        assert first["digest"] != second["digest"]
+
+
 def test_fingerprint_rejects_continuously_changing_generation(
     tmp_path,
     monkeypatch,

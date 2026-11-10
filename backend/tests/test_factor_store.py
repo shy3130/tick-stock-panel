@@ -166,3 +166,12 @@ def test_unregister_builtin_rejected() -> None:
         unregister_factor("rsi_14")
     spec = get_factor("rsi_14")
     assert isinstance(spec, FactorSpec)
+
+
+def test_load_custom_dependency_chain_independent_of_filename_order(tmp_path, cleanup_registry):
+    for index in range(5):
+        fid = f"uf_chain_{index}"
+        formula = f"uf_chain_{index + 1} * 2" if index < 4 else "close"
+        store.save_one(tmp_path, {"id": fid, "label": fid, "kind": "custom", "formula": formula})
+        cleanup_registry.add(fid)
+    assert set(store.load_into_registry(tmp_path)) == {f"uf_chain_{i}" for i in range(5)}

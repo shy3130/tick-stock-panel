@@ -20,7 +20,7 @@ from app.backtest.mining import (
     evaluate_candidate_gate,
 )
 from app.enriched_generation import EnrichedGenerationUnavailableError
-from app.factors.registry import factor_columns_view
+from app.factors.registry import missing_factor_ids
 from app.services import preferences
 from app.services.mining_jobs import (
     RUN_STATUSES,
@@ -41,9 +41,6 @@ from app.services.mining_schedule import (
 )
 
 router = APIRouter(prefix="/api/backtest/mining", tags=["backtest"])
-# 校验时动态读取 (含运行期注册的自定义/复合因子)
-def _known_factor_ids() -> frozenset[str]:
-    return frozenset(str(item["id"]) for item in factor_columns_view())
 _MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 _SSE_POLL_SECONDS = 0.5
 _SSE_HEARTBEAT_SECONDS = 15.0
@@ -90,7 +87,7 @@ class MiningStartRequest(BaseModel):
     @field_validator("factor_names")
     @classmethod
     def _known_factors(cls, values: list[str]) -> list[str]:
-        unknown = sorted(set(values) - _known_factor_ids())
+        unknown = missing_factor_ids(values)
         if unknown:
             raise ValueError(f"unknown mining factors: {unknown}")
         return values
