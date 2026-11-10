@@ -146,7 +146,43 @@ def _classify_handler(handler: ast.ExceptHandler) -> str:
     return _HANDLED
 
 
-def check_swallowed_exception(files: list[Path], *, new_code: bool) -> list[Issue]:
+def _staged_new_lines() -> dict[str, set[int]]:
+    """解析 `git diff --cached -U0`, 返回 {文件: 新增行号集合}。
+
+    棘轮必须只卡新增行: 只改一个文件的某个字符, 不该连带把该文件里所有既有
+    静默点都判成新增违规 —— 那样改老文件会被无差别拦截, 人就会开始用
+    `--no-verify` 绕过, 门禁随之失效。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--cached", "-U0", "--no-color", "--no-ext-diff"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    result: dict[str, set[int]] = {}
+    current: str | None = None
+    for line in out.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            result.setdefault(current, set())
+        elif line.startswith("@@") and current:
+            m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+            if not m:
+                continue
+            start = int(m.group(1))
+            count = int(m.group(2)) if m.group(2) is not None else 1
+            if count:
+                result[current].update(range(start, start + count))
+    return result
+
+
+def check_swallowed_exception(
+    files: list[Path],
+    *,
+    new_code: bool,
+    new_lines: dict[str, set[int]] | None = None,
+) -> list[Issue]:
     """R002 吞异常: except 捕获了却不留痕。
 
     事故: mining_process_lock 抛 PermissionError, 调用方只 `except MiningProcessLockError`
@@ -182,10 +218,12 @@ def check_swallowed_exception(files: list[Path], *, new_code: bool) -> list[Issu
                 "Exception", "BaseException",
             }
             if kind == _SILENT:
+                touched = bool(new_lines) and node.lineno in new_lines.get(_rel(p), set())
+                level = "ERROR" if (new_code and touched) else "WARN"
                 issues.append(Issue(
-                    "ERROR" if new_code else "WARN", "R002-silent-catch", _rel(p), node.lineno,
+                    level, "R002-silent-catch", _rel(p), node.lineno,
                     "捕获后什么都不做(pass): 故障被彻底掩埋, 至少记一条日志"
-                    + ("" if new_code else "; 若确属有意静默, 加 `# noqa: R002`"),
+                    + ("" if level == "ERROR" else "; 若确属有意静默, 加 `# noqa: R002`"),
                 ))
             elif kind == _SKIP and is_broad:
                 issues.append(Issue(
@@ -446,7 +484,11 @@ def main() -> int:
 
     issues: list[Issue] = []
     issues += check_python_syntax(py_files)
-    issues += check_swallowed_exception(py_files, new_code=staged is not None)
+    issues += check_swallowed_exception(
+        py_files,
+        new_code=staged is not None,
+        new_lines=_staged_new_lines() if staged is not None else None,
+    )
     issues += check_int8_overflow(py_files)
     issues += check_text_encoding(bat_files)
     issues += check_ps1_bom(ps1_files)
