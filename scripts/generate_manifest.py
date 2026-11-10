@@ -24,7 +24,7 @@ EXCLUDED_SUFFIXES = {".pyc", ".log", ".tmp"}
 
 
 def _is_excluded(rel: str, name: str) -> bool:
-    if rel in EXCLUDED_DIRS or rel.split("/", 1)[0] in EXCLUDED_DIRS:
+    if any(part in EXCLUDED_DIRS for part in rel.split("/")):
         return True
     if name in EXCLUDED_NAMES:
         return True

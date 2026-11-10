@@ -4,7 +4,7 @@
 
 - 构建时生成全量程序文件清单 (app/upgrade_manifest.json, sha256 基线);
 - 每次启动后台扫描程序目录, 与清单对比 → 用户「修改/新增」的程序文件
-  常备备份到 data/upgrade_guard/live/ (data 不随升级覆盖, 天然安全);
+  常备备份到 data/upgrade_guard/snapshots/ (只保留最近一次成功快照);
 - 检测到版本变化 (上次运行版本 ≠ 当前版本) 时, 用 data 里幸存的旧清单
   快照 + 旧备份生成升级对比报告:
     restorable  用户改过、新版没动 → 升级覆盖丢失, 可一键恢复;
@@ -21,15 +21,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app import __version__
+from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +50,27 @@ EXCLUDED_NAMES = {".env", ".DS_Store", MANIFEST_NAME}
 EXCLUDED_SUFFIXES = {".pyc", ".log", ".tmp"}
 
 _REPORT_CATEGORIES = ("restorable", "conflict", "match", "added_lost")
+_SNAPSHOT_ID = re.compile(r"[0-9a-f]{32}")
+_REPORT_ID = re.compile(r"[^/\\:]+_to_[^/\\:]+_\d{8}_\d{6}(?:_[0-9a-f]{8})?")
+
+
+class UpgradeGuardBusyError(RuntimeError):
+    """扫描或恢复正在写入备份, 不允许并发修改。"""
+
+
+def _safe_path(base: Path, relative: str) -> Path:
+    if not relative or "\\" in relative or ":" in relative or any(
+        part in ("", ".", "..") for part in relative.split("/")
+    ):
+        raise ValueError("非法升级备份路径")
+    path = base
+    for part in ("", *relative.split("/")):
+        path = path / part
+        if path.is_symlink():
+            raise ValueError("升级备份路径不能包含符号链接")
+    if not path.resolve().is_relative_to(base.resolve()):
+        raise ValueError("升级备份路径超出允许目录")
+    return path
 
 
 def _utcnow_iso() -> str:
@@ -57,8 +85,13 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _unreadable_directory(error: OSError) -> None:
+    # rglob 会略过无权限目录, 不能把漏扫当成用户删除而清掉旧备份。
+    raise error
+
+
 def _is_excluded(rel: str, name: str) -> bool:
-    if rel in EXCLUDED_DIRS or rel.split("/", 1)[0] in EXCLUDED_DIRS:
+    if any(part in EXCLUDED_DIRS for part in rel.split("/")):
         return True
     if name in EXCLUDED_NAMES:
         return True
@@ -91,9 +124,9 @@ class UpgradeGuard:
     def __init__(self, data_dir: Path, *, root: Path | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.state_dir = self.data_dir / "upgrade_guard"
-        self.live_dir = self.state_dir / "live"
         self.reports_dir = self.state_dir / "reports"
         self._lock = threading.Lock()
+        self._busy = False
         self._last_status: dict[str, Any] | None = None
         self._scanning = False
         self._thread: threading.Thread | None = None
@@ -120,83 +153,121 @@ class UpgradeGuard:
 
     def _load_state(self) -> dict[str, Any]:
         try:
-            return json.loads(self._state_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 — 首次/损坏都按空状态起步
+            state = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             return {}
+        except (ValueError, UnicodeError) as exc:
+            raise OSError("升级备份状态损坏，已保留原备份") from exc
+        if not isinstance(state, dict):
+            raise OSError("升级备份状态无效，已保留原备份")
+        return state
 
     def _save_state(self, state: dict[str, Any]) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self._state_path)
+        atomic_write_text(self._state_path, json.dumps(state, ensure_ascii=False, indent=1))
+
+    @property
+    def live_dir(self) -> Path:
+        snapshot = self._load_state().get("live_snapshot")
+        if snapshot is None:
+            return _safe_path(self.state_dir, "live")  # 兼容旧版本固定目录。
+        if not isinstance(snapshot, str) or not _SNAPSHOT_ID.fullmatch(snapshot):
+            raise ValueError("升级备份快照标识无效")
+        return _safe_path(self.state_dir, f"snapshots/{snapshot}")
 
     # ── 扫描 ────────────────────────────────────────────────────
+
+    @contextmanager
+    def _operation(self, *, scanning: bool = False) -> Iterator[None]:
+        # 只用锁切换准入状态, 扫描/复制期间不持锁阻塞状态查询。
+        with self._lock:
+            if self._busy:
+                raise UpgradeGuardBusyError("扫描或恢复正在进行中")
+            self._busy = True
+            self._scanning = scanning
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._busy = False
+                self._scanning = False
 
     def _classify(self, cache: dict[str, Any]) -> tuple[list[str], list[str]]:
         """磁盘 vs 当前清单 → (用户修改的, 用户新增的)。命中缓存免重哈希。"""
         modified: list[str] = []
         added: list[str] = []
-        for path in self.root.rglob("*"):  # type: ignore[union-attr]
-            if not path.is_file():
-                continue
-            rel = path.relative_to(self.root).as_posix()  # type: ignore[arg-type]
-            if _is_excluded(rel, path.name):
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            entry = cache.get(rel)
-            if entry and entry.get("s") == stat.st_size and entry.get("m") == stat.st_mtime_ns:
-                digest = str(entry.get("h", ""))
-            else:
-                try:
-                    digest = _sha256(path)
-                except OSError:
+        seen: set[str] = set()
+        data_root = self.data_dir.resolve()
+        if self.root == data_root:
+            raise ValueError("程序目录与数据目录相同，无法安全扫描升级备份")
+
+        for parent, directories, filenames in os.walk(self.root, onerror=_unreadable_directory):
+            directories[:] = [
+                name for name in directories
+                if name not in EXCLUDED_DIRS and (Path(parent) / name).resolve() != data_root
+            ]
+            for name in filenames:
+                path = Path(parent) / name
+                if path.is_symlink() or not path.is_file():
                     continue
-                cache[rel] = {"s": stat.st_size, "m": stat.st_mtime_ns, "h": digest}
-            expected = self.manifest.get(rel)
-            if expected is None:
-                added.append(rel)
-            elif digest != expected:
-                modified.append(rel)
+                rel = path.relative_to(self.root).as_posix()  # type: ignore[arg-type]
+                if _is_excluded(rel, name):
+                    continue
+                seen.add(rel)
+                stat = path.stat()
+                entry = cache.get(rel)
+                if entry and entry.get("s") == stat.st_size and entry.get("m") == stat.st_mtime_ns:
+                    digest = str(entry.get("h", ""))
+                else:
+                    digest = _sha256(path)
+                    cache[rel] = {"s": stat.st_size, "m": stat.st_mtime_ns, "h": digest}
+                expected = self.manifest.get(rel)
+                if expected is None:
+                    added.append(rel)
+                elif digest != expected:
+                    modified.append(rel)
+        for rel in cache.keys() - seen:
+            del cache[rel]
         return sorted(modified), sorted(added)
 
-    def _sync_live(self, files: list[str]) -> None:
-        """live/ 常备备份对齐当前修改集: 复制现存, 清掉已还原/已删除的陈旧项。"""
-        wanted: set[str] = set()
-        for rel in files:
-            src = self.root / rel  # type: ignore[operator]
-            dst = self.live_dir / rel
-            try:
+    def _sync_live(self, files: list[str]) -> Path:
+        """先完整复制新快照; state.json 原子切换成功后才允许清理上一份。"""
+        snapshot = _safe_path(self.state_dir, f"snapshots/{uuid.uuid4().hex}")
+        snapshot.mkdir(parents=True)
+        try:
+            for rel in files:
+                src = _safe_path(self.root, rel)  # type: ignore[arg-type]
+                dst = snapshot / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
-                wanted.add(rel)
-            except OSError as e:
-                logger.warning("upgrade guard backup copy failed %s: %s", rel, e)
-        if self.live_dir.exists():
-            for old in self.live_dir.rglob("*"):
-                if old.is_file():
-                    rel = old.relative_to(self.live_dir).as_posix()
-                    if rel not in wanted:
-                        old.unlink(missing_ok=True)
+            return snapshot
+        except BaseException:
+            shutil.rmtree(snapshot, ignore_errors=True)
+            raise
 
     def _build_report(self, from_version: str, prev_manifest: dict[str, str]) -> dict[str, Any] | None:
         """版本变化时, 用旧 live 备份 + 旧清单快照 + 新磁盘生成对比报告。"""
         rows: list[dict[str, Any]] = []
-        if not self.live_dir.exists():
+        live = self.live_dir
+        if not live.exists():
+            if self._load_state().get("live_snapshot"):
+                raise OSError("上一份升级备份快照缺失，已停止更新")
             return None
-        for backup in sorted(self.live_dir.rglob("*")):
+        backups = (
+            Path(parent) / name
+            for parent, _, names in os.walk(live, onerror=_unreadable_directory)
+            for name in names
+        )
+        for backup in sorted(backups):
+            if backup.is_symlink():
+                raise ValueError("升级备份副本不能包含符号链接")
             if not backup.is_file():
                 continue
-            rel = backup.relative_to(self.live_dir).as_posix()
+            rel = backup.relative_to(live).as_posix()
             if _is_excluded(rel, backup.name):
                 continue
-            try:
-                user_sha = _sha256(backup)
-            except OSError:
-                continue
-            disk = self.root / rel  # type: ignore[operator]
+            user_sha = _sha256(backup)
+            disk = _safe_path(self.root, rel)  # type: ignore[arg-type]
             disk_sha = _sha256(disk) if disk.is_file() else None
             prev_sha = prev_manifest.get(rel)
             if disk_sha == user_sha:
@@ -217,14 +288,10 @@ class UpgradeGuard:
             })
         if not rows:
             return None
-        report_id = f"{from_version}_to_{__version__}_{time.strftime('%Y%m%d_%H%M%S')}"
-        report_dir = self.reports_dir / report_id
-        # 三方材料: files/<rel> = 用户版本 (旧备份原样归档)
-        for row in rows:
-            src = self.live_dir / row["relpath"]
-            dst = report_dir / "files" / row["relpath"]
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+        token = uuid.uuid4().hex
+        report_id = f"{from_version}_to_{__version__}_{time.strftime('%Y%m%d_%H%M%S')}_{token[:8]}"
+        report_dir = self._report_dir(report_id)
+        temporary = _safe_path(self.state_dir, f"reports/.report-{token}")
         counts = {c: 0 for c in _REPORT_CATEGORIES}
         for row in rows:
             counts[row["category"]] += 1
@@ -237,19 +304,64 @@ class UpgradeGuard:
             "files": rows,
             "dir": str(report_dir),
         }
-        report_dir.mkdir(parents=True, exist_ok=True)
-        (report_dir / "report.json").write_text(
-            json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8",
-        )
+        try:
+            for row in rows:
+                src = live / row["relpath"]
+                dst = temporary / "files" / row["relpath"]
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            atomic_write_text(temporary / "report.json", json.dumps(report, ensure_ascii=False, indent=1))
+            temporary.rename(report_dir)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary, ignore_errors=True)
         return report
 
+    def _latest_report_id(self, state: dict[str, Any]) -> str | None:
+        for key in ("latest_report", "pending_report"):
+            candidate = state.get(key)
+            if candidate and self._load_report(str(candidate)):
+                return str(candidate)
+        # 老版本确认报告后不保存指针, 从旧归档中选最近一次进行兼容迁移。
+        reports = []
+        reports_dir = _safe_path(self.state_dir, "reports")
+        if reports_dir.exists():
+            for path in reports_dir.iterdir():
+                if path.is_symlink() or not _REPORT_ID.fullmatch(path.name):
+                    continue
+                report = self._load_report(path.name)
+                if report:
+                    reports.append((str(report.get("created_at", "")), path.name))
+        return max(reports)[1] if reports else None
+
+    def _prune_backups(self, snapshot: Path, report_id: str | None) -> None:
+        """仅清理本功能生成的自动副本, 新快照已提交后才调用。"""
+        for path in snapshot.parent.iterdir():
+            if path != snapshot and not path.is_symlink() and path.is_dir() and _SNAPSHOT_ID.fullmatch(path.name):
+                shutil.rmtree(path)
+        legacy = self.state_dir / "live"
+        if legacy.exists() and not legacy.is_symlink():
+            shutil.rmtree(legacy)
+        reports_dir = _safe_path(self.state_dir, "reports")
+        if reports_dir.exists():
+            for path in reports_dir.iterdir():
+                owned = _REPORT_ID.fullmatch(path.name) or re.fullmatch(r"\.report-[0-9a-f]{32}", path.name)
+                if owned and path.name != report_id and not path.is_symlink() and path.is_dir():
+                    shutil.rmtree(path)
+
     def scan(self) -> dict[str, Any]:
-        """完整扫描: 分类 → (版本变化时) 报告 → 重对齐常备备份 → 状态落盘。"""
-        with self._lock:
-            if self.root is None:
+        """分类、生成完整副本、原子提交状态, 最后清理过期自动备份。"""
+        with self._operation(scanning=True):
+            return self._scan()
+
+    def _scan(self) -> dict[str, Any]:
+        if self.root is None:
+            with self._lock:
                 self._last_status = {"enabled": False, "reason": "manifest_missing"}
                 return self._last_status
-            self._scanning = True
+        snapshot = None
+        report = None
+        committed = False
         try:
             state = self._load_state()
             cache = state.get("file_cache") if isinstance(state.get("file_cache"), dict) else {}
@@ -257,25 +369,26 @@ class UpgradeGuard:
 
             modified, added = self._classify(cache)
 
-            report: dict[str, Any] | None = None
+            latest_report_id = self._latest_report_id(state)
             prev_version = state.get("last_version")
             if prev_version and prev_version != __version__:
                 prev_manifest = state.get("manifest_snapshot")
                 prev_manifest = {str(k): str(v) for k, v in prev_manifest.items()} if isinstance(prev_manifest, dict) else {}
-                try:
-                    report = self._build_report(str(prev_version), prev_manifest)
-                except Exception as e:  # noqa: BLE001 — 报告失败不阻断扫描
-                    logger.warning("upgrade guard report build failed: %s", e)
+                report = self._build_report(str(prev_version), prev_manifest)
 
-            self._sync_live(modified + added)
+            snapshot = self._sync_live(modified + added)
 
             if report is not None:
                 state["pending_report"] = report["id"]
+                latest_report_id = report["id"]
+            state["latest_report"] = latest_report_id
+            state["live_snapshot"] = snapshot.name
             state["last_version"] = __version__
             state["manifest_snapshot"] = self.manifest
             state["file_cache"] = cache
             state["last_scan"] = _utcnow_iso()
             self._save_state(state)
+            committed = True
 
             status = {
                 "enabled": True,
@@ -285,16 +398,20 @@ class UpgradeGuard:
                 "last_scan": state["last_scan"],
                 "modified": modified,
                 "added": added,
-                "backup_dir": str(self.live_dir),
+                "backup_dir": str(snapshot),
                 "reports_dir": str(self.reports_dir),
                 "pending_report": self._load_report(report["id"]) if report else self._pending_report(state),
             }
             with self._lock:
                 self._last_status = status
+            self._prune_backups(snapshot, latest_report_id)
             return status
         finally:
-            with self._lock:
-                self._scanning = False
+            if not committed:
+                if snapshot is not None:
+                    shutil.rmtree(snapshot, ignore_errors=True)
+                if report is not None:
+                    shutil.rmtree(self._report_dir(report["id"]), ignore_errors=True)
 
     # ── 报告读取 / 恢复 / 确认 ──────────────────────────────────
 
@@ -303,11 +420,19 @@ class UpgradeGuard:
         return self._load_report(str(report_id)) if report_id else None
 
     def _load_report(self, report_id: str) -> dict[str, Any] | None:
-        path = self.reports_dir / report_id / "report.json"
+        path = _safe_path(self._report_dir(report_id), "report.json")
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             return None
+        if not isinstance(report, dict):
+            raise ValueError("升级报告内容无效")
+        return report
+
+    def _report_dir(self, report_id: str) -> Path:
+        if "/" in report_id or "\\" in report_id:
+            raise ValueError("非法升级报告标识")
+        return _safe_path(self.state_dir, f"reports/{report_id}")
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -321,28 +446,47 @@ class UpgradeGuard:
 
     def restore(self, report_id: str, relpath: str) -> Path:
         """把报告归档的用户版本复制回程序目录 (relpath 必须在报告清单内)。"""
+        with self._operation():
+            return self._restore(report_id, relpath)
+
+    def _restore(self, report_id: str, relpath: str) -> Path:
         report = self._load_report(report_id)
         if report is None:
             raise FileNotFoundError(f"报告不存在: {report_id}")
         if not any(row["relpath"] == relpath for row in report.get("files", [])):
             raise ValueError(f"文件不在报告清单内: {relpath}")
-        src = self.reports_dir / report_id / "files" / relpath
+        src = _safe_path(self._report_dir(report_id), f"files/{relpath}")
         if not src.is_file():
             raise FileNotFoundError(f"备份副本缺失: {relpath}")
-        dst = self.root / relpath  # type: ignore[operator]
+        if self.root is None:
+            raise ValueError("升级保护未启用")
+        dst = _safe_path(self.root, relpath)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        fd, name = tempfile.mkstemp(prefix=".upgrade-restore-", suffix=".tmp", dir=dst.parent)
+        temporary = Path(name)
+        # 先关闭 mkstemp 的句柄, Windows 下 copy2/replace 才能独占临时文件。
+        os.close(fd)
+        try:
+            shutil.copy2(src, temporary)
+            temporary.replace(dst)
+        finally:
+            temporary.unlink(missing_ok=True)
+        with self._lock:
+            self._last_status = None
         logger.info("upgrade guard restored %s from report %s", relpath, report_id)
         return dst
 
     def dismiss_report(self) -> None:
-        state = self._load_state()
-        if state.get("pending_report"):
-            state.pop("pending_report", None)
-            self._save_state(state)
-            with self._lock:
-                if self._last_status is not None:
-                    self._last_status["pending_report"] = None
+        with self._operation():
+            state = self._load_state()
+            if state.get("pending_report"):
+                # 兼容旧状态, 确认后仍保留最近一份归档供回查。
+                state["latest_report"] = self._latest_report_id(state)
+                state.pop("pending_report", None)
+                self._save_state(state)
+                with self._lock:
+                    if self._last_status is not None:
+                        self._last_status["pending_report"] = None
 
     # ── 后台线程 ────────────────────────────────────────────────
 
