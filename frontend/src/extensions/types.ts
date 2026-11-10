@@ -22,6 +22,11 @@ export interface FrontendSlotContextMap {
   'layout.header.quick': Record<string, never>
   /** 设置→系统「界面」区尾部 — 扩展注册系统级开关行 (样式与核心 ToggleRow 同款) */
   'settings.system.section': Record<string, never>
+  /** 个股详情顶部标签，选中时在主内容区挂载组件 */
+  'stock-preview.tabs': {
+    symbol: string
+    name: string | null
+  }
   /** 个股详情对话框底部扩展区 (日K/分时图表下方) */
   'stock-preview.footer': {
     symbol: string
@@ -46,7 +51,7 @@ export type FrontendSlotRegistration<K extends FrontendSlotName = FrontendSlotNa
   id: string
   order?: number
   component: ComponentType<FrontendSlotContextMap[K]>
-} : never
+} & (K extends 'stock-preview.tabs' ? { label: string } : unknown) : never
 
 export interface FrontendExtensionRoute {
   id: string

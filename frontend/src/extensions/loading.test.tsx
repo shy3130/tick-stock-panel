@@ -70,3 +70,19 @@ it('并发加载仍按源顺序处理重复 ID，隔离同步抛错的模块', a
   expect(registry.getFrontendExtensionRoutes().map(r => r.path)).toEqual(['/first'])
   expect(registry.getFrontendExtensionLoadErrors().map(e => e.source)).toEqual(['broken', 'z'])
 })
+
+it('个股详情标签标题为空或 ID 冲突时只拒绝对应扩展', async () => {
+  const registry = await import('./registry')
+  const tab = { name: 'stock-preview.tabs' as const, id: 'research', label: '研究', component: () => null }
+  await registry.loadFrontendExtensions({
+    a: async () => ({ default: { id: 'empty', apiVersion: 1, slots: [{ ...tab, label: '  ' }] } }),
+    b: async () => ({ default: { id: 'valid', apiVersion: 1, slots: [tab] } }),
+    c: async () => ({ default: { id: 'duplicate', apiVersion: 1, slots: [tab] } }),
+  })
+  registry.finalizeFrontendExtensions(new Set())
+  expect(registry.getFrontendSlotRegistrations('stock-preview.tabs').map(tab => tab.extensionId)).toEqual(['valid'])
+  expect(registry.getFrontendExtensionLoadErrors().map(e => [e.extensionId, e.error])).toEqual([
+    ['empty', expect.stringContaining('label')],
+    ['duplicate', expect.stringContaining('ID 重复')],
+  ])
+})

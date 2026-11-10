@@ -1,5 +1,5 @@
 import { ShieldCheck } from 'lucide-react'
-import type { FrontendExtension } from '@/extensions/types'
+import type { FrontendExtension, FrontendSlotContextMap } from '@/extensions/types'
 
 function RiskPage() {
   return <div>风险分析</div>
@@ -7,6 +7,15 @@ function RiskPage() {
 
 function NavigationExtra({ collapsed }: { collapsed: boolean; pathname: string }) {
   return collapsed ? null : <div className="px-3 py-1 text-xs text-muted">二开内容</div>
+}
+
+function StockResearchTab({ symbol, name }: FrontendSlotContextMap['stock-preview.tabs']) {
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+      <dt className="text-muted">证券代码</dt><dd>{symbol}</dd>
+      <dt className="text-muted">证券简称</dt><dd>{name ?? '暂无'}</dd>
+    </dl>
+  )
 }
 
 /** 个股详情对话框底部: 自带分隔与内边距 */
@@ -45,6 +54,13 @@ const extension: FrontendExtension = {
       name: 'layout.navigation.extra',
       id: 'company-risk-summary',
       component: NavigationExtra,
+    },
+    {
+      name: 'stock-preview.tabs',
+      id: 'company-stock-research',
+      label: '个股研究',
+      order: 100,
+      component: StockResearchTab,
     },
     {
       name: 'stock-preview.footer',
