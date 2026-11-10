@@ -666,8 +666,9 @@ class BacktestEngine:
             )
             if invalid_ext:
                 raise ValueError(
-                    f"扩展字段不可用于矩阵回测 (需为时序模式的数值扩展字段): "
-                    f"{sorted(invalid_ext)}"
+                    f"扩展字段不可用于矩阵回测 (字段已失效，或不是时序模式的数值字段): "
+                    f"{sorted(invalid_ext)}。请在策略设置中移除或替换相关评分因子、叠加条件；"
+                    "若策略源码直接引用该字段，请同步修改源码，或恢复对应的时序扩展数据。"
                 )
             field_columns = field_columns - ext_wanted
         cache_root = (
@@ -680,7 +681,9 @@ class BacktestEngine:
             if cache_profile is not None
             else frozenset(field_columns)
         )
-        cache_fields = frozenset(cache_fields) - ext_wanted
+        # 缓存档包含其他策略的依赖; 所有扩展列均须留到当前策略的现场注入阶段,
+        # 否则无关策略残留的旧扩展字段也会被当作 parquet 必需列, 拖垮整个共享缓存。
+        cache_fields = frozenset(name for name in cache_fields if not name.startswith("ext_"))
         cache_max_bytes = (
             cache_profile.max_disk_bytes
             if cache_profile is not None
