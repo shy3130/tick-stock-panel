@@ -551,6 +551,17 @@ class ExtConfigStore:
             _load_all_cache[str(self._base)] = (sig, copy.deepcopy(configs))
         return configs
 
+    def _invalidate_load_all_cache(self) -> None:
+        """显式失效 load_all 缓存。
+
+        不能只依赖 `(mtime_ns, size)` 签名：Windows NTFS 的文件时间戳按系统时钟
+        节拍（约 15.6ms）延迟更新，同一 tick 内连续两次写入会得到完全相同的
+        `st_mtime_ns`；若新旧配置的字节数又恰好相等（如 label 从 "old" 改成
+        "new"），签名一字不差，load_all 会继续返回旧配置 —— 用户改完扩展表字段
+        却看到旧 schema。upsert/delete 是本进程已知的写入，直接失效，不赌时间戳。
+        """
+        _load_all_cache.pop(str(self._base), None)
+
     def get(self, config_id: str) -> ExtConfig | None:
         try:
             cp = self._config_path(config_id)
@@ -589,6 +600,8 @@ class ExtConfigStore:
         atomic_write_text(
             cp, json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
         )
+        # 显式失效配置列表缓存: 不能靠 mtime+size 签名, 同 tick 同长度的编辑会漏判。
+        self._invalidate_load_all_cache()
         # 字段集/模式变化会改变扩展列集合: 失效扩展帧缓存与策略结果缓存。
         # 定时拉取循环的 last_run/next_run 例行回写传 keep_strategy_cache=True,
         # 否则每轮拉取后策略页缓存被状态回写清空 (数据写入链路已另行放行)。
@@ -603,6 +616,7 @@ class ExtConfigStore:
         if not cp.exists():
             return False
         shutil.rmtree(cp.parent, ignore_errors=True)
+        self._invalidate_load_all_cache()
         _invalidate_ext_derived(self._base.parent)
         return True
 

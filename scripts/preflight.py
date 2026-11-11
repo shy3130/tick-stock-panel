@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -395,7 +396,91 @@ def check_parquet_dup(staged: list[str] | None) -> list[Issue]:
     return issues
 
 
-# ---------------------------------------------------------------- 规则 6: 组件重复
+# ---------------------------------------------------------------- 规则 6: 分区 schema 漂移
+
+# 这些表共用一个 `**/*.parquet` glob 扫描, 分区之间 schema 必须一致。
+DRIFT_CHECK_DIRS = (
+    "kline_daily", "kline_daily_enriched",
+    "kline_index_daily", "kline_index_enriched",
+    "kline_etf_daily", "kline_etf_enriched",
+)
+# 漂移只可能来自「新写入」, 默认只看最近 30 个交易日, 保证门禁仍是秒级。
+DRIFT_RECENT_PARTITIONS = 30
+
+
+def check_partition_schema_drift(staged: list[str] | None, full: bool) -> list[Issue]:
+    """R008 同一 glob 下的分区 dtype / 列不一致。
+
+    事故: 2026-11-09 单日重写把 consecutive_limit_ups 写成 Int64, 其余 2670 个分区
+    是 UInt32, polars 整段扫描直接失败 —— `data type mismatch for column
+    consecutive_limit_ups: incoming: Int64 != target: UInt32`。该异常被
+    `_scan_daily_*` 的 `except` 吞成空 DataFrame, 表现为「日K查不到数据」却几乎没有
+    报错线索。同类事故2: 一次性脚本把 DuckDB 的 `filename_1` 辅助列写回了 243 个分区。
+
+    分级依据「是否真的会打断扫描」:
+    - dtype 不一致 -> ERROR (polars 直接抛错, 整段查询归零)
+    - 列多/列少 -> WARN (扫描封装有 extra_columns="ignore"/missing_columns="insert")
+    """
+    if staged is not None:
+        return []  # 数据文件不进版本库
+    try:
+        import polars as pl  # noqa: PLC0415 - 只有本规则需要, 缺 polars 时跳过而不整体失败
+    except ImportError:
+        return [Issue(
+            "WARN", "R008-schema-drift", DATA_ROOT, 0,
+            "跳过: 读取 parquet schema 需要 polars (用 backend/.venv 的 python 运行可启用)",
+        )]
+    base = ROOT / DATA_ROOT
+    if not base.exists():
+        return []
+    issues: list[Issue] = []
+    for table in DRIFT_CHECK_DIRS:
+        table_dir = base / table
+        if not table_dir.is_dir():
+            continue
+        parts = sorted(p for p in table_dir.glob("date=*") if (p / "part.parquet").exists())
+        if not full:
+            parts = parts[-DRIFT_RECENT_PARTITIONS:]
+        if len(parts) < 3:
+            continue
+        schemas: dict[Path, dict[str, str]] = {}
+        for part in parts:
+            f = part / "part.parquet"
+            try:
+                schemas[f] = {k: str(v) for k, v in pl.read_parquet_schema(f).items()}
+            except Exception:  # noqa: BLE001 - 读不了就跳过, 不阻断门禁
+                issues.append(Issue("WARN", "R008-schema-drift", _rel(f), 0, "schema 读取失败"))
+        if len(schemas) < 3:
+            continue
+        ranked = Counter(tuple(sorted(s.items())) for s in schemas.values()).most_common()
+        dominant = dict(ranked[0][0])
+        for f, schema in schemas.items():
+            bad_dtype = [
+                f"{c}: {schema[c]} (主流 {dominant[c]})"
+                for c in schema if c in dominant and schema[c] != dominant[c]
+            ]
+            extra = sorted(set(schema) - set(dominant))
+            missing = sorted(set(dominant) - set(schema))
+            if bad_dtype:
+                issues.append(Issue(
+                    "ERROR", "R008-schema-drift", _rel(f), 0,
+                    "dtype 与主流分区不一致 -> 整段 glob 扫描会报 data type mismatch: "
+                    + "; ".join(bad_dtype[:4]),
+                ))
+            elif extra or missing:
+                detail = []
+                if extra:
+                    detail.append("多列 " + ", ".join(extra[:4]))
+                if missing:
+                    detail.append("缺列 " + ", ".join(missing[:4]))
+                issues.append(Issue(
+                    "WARN", "R008-schema-drift", _rel(f), 0,
+                    "; ".join(detail) + " -> 靠扫描封装的 extra/missing 容忍, 建议归一",
+                ))
+    return issues
+
+
+# ---------------------------------------------------------------- 规则 7: 组件重复
 
 
 def _git_lines(args: list[str]) -> list[str]:
@@ -474,6 +559,8 @@ def main() -> int:
     ap.add_argument("--staged", action="store_true", help="只检查 git 暂存文件")
     ap.add_argument("--strict", action="store_true", help="WARN 也视为失败")
     ap.add_argument("--verbose", action="store_true", help="列出全部 WARN 明细")
+    ap.add_argument("--data-full", action="store_true",
+                    help="R008 扫描全部分区(默认只看最近 30 个交易日)")
     args = ap.parse_args()
 
     staged = _staged_files() if args.staged else None
@@ -493,6 +580,7 @@ def main() -> int:
     issues += check_text_encoding(bat_files)
     issues += check_ps1_bom(ps1_files)
     issues += check_parquet_dup(staged)
+    issues += check_partition_schema_drift(staged, full=args.data_full)
     issues += check_duplicate_components(staged)
 
     errors = [i for i in issues if i.level == "ERROR"]
