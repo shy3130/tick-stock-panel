@@ -1093,7 +1093,7 @@ async def build_strategy(req: BuildRequest, request: Request):
     step1: name + description + direction + rules → 完整策略
     step2: current_code + instruction → 修改任意部分
     """
-    gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req))
+    gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req), data_dir=_data_dir(request))
 
     try:
         prompt = _build_prompt(req)
@@ -1117,7 +1117,7 @@ async def build_strategy_stream(req: BuildRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     async def event_generator():
-        gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req))
+        gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req), data_dir=_data_dir(request))
         chunks: list[str] = []
         yield json.dumps({"type": "meta", "strategy_id": req.strategy_id, "step": req.step}, ensure_ascii=False)
         try:
@@ -1154,7 +1154,7 @@ async def build_strategy_stream(req: BuildRequest, request: Request):
 @router.post("/ai/generate")
 async def ai_generate(req: AIGenerateRequest, request: Request):
     try:
-        gen = AIStrategyGenerator()
+        gen = AIStrategyGenerator(data_dir=_data_dir(request))
         result = await gen.generate(req.prompt)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1187,7 +1187,7 @@ async def ai_iterate(req: AIIterateRequest, request: Request):
             prompt, engine=engine, data_dir=str(data_dir), execution_backend=req.execution_backend,
             repo=request.app.state.repo,
         )
-    except (ValueError, AIToolProtocolError) as e:
+    except (ValueError, RuntimeError, AIToolProtocolError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception:
         # 内部异常详情只进日志, 不透给客户端 (§8)

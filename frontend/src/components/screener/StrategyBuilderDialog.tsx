@@ -657,15 +657,15 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                 </div>
 
                 {iterateRounds.length > 0 && (
-                  <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-3 py-2.5 space-y-1.5">
-                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
+                  <div className="rounded-xl border border-border bg-surface/30 px-3 py-2.5 space-y-1.5">
+                    <div className={`flex items-center gap-1.5 text-[11px] ${iterateRounds.some(r => r.backtest_error || !r.stats) ? 'text-amber-400' : 'text-emerald-400'}`}>
                       <Terminal className="h-3.5 w-3.5" />
                       迭代证据（共 {iterateRounds.length} 轮，草稿已保存为 {iterateDraftId}）
                     </div>
                     <div className="text-[10px] text-muted/50">每轮指标为该轮「改动前」基准回测；末行「最终版回测」为最终代码回测结果</div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-[10px]">
-                        <thead>
+                        <thead className="whitespace-nowrap">
                           <tr className="text-muted/50">
                             <th className="text-left font-medium py-1 pr-2">轮次</th>
                             <th className="text-right font-medium py-1 pr-2">总收益</th>
@@ -683,7 +683,12 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                               <td className="text-right py-1 pr-2 font-mono">{fmtStat('max_drawdown', r.stats?.max_drawdown)}</td>
                               <td className="text-right py-1 pr-2 font-mono">{fmtStat('sharpe', r.stats?.sharpe)}</td>
                               <td className="text-right py-1 pr-2 font-mono">{fmtStat('win_rate', r.stats?.win_rate)}</td>
-                              <td className="py-1 text-muted">{r.change_summary}</td>
+                              <td className="max-w-xs break-words py-1 text-muted">
+                                <div>{r.change_summary}</div>
+                                {(r.backtest_error || !r.stats) && <div role="alert" className="mt-1 text-danger">
+                                  {r.backtest_error ? `回测失败：${r.backtest_error}` : '未取得回测指标，请重新迭代'}
+                                </div>}
+                              </td>
                             </tr>
                           ))}
                         </tbody>

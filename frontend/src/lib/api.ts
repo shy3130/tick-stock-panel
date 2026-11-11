@@ -999,6 +999,7 @@ export interface StrategyCodeSaveResult {
 export interface AiIterateRound {
   round: number
   stats: Record<string, number> | null
+  backtest_error?: string | null
   change_summary: string
 }
 

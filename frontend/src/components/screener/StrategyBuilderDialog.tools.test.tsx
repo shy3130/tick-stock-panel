@@ -58,6 +58,24 @@ it('allows Codex iteration when the backend advertises tool support', async () =
   expect(container.textContent).not.toContain('不支持工具调用迭代')
 })
 
+it('shows the backtest failure beside its iteration and keeps a zero-trade result readable', async () => {
+  vi.mocked(api.strategyAiIterate).mockResolvedValue({
+    draft_strategy_id: 'ai_failed',
+    final_code: buildMinuteTemplate(BUILTIN_DEFAULT_BASIC_FILTER), final_meta: {},
+    rounds: [
+      { round: 1, stats: null, backtest_error: '策略引用了不存在的信号 signal_missing', change_summary: '代码未变化，迭代停止' },
+      { round: 2, stats: { total_return: 0, n_trades: 0, win_rate: 0 }, backtest_error: null, change_summary: '最终版回测' },
+    ],
+  })
+  await render()
+  await act(async () => button('AI 迭代（').click())
+  await act(async () => button('AI 迭代生成').click())
+  expect(container.textContent).toContain('策略引用了不存在的信号 signal_missing')
+  const rows = container.querySelectorAll('tbody tr')
+  expect(rows[0].textContent).toContain('回测失败')
+  expect(rows[1].textContent).toContain('0.00%')
+})
+
 it('explains an unsupported adapter and keeps ordinary generation available', async () => {
   vi.mocked(api.strategyAiStatus).mockResolvedValue({ configured: true, has_key: true,
     has_model: true, provider: 'unknown', supports_tools: false })

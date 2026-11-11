@@ -9,7 +9,7 @@
 3. 禁止文件读写和 `open/exec/eval/__import__/getattr/…` 等危险调用；含 `__x__` 的名字/字符串(含拼接)与 `pl.os/np.lib` 等模块句柄一律禁用。
 4. `META.params` 只放可调项：必填 `id/label/type/default`；数值项加 `min/max/step`，select 加 `options`。
 5. `META.scoring` 使用真实数值字段或 `ma20_bias`；分钟策略可用函数返回的数值列，非空时权重和为 1.0。
-6. `ENTRY_SIGNALS/EXIT_SIGNALS` 只选相关信号，无匹配项可为空。
+6. `ENTRY_SIGNALS/EXIT_SIGNALS` 只填写文末「当前可用信号」中的已注册信号，自行创建的列名不能作为注册信号使用。无匹配项时用空列表，并在过滤函数中实现入场条件，用 `MAX_HOLD_DAYS/STOP_LOSS/TAKE_PROFIT` 表达持有期、止损和止盈。
 7. `RULES` 用中文列出至少 3 条核心逻辑。
 8. 优先 Polars 向量化，避免逐行循环。
 9. `META` 须为顶层字面量字典（可用 `META: dict = {...}`），禁止改名或动态构造。
@@ -191,26 +191,9 @@ def filter_minute_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 
 市值相关：`total_shares`, `float_shares`，可用 `close * total_shares` 估算总市值。
 
-## 常用信号列
+## 信号使用
 
-信号列是布尔值，使用时加 `.fill_null(False)`。
-
-- `signal_ma_golden_5_20`: MA5 上穿 MA20
-- `signal_ma_dead_5_20`: MA5 下穿 MA20
-- `signal_ma_golden_20_60`: MA20 上穿 MA60
-- `signal_macd_golden`: MACD 金叉
-- `signal_macd_dead`: MACD 死叉
-- `signal_ma20_breakout`: 突破 MA20
-- `signal_ma20_breakdown`: 跌破 MA20
-- `signal_n_day_high`: 60 日新高
-- `signal_n_day_low`: 60 日新低
-- `signal_boll_breakout_upper`: 突破布林上轨
-- `signal_boll_breakdown_lower`: 跌破布林下轨
-- `signal_volume_surge`: 放量
-- `signal_limit_up`: 涨停
-- `signal_limit_down`: 跌停
-- `signal_limit_down_recovery`: 跌停翘板
-- `signal_broken_limit_up`: 炸板
+可用信号由文末的实时目录提供。信号列是布尔值，使用时加 `.fill_null(False)`。有 `signal_` 或 `csg_` 前缀的完整列名可直接写入信号列表。
 
 涨跌停策略优先使用稳定列 `consecutive_limit_ups >= 1`。
 

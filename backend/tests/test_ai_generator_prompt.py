@@ -6,6 +6,73 @@ from app.strategy.ai_generator import GUIDE_PATH, AIStrategyGenerator
 from app.strategy.prompt_builder import build_step1, build_step2
 
 
+def test_missing_guide_stops_generation(monkeypatch, tmp_path):
+    from app.strategy import ai_generator
+
+    monkeypatch.setattr(ai_generator, "GUIDE_PATH", tmp_path / "missing.md")
+    with pytest.raises(RuntimeError, match="策略生成指南"):
+        AIStrategyGenerator()._get_guide()
+
+
+def test_guide_and_validation_follow_current_signal_library(monkeypatch, tmp_path):
+    from app.config import settings
+    from app.strategy import custom_signals
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    custom_signals.save_one(tmp_path, {
+        "id": "audit", "name": "测试信号", "kind": "entry", "enabled": True,
+        "conditions": [{"left": "close", "op": ">", "right": "10"}],
+    })
+    generator = AIStrategyGenerator()
+    code = """import polars as pl
+META = {"id": "ai_signal", "scoring": {}}
+ENTRY_SIGNALS: list = ["csg_audit"]
+EXIT_SIGNALS = []
+def filter(df, params):
+    return pl.lit(True)
+"""
+    assert "`csg_audit`" in generator._get_guide()
+    assert generator.validate_code(code)["valid"]
+    invalid = code.replace("csg_audit", "signal_entry_oversold_rebound")
+    result = generator.validate_code(invalid)
+    assert not result["valid"] and "signal_entry_oversold_rebound" in result["error"]
+
+    sig = custom_signals.load_one(tmp_path, "audit")
+    sig["enabled"] = False
+    custom_signals.save_one(tmp_path, sig)
+    assert "`csg_audit`" not in generator._get_guide()
+    assert not generator.validate_code(code)["valid"]
+    assert generator.validate_code(code.replace('["csg_audit"]', "[]"))["valid"]
+
+
+@pytest.mark.asyncio
+async def test_generate_repairs_invented_signals_once(monkeypatch, tmp_path):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    code = """import polars as pl
+META = {"id": "ai_signal", "scoring": {}}
+ENTRY_SIGNALS = ["entry_oversold_rebound"]
+EXIT_SIGNALS = ["exit_holding_period"]
+def filter_history(df, params):
+    return df.with_columns(pl.lit(True).alias("signal_entry_oversold_rebound"))
+"""
+    calls = []
+
+    async def generate(self, prompt, guide):
+        calls.append(prompt)
+        return code if len(calls) == 1 else code.replace(
+            '["entry_oversold_rebound"]', "[]",
+        ).replace('["exit_holding_period"]', "[]")
+
+    monkeypatch.setattr(AIStrategyGenerator, "_call_llm", generate)
+    invalid = AIStrategyGenerator().validate_code(code)
+    assert "entry_oversold_rebound" in invalid["error"] and "exit_holding_period" in invalid["error"]
+    result = await AIStrategyGenerator().generate("生成策略")
+    assert result["valid"] and len(calls) == 2
+    assert "entry_oversold_rebound" in calls[1] and "exit_holding_period" in calls[1]
+
+
 def test_ai_strategy_generator_uses_compact_guide():
     assert GUIDE_PATH.name == "strategy-guide-compact.md"
 

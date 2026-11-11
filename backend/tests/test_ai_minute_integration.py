@@ -67,7 +67,10 @@ async def test_minute_stream_generation_saves_and_reloads(monkeypatch, context):
 
     monkeypatch.setattr(AIStrategyGenerator, "stream", stream)
     response = await build_strategy_stream(
-        BuildRequest(step=1, strategy_id="ai_minute", execution_backend="minute_filter"), None,
+        BuildRequest(step=1, strategy_id="ai_minute", execution_backend="minute_filter"),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            repo=SimpleNamespace(store=SimpleNamespace(data_dir=context.data_dir)),
+        ))),
     )
     events = []
     async for chunk in response.body_iterator:
@@ -219,10 +222,10 @@ async def test_backtest_and_final_iteration_select_etf(monkeypatch, context):
         "run_backtest", {"strategy_id": "custom_etf"}, context,
     )
     assert payload["ok"], payload
-    final = await AIStrategyIterator()._backtest_final(
+    final = await AIStrategyIterator()._run_backtest(
         str(context.data_dir), "custom_etf", engine=context.engine, repo=context.repo,
     )
-    assert final == {"n_trades": 2}
+    assert final["ok"] and final["result"]["stats"] == {"n_trades": 2}
     assert seen == ["etf", "etf"]
 
 
@@ -264,7 +267,7 @@ async def test_minute_backtest_preserves_params_and_worker_contract(monkeypatch,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("step", [1, 2])
-async def test_stream_repairs_wrong_backend_and_preserves_old_minute_edits(monkeypatch, step):
+async def test_stream_repairs_wrong_backend_and_preserves_old_minute_edits(monkeypatch, step, context):
     calls = []
 
     async def stream(self, prompt):
@@ -279,7 +282,10 @@ async def test_stream_repairs_wrong_backend_and_preserves_old_minute_edits(monke
     monkeypatch.setattr(AIStrategyGenerator, "stream", stream)
     monkeypatch.setattr(AIStrategyGenerator, "_call_llm", repair)
     kwargs = {"execution_backend": "minute_filter"} if step == 1 else {"current_code": MINUTE_CODE}
-    response = await build_strategy_stream(BuildRequest(step=step, **kwargs), None)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        repo=SimpleNamespace(store=SimpleNamespace(data_dir=context.data_dir)),
+    )))
+    response = await build_strategy_stream(BuildRequest(step=step, **kwargs), request)
     events = [json.loads(line) async for line in response.body_iterator]
     assert len(calls) == 1 and 'timeframes=["1m"]' in calls[0]
     assert events[-1]["valid"] and '"minute_filter"' in events[-1]["code"]

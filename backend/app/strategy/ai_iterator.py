@@ -7,7 +7,6 @@ services.tool_catalog 做工具目录 + 回测桥。
 """
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
 from pprint import pformat
@@ -58,15 +57,12 @@ class AIStrategyIterator:
         """执行有界迭代, 返回:
         {
             "draft_strategy_id": str,
-            "rounds": [{"round": int, "stats": dict | None, "change_summary": str}, ...],
+            "rounds": [{"round": int, "stats": dict | None, "backtest_error": str | None, "change_summary": str}, ...],
             "final_code": str,
             "final_meta": dict,
         }
         """
-        generator = (
-            AIStrategyGenerator(execution_backend=execution_backend)
-            if execution_backend else AIStrategyGenerator()
-        )
+        generator = AIStrategyGenerator(execution_backend=execution_backend, data_dir=Path(data_dir))
         tools = tool_catalog.build_tool_schemas()
 
         # 1. 生成 v1 (复用现有单次生成 + 结构修复)
@@ -84,22 +80,27 @@ class AIStrategyIterator:
         rounds: list[dict[str, Any]] = []
         final_backtested = False  # final 版(当前 current_code)是否已有回测证据
         for round_no in range(1, self._max_rounds + 1):
+            backtests: list[dict] = []
             full = await generate_ai_text_with_tools(
                 self._iteration_messages(generator, current_code, prompt, draft_id),
                 tools,
-                execute_tool=self._make_execute_tool(engine, data_dir, repo=repo),
+                execute_tool=self._make_execute_tool(engine, data_dir, draft_id, backtests, repo=repo),
                 max_rounds=_CYCLE_TOOL_BUDGET,
                 temperature=0.3,
                 max_tokens=None,
             )
-            # stats 是本轮「改动前」的 current_code 回测基准 (LLM 先回测再产出改进版)
-            stats = _extract_backtest_stats(full)
+            # stats 是本轮「改动前」的 current_code 回测基准。
+            # 只接收执行器实际返回的当前草稿结果，模型漏调或回测了其他策略时补测。
+            payload = backtests[-1] if backtests else await self._run_backtest(
+                data_dir, draft_id, engine=engine, repo=repo,
+            )
+            evidence = _backtest_evidence(payload)
             final_text = _last_assistant_content(full)
             improved = generator.validate_code(final_text)
             if not improved.get("valid"):
                 rounds.append({
                     "round": round_no,
-                    "stats": stats,
+                    **evidence,
                     "change_summary": f"改进版校验失败: {improved.get('error')}",
                 })
                 final_backtested = True  # final 仍是 current_code, 已被本轮回测
@@ -109,27 +110,27 @@ class AIStrategyIterator:
             if new_code.strip() == current_code.strip():
                 rounds.append({
                     "round": round_no,
-                    "stats": stats,
-                    "change_summary": "无改动, 视为收敛",
+                    **evidence,
+                    "change_summary": "代码未变化，迭代停止" if evidence["backtest_error"] else "无改动, 视为收敛",
                 })
-                final_backtested = True  # 收敛, final 仍是 current_code
+                final_backtested = True  # 当前代码已有本轮回测结果，失败原因随证据返回。
                 break
 
             self._save_draft(engine, data_dir, draft_id, new_code, new_meta)
             current_code, current_meta = new_code, {**new_meta, "id": draft_id}
             rounds.append({
                 "round": round_no,
-                "stats": stats,
+                **evidence,
                 "change_summary": _extract_summary(final_text),
             })
             final_backtested = False  # 本轮改进了 current_code, 新的 final 尚未回测
 
         # 循环耗尽且末轮是改进版时, final 版从未被回测, 补一次作为末行证据
         if not final_backtested:
-            final_stats = await self._backtest_final(data_dir, draft_id, engine=engine, repo=repo)
+            final_payload = await self._run_backtest(data_dir, draft_id, engine=engine, repo=repo)
             rounds.append({
                 "round": len(rounds) + 1,
-                "stats": final_stats,
+                **_backtest_evidence(final_payload),
                 "change_summary": "最终版回测",
             })
 
@@ -140,16 +141,15 @@ class AIStrategyIterator:
             "final_meta": current_meta,
         }
 
-    async def _backtest_final(self, data_dir: str, draft_id: str, *, engine=None, repo=None) -> dict | None:
-        """对最终版草稿补一次回测, 返回精简 stats; 失败返回 None (末行证据尽力而为)。"""
+    async def _run_backtest(self, data_dir: str, draft_id: str, *, engine=None, repo=None) -> dict:
+        """补测当前草稿，并保留失败原因供迭代证据展示。"""
         try:
-            payload = await tool_catalog.execute_tool(
+            return await tool_catalog.execute_tool(
                 tool_catalog.RUN_BACKTEST, {"strategy_id": draft_id},
                 engine=engine, repo=repo, data_dir=data_dir,
             )
-            return payload["result"].get("stats") if payload["ok"] else None
-        except Exception:  # noqa: BLE001 — 末行证据不强依赖回测成功
-            return None
+        except Exception as exc:  # noqa: BLE001 — 草稿仍可返回给用户查看和修正
+            return {"ok": False, "error": str(exc) or "回测执行失败"}
 
     def _alloc_draft_id(self, engine) -> str:
         while True:
@@ -193,9 +193,12 @@ class AIStrategyIterator:
             {"role": "user", "content": user},
         ]
 
-    def _make_execute_tool(self, engine, data_dir: str, *, repo=None):
+    def _make_execute_tool(self, engine, data_dir: str, draft_id: str, backtests: list[dict], *, repo=None):
         async def _execute(name: str, args: dict) -> dict:
-            return await tool_catalog.execute_tool(name, args, engine=engine, repo=repo, data_dir=data_dir)
+            payload = await tool_catalog.execute_tool(name, args, engine=engine, repo=repo, data_dir=data_dir)
+            if name == tool_catalog.RUN_BACKTEST and args.get("strategy_id") == draft_id:
+                backtests.append(payload)
+            return payload
 
         return _execute
 
@@ -235,22 +238,13 @@ def _last_assistant_content(messages: list[dict]) -> str:
     return ""
 
 
-def _extract_backtest_stats(messages: list[dict]) -> dict | None:
-    """从 role:tool 消息中取出最近一次 run_backtest 的精简 stats。"""
-    stats = None
-    for m in messages:
-        if m.get("role") != "tool":
-            continue
-        try:
-            payload = json.loads(m.get("content") or "")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            continue
-        result = payload.get("result")
-        if isinstance(result, dict) and isinstance(result.get("stats"), dict):
-            stats = result["stats"]
-    return stats
+def _backtest_evidence(payload: dict) -> dict:
+    if not payload.get("ok"):
+        return {"stats": None, "backtest_error": payload.get("error") or "回测执行失败"}
+    stats = payload.get("result", {}).get("stats")
+    if not isinstance(stats, dict) or not stats:
+        return {"stats": None, "backtest_error": "回测未返回可用指标"}
+    return {"stats": stats, "backtest_error": None}
 
 
 def _extract_summary(text: str) -> str:

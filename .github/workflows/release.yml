@@ -157,7 +157,7 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller ../packaging/tsp.spec --noconfirm
 
-      - name: 生成升级保护清单
+      - name: 校验策略提示词并生成升级保护清单
         # 二次开发升级对比基线: 对打包产出的 _internal 全量文件做 sha256。
         # 相对路径与运行时 _MEIPASS 布局一致, 清单落 _internal/app/ 后随
         # Inno/DMG/tar 一起分发, 运行时由 upgrade_guard 读取。
@@ -167,6 +167,19 @@ jobs:
         # 三平台 runner 均自带 bash, 显式指定即可统一。
         shell: bash
         run: |
+          uv run --no-project python - <<'PY'
+          from pathlib import Path
+
+          source = Path("backend/app/strategy/prompts")
+          packaged = Path("backend/dist/TSP/_internal/app/strategy/prompts")
+          if not (source / "strategy-guide-compact.md").is_file():
+              raise SystemExit("Missing strategy generation guide")
+          for prompt in source.glob("*.md"):
+              target = packaged / prompt.name
+              if not target.is_file() or target.read_bytes() != prompt.read_bytes():
+                  raise SystemExit(f"Missing or mismatched strategy prompt: {target}")
+          print("Strategy prompt packaging check passed")
+          PY
           APP_VER=$(node -p "require('./frontend/package.json').version")
           uv run --no-project python scripts/generate_manifest.py --root backend/dist/TSP/_internal --output backend/dist/TSP/_internal/app/upgrade_manifest.json --version "$APP_VER"
 

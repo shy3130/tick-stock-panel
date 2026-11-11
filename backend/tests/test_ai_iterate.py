@@ -214,6 +214,9 @@ def test_execute_unknown_tool():
 class FakeGenerator:
     """替换 AIStrategyGenerator: generate 返回 v1, validate_code 对改进版返回 valid。"""
 
+    def __init__(self, **kwargs):
+        pass
+
     def needs_structural_repair(self, result):
         return False
 
@@ -235,6 +238,8 @@ def _fake_tool_loop(call_log: list):
     """按调用次数返回对话: 第 1 轮 run_backtest→改进, 第 2 轮原样输出(收敛)。"""
     async def fake(messages, tools, *, execute_tool, max_rounds, temperature, max_tokens):
         call_log.append(len(call_log) + 1)
+        draft_id = messages[-1]["content"].split("策略草稿已保存为 ", 1)[1].split("。", 1)[0]
+        payload = await execute_tool("run_backtest", {"strategy_id": draft_id})
         if len(call_log) == 1:
             return [
                 {"role": "assistant", "content": None, "tool_calls": [{
@@ -243,9 +248,7 @@ def _fake_tool_loop(call_log: list):
                                  "arguments": json.dumps({"strategy_id": "draft"})},
                 }]},
                 {"role": "tool", "tool_call_id": "call_1",
-                 "content": json.dumps({"ok": True, "result": {"stats": {
-                     "sharpe": 1.5, "max_drawdown": -0.08, "win_rate": 0.55, "total_return": 0.12,
-                 }}}, ensure_ascii=False)},
+                 "content": json.dumps(payload, ensure_ascii=False)},
                 {"role": "assistant", "content": "改进夏普\n```python\n" + V2_CODE + "\n```"},
             ]
         return [
@@ -255,7 +258,16 @@ def _fake_tool_loop(call_log: list):
     return fake
 
 
-def test_iterate_full_flow(monkeypatch):
+@pytest.fixture
+def successful_backtest(monkeypatch):
+    async def execute(*args, **kwargs):
+        return {"ok": True, "result": {"stats": {
+            "sharpe": 1.5, "max_drawdown": -0.08, "win_rate": 0.55, "total_return": 0.12,
+        }}}
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+
+
+def test_iterate_full_flow(monkeypatch, successful_backtest):
     call_log: list = []
     monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
     monkeypatch.setattr(it, "generate_ai_text_with_tools", _fake_tool_loop(call_log))
@@ -281,7 +293,7 @@ def test_iterate_full_flow(monkeypatch):
     r1, r2 = result["rounds"]
     assert r1["stats"] is not None and r1["stats"]["sharpe"] == 1.5
     assert r1["change_summary"] == "改进夏普"
-    assert r2["stats"] is None
+    assert r2["stats"]["sharpe"] == 1.5
     assert "收敛" in r2["change_summary"]
 
     assert result["final_code"].strip() == V2_CODE.strip()
@@ -296,7 +308,7 @@ def test_iterate_full_flow(monkeypatch):
     assert ast.literal_eval(find_meta_assignment(on_disk)[1]).get("research_only") is True
 
 
-def test_iterate_validation_failure_breaks(monkeypatch):
+def test_iterate_validation_failure_breaks(monkeypatch, successful_backtest):
     """改进版校验失败 -> 记录 error 并 break, 不落盘坏代码。"""
     call_log: list = []
 
@@ -317,16 +329,16 @@ def test_iterate_validation_failure_breaks(monkeypatch):
     assert engine.reloads == 1  # 只有 v1 落盘
 
 
-def test_iterate_final_backtest_appended(monkeypatch):
+def test_iterate_final_backtest_appended(monkeypatch, successful_backtest):
     """末轮是改进版 (耗尽 max_rounds) -> final 从未被回测, 补一次末行「最终版回测」。"""
     call_log: list = []
     monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
     monkeypatch.setattr(it, "generate_ai_text_with_tools", _fake_tool_loop(call_log))
 
     async def fake_final_backtest(self, data_dir, draft_id, **kwargs):
-        return {"sharpe": 2.0}
+        return {"ok": True, "result": {"stats": {"sharpe": 2.0}}}
 
-    monkeypatch.setattr(AIStrategyIterator, "_backtest_final", fake_final_backtest)
+    monkeypatch.setattr(AIStrategyIterator, "_run_backtest", fake_final_backtest)
 
     engine = _FakeEngine()
     with tempfile.TemporaryDirectory() as tmp:
@@ -340,6 +352,104 @@ def test_iterate_final_backtest_appended(monkeypatch):
     assert r1["change_summary"] == "改进夏普"
     assert r2["change_summary"] == "最终版回测"
     assert r2["stats"] == {"sharpe": 2.0}
+
+
+def test_failed_backtest_stays_visible_and_never_claims_convergence(monkeypatch, tmp_path):
+    monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
+    error = "策略引用了不存在的信号: ['signal_entry_oversold_rebound']"
+    calls = []
+
+    async def execute(name, args, **kwargs):
+        calls.append((name, args))
+        return {"ok": False, "error": error}
+
+    async def loop(messages, tools, *, execute_tool, **kwargs):
+        draft = next((tmp_path / "strategies" / "ai").glob("ai_*.py")).stem
+        await execute_tool("run_backtest", {"strategy_id": draft})
+        return [{"role": "assistant", "content": V1_CODE}]
+
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+    monkeypatch.setattr(it, "generate_ai_text_with_tools", loop)
+    result = asyncio.run(AIStrategyIterator().iterate(
+        "测试", engine=_FakeEngine(), data_dir=str(tmp_path),
+    ))
+    row, = result["rounds"]
+    assert row["stats"] is None and row["backtest_error"] == error
+    assert "收敛" not in row["change_summary"]
+    assert len(calls) == 1
+
+
+def test_omitted_or_unrelated_model_backtest_gets_real_draft_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
+    calls = []
+
+    async def execute(name, args, **kwargs):
+        calls.append(args["strategy_id"])
+        if args["strategy_id"] == "other":
+            return {"ok": True, "result": {"stats": {"total_return": 99}}}
+        return {"ok": True, "result": {"stats": {"n_trades": 0, "total_return": 0}}}
+
+    async def loop(messages, tools, *, execute_tool, **kwargs):
+        await execute_tool("run_backtest", {"strategy_id": "other"})
+        return [{"role": "assistant", "content": V1_CODE}]
+
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+    monkeypatch.setattr(it, "generate_ai_text_with_tools", loop)
+    result = asyncio.run(AIStrategyIterator().iterate(
+        "测试", engine=_FakeEngine(), data_dir=str(tmp_path),
+    ))
+    row, = result["rounds"]
+    assert calls == ["other", result["draft_strategy_id"]]
+    assert row["stats"] == {"n_trades": 0, "total_return": 0}
+    assert row["backtest_error"] is None
+
+
+def test_final_backtest_failure_is_in_final_row(monkeypatch, tmp_path):
+    monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
+
+    async def loop(messages, tools, **kwargs):
+        return [{"role": "assistant", "content": V2_CODE}]
+
+    async def execute(*args, **kwargs):
+        return {"ok": False, "error": "缺少日线数据"}
+
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+    monkeypatch.setattr(it, "generate_ai_text_with_tools", loop)
+    result = asyncio.run(AIStrategyIterator(max_rounds=1).iterate(
+        "测试", engine=_FakeEngine(), data_dir=str(tmp_path),
+    ))
+    assert result["rounds"][-1]["backtest_error"] == "缺少日线数据"
+    assert result["rounds"][-1]["change_summary"] == "最终版回测"
+
+
+def test_latest_backtest_error_replaces_earlier_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(it, "AIStrategyGenerator", FakeGenerator)
+    outcomes = iter([
+        {"ok": True, "result": {"stats": {"total_return": 0.5}}},
+        {"ok": False, "error": "第二次回测失败"},
+    ])
+
+    async def execute(*args, **kwargs):
+        return next(outcomes)
+
+    async def loop(messages, tools, *, execute_tool, **kwargs):
+        draft = next((tmp_path / "strategies" / "ai").glob("ai_*.py")).stem
+        await execute_tool("run_backtest", {"strategy_id": draft})
+        await execute_tool("run_backtest", {"strategy_id": draft})
+        # 对话中残留的成功结果也不能覆盖执行器最新的失败。
+        return [
+            {"role": "tool", "content": json.dumps({"ok": True, "result": {"stats": {"total_return": 0.5}}})},
+            {"role": "assistant", "content": V1_CODE},
+        ]
+
+    monkeypatch.setattr(tool_catalog, "execute_tool", execute)
+    monkeypatch.setattr(it, "generate_ai_text_with_tools", loop)
+    result = asyncio.run(AIStrategyIterator().iterate(
+        "测试", engine=_FakeEngine(), data_dir=str(tmp_path),
+    ))
+    row, = result["rounds"]
+    assert row["stats"] is None and row["backtest_error"] == "第二次回测失败"
+    assert "收敛" not in row["change_summary"]
 
 
 @pytest.mark.parametrize("old_cli", [False, True])
