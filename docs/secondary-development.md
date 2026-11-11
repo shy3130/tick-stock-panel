@@ -22,7 +22,7 @@
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
 - 核心 AI 工具调用（已实现）：`app.services.ai_provider.generate_ai_text_with_tools` 接收调用方的工具 schema 与异步执行回调，统一支持 OpenAI Chat Completions / Responses 与 Codex CLI 结构化输出。策略迭代与可选 AI 助手共用核心适配；核心不依赖 `app.custom.assistant`，其他扩展可传入自己的工具，无需注册进助手目录。接入示例见下文「复用核心 AI 工具调用」。
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
-- 当前前端插槽：`layout.navigation.extra`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
+- 当前前端插槽（8 个，context 契约见下文 §3.2）：`layout.navigation.extra`、`layout.header.quick`、`settings.system.section`、`settings.data-sources.toolbar`、`settings.data-sources.detail-actions`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
 - 当前后端继承点：`NotificationFormatter`。
 - 个股详情公共入口（已实现）：源码扩展通过 `@/extensions/stockPreview` 的 `openStockPreview` / `closeStockPreview` 调用；运行时页面通过 `ctx.ui` 调用相同能力。复用原弹窗、查询和列表切股，不要求每个扩展自行挂载图表。
 - 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
@@ -127,6 +127,10 @@ export default extension
 
 ```text
 layout.navigation.extra
+layout.header.quick
+settings.system.section
+settings.data-sources.toolbar
+settings.data-sources.detail-actions
 stock-preview.tabs
 stock-preview.footer
 watchlist.toolbar
@@ -138,6 +142,10 @@ watchlist.toolbar
 - `stock-preview.tabs` 在个股详情顶部「日 K / 分时」右侧追加标签。组件接收当前证券的 `{ symbol: string, name: string | null }`。选中时挂载，离开时卸载。弹窗内切股会保留当前标签，并为新证券重新挂载组件。重新打开弹窗默认显示日 K。
 - `stock-preview.footer`：`{ symbol, name, view }`，个股详情对话框底部（日K/分时图表下方）；`view` 为 `'daily' | 'intraday'`。适合个股附加面板：龙虎榜、资金流、外部研究链接等。
 - `watchlist.toolbar`：`{ symbols, viewMode, selectedGroup, refresh }`，自选页工具栏末尾；`symbols` 为当前筛选视图中的标的，`refresh` 在扩展修改数据后调用以刷新自选增强数据。适合批量操作入口：自定义分析、导出、组合计算等。
+- `layout.header.quick`：无 context，侧栏头部「数据源 / AI 配置」行下方的快捷入口行，与核心数据入口 chip 同排（每行两个半宽 chip，行内自带顶部发丝线）。适合注册全局快捷方式。
+- `settings.system.section`：无 context，「设置 → 系统」界面设置区尾部追加系统级设置行；样式应与核心设置行同款。
+- `settings.data-sources.toolbar`：`{ refresh, selectSource }`，数据源页头部工具栏右侧；`refresh` 刷新数据源清单，`selectSource(name)` 选中数据源并打开其详情。适合「安装 / 管理外部数据源包」类入口，完整契约见 [外部数据源插件安装](external-data-source-packages.md)。
+- `settings.data-sources.detail-actions`：`{ plugin, refresh }`，数据源插件详情页头部与主体配置区之间；`plugin` 为当前插件信息，`refresh` 在扩展修改后刷新。完整契约见 [外部数据源插件安装](external-data-source-packages.md)。
 
 新增插槽前必须有真实用例，并同时定义 context 类型、异常隔离和测试；不能只在类型表中预留名字。
 
@@ -181,6 +189,10 @@ const extension: FrontendExtension = {
 ```
 
 路由注册与菜单注册已经解耦：页面可以存在但不显示在菜单中；菜单只能引用同一扩展内的已注册路由。首版只支持静态绝对路径。扩展路由不得覆盖核心或其他扩展路径，冲突时只禁用该扩展并输出明确错误。
+
+用户可在「设置 → 页面管理 → 菜单与页面」将内置、分析及扩展导航归入一级分类，扩展清单仍沿用上面的 v1 契约，无需声明 `parentId` 或修改路由。宿主用实际路由路径作为页面 ID（声明式分析页统一为 `/analysis/<id>`），显示名称和图标仍来自原注册项。
+
+布局持久化字段为 `preferences.nav_layout`：`{v: 1, items: [...]}`，顶层项为 `{type: 'page', id: '/path'}` 或 `{type: 'group', id: 'group:<id>', label, children: [{type: 'page', id: '/path'}]}`。分类不能嵌套，看板固定在顶层首位，同一页面不能重复；保存接口为 `PUT /api/settings/preferences/nav-layout`，提交 `nav_layout` 和可选的 `nav_hidden`。归属、顺序与隐藏项统一原子保存，并同步平铺 `nav_order` 供旧版本回退；更高布局版本拒绝覆盖。无新布局时兼容原有 `nav_order`、`nav_hidden` 和分析页裸 ID。暂时不可用的页面引用保留在配置中，侧栏只显示已注册且可见的页面；新建的空分类保留显示，包含页面但其全部隐藏或不可用的分类暂不显示。
 
 完整前端模板位于 [`frontend/src/custom/_template/extension.tsx.example`](../frontend/src/custom/_template/extension.tsx.example)。
 

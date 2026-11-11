@@ -42,6 +42,7 @@ const SPECS: { ls: string; remote: string; codec: Codec }[] = [
   { ls: 'tf-settings-nav-collapsed', remote: 'settings_nav_collapsed', codec: 'bool01' },
   { ls: 'bt_strategy_list_maxh', remote: 'bt_strategy_list_maxh', codec: 'int' },
   { ls: 'tf-nav-state', remote: 'nav_state', codec: 'string' },
+  { ls: 'tf-nav-groups', remote: 'nav_groups', codec: 'string' },
   // AI 助手悬浮球显隐 — 不入副本时桌面版换端口即回默认开启 ("关了过一会又开")
   { ls: 'assistant.fab.enabled', remote: 'assistant_fab_enabled', codec: 'bool01' },
   // 保留 JSON 文本，兼容后端界面偏好只接收标量的契约。

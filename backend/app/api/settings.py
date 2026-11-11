@@ -696,6 +696,7 @@ def get_preferences() -> dict:
         "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
         "nav_hidden": preferences.get_nav_hidden(),
+        "nav_layout": preferences.get_nav_layout(),
         "dashboard_layout": preferences.get_dashboard_layout(),
         "screener_auto_run": preferences.get_screener_auto_run(),
         "assistant_auto_approve_actions": preferences.get_assistant_auto_approve_actions(),
@@ -1038,6 +1039,23 @@ class NavOrderIn(BaseModel):
 
 class NavHiddenIn(BaseModel):
     nav_hidden: list[str]
+
+
+class NavLayoutIn(BaseModel):
+    nav_layout: dict | None
+    nav_hidden: list[str] | None = None
+
+
+@router.put("/preferences/nav-layout")
+def update_nav_layout(req: NavLayoutIn) -> dict:
+    from app.services import preferences
+
+    try:
+        layout = preferences.set_nav_layout(req.nav_layout, req.nav_hidden)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"nav_layout": layout, "nav_order": preferences.get_nav_order(),
+            "nav_hidden": preferences.get_nav_hidden()}
 
 
 @router.put("/preferences/nav-order")

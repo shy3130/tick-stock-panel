@@ -4,6 +4,7 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type { NavLayout } from './navLayout'
 
 const BASE = ''
 
@@ -2523,6 +2524,8 @@ export interface Preferences {
   webhook_default_channels?: string[]
   nav_order: string[]
   nav_hidden: string[]
+  nav_layout?: NavLayout | null
+  ui_prefs?: Record<string, string | number | boolean>
   /** 看板自定义布局; null/缺省 = 未自定义(前端内置默认布局) */
   dashboard_layout: { v: number; items: Array<{ i: string; t: string; x: number; y: number; w: number; h: number; p?: Record<string, string> }> } | null
   screener_auto_run: boolean
@@ -3297,6 +3300,10 @@ export const api = {
     request<{ nav_order: string[] }>('/api/settings/preferences/nav-order', {
       method: 'PUT',
       body: JSON.stringify({ nav_order }),
+    }),
+  saveNavLayout: (nav_layout: NavLayout | null, nav_hidden: string[]) =>
+    request<{ nav_layout: NavLayout | null; nav_order: string[]; nav_hidden: string[] }>('/api/settings/preferences/nav-layout', {
+      method: 'PUT', body: JSON.stringify({ nav_layout, nav_hidden }),
     }),
   saveNavHidden: (nav_hidden: string[]) =>
     request<{ nav_hidden: string[] }>('/api/settings/preferences/nav-hidden', {
