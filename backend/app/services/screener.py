@@ -52,6 +52,32 @@ _HISTORY_CACHE_TTL = 120.0  # 秒
 _PRIOR_PARTITION_SCAN = 10
 
 
+def _join_instruments(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.DataFrame:
+    if instruments.is_empty():
+        return df
+    if "name" not in df.columns:
+        columns = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in instruments.columns]
+        return df.join(instruments.select(columns), on="symbol", how="left")
+    if "name" not in instruments.columns:
+        return df
+    missing = pl.col("name").is_null() | (pl.col("name").cast(pl.Utf8).str.strip_chars() == "")
+    if not df.select(missing.any()).item():
+        return df
+    # 实时/历史缓存可能已有 name 列却只有部分名称，按行补齐且保持缓存本身不变。
+    return (
+        df.join(
+            instruments.select("symbol", pl.col("name").alias("_instrument_name")),
+            on="symbol", how="left", maintain_order="left",
+        )
+        .with_columns(
+            pl.when(missing).then(
+                pl.col("_instrument_name").cast(pl.Utf8).str.strip_chars().replace("", None)
+            ).otherwise(pl.col("name")).alias("name")
+        )
+        .drop("_instrument_name")
+    )
+
+
 @dataclass
 class ScreenerResult:
     as_of: date
@@ -98,14 +124,7 @@ class ScreenerService:
         # 优先使用 repo 最新日缓存
         cache, cache_date = self.repo.get_enriched_latest_asset(self.asset_type)
         if cache is not None and not cache.is_empty() and cache_date == target_date:
-            df = cache
-            # JOIN instruments
-            df_i = self.repo.get_instruments_asset(self.asset_type)
-            if not df_i.is_empty():
-                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
-                if "name" not in df.columns:
-                    df = df.join(df_i.select(inst_cols), on="symbol", how="left")
-            return df
+            return _join_instruments(cache, self.repo.get_instruments_asset(self.asset_type))
 
         # 尝试从 repo 级预计算历史缓存中提取目标日期 (仅 stock: 该缓存为股票专用)
         if self.asset_type == "stock":
@@ -114,13 +133,7 @@ class ScreenerService:
                 df = cached_hist.filter(pl.col("date") == target_date)
                 if not df.is_empty():
                     logger.debug("_load_enriched_for_date: repo history cache for %s", target_date)
-                    # JOIN instruments
-                    df_i = self.repo.get_instruments_asset(self.asset_type)
-                    if not df_i.is_empty():
-                        inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
-                        if "name" not in df.columns:
-                            df = df.join(df_i.select(inst_cols), on="symbol", how="left")
-                    return df
+                    return _join_instruments(df, self.repo.get_instruments_asset(self.asset_type))
 
         # 历史日期: 从 parquet 读取 14 列, 即时计算指标 (慢路径)
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
@@ -259,13 +272,7 @@ class ScreenerService:
         # 只保留目标日期
         df_result = df_full.filter(pl.col("date") == target_date)
 
-        # JOIN instruments (name, total_shares, float_shares)
-        if not instruments.is_empty():
-            inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in instruments.columns]
-            if "name" not in df_result.columns:
-                df_result = df_result.join(instruments.select(inst_cols), on="symbol", how="left")
-
-        return df_result
+        return _join_instruments(df_result, instruments)
 
     def _load_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame:
         """读取目标日期之前的基础行情数据, 供历史窗口策略使用。
