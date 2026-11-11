@@ -26,6 +26,7 @@
 | R005 | `.ps1` 含中文却无 UTF-8 BOM |
 | R006 | 同一 `date=` 分区里 `part.parquet` 与其他 parquet 并存，通配读取重复计数 |
 | R007 | 新增前端组件与已有组件同名，重复造轮子 |
+| R008 | 同一 glob 下分区 dtype/列不一致，整段查询报 `data type mismatch` 后被 `except` 吞成空表 |
 
 机器查不了、只能靠人的四条：
 
