@@ -1163,6 +1163,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         response_path=body.response_path,
         field_map=body.field_map,
         schedule_minutes=body.schedule_minutes,
+        schedule_seconds=body.schedule_seconds,
         enabled=body.enabled,
         schedule_time=body.schedule_time,
         schedule_period=body.schedule_period,

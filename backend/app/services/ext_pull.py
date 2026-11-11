@@ -605,6 +605,15 @@ async def _backfill_history(
 # 才生效, 分片轮询让变更在一分钟内被外层重读
 _DAILY_POLL_SECONDS = 60
 
+# 间隔制下限 (秒): 秒级拉取的边界, 防手改 config.json 写过小值打爆接口。
+# 同一配置的拉取循环串行执行 (拉完才睡), 下限只约束频率不涉及并发
+_MIN_INTERVAL_S = 10
+
+
+def _interval_seconds(pull: PullConfig) -> float:
+    """间隔制有效间隔 (秒): schedule_seconds 优先 (秒级), 回退 schedule_minutes*60。"""
+    return max(pull.schedule_seconds or pull.schedule_minutes * 60, _MIN_INTERVAL_S)
+
 
 def _today_target(now: datetime, hhmm: str) -> datetime:
     """北京时间 now 当天的固定时刻 (保持 now 的时区信息)。"""
@@ -824,7 +833,7 @@ class PullScheduler:
             fresh = await run_ext_data_io(store.get, config_id)
             if not fresh or not fresh.pull or not fresh.pull.enabled:
                 return
-            if fresh.pull.schedule_time or max(fresh.pull.schedule_minutes * 60, 60) != interval:
+            if fresh.pull.schedule_time or _interval_seconds(fresh.pull) != interval:
                 return  # 调度形态或间隔变了 → 回外层重读并重新安排
 
     async def _run_loop(self, config: ExtConfig) -> None:
@@ -855,7 +864,7 @@ class PullScheduler:
                     fresh.pull.last_message = "不在拉取时间窗口内"
                     await run_ext_data_io(store.upsert, fresh, keep_strategy_cache=True)
                     logger.info("PullScheduler: %s skipped (outside time window)", config.id)
-                    interval = max(pull.schedule_minutes * 60, 60)
+                    interval = _interval_seconds(pull)
                     await self._sleep_interval_reloading(config.id, store, interval)
                     continue
 
@@ -863,7 +872,7 @@ class PullScheduler:
                 await self._execute_pull(fresh, store)
 
                 # 间隔取自最新配置 (每次重新读取, 修复改间隔不生效)
-                interval = max(pull.schedule_minutes * 60, 60)  # 至少 60s
+                interval = _interval_seconds(pull)
                 # 预告下次运行时间, 供前端展示
                 next_dt = datetime.now(UTC).timestamp() + interval
                 latest = await run_ext_data_io(store.get, config.id)

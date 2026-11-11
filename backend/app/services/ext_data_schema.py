@@ -45,6 +45,9 @@ class PullConfigReq(BaseModel):
     response_path: str = ""          # dot-path to rows array
     field_map: dict[str, str] | None = None  # external → internal field name
     schedule_minutes: int = Field(1440, ge=1)
+    # 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes 生效 (秒级拉取,
+    # 如集合竞价 30s 快照); null = 沿用 schedule_minutes (存量配置与旧导出包)
+    schedule_seconds: int | None = Field(None, ge=10, le=2_592_000)
     enabled: bool = False
     # 每日固定拉取时刻 "HH:MM" (北京时间): 配置后按墙钟每天该时刻拉一次,
     # 忽略 schedule_minutes; null = 间隔制 (清除固定时刻)
