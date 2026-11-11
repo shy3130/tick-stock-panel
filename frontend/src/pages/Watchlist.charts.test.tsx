@@ -126,3 +126,35 @@ it('fills the latest daily scope after an older request finishes and retries emp
   expect(host.textContent).toBe('2,2')
   expect(request).toHaveBeenLastCalledWith([existing, added], 12)
 })
+
+it('keeps one stock across sorting, refreshes and group cards when an older backend returns duplicates', async () => {
+  const target = '600327.SH'
+  const entries = [{ symbol: target, added_at: '2026-11-04' }, { symbol: existing, added_at: '2026-11-04' }]
+  const targetRow = { symbol: target, name: '大东方', asset_type: 'stock', close: 6.53 }
+  const otherRow = { symbol: existing, name: '测试股', asset_type: 'stock', close: 10 }
+  const payload = { rows: [targetRow, { ...targetRow }, otherRow], as_of: null, elapsed_ms: 0 }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')))
+  vi.spyOn(api, 'watchlistList').mockResolvedValue({ symbols: entries })
+  vi.spyOn(api, 'watchlistGroups').mockResolvedValue({ groups: [] })
+  vi.spyOn(api, 'watchlistEnriched').mockResolvedValue(payload)
+  vi.spyOn(api, 'klineDailyBatch').mockResolvedValue({ data: {} })
+  vi.spyOn(api, 'klineMinuteBatch').mockResolvedValue({ data: {} })
+  await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}><Watchlist /></QueryClientProvider></MemoryRouter>))
+  await settle()
+  for (let i = 0; i < 4; i++) {
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2)
+    const heading = [...host.querySelectorAll('th')].find(el => el.textContent?.includes('代码'))!
+    await act(async () => heading.click())
+    await settle()
+  }
+  await act(async () => client.setQueryData(QK.watchlistEnriched(''), {
+    ...payload, rows: [otherRow, { ...targetRow, close: 6.6 }, { ...targetRow, close: 6.6 }],
+  }))
+  await settle()
+  expect(host.querySelectorAll('tbody tr')).toHaveLength(2)
+  const grouped = host.querySelector<HTMLButtonElement>('button[aria-label="分组卡片视图"]')!
+  await act(async () => grouped.click())
+  await settle()
+  expect(host.querySelectorAll('button[aria-label^="快速加入自选"]')).toHaveLength(0)
+  expect([...host.querySelectorAll('button')].filter(el => el.textContent?.includes(target))).toHaveLength(1)
+})

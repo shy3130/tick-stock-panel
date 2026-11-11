@@ -491,6 +491,15 @@ def _added_base_closes(
     )
 
 
+def _latest_watchlist_rows(frame: pl.DataFrame, symbols: list[str]) -> pl.DataFrame:
+    """仅收敛请求的标的，按日期和行情时间选取完整行，避免关联放大。"""
+    selected = frame.filter(pl.col("symbol").is_in(symbols))
+    order = [column for column in ("date", "quote_ts") if column in selected.columns]
+    if order:
+        selected = selected.sort(order, descending=True, nulls_last=True, maintain_order=True)
+    return selected.unique(subset=["symbol"], keep="first", maintain_order=True)
+
+
 @router.get("/enriched")
 def watchlist_enriched(
     request: Request,
@@ -532,7 +541,7 @@ def watchlist_enriched(
         if df_e.is_empty():
             df = watchlist_df
         else:
-            df = watchlist_df.join(df_e, on="symbol", how="left")
+            df = watchlist_df.join(_latest_watchlist_rows(df_e, stock_symbols), on="symbol", how="left")
     else:
         df = pl.DataFrame()
 
@@ -543,7 +552,7 @@ def watchlist_enriched(
         etf_watchlist_df = pl.DataFrame({"symbol": etf_symbols})
         if not df_etf_all.is_empty():
             # ETF 同样以自选为主表 LEFT JOIN, 缺失标的指标为 null
-            df_etf = etf_watchlist_df.join(df_etf_all, on="symbol", how="left")
+            df_etf = etf_watchlist_df.join(_latest_watchlist_rows(df_etf_all, etf_symbols), on="symbol", how="left")
         else:
             df_etf = etf_watchlist_df
         df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
@@ -554,7 +563,7 @@ def watchlist_enriched(
         df_idx_all, index_date = repo.get_enriched_latest_asset("index")
         idx_watchlist_df = pl.DataFrame({"symbol": index_symbols})
         if not df_idx_all.is_empty():
-            df_idx = idx_watchlist_df.join(df_idx_all, on="symbol", how="left")
+            df_idx = idx_watchlist_df.join(_latest_watchlist_rows(df_idx_all, index_symbols), on="symbol", how="left")
         else:
             df_idx = idx_watchlist_df
         df = df_idx if df.is_empty() else pl.concat([df, df_idx], how="diagonal_relaxed")
@@ -578,7 +587,8 @@ def watchlist_enriched(
     # JOIN float_shares (仅股票有) + 名称 (股票/ETF 统一走 get_name_map)
     df_i = repo.get_instruments()
     if not df_i.is_empty() and "float_shares" in df_i.columns:
-        df = df.join(df_i.select(["symbol", "float_shares"]), on="symbol", how="left")
+        shares = df_i.select(["symbol", "float_shares"]).unique(subset=["symbol"], keep="first")
+        df = df.join(shares, on="symbol", how="left")
     name_map = repo.get_name_map(df["symbol"].to_list())
     df = df.with_columns(
         pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name")
@@ -601,7 +611,7 @@ def watchlist_enriched(
             if missing.height:
                 fallback = prepared_reader(asset, missing["symbol"].to_list())
                 if isinstance(fallback, pl.DataFrame) and not fallback.is_empty():
-                    parts.append(fallback.with_columns(
+                    parts.append(_latest_watchlist_rows(fallback, missing["symbol"].to_list()).with_columns(
                         pl.lit(asset).alias("asset_type"), pl.lit(True).alias("prepared_daily"),
                     ))
         if parts:
@@ -730,6 +740,9 @@ def watchlist_enriched(
                             df = df.join(ext_df, on="symbol", how="left")
                     except Exception as e2:
                         logger.debug("ext join fallback failed for %s.%s: %s", config_id, field_name, e2)
+
+    # 最终输出也保证每标的一行，兼容旧名单或附加数据中的重复记录。
+    df = df.unique(subset=["symbol"], keep="first", maintain_order=True)
 
     # sanitize NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]
