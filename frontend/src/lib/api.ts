@@ -4358,6 +4358,8 @@ export const api = {
     url: string; method?: string; headers?: Record<string, string>; body?: string;
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
+    /** 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes; null=沿用分钟值 */
+    schedule_seconds?: number | null;
     schedule_time?: string | null;
     schedule_period?: 'daily' | 'weekly' | 'monthly' | null;
     schedule_day?: number | null;
@@ -5380,6 +5382,8 @@ export interface PullConfig {
   response_path: string
   field_map?: Record<string, string>
   schedule_minutes: number
+  /** 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes 生效; null/缺省=分钟制 */
+  schedule_seconds?: number | null
   enabled: boolean
   /** 每日固定拉取时刻 "HH:MM" (北京时间): 配置后忽略间隔, 每天该时刻拉一次; null=间隔制 */
   schedule_time?: string | null

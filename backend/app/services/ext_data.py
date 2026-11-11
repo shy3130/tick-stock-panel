@@ -177,7 +177,7 @@ class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
         "url", "method", "headers", "body", "response_path",
-        "field_map", "schedule_minutes", "enabled",
+        "field_map", "schedule_minutes", "schedule_seconds", "enabled",
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
@@ -195,6 +195,7 @@ class PullConfig:
         response_path: str = "",
         field_map: dict[str, str] | None = None,
         schedule_minutes: int = 1440,
+        schedule_seconds: int | None = None,
         enabled: bool = False,
         last_run: str | None = None,
         last_status: str | None = None,
@@ -229,6 +230,13 @@ class PullConfig:
         self.response_path = response_path  # dot-path to rows array, e.g. "data.list"
         self.field_map = field_map or {}    # external_name → config_field_name
         self.schedule_minutes = schedule_minutes
+        # 间隔秒数: 配置后优先于 schedule_minutes 生效 (秒级拉取, 如集合竞价
+        # 30s 快照)。config.json 手改写入非法值时归一 None (fail-closed, 回退
+        # 分钟制); 调度侧另有下限钳制兜底。
+        self.schedule_seconds = (
+            int(schedule_seconds) if isinstance(schedule_seconds, (int, float))
+            and 10 <= schedule_seconds <= 2_592_000 else None
+        )
         self.enabled = enabled
         self.last_run = last_run
         self.last_status = last_status      # "success" | "error"
@@ -320,6 +328,7 @@ class PullConfig:
             "response_path": self.response_path,
             "field_map": self.field_map,
             "schedule_minutes": self.schedule_minutes,
+            "schedule_seconds": self.schedule_seconds,
             "enabled": self.enabled,
             "last_run": self.last_run,
             "last_status": self.last_status,
@@ -359,6 +368,7 @@ class PullConfig:
             response_path=d.get("response_path", ""),
             field_map=d.get("field_map"),
             schedule_minutes=d.get("schedule_minutes", 1440),
+            schedule_seconds=d.get("schedule_seconds"),
             enabled=d.get("enabled", False),
             last_run=d.get("last_run"),
             last_status=d.get("last_status"),
