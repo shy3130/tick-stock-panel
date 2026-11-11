@@ -281,7 +281,7 @@ def test_on_chunk_done_wrapped_to_3_args(monkeypatch):
 
 # ---------- 测试 9: get_minute_batch 按 asset_type 拆分调用 sync_minute_batch ----------
 
-def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
+def test_get_minute_batch_splits_stock_and_etf(monkeypatch, tmp_path):
     """get_minute_batch 把 incomplete 拆成 stock/ETF 两组, 分别以
     asset_type='stock'/'etf' 调用 sync_minute_batch, 结果 concat 返回。
 
@@ -302,6 +302,10 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
 
     # mock repo: ETF 集合含 510300.SH; 本地分钟K返回空 (强制走 incomplete 补拉)
     mock_repo = MagicMock()
+    # ETF 前缀兜底会查 <data_dir>/etf_long/<symbol>.parquet 判断是否场内基金。
+    # 用 MagicMock 当 data_dir 时 .exists() 恒为真, 股票 600519.SH 会被误判成 ETF,
+    # 整批改用 asset_type='etf' 补拉 —— 股票永远拉不到。必须给真实临时目录。
+    mock_repo.store.data_dir = tmp_path
     mock_repo.get_etf_symbol_set.return_value = {"510300.SH"}
     mock_repo.get_minute_batch.return_value = pl.DataFrame()
 
@@ -965,7 +969,7 @@ def _healthy_svc(monkeypatch, healthy: bool):
     return svc
 
 
-def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch):
+def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch, tmp_path):
     """全量分钟服务健康 + prefer_local: 股票 incomplete 不再批量补拉,
     本地现有数据(哪怕 <90%)直接返回; ETF 不在服务 universe, 维持补拉。"""
     from app.api import kline as kline_api
@@ -974,6 +978,7 @@ def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch):
     monkeypatch.setattr(kline_api.kline_sync, "sync_minute_batch", sync_spy)
 
     mock_repo = MagicMock()
+    mock_repo.store.data_dir = tmp_path  # ETF 前缀兜底需真实目录, 见 splits 测试说明
     mock_repo.get_etf_symbol_set.return_value = {"510300.SH"}
     # 股票本地 100 根 (expected=240 → <90% 判 incomplete), ETF 本地空
     mock_repo.get_minute_batch.side_effect = (
@@ -1002,7 +1007,7 @@ def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch):
     assert result["full_minute_local"] is True
 
 
-def test_get_minute_batch_prefer_local_unhealthy_falls_back(monkeypatch):
+def test_get_minute_batch_prefer_local_unhealthy_falls_back(monkeypatch, tmp_path):
     """服务不健康 (挂了/停了) + prefer_local: 回落现状补拉兜底, 行为与不带标志一致。"""
     from app.api import kline as kline_api
 
@@ -1010,6 +1015,7 @@ def test_get_minute_batch_prefer_local_unhealthy_falls_back(monkeypatch):
     monkeypatch.setattr(kline_api.kline_sync, "sync_minute_batch", sync_spy)
 
     mock_repo = MagicMock()
+    mock_repo.store.data_dir = tmp_path  # ETF 前缀兜底需真实目录, 见 splits 测试说明
     mock_repo.get_etf_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = _mock_minute_rows("600519.SH", 100)
 
@@ -1108,7 +1114,7 @@ def test_get_minute_batch_leading_hole_triggers_full_day_refetch(monkeypatch):
     assert len(rows) >= 121
 
 
-def test_get_minute_batch_healthy_does_not_suppress_leading_hole_refetch(monkeypatch):
+def test_get_minute_batch_healthy_does_not_suppress_leading_hole_refetch(monkeypatch, tmp_path):
     """服务健康 + prefer_local: 前部洞的股票仍全天补拉 (服务增量锚定本地最新,
     补不了洞); 纯尾部落后的股票维持不补拉 (服务下一轮会补尾巴)。"""
     from app.api import kline as kline_api
@@ -1120,6 +1126,7 @@ def test_get_minute_batch_healthy_does_not_suppress_leading_hole_refetch(monkeyp
     stale_local = _mock_minute_rows("000001.SZ", 100)  # 09:31 开头的连续序列, 仅根数不足
 
     mock_repo = MagicMock()
+    mock_repo.store.data_dir = tmp_path  # ETF 前缀兜底需真实目录, 见 splits 测试说明
     mock_repo.get_etf_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = pl.concat([hole_local, stale_local])
 

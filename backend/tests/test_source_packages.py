@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+
+from tests._platform_caps import skip_windows_path_semantics
 import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -181,7 +183,7 @@ def test_pending_replacement_preview_rejects_stale_install_state(isolated):
     assert current["pending_version"] == "2.0.0"
 
 
-@pytest.mark.parametrize("filename", ["../escape.py", "/escape.py", "a\\b.py", "a/../b.py", "CON.py", "client.PY", "x.dll", "a./b.py"])
+@pytest.mark.parametrize("filename", ["../escape.py", "/escape.py", pytest.param("a\\b.py", marks=skip_windows_path_semantics), "a/../b.py", "CON.py", "client.PY", "x.dll", "a./b.py"])
 def test_archive_paths_and_payload_limits(isolated, filename):
     with pytest.raises(ValueError):
         packages.inspect_archive(bundle(extra={filename: "pass"}))

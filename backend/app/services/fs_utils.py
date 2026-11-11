@@ -21,7 +21,11 @@ def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None
     只读位, 失败不该让写入失败, 所以吞掉 OSError, 与原调用处的处理一致。
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    # newline="" 关闭换行转换: 默认 newline=None 会在 Windows 上把 \n 写成 \r\n,
+    # 若传入文本本身已含 \r\n (例如从 zip 取出的 Windows 原作者文件), 就会变成
+    # \r\r\n —— 备份→还原一轮多两个空行, 再还原又翻倍。配置文件与策略源码应当
+    # 按字节原样落盘, 行尾由内容自己决定, 不由运行平台决定。
+    tmp.write_text(text, encoding="utf-8", newline="")
     if mode is not None:
         try:
             os.chmod(tmp, mode)
