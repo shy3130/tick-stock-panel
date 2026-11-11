@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
@@ -27,13 +27,14 @@ import { setUiPref } from '@/lib/uiPrefs'
 import { useStrategyLibrarySync } from '@/lib/strategyLibrary'
 import { getPageScale } from '@/lib/pageZoom'
 import { setKlineBatchLimits } from '@/lib/klineBatchLimits'
-import { compareByDefaultNav, defaultNavIndex, seedHiddenForNewUser } from '@/lib/navOrder'
+import { seedHiddenForNewUser } from '@/lib/navOrder'
+import { navPageIds, resolveNavLayout, visibleNavLayout, type NavGroup } from '@/lib/navLayout'
+import { getNavigationEntries, type NavigationEntry } from '@/lib/navigation'
+import { NavFolder } from './navigation/NavFolder'
 import {
   Settings,
   DatabaseZap,
   Loader2,
-  Tags,
-  BarChart3,
   Sparkles,
   CheckCircle2,
   ChevronRight,
@@ -49,17 +50,6 @@ import {
   Download,
   HardDriveDownload,
 } from 'lucide-react'
-import {
-  IconDashboard,
-  IconWatchlist,
-  IconStrategy,
-  IconFactors,
-  IconBacktest,
-  IconRegime,
-  IconIndices,
-  IconData,
-  type BrandIconProps,
-} from './BrandIcons'
 import { Logo } from './Logo'
 import { api, type CapabilityMatrix, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -72,7 +62,6 @@ import { findDataSource } from '@/lib/dataSources'
 import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
-import { getFrontendExtensionNavigation } from '@/extensions/registry'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
@@ -86,17 +75,6 @@ export const CORE_INDEXES = [
 ] as const
 
 type CoreIndex = (typeof CORE_INDEXES)[number]
-
-const nav = [
-  { to: '/',                 label: '看板',     icon: IconDashboard },
-  { to: '/watchlist',        label: '自选',     icon: IconWatchlist },
-  { to: '/screener',         label: '策略',     icon: IconStrategy },
-  { to: '/factors',          label: '因子',     icon: IconFactors },
-  { to: '/backtest',         label: '回测',     icon: IconBacktest },
-  { to: '/regime',           label: '市场环境', icon: IconRegime },
-  { to: '/indices',          label: '指数',     icon: IconIndices },
-  { to: '/data',             label: '数据',     icon: IconData },
-] as const
 
 /** 亮/暗主题切换 — 状态存 localStorage, 生效见 lib/theme.ts */
 function ThemeToggle() {
@@ -413,6 +391,47 @@ export function Layout() {
   // 自选二级菜单展开状态 — 默认当前在自选页时展开
   const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
 
+  const allNav = getNavigationEntries(analysisMenus?.items ?? [])
+  const navById = new Map(allNav.map(item => [item.id, item]))
+  const layout = resolveNavLayout(prefs?.nav_layout, allNav, prefs?.nav_order)
+  const visibleLayout = visibleNavLayout(layout, allNav, prefs?.nav_hidden ?? [])
+  if (!prefs?.nav_layout) visibleLayout.items = visibleLayout.items.filter(node => node.id !== '/settings')
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem('tf-nav-groups') || '{}')
+      return value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).filter((item): item is [string, boolean] => typeof item[1] === 'boolean')) : {}
+    } catch { return {} }
+  })
+  const groupEdited = useRef(false)
+  const groupRestored = useRef(false)
+  const [railGroupId, setRailGroupId] = useState<string | null>(null)
+  const activeGroupId = visibleLayout.items.find(node => node.type === 'group' && node.children.some(page =>
+    location.pathname === page.id || (page.id !== '/' && location.pathname.startsWith(`${page.id}/`))))?.id
+  useEffect(() => {
+    setRailGroupId(null)
+    if (activeGroupId) setGroupOpen(previous => ({ ...previous, [activeGroupId]: true }))
+  }, [location.pathname, location.search, activeGroupId])
+  const savedGroupOpen = prefs?.ui_prefs?.nav_groups
+  useEffect(() => {
+    if (groupRestored.current || groupEdited.current || typeof savedGroupOpen !== 'string') return
+    groupRestored.current = true
+    try {
+      const value = JSON.parse(savedGroupOpen)
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const restored = Object.fromEntries(Object.entries(value).filter((item): item is [string, boolean] => typeof item[1] === 'boolean'))
+        setGroupOpen(previous => ({ ...restored, ...previous }))
+      }
+    } catch { /* 非法展开偏好不影响页面入口 */ }
+  }, [savedGroupOpen])
+  const isGroupOpen = (group: NavGroup) => groupOpen[group.id] ?? group.id === activeGroupId
+  const toggleGroup = (group: NavGroup) => {
+    groupEdited.current = true
+    const next = { ...groupOpen, [group.id]: !isGroupOpen(group) }
+    setGroupOpen(next)
+    setUiPref('tf-nav-groups', JSON.stringify(next))
+  }
+
   // 侧边栏三态 — expanded(14rem) / rail(3.5rem 图标条) / hidden(0, 左缘悬浮按钮唤出)。
   // 仅桌面 (≥768px) 参与三态; 移动端 aside 以抽屉呈现, 由 drawerOpen 控制, 恒渲染完整形态。
   // 持久化到 localStorage; 迁移旧两态键 tf-nav-collapsed (收起 → 图标条)。
@@ -436,7 +455,7 @@ export function Layout() {
   // 图标条形态仅桌面 rail 态成立 (移动端抽屉与 overlay 预览恒为完整形态)
   const railMode = isDesktop && navState === 'rail'
   // 路由跳转/切回桌面时关抽屉; ESC 同样关闭
-  useEffect(() => { setDrawerOpen(false) }, [location.pathname, isDesktop])
+  useEffect(() => { setDrawerOpen(false) }, [location.pathname, location.search, isDesktop])
   useEffect(() => {
     if (!drawerOpen) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false) }
@@ -447,8 +466,14 @@ export function Layout() {
   // 分组等权平均涨跌幅 — 复用 watchlist/enriched 查询缓存(与自选页同 key,
   // 盘中随 SSE 刷新)。可见性门控: 子菜单实际可见(桌面展开 + 二级菜单展开, 或
   // 移动端抽屉打开) 时才拉取, 收起/隐藏/抽屉关闭下不为隐藏 UI 发请求。
-  const sidebarFullyVisible = navState === 'expanded' && (isDesktop || drawerOpen)
-  const navGroupPctVisible = groupsInNav && sidebarFullyVisible && watchlistNavExpanded
+  const sidebarFullyVisible = isDesktop ? navState === 'expanded' : drawerOpen
+  const watchlistParent = visibleLayout.items.find(node => node.type === 'group' && navPageIds(node).includes('/watchlist'))
+  const watchlistVisible = visibleLayout.items.some(node => navPageIds(node).includes('/watchlist'))
+  const watchlistParentOpen = !watchlistParent || (watchlistParent.type === 'group' &&
+    (railMode ? railGroupId === watchlistParent.id : isGroupOpen(watchlistParent)))
+  // 图标模式仅在包含自选的分类弹层中显示分组统计。
+  const navGroupPctVisible = groupsInNav && watchlistVisible && watchlistParentOpen
+    && (sidebarFullyVisible || (railMode && railGroupId === watchlistParent?.id)) && watchlistNavExpanded
   const { data: navWatchlist } = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
@@ -593,58 +618,6 @@ export function Layout() {
     if (alertsTotal != null) setAlertTotal(alertsTotal)
   }, [alertsTotal])
 
-  // 合并内置页面 + 可见的扩展分析菜单
-  type NavIcon = (props: BrandIconProps) => ReactNode
-  // arch: 'ext' = 扩展域页面 (官方扩展/自定义分析), 核心域 nav 常量不带标。
-  // 与菜单设置 ARCH_CLASS 同口径: nav 常量 8 项全部核心, 其余两个来源全部扩展。
-  type NavItem = { to: string; label: string; icon: NavIcon; badge?: string; arch?: 'core' | 'ext' }
-  const analysisNav: NavItem[] = (analysisMenus?.items ?? [])
-    .filter(m => m.visible)
-    .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3, arch: 'ext' as const }))
-  const extensionNav: NavItem[] = getFrontendExtensionNavigation().map(item => ({
-    to: item.route.path,
-    label: item.label,
-    icon: item.icon,
-    badge: item.badge,
-    arch: 'ext' as const,
-  }))
-
-  const allNav: NavItem[] = [...nav, ...analysisNav, ...extensionNav]
-  const savedOrder = prefs?.nav_order ?? []
-
-  const navItems = savedOrder.length > 0
-    ? (() => {
-        const byTo = new Map(allNav.map(n => [n.to, n]))
-        const ordered = (savedOrder
-          .map(id => byTo.get(id) ?? byTo.get(`/analysis/${id}`))
-          .filter(Boolean)) as typeof allNav
-        const seen = new Set(ordered.map(n => n.to))
-        const merged = [...ordered]
-        for (const item of allNav) {
-          if (seen.has(item.to)) continue
-          // 未保存过排序的新条目: 默认基准内的路径插回默认位置(排在已出现的
-          // 最近默认前驱之后), 分析菜单/未知扩展追加到末尾。基准含迁移到
-          // custom/ 的扩展域页面, 保证老用户升级无感 (lib/navOrder)。
-          const di = defaultNavIndex(item.to)
-          let anchor = -1
-          if (Number.isFinite(di) && di > 0) {
-            for (let i = di - 1; i >= 0 && anchor < 0; i -= 1) {
-              anchor = merged.findIndex(n => defaultNavIndex(n.to) === i)
-            }
-          }
-          if (anchor >= 0) merged.splice(anchor + 1, 0, item)
-          else if (di === 0) merged.unshift(item)
-          else merged.push(item)
-        }
-        return merged
-      })()
-    // 无保存排序 (新装/从未调整过菜单): 按迁移前默认基准排序, 扩展域页面
-    // 不沉底 — 老用户升级侧栏顺序与迁移前一致; 未知路径稳定追加在后。
-    : [...allNav].sort((a, b) => compareByDefaultNav(a.to, b.to))
-
-  const hiddenIds = new Set(prefs?.nav_hidden ?? [])
-  const visibleNavItems = navItems.filter(n => !hiddenIds.has(n.to) && !hiddenIds.has(n.to.replace(/^\/analysis\//, '')))
-
   // 新装用户一次性种子: 扩展域页面默认隐藏, 菜单设置里可逐个开启。
   // 老用户 (升级前已完成 onboarding) 只写标记不动偏好, 升级前后侧栏一致。
   // 种子标记存 localStorage (每设备一次, 保存成功后才写); 隐藏偏好本体持久化在后端 nav_hidden。
@@ -708,6 +681,150 @@ export function Layout() {
       // 挖掘运行历史查询失败不阻塞开关实时行情
     }
     await doEnableRealtime()
+  }
+
+  const renderNavItem = (entry: NavigationEntry, nested = false) => {
+    const itemRail = railMode && !nested
+    const { to, label, icon: Icon, badge, arch } = entry
+    // 「自选」项 — 开启分组侧栏且未整体收起时, 渲染为可展开父项 + 二级分组
+    const isWatchlistExpandable = to === '/watchlist' && groupsInNav && !itemRail && watchlistGroups.length > 0
+    return (
+      <div key={to}>
+        {isWatchlistExpandable ? (
+          /* 可展开的自选父项 — 点击切换展开, 不直接跳页 */
+          <button
+            aria-expanded={watchlistNavExpanded}
+            onClick={() => setWatchlistNavExpanded(v => !v)}
+            className={cn(
+              'group relative flex w-full items-center gap-3 rounded-btn px-3 py-2 text-sm transition-all duration-150 ease-smooth',
+              location.pathname === '/watchlist'
+                ? 'bg-elevated text-foreground font-medium'
+                : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground',
+            )}
+          >
+            <span
+              className={cn(
+                'pointer-events-none absolute inset-y-1 left-0 w-[2px] rounded-full bg-accent transition-opacity duration-150',
+                location.pathname === '/watchlist' ? 'opacity-100' : 'opacity-0',
+              )}
+            />
+            <Icon className={cn('h-4 w-4 shrink-0 transition-colors', location.pathname === '/watchlist' ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
+            <span className="flex-1 text-left">{label}</span>
+            {watchlistNavExpanded
+              ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" />
+              : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />
+            }
+          </button>
+        ) : (
+          /* 普通菜单项 */
+          <NavLink
+            to={to}
+            title={itemRail ? label : undefined}
+            className={({ isActive }) =>
+              cn(
+                'group relative flex items-center rounded-btn text-sm transition-all duration-150 ease-smooth',
+                itemRail ? 'justify-center px-0 py-2' : 'gap-3 px-3 py-2',
+                isActive
+                  ? 'bg-elevated text-foreground font-medium'
+                  : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground',
+              )
+            }
+          >
+            {({ isActive }) => (
+              <>
+                {/* active 左侧 accent 竖条指示 */}
+                <span
+                  className={cn(
+                    'pointer-events-none absolute inset-y-1 left-0 w-[2px] rounded-full bg-accent transition-opacity duration-150',
+                    isActive ? 'opacity-100' : 'opacity-0',
+                  )}
+                />
+                <Icon className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
+                {!itemRail && (
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className="truncate">{label}</span>
+                    {arch === 'ext' && (
+                      <span
+                        title="扩展域页面 — 可整体替换/移除而不伤核心"
+                        className="shrink-0 font-mono text-[8px] font-medium uppercase leading-none tracking-[0.08em] text-muted/70"
+                      >
+                        ext
+                      </span>
+                    )}
+                  </span>
+                )}
+                {!itemRail && badge && (
+                  <span className="ml-auto inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400 shrink-0">
+                    {badge}
+                  </span>
+                )}
+                {/* 数据同步状态: 同步中转圈, 刚完成显示绿色对勾闪烁 3 秒 */}
+                {to === '/data' && isDataSyncing && !itemRail && (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+                )}
+                {to === '/data' && !isDataSyncing && dataSyncJustDone && !itemRail && (
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-bull animate-pulse" />
+                )}
+                {/* 监控中心徽标: 仅非监控页且有未读时显示 */}
+                {to === '/monitor' && !itemRail && <MonitorBadge active={isActive} />}
+              </>
+            )}
+          </NavLink>
+        )}
+
+        {/* 自选分组二级子菜单 — 展开时显示 */}
+        {isWatchlistExpandable && watchlistNavExpanded && (
+          <div className="mt-0.5 space-y-0.5">
+            <NavLink
+              to="/watchlist"
+              className={({ isActive }) => cn(
+                'flex items-center gap-3 rounded-btn py-1.5 pl-9 pr-3 text-[12px] transition-colors duration-150 ease-smooth',
+                isActive && !location.search
+                  ? 'text-accent font-medium'
+                  : 'text-foreground/60 hover:text-foreground hover:bg-elevated/50',
+              )}
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center"><span className="h-1.5 w-1.5 rounded-full bg-muted" /></span>
+              <span>全部</span>
+              {(() => {
+                const info = navGroupPcts['all']
+                return info && info.pct != null ? (
+                  <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(info.pct)}`} title={groupPctTitle(info)}>
+                    {fmtPct(info.pct)}
+                  </span>
+                ) : null
+              })()}
+            </NavLink>
+            {watchlistGroups.map(group => {
+              const color = resolveWatchlistGroupColor(group.color)
+              const groupPath = `/watchlist?group=${group.id}`
+              const isGroupActive = location.pathname === '/watchlist' && location.search === `?group=${group.id}`
+              const pctInfo = navGroupPcts[group.id]
+              return (
+                <NavLink
+                  key={group.id}
+                  to={groupPath}
+                  className={cn(
+                    'flex items-center gap-3 rounded-btn py-1.5 pl-9 pr-3 text-[12px] transition-colors duration-150 ease-smooth',
+                    isGroupActive
+                      ? 'text-accent font-medium'
+                      : 'text-foreground/60 hover:text-foreground hover:bg-elevated/50',
+                  )}
+                >
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center"><span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} /></span>
+                  <span className="truncate">{group.name}</span>
+                  {pctInfo && pctInfo.pct != null && (
+                    <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(pctInfo.pct)}`} title={groupPctTitle(pctInfo)}>
+                      {fmtPct(pctInfo.pct)}
+                    </span>
+                  )}
+                </NavLink>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -822,145 +939,25 @@ export function Layout() {
         </div>
 
         <nav className="tf-nav-scroll flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-0.5">
-          {visibleNavItems.map(({ to, label, icon: Icon, badge, arch }) => {
-            // 「自选」项 — 开启分组侧栏且未整体收起时, 渲染为可展开父项 + 二级分组
-            const isWatchlistExpandable = to === '/watchlist' && groupsInNav && !railMode && watchlistGroups.length > 0
-            return (
-              <div key={to}>
-                {isWatchlistExpandable ? (
-                  /* 可展开的自选父项 — 点击切换展开, 不直接跳页 */
-                  <button
-                    onClick={() => setWatchlistNavExpanded(v => !v)}
-                    className={cn(
-                      'group relative flex w-full items-center gap-3 rounded-btn px-3 py-2 text-sm transition-all duration-150 ease-smooth',
-                      location.pathname === '/watchlist'
-                        ? 'bg-elevated text-foreground font-medium'
-                        : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'pointer-events-none absolute inset-y-1 left-0 w-[2px] rounded-full bg-accent transition-opacity duration-150',
-                        location.pathname === '/watchlist' ? 'opacity-100' : 'opacity-0',
-                      )}
-                    />
-                    <Icon className={cn('h-4 w-4 shrink-0 transition-colors', location.pathname === '/watchlist' ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                    <span className="flex-1 text-left">{label}</span>
-                    {watchlistNavExpanded
-                      ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" />
-                      : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />
-                    }
-                  </button>
-                ) : (
-                  /* 普通菜单项 */
-                  <NavLink
-                    to={to}
-                    title={railMode ? label : undefined}
-                    className={({ isActive }) =>
-                      cn(
-                        'group relative flex items-center rounded-btn text-sm transition-all duration-150 ease-smooth',
-                        railMode ? 'justify-center px-0 py-2' : 'gap-3 px-3 py-2',
-                        isActive
-                          ? 'bg-elevated text-foreground font-medium'
-                          : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground',
-                      )
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        {/* active 左侧 accent 竖条指示 */}
-                        <span
-                          className={cn(
-                            'pointer-events-none absolute inset-y-1 left-0 w-[2px] rounded-full bg-accent transition-opacity duration-150',
-                            isActive ? 'opacity-100' : 'opacity-0',
-                          )}
-                        />
-                        <Icon className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                        {!railMode && (
-                          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                            <span className="truncate">{label}</span>
-                            {arch === 'ext' && (
-                              <span
-                                title="扩展域页面 — 可整体替换/移除而不伤核心"
-                                className="shrink-0 font-mono text-[8px] font-medium uppercase leading-none tracking-[0.08em] text-muted/70"
-                              >
-                                ext
-                              </span>
-                            )}
-                          </span>
-                        )}
-                        {!railMode && badge && (
-                          <span className="ml-auto inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400 shrink-0">
-                            {badge}
-                          </span>
-                        )}
-                        {/* 数据同步状态: 同步中转圈, 刚完成显示绿色对勾闪烁 3 秒 */}
-                        {to === '/data' && isDataSyncing && !railMode && (
-                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-                        )}
-                        {to === '/data' && !isDataSyncing && dataSyncJustDone && !railMode && (
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-bull animate-pulse" />
-                        )}
-                        {/* 监控中心徽标: 仅非监控页且有未读时显示 */}
-                        {to === '/monitor' && !railMode && <MonitorBadge active={isActive} />}
-                      </>
-                    )}
-                  </NavLink>
-                )}
-
-                {/* 自选分组二级子菜单 — 展开时显示 */}
-                {isWatchlistExpandable && watchlistNavExpanded && (
-                  <div className="mt-0.5 space-y-0.5">
-                    <NavLink
-                      to="/watchlist"
-                      className={({ isActive }) => cn(
-                        'flex items-center gap-2 rounded-btn py-1.5 pl-9 pr-3 text-[12px] transition-colors duration-150 ease-smooth',
-                        isActive && !location.search
-                          ? 'text-accent font-medium'
-                          : 'text-foreground/60 hover:text-foreground hover:bg-elevated/50',
-                      )}
-                    >
-                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted" />
-                      <span>全部</span>
-                      {(() => {
-                        const info = navGroupPcts['all']
-                        return info && info.pct != null ? (
-                          <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(info.pct)}`} title={groupPctTitle(info)}>
-                            {fmtPct(info.pct)}
-                          </span>
-                        ) : null
-                      })()}
-                    </NavLink>
-                    {watchlistGroups.map(group => {
-                      const color = resolveWatchlistGroupColor(group.color)
-                      const groupPath = `/watchlist?group=${group.id}`
-                      const isGroupActive = location.pathname === '/watchlist' && location.search === `?group=${group.id}`
-                      const pctInfo = navGroupPcts[group.id]
-                      return (
-                        <NavLink
-                          key={group.id}
-                          to={groupPath}
-                          className={cn(
-                            'flex items-center gap-2 rounded-btn py-1.5 pl-9 pr-3 text-[12px] transition-colors duration-150 ease-smooth',
-                            isGroupActive
-                              ? 'text-accent font-medium'
-                              : 'text-foreground/60 hover:text-foreground hover:bg-elevated/50',
-                          )}
-                        >
-                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${color.dot}`} />
-                          <span className="truncate">{group.name}</span>
-                          {pctInfo && pctInfo.pct != null && (
-                            <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(pctInfo.pct)}`} title={groupPctTitle(pctInfo)}>
-                              {fmtPct(pctInfo.pct)}
-                            </span>
-                          )}
-                        </NavLink>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
+          {visibleLayout.items.map(node => {
+            if (node.type === 'page') {
+              const entry = navById.get(node.id)
+              return entry ? renderNavItem(entry) : null
+            }
+            const ids = navPageIds(node)
+            return <NavFolder key={node.id} label={node.label} active={node.id === activeGroupId}
+              expanded={isGroupOpen(node)} rail={railMode} popupOpen={railGroupId === node.id}
+              onToggle={() => toggleGroup(node)} onPopupChange={open => setRailGroupId(open ? node.id : null)}
+              indicators={<>
+                {ids.includes('/data') && isDataSyncing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {ids.includes('/monitor') && <MonitorBadge active={location.pathname === '/monitor'} />}
+              </>}>
+              {node.children.length === 0 && <p className="px-3 py-2 text-xs leading-5 text-muted">暂无子菜单，请在菜单管理中移入页面。</p>}
+              {node.children.map(page => {
+                const entry = navById.get(page.id)
+                return entry ? renderNavItem(entry, true) : null
+              })}
+            </NavFolder>
           })}
           <ExtensionSlot
             name="layout.navigation.extra"
@@ -1086,8 +1083,8 @@ export function Layout() {
           <div className={railMode ? 'flex flex-col items-center gap-1' : 'flex items-center gap-1'}>
             <ThemeToggle />
             <NavLink
-              to="/settings"
-              title={railMode ? '设置' : undefined}
+              to={prefs?.nav_layout ? '/settings?tab=pages&section=menus' : '/settings'}
+              title={railMode ? (prefs?.nav_layout ? '菜单管理' : '设置') : undefined}
               className={({ isActive }) =>
                 cn(
                   'group relative flex items-center rounded-btn text-sm transition-all duration-150 ease-smooth',
@@ -1107,7 +1104,7 @@ export function Layout() {
                     )}
                   />
                   <Settings className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                  {!railMode && <span className="whitespace-nowrap">设置</span>}
+                  {!railMode && <span className="whitespace-nowrap">{prefs?.nav_layout ? '菜单管理' : '设置'}</span>}
                   {!railMode && version && (
                     <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-muted/50 select-none shrink-0">
                       {version}

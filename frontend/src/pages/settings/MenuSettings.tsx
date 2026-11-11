@@ -1,458 +1,207 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, ExternalLink, GripVertical, Bell, Trash2, Folder, FolderMinus, LockKeyhole, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { api, type Preferences } from '@/lib/api'
 import { setUiPref } from '@/lib/uiPrefs'
 import { toast } from '@/components/Toast'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
-import { getFrontendExtensionNavigation } from '@/extensions/registry'
-import { compareByDefaultNav, defaultNavIndex } from '@/lib/navOrder'
+import { getNavigationEntries, type NavigationEntry } from '@/lib/navigation'
+import { canonicalNavId, dissolveNavGroup, moveNavPage, navPageIds, resolveNavLayout, type NavGroup, type NavLayout, type NavNode } from '@/lib/navLayout'
+import { cn } from '@/lib/cn'
 
-interface NavEntry {
-  id: string
-  label: string
-  type: 'builtin' | 'analysis' | 'extension'
-  visible: boolean
-  /** 源码扩展命名空间 (frontend/src/custom/<ns>/), 仅 type=extension 有值; 物理删除的凭据 */
-  extensionId?: string
-}
-
-// 核心页清单; nav_order 未保存时的完整默认顺序以 lib/navOrder 基准为准
-// (含迁移到 custom/ 的扩展域页面, 保证老用户升级侧栏顺序无感)
-const BUILTIN_PAGES: NavEntry[] = [
-  { id: '/', label: '看板', type: 'builtin', visible: true },
-  { id: '/watchlist', label: '自选', type: 'builtin', visible: true },
-  { id: '/screener', label: '策略', type: 'builtin', visible: true },
-  { id: '/factors', label: '因子', type: 'builtin', visible: true },
-  { id: '/backtest', label: '回测', type: 'builtin', visible: true },
-  { id: '/regime', label: '市场环境', type: 'builtin', visible: true },
-  { id: '/indices', label: '指数', type: 'builtin', visible: true },
-  { id: '/data', label: '数据', type: 'builtin', visible: true },
-]
-
-// ── 架构归属标注 (docs/open-platform-plan.md §2 核心域/扩展域边界) ──
-// 核心 = 页面承载核心域能力 (数据底座/订阅锚点/策略回测/环境生产);
-// 扩展 = 核心数据的消费页, 二开可用「扩展页面」平行实现替换 UI 而不伤核心。
-// 与「类型」列的区别: 类型标注页面来源 (内置/自定义), 归属标注架构分层。
-type ArchKind = 'core' | 'ext'
-const ARCH_CLASS: Record<string, { kind: ArchKind; reason: string }> = {
-  '/':               { kind: 'core', reason: '总览页 — 聚合核心数据的多维视图' },
-  '/watchlist':      { kind: 'core', reason: '订阅锚点 — 监控/提醒/看板的数据范围基准' },
-  '/screener':       { kind: 'core', reason: '策略引擎 — 策略/评分/信号定义' },
-  '/factors':        { kind: 'core', reason: '因子平台 — 因子检验与回测联动' },
-  '/backtest':       { kind: 'core', reason: '回测引擎 — 矩阵回测与优化' },
-  '/regime':         { kind: 'core', reason: '环境数据生产 — 回测/挖掘/归因共用的市场状态口径' },
-  '/indices':        { kind: 'core', reason: '行情数据底座 — 指数日K/分时出口' },
-  '/data':           { kind: 'core', reason: '数据底座 — 同步管道与数据源路由' },
-  '/stock-analysis': { kind: 'ext', reason: '个股分析视图 — 消费核心数据, 可由扩展页面替换' },
-  '/limit-ladder':   { kind: 'ext', reason: '连板梯队视图 — 消费核心数据, 可由扩展页面替换' },
-  '/concept-analysis': { kind: 'ext', reason: '概念分析视图 — 消费核心数据, 可由扩展页面替换' },
-  '/industry-analysis': { kind: 'ext', reason: '行业分析视图 — 消费核心数据, 可由扩展页面替换' },
-  '/financials':     { kind: 'ext', reason: '财务概况视图 — 消费核心数据, 可由扩展页面替换' },
-  '/monitor':        { kind: 'ext', reason: '监控消费页 (规则引擎与推送管道属核心), 页面可替换' },
-  '/abnormal':       { kind: 'ext', reason: '异动监控视图 — 消费核心数据, 可由扩展页面替换' },
-  '/lots':           { kind: 'ext', reason: '持仓提醒视图 — 消费核心数据, 可由扩展页面替换' },
-  '/paper':          { kind: 'ext', reason: '模拟盘 — 官方插件化拆分候选 (V3)' },
-  '/signals':        { kind: 'ext', reason: '信号库视图 — 消费核心数据, 可由扩展页面替换' },
-  '/review':         { kind: 'ext', reason: '大盘复盘视图 — 消费核心数据, 可由扩展页面替换' },
-}
-/** 自定义分析页天然属于扩展域 */
-const archOf = (entry: NavEntry): { kind: ArchKind; reason: string } =>
-  ARCH_CLASS[entry.id] ?? { kind: 'ext', reason: '自定义分析页 — 扩展域' }
-
-// ── Sortable row ──
-
-function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBadge, onRemove }: {
-  entry: NavEntry
-  hidden: boolean
-  onToggleHidden: (id: string) => void
-  badgeEnabled?: boolean
-  onToggleBadge?: (id: string) => void
-  /** 删除源码扩展页 (物理删除 frontend/src/custom/<extensionId>/, 先备份) */
-  onRemove?: (entry: NavEntry) => void
+function SortableMenuRow({ node, entry, parentId, groups, hidden, busy, focusNew, onMove, onHide, onRename, onDissolve,
+  badgeEnabled, onToggleBadge, onRemove }: {
+  node: NavNode; entry?: NavigationEntry; parentId: string | null; groups: NavGroup[]; hidden: boolean; busy: boolean; focusNew: boolean
+  onMove: (id: string, parent: string | null) => void; onHide: (id: string) => void
+  onRename: (id: string, label: string) => void; onDissolve: (id: string) => void
+  badgeEnabled: boolean; onToggleBadge: () => void; onRemove: (entry: NavigationEntry) => void
 }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: entry.id })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.6 : 1,
-    zIndex: isDragging ? 10 : undefined,
-  }
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`group grid grid-cols-[2.5rem_1fr_4.5rem_3rem_4.5rem_3rem] items-center border-b border-border/60 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-elevated/40 ${
-        isDragging ? 'bg-elevated rounded-lg shadow-lg' : ''
-      } ${hidden ? 'opacity-50' : ''}`}
-    >
-      <div
-        {...attributes}
-        {...listeners}
-        className="cursor-grab active:cursor-grabbing text-muted hover:text-foreground transition-colors"
-      >
-        <GripVertical className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex items-center gap-2">
-        <span className={`truncate text-sm font-medium ${!hidden ? 'text-foreground' : 'text-muted line-through'}`}>
-          {entry.label}
-        </span>
-        {(() => {
-          const arch = archOf(entry)
-          return (
-            <span
-              title={arch.reason}
-              className={`shrink-0 cursor-help font-mono text-[9px] font-medium uppercase leading-4 tracking-[0.08em] ${
-                arch.kind === 'core' ? 'text-accent' : 'text-muted/80'
-              }`}
-            >
-              {arch.kind === 'core' ? 'core' : 'ext'}
-            </span>
-          )
-        })()}
-        {hidden && (
-          <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted shrink-0">已隐藏</span>
-        )}
-        <span className="truncate text-[11px] text-muted font-mono">{entry.id}</span>
-      </div>
-      <div>
-        <span className={`text-[11px] font-medium ${
-          entry.type === 'analysis' ? 'text-accent' : 'text-muted'
-        }`}>
-          {entry.type === 'builtin' ? '内置' : entry.type === 'analysis' ? '自定义' : '扩展'}
-        </span>
-      </div>
-      <div className="flex justify-center">
-        <button
-          onClick={() => onToggleHidden(entry.id)}
-          className={`rounded p-1 transition-colors ${
-            hidden
-              ? 'text-muted hover:text-accent hover:bg-accent/10'
-              : 'text-accent hover:bg-accent/10'
-          }`}
-          title={hidden ? '显示' : '隐藏'}
-        >
-          {hidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-        </button>
-      </div>
-      <div className="flex justify-center gap-1">
-        {entry.type === 'analysis' ? (
-          <Link
-            to={`/settings?tab=pages&section=ext-pages`}
-            className="rounded p-1 text-muted hover:text-accent hover:bg-accent/10 transition-colors"
-            title="编辑扩展页面"
-          >
-            <Settings className="h-3.5 w-3.5" />
-          </Link>
-        ) : (
-          <Link
-            to={entry.id}
-            className="rounded p-1 text-muted hover:text-accent hover:bg-accent/10 transition-colors"
-            title="打开页面"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
-        )}
-        {onRemove && entry.extensionId && (
-          <button
-            type="button"
-            onClick={() => onRemove(entry)}
-            className="rounded p-1 text-muted hover:bg-danger/10 hover:text-danger transition-colors"
-            title={`删除源码扩展页 (物理删除 frontend/src/custom/${entry.extensionId}/, 自动备份)`}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {/* 第 6 列: 徽标开关 (仅监控中心) */}
-      <div className="flex justify-center">
-        {onToggleBadge && (
-          <button
-            onClick={() => onToggleBadge(entry.id)}
-            className={`rounded p-1 transition-colors ${
-              badgeEnabled
-                ? 'text-accent hover:bg-accent/10'
-                : 'text-muted hover:text-accent hover:bg-accent/10'
-            }`}
-            title={badgeEnabled ? '关闭数字提示' : '开启数字提示'}
-          >
-            <Bell className="h-3.5 w-3.5" />
-          </button>
-        )}
+  const home = node.id === '/'
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({
+    id: node.id, disabled: home || busy, data: { parentId, type: node.type },
+  })
+  const label = node.type === 'group' ? node.label : entry?.label ?? node.id
+  const Icon = node.type === 'group' ? Folder : entry?.icon ?? ExternalLink
+  return <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
+    className={cn('relative flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-3 last:border-b-0 sm:px-4',
+      parentId && 'pl-9 sm:pl-10', isDragging && 'z-10 bg-elevated shadow-lg', isOver && 'bg-accent/10', hidden && 'opacity-60')}
+    data-nav-id={node.id}>
+    <button type="button" {...attributes} {...listeners} disabled={home || busy} aria-label={`拖动${label}`}
+      className="touch-none rounded p-1 text-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-30">
+      {home ? <LockKeyhole className="h-4 w-4" /> : <GripVertical className="h-4 w-4" />}
+    </button>
+    <Icon className="h-4 w-4 shrink-0 text-muted" />
+    <div className="min-w-0 flex-1 basis-28">
+      {node.type === 'group' ? <input aria-label={`分类名称：${label}`} maxLength={32} value={node.label} disabled={busy} autoFocus={focusNew}
+        onChange={e => onRename(node.id, e.target.value)} className="h-8 w-full rounded border border-transparent bg-transparent px-0 text-sm font-medium text-foreground hover:border-border focus:border-accent focus:outline-none" />
+        : <div className="truncate text-sm font-medium text-foreground">{label}{home && <span className="ml-2 text-xs font-normal text-muted">固定置顶</span>}</div>}
+      <div className="truncate text-[11px] text-muted">
+        {node.type === 'group' ? `${node.children.length} 个菜单 · 拖到分类名称上可移入` : !entry ? '页面暂不可用，归属已保留'
+          : !entry.visible ? '页面已停用，启用后在原分类恢复' : entry.type === 'builtin' ? '内置页面' : entry.type === 'analysis' ? '自定义分析页面' : '扩展页面'}
       </div>
     </div>
-  )
+    {node.type === 'page' && !home && <select aria-label={`移动${label}到`} value={parentId ?? ''} disabled={busy}
+      onChange={e => onMove(node.id, e.target.value || null)}
+      className="h-8 w-32 max-w-full rounded-lg border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30">
+      <option value="">顶层菜单</option>{groups.map(group => <option key={group.id} value={group.id}>{group.label || '未命名分类'}</option>)}
+    </select>}
+    <div className="flex items-center gap-1">
+      {node.type === 'group' ? <button type="button" disabled={busy} onClick={() => onDissolve(node.id)} aria-label={`解散${label}`}
+        title="解散分类，子菜单移回顶层" className="rounded p-2 text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"><FolderMinus className="h-4 w-4" /></button>
+        : <>
+          <button type="button" disabled={home || busy} onClick={() => onHide(node.id)} aria-label={`${hidden ? '显示' : '隐藏'}${label}`}
+            className="rounded p-2 text-muted hover:bg-elevated hover:text-accent disabled:opacity-30">{hidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+          {entry && <Link to={entry.type === 'analysis' ? '/settings?tab=pages&section=ext-pages' : entry.to}
+            aria-label={`打开${label}`} className="rounded p-2 text-muted hover:bg-elevated hover:text-accent"><ExternalLink className="h-4 w-4" /></Link>}
+          {node.id === '/monitor' && <button type="button" aria-label={badgeEnabled ? '关闭监控数字提示' : '开启监控数字提示'} onClick={onToggleBadge}
+            className="rounded p-2 text-muted hover:bg-elevated hover:text-accent"><Bell className="h-4 w-4" /></button>}
+          {entry?.extensionId && <button type="button" disabled={busy} onClick={() => onRemove(entry)} aria-label={`删除源码扩展页${label}`}
+            className="rounded p-2 text-muted hover:bg-danger/10 hover:text-danger disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>}
+        </>}
+    </div>
+  </div>
 }
 
-// ── Main panel ──
+function RootDropTarget({ disabled }: { disabled: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({ id: 'nav:root', disabled })
+  return <div ref={setNodeRef} className={cn('p-4 text-center text-xs text-muted', isOver && 'bg-accent/10 text-accent')}>拖到这里移回顶层，也可使用每行的归属选择框</div>
+}
 
 export function SettingsMenuSettingsPanel() {
   const qc = useQueryClient()
   const { data: prefs } = usePreferences()
   const menus = useQuery({ queryKey: QK.analysisMenus, queryFn: api.analysisMenus })
-
-  const analysisEntries: NavEntry[] = (menus.data?.items ?? []).map(m => ({
-    id: m.id,
-    label: m.label,
-    type: 'analysis' as const,
-    visible: m.visible,
-  }))
-
-  // 扩展导航 (frontend/src/custom/*/extension.tsx 注册): id 取路由 path,
-  // 与 Layout 侧边栏 nav_order / nav_hidden 按 to 匹配的口径一致。
-  // removedNs: 本次会话已物理删除的命名空间 — 注册表是启动期冻结快照,
-  // 刷新页面前需本地过滤, 否则已删除的行会残留。
   const [removedNs, setRemovedNs] = useState<Set<string>>(new Set())
-  const extensionEntries: NavEntry[] = getFrontendExtensionNavigation()
-    .filter(item => !removedNs.has(item.extensionId))
-    .map(item => ({
-      id: item.route.path,
-      label: item.label,
-      type: 'extension' as const,
-      visible: true,
-      extensionId: item.extensionId,
-    }))
-
-  const allEntries = useMemo(() => {
-    const saved = prefs?.nav_order ?? []
-    const entryMap = new Map<string, NavEntry>()
-    for (const e of BUILTIN_PAGES) entryMap.set(e.id, e)
-    for (const e of analysisEntries) entryMap.set(e.id, e)
-    for (const e of extensionEntries) entryMap.set(e.id, e)
-
-    // 无保存排序: 按迁移前默认基准排序 (扩展域页面不沉底, 老用户升级无感)
-    if (saved.length === 0) {
-      return [...BUILTIN_PAGES, ...analysisEntries, ...extensionEntries]
-        .sort((a, b) => compareByDefaultNav(a.id, b.id))
-    }
-
-    const ordered: NavEntry[] = []
-    const seen = new Set<string>()
-    for (const id of saved) {
-      const entry = entryMap.get(id)
-      if (entry) {
-        ordered.push(entry)
-        seen.add(id)
-      }
-    }
-    for (const e of [...BUILTIN_PAGES, ...analysisEntries, ...extensionEntries]) {
-      if (seen.has(e.id)) continue
-      // 未保存过排序的新条目: 默认基准内的路径插回默认位置, 其余追加到末尾
-      const di = defaultNavIndex(e.id)
-      let anchor = -1
-      if (Number.isFinite(di) && di > 0) {
-        for (let i = di - 1; i >= 0 && anchor < 0; i -= 1) {
-          anchor = ordered.findIndex(o => defaultNavIndex(o.id) === i)
-        }
-      }
-      if (anchor >= 0) ordered.splice(anchor + 1, 0, e)
-      else if (di === 0) ordered.unshift(e)
-      else ordered.push(e)
-    }
-    return ordered
-  }, [prefs?.nav_order, analysisEntries, extensionEntries])
-
-  const hiddenSet = useMemo(() => new Set(prefs?.nav_hidden ?? []), [prefs?.nav_hidden])
-
-  // Local order state for optimistic drag updates
-  const [localOrder, setLocalOrder] = useState<string[] | null>(null)
-  const orderedEntries = useMemo(() => {
-    const order = localOrder ?? prefs?.nav_order ?? []
-    if (!order.length) return allEntries
-    const byId = new Map(allEntries.map(e => [e.id, e]))
-    const result: NavEntry[] = []
-    const seen = new Set<string>()
-    for (const id of order) {
-      const e = byId.get(id)
-      if (e) { result.push(e); seen.add(id) }
-    }
-    for (const e of allEntries) {
-      if (seen.has(e.id)) continue
-      // 与 allEntries 同一语义: 默认基准内的路径插回默认位置而非追加到末尾
-      const di = defaultNavIndex(e.id)
-      let anchor = -1
-      if (Number.isFinite(di) && di > 0) {
-        for (let i = di - 1; i >= 0 && anchor < 0; i -= 1) {
-          anchor = result.findIndex(o => defaultNavIndex(o.id) === i)
-        }
-      }
-      if (anchor >= 0) result.splice(anchor + 1, 0, e)
-      else if (di === 0) result.unshift(e)
-      else result.push(e)
-    }
-    return result
-  }, [localOrder, prefs?.nav_order, allEntries])
-
-  const saveNavOrder = useMutation({
-    mutationFn: (order: string[]) => api.saveNavOrder(order),
-    onSuccess: () => {
-      setLocalOrder(null)
-      qc.invalidateQueries({ queryKey: QK.preferences })
+  const entries = getNavigationEntries(menus.data?.items ?? []).filter(x => !x.extensionId || !removedNs.has(x.extensionId))
+  const entryMap = new Map(entries.map(x => [x.id, x]))
+  const [draft, setDraft] = useState<NavLayout | null>(null)
+  const [hiddenDraft, setHiddenDraft] = useState<string[] | null>(null)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupId, setNewGroupId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const layout = resolveNavLayout(draft ?? prefs?.nav_layout, entries, prefs?.nav_order)
+  const hidden = hiddenDraft ?? (prefs?.nav_hidden ?? []).map(canonicalNavId).filter(id => id !== '/')
+  const dirty = draft !== null || hiddenDraft !== null
+  const groups = layout.items.filter((x): x is NavGroup => x.type === 'group')
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const save = useMutation({
+    mutationFn: () => api.saveNavLayout(layout, hidden),
+    onSuccess: result => {
+      qc.setQueryData<Preferences>(QK.preferences, previous => previous ? { ...previous, ...result } : previous)
+      setDraft(null); setHiddenDraft(null); setSaved(true); setError('')
+      void qc.invalidateQueries({ queryKey: QK.preferences })
+      toast('菜单布局已保存', 'success')
     },
+    onError: (e: Error) => setError(e.message || '保存失败，修改已保留，请重试'),
   })
-
-  const saveNavHidden = useMutation({
-    mutationFn: (hidden: string[]) => api.saveNavHidden(hidden),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
-  })
-
-  // 删除源码扩展页: 双重确认 → 后端先备份 zip 再删目录 → 本地移行 + 提示刷新
-  const [deletedBackup, setDeletedBackup] = useState<{ ns: string; backup: string } | null>(null)
-  const deleteExtension = useMutation({
-    mutationFn: (ns: string) => api.pageAdminDeleteSourceExtension(ns),
-    onSuccess: (r) => {
-      setRemovedNs(prev => new Set(prev).add(r.deleted))
-      setDeletedBackup({ ns: r.deleted, backup: r.backup })
-      toast(`已删除 ${r.deleted} (已备份), 刷新页面后从菜单与路由消失`, 'success')
-    },
-    onError: (e: Error) => toast(e.message || '删除失败', 'error'),
-  })
-  const handleRemoveExtension = (entry: NavEntry) => {
-    const ns = entry.extensionId
-    if (!ns) return
-    if (!confirm(`删除源码扩展页「${entry.label}」?\n\n将物理删除 frontend/src/custom/${ns}/ 目录, 刷新后该页面从菜单和路由中消失。`)) return
-    if (!confirm(`二次确认: 删除前会自动备份为 zip (可下载恢复)。确定删除 ${ns}?`)) return
-    deleteExtension.mutate(ns)
+  const busy = save.isPending || !prefs || menus.isLoading || menus.isError
+  const change = (value: NavLayout) => { setDraft(value); setSaved(false); setError('') }
+  const onMove = (id: string, parent: string | null) => change(moveNavPage(layout, id, parent))
+  const onHide = (id: string) => {
+    if (id === '/') return
+    setHiddenDraft(hidden.includes(id) ? hidden.filter(x => x !== id) : [...hidden, id]); setSaved(false)
   }
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  )
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-
-    const ids = orderedEntries.map(e => e.id)
-    const oldIdx = ids.indexOf(active.id as string)
-    const newIdx = ids.indexOf(over.id as string)
-    const reordered = arrayMove(ids, oldIdx, newIdx)
-    setLocalOrder(reordered)
-    saveNavOrder.mutate(reordered)
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id || active.id === '/' || busy) return
+    const id = String(active.id)
+    const root = layout.items.find(x => x.id === id)
+    if (root?.type === 'group') {
+      const target = layout.items.find(x => x.id === over.id || navPageIds(x).includes(String(over.id)))
+      const from = layout.items.findIndex(x => x.id === id)
+      const to = over.id === 'nav:root' ? layout.items.length - 1 : layout.items.findIndex(x => x.id === target?.id)
+      if (to > 0) change({ ...layout, items: arrayMove(layout.items, from, to) })
+      return
+    }
+    if (over.id === 'nav:root') return onMove(id, null)
+    const group = groups.find(x => x.id === over.id || x.children.some(page => page.id === over.id))
+    const oldGroup = groups.find(x => x.children.some(page => page.id === id))
+    if (group?.id === oldGroup?.id && over.id !== group?.id) {
+      const siblings = group ? group.children : layout.items
+      const from = siblings.findIndex(x => x.id === id)
+      const to = siblings.findIndex(x => x.id === over.id)
+      if (from >= 0 && to >= (group ? 0 : 1)) {
+        if (group) change({ ...layout, items: layout.items.map(x => x.id === group.id
+          ? { ...group, children: arrayMove(group.children, from, to) } : x) })
+        else change({ ...layout, items: arrayMove(layout.items, from, to) })
+      }
+      return
+    }
+    change(moveNavPage(layout, id, group?.id ?? null, group?.id === over.id ? undefined : String(over.id)))
   }
-
-  const toggleHidden = (id: string) => {
-    const next = new Set(hiddenSet)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    saveNavHidden.mutate([...next])
+  const addGroup = () => {
+    const label = newGroupName.trim()
+    if (!label) return
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+    const group: NavGroup = { type: 'group', id: `group:${id}`, label, children: [] }
+    change({ ...layout, items: [layout.items[0], group, ...layout.items.slice(1)] })
+    setNewGroupId(group.id)
+    setNewGroupName('')
   }
-
-  // 监控中心徽标开关 (localStorage)
   const [badgeEnabled, setBadgeEnabled] = useState(() => {
     try { return localStorage.getItem('monitor_badge_enabled') !== '0' } catch { return true }
   })
-  const toggleBadge = (id: string) => {
-    if (id !== '/monitor') return
-    const next = !badgeEnabled
-    setBadgeEnabled(next)
-    try { setUiPref('monitor_badge_enabled', next ? '1' : '0') } catch { /* ignore */ }
+  const toggleBadge = () => {
+    setBadgeEnabled(!badgeEnabled); setUiPref('monitor_badge_enabled', badgeEnabled ? '0' : '1')
   }
-
-  return (
-    <div className="max-w-5xl space-y-6">
-      <section className="rounded-2xl border border-border bg-surface p-6 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_38%)]">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">菜单设置</div>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">调整左侧菜单顺序</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
-          拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
-          新安装用户的扩展页面默认隐藏，在这里点眼睛图标即可逐个开启。
-        </p>
-        <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
-          <span>架构归属 (悬停看原因):</span>
-          <span className="inline-flex items-center gap-1">
-            <span className="rounded bg-accent/10 px-1 py-px text-[9px] leading-4 text-accent">核心</span>
-            页面承载核心域能力 (数据底座 / 订阅锚点 / 策略回测 / 环境生产)
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="rounded border border-border px-1 py-px text-[9px] leading-4 text-muted">扩展</span>
-            核心数据的消费页 — 二次开发可用「扩展页面」平行实现替换, 不伤核心
-          </span>
-        </p>
-      </section>
-
-      <section className="rounded-card border border-border bg-surface overflow-hidden">
-        <div className="grid grid-cols-[2.5rem_1fr_4.5rem_3rem_4.5rem_3rem] items-center border-b border-border bg-elevated/40 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-muted">
-          <div />
-          <div>菜单 · 归属</div>
-          <div>类型</div>
-          <div className="text-center">显示</div>
-          <div className="text-center">设置</div>
-          <div className="text-center">数字</div>
-        </div>
-
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={orderedEntries.map(e => e.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            {orderedEntries.map((entry) => (
-              <SortableItem
-                key={entry.id}
-                entry={entry}
-                hidden={hiddenSet.has(entry.id)}
-                onToggleHidden={toggleHidden}
-                badgeEnabled={entry.id === '/monitor' ? badgeEnabled : undefined}
-                onToggleBadge={entry.id === '/monitor' ? toggleBadge : undefined}
-                onRemove={handleRemoveExtension}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
-
-        {menus.isLoading && (
-          <div className="px-5 py-10 text-center text-sm text-muted">正在加载菜单...</div>
-        )}
-      </section>
-
-      {deletedBackup && (
-        <div className="rounded-card border border-border bg-elevated/40 p-4 text-sm text-secondary flex flex-wrap items-center gap-x-4 gap-y-2">
-          <span>
-            已删除源码扩展页 <span className="font-mono text-foreground">{deletedBackup.ns}</span>，刷新页面后生效。
-          </span>
-          <a
-            href={api.pageAdminBackupUrl(deletedBackup.backup)}
-            download
-            className="rounded border border-border px-2 py-1 text-xs text-accent hover:bg-accent/10 transition-colors"
-          >
-            下载备份 {deletedBackup.backup}
-          </a>
-          <span className="text-xs text-muted">备份同时保存在服务端 data/backups/pages/，误删可解压恢复或 git checkout</span>
-        </div>
-      )}
+  const [deletedBackup, setDeletedBackup] = useState<{ ns: string; backup: string } | null>(null)
+  const deleteExtension = useMutation({
+    mutationFn: (ns: string) => api.pageAdminDeleteSourceExtension(ns),
+    onSuccess: r => {
+      setRemovedNs(previous => new Set(previous).add(r.deleted))
+      setDeletedBackup({ ns: r.deleted, backup: r.backup })
+      toast(`已删除 ${r.deleted}（已备份），刷新后移除页面`, 'success')
+    },
+    onError: (e: Error) => toast(e.message || '删除失败', 'error'),
+  })
+  const remove = (entry: NavigationEntry) => {
+    if (dirty) { setError('请先保存或撤销布局修改，再删除扩展页'); return }
+    const ns = entry.extensionId
+    if (!ns || !confirm(`删除源码扩展页「${entry.label}」？将先备份再物理删除 frontend/src/custom/${ns}/。`)) return
+    if (confirm(`再次确认删除 ${ns}？页面入口将于刷新后移除。`)) deleteExtension.mutate(ns)
+  }
+  const row = (node: NavNode, parentId: string | null = null) => <SortableMenuRow key={node.id} node={node} entry={entryMap.get(node.id)}
+    parentId={parentId} groups={groups} hidden={hidden.includes(node.id)} busy={busy || deleteExtension.isPending} focusNew={node.id === newGroupId}
+    onMove={onMove} onHide={onHide} onRename={(id, label) => change({ ...layout, items: layout.items.map(x => x.type === 'group' && x.id === id ? { ...x, label } : x) })}
+    onDissolve={id => change(dissolveNavGroup(layout, id))} badgeEnabled={badgeEnabled} onToggleBadge={toggleBadge} onRemove={remove} />
+  return <div className="max-w-5xl space-y-5">
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div><h2 className="text-xl font-semibold text-foreground">组织左侧菜单</h2>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">把常用页面归入分类，缩短侧栏。看板固定置顶，其余菜单可拖动或选择归属；自选保留原有分组。</p></div>
+      <Link to="/settings?tab=pages&section=ext-pages" className="rounded-lg border border-border px-3 py-2 text-xs text-secondary hover:bg-elevated">管理扩展页面</Link>
     </div>
-  )
+    <div className="flex flex-wrap items-center gap-2">
+      <input aria-label="新分类名称" placeholder="分类名称，例如：研究分析" maxLength={32} value={newGroupName} disabled={busy}
+        onChange={e => setNewGroupName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addGroup() }}
+        className="h-9 min-w-0 flex-1 basis-48 rounded-lg border border-border bg-base px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30" />
+      <button type="button" onClick={addGroup} disabled={busy || !newGroupName.trim()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated disabled:opacity-40"><Plus className="h-4 w-4" />新建分类</button>
+    </div>
+    {menus.isError && <p role="alert" className="text-sm text-danger">菜单加载失败，请刷新后重试。现有布局保持不变。</p>}
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <div className="rounded-xl border border-border bg-surface">
+        <SortableContext items={layout.items.flatMap(node => [node.id, ...(node.type === 'group' ? node.children.map(x => x.id) : [])])} strategy={verticalListSortingStrategy}>
+          {layout.items.map(node => <div key={node.id}>{row(node)}{node.type === 'group' && <div className="bg-elevated/20">
+            {node.children.length ? node.children.map(page => row(page, node.id)) : <p className="px-12 py-3 text-xs text-muted">暂无子菜单，可拖入页面或通过归属选择框移入；保存后分类显示在侧栏。</p>}
+          </div>}</div>)}
+        </SortableContext>
+        <RootDropTarget disabled={busy} />
+      </div>
+    </DndContext>
+    {error && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-sm text-danger">{error}</p>}
+    <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-border bg-base py-3">
+      <span role="status" className="mr-auto text-xs text-muted">{!prefs || menus.isLoading ? '正在读取菜单…' : save.isPending ? '正在保存…' : dirty ? '有未保存的修改' : saved ? '布局已保存' : '修改后点击保存，侧栏立即更新'}</span>
+      <button type="button" disabled={busy} onClick={() => change({ v: 1, items: layout.items.flatMap<NavNode>(node => node.type === 'group' ? node.children : [node]) })}
+        className="rounded-lg px-3 py-2 text-xs text-secondary hover:bg-elevated disabled:opacity-40">恢复平铺</button>
+      <button type="button" disabled={busy || !dirty} onClick={() => { setDraft(null); setHiddenDraft(null); setError('') }}
+        className="rounded-lg border border-border px-3 py-2 text-xs text-secondary hover:bg-elevated disabled:opacity-40">撤销修改</button>
+      <button type="button" disabled={busy || !dirty} onClick={() => save.mutate()} className="rounded-lg bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-40">保存布局</button>
+    </div>
+    {deletedBackup && <div className="text-sm text-secondary">已备份 {deletedBackup.ns}：<a className="text-accent underline" href={api.pageAdminBackupUrl(deletedBackup.backup)} download>下载备份</a></div>}
+  </div>
 }
