@@ -360,6 +360,7 @@ class KlineRepository:
         self._live_agg_cache_date: date | None = None
         self._live_agg_check_date: date | None = None          # 上次跨日校验时的 today (快路径节流)
         self._instruments_cache: pl.DataFrame | None = None
+        self._name_map_cache: dict[str, str] | None = None
         self._historical_shares_cache: pl.DataFrame | None = None
         self._historical_shares_mtime_ns: int | None = None
         # 完整 enriched 历史 (含所有指标, 供 filter_history 策略使用)
@@ -1193,8 +1194,20 @@ class KlineRepository:
     def _refresh_instruments(self) -> None:
         """加载 instruments 到内存。"""
         try:
-            df = guarded_collect(pl.scan_parquet(self._inst_glob), priority="background")
+            files = sorted((self.store.data_dir / "instruments").rglob("*.parquet"))
+            if not files:
+                return
+            # 先合并各文件的字段，旧文件缺少 as_of 时也能使用新文件的日期。
+            df = guarded_collect(
+                pl.concat([pl.scan_parquet(path) for path in files], how="diagonal_relaxed"),
+                priority="background",
+            )
             if not df.is_empty():
+                # 旧 part.parquet 与当前 instruments.parquet 可能共存。
+                # 缓存必须每标的一行，按元数据日期保留最新整行。
+                if "as_of" in df.columns:
+                    df = df.sort("as_of", descending=True, nulls_last=True, maintain_order=True)
+                df = df.unique(subset=["symbol"], keep="first", maintain_order=True)
                 self._instruments_cache = df
                 self._name_map_cache = None
                 logger.info("instruments 缓存已加载: %d 只", len(df))

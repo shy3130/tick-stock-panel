@@ -22,7 +22,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { QuoteFreshnessBadge } from '@/components/QuoteFreshnessBadge'
-import { toNavItems, type NavItem } from '@/lib/listNav'
+import { toNavItems, uniqueBy, type NavItem } from '@/lib/listNav'
 import {
   DimensionMembersDialog,
   dimensionKindForSourceField,
@@ -1092,7 +1092,11 @@ export function Watchlist() {
 
   const listEntries = list.data?.symbols ?? []
   const allSymbols = listEntries.map(s => s.symbol)
-  const rows = enriched.data?.rows ?? []
+  // 兼容旧服务返回的重复行情，表格、卡片、分组统计与导航共用同一份行集合。
+  const rows = useMemo(
+    () => uniqueBy(enriched.data?.rows ?? [], row => row.symbol),
+    [enriched.data?.rows],
+  )
   const groupBySymbol = useMemo(
     () => new Map(listEntries.map(entry => [entry.symbol, entry.group_ids ?? []])),
     [listEntries],
