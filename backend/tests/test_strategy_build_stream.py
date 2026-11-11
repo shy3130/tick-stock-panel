@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,8 +40,15 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 '''
 
 
+@pytest.fixture
+def stream_request(tmp_path):
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+    )))
+
+
 @pytest.mark.asyncio
-async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypatch):
+async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypatch, stream_request):
     async def fake_stream(self, prompt):
         yield STREAM_CODE[:40]
         yield STREAM_CODE[40:]
@@ -55,7 +63,7 @@ async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypa
         strategy_id="ai_streamed",
     )
 
-    response = await build_strategy_stream(req, None)
+    response = await build_strategy_stream(req, stream_request)
     body = b""
     async for chunk in response.body_iterator:
         body += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
@@ -71,7 +79,7 @@ async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_build_strategy_stream_repairs_missing_meta_once(monkeypatch):
+async def test_build_strategy_stream_repairs_missing_meta_once(monkeypatch, stream_request):
     calls = 0
 
     async def fake_stream(self, prompt):
@@ -93,7 +101,7 @@ async def test_build_strategy_stream_repairs_missing_meta_once(monkeypatch):
         strategy_id="ai_repaired",
     )
 
-    response = await build_strategy_stream(req, None)
+    response = await build_strategy_stream(req, stream_request)
     body = b""
     async for chunk in response.body_iterator:
         body += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
@@ -129,7 +137,7 @@ def _parse_like_frontend(text: str) -> tuple[list[dict], list[str]]:
 
 
 @pytest.mark.asyncio
-async def test_build_strategy_stream_heartbeat_does_not_swallow_events(monkeypatch):
+async def test_build_strategy_stream_heartbeat_does_not_swallow_events(monkeypatch, stream_request):
     """LLM 首包前与结构修复期间空闲超过心跳间隔: ping 必须独占一行, 不能把 delta/result 粘掉。"""
 
     async def slow_stream(self, prompt):
@@ -152,7 +160,7 @@ async def test_build_strategy_stream_heartbeat_does_not_swallow_events(monkeypat
         strategy_id="ai_heartbeat",
     )
 
-    text = await _read_body(await build_strategy_stream(req, None))
+    text = await _read_body(await build_strategy_stream(req, stream_request))
     events, dropped = _parse_like_frontend(text)
     types = [event["type"] for event in events]
 
@@ -171,7 +179,7 @@ async def test_build_strategy_stream_heartbeat_does_not_swallow_events(monkeypat
         (ValueError("boom"), "AI生成失败: boom"),
     ],
 )
-async def test_build_strategy_stream_error_event_is_own_line(monkeypatch, exc, message):
+async def test_build_strategy_stream_error_event_is_own_line(monkeypatch, exc, message, stream_request):
     async def failing_stream(self, prompt):
         raise exc
         yield  # pragma: no cover - 使其成为异步生成器
@@ -179,7 +187,7 @@ async def test_build_strategy_stream_error_event_is_own_line(monkeypatch, exc, m
     monkeypatch.setattr(AIStrategyGenerator, "stream", failing_stream)
     req = BuildRequest(step=2, current_code="x = 1", instruction="改一下", strategy_id="")
 
-    text = await _read_body(await build_strategy_stream(req, None))
+    text = await _read_body(await build_strategy_stream(req, stream_request))
     events, dropped = _parse_like_frontend(text)
 
     assert dropped == []

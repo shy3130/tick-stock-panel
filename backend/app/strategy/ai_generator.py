@@ -7,17 +7,16 @@ from __future__ import annotations
 
 import ast
 import importlib
-import logging
 import math
 import re
 import sys
 import types
 from pathlib import Path
 
+from app.config import settings
 from app.indicators.pipeline import ENRICHED_COLUMNS
+from app.strategy import custom_signals
 from app.strategy.scoring import VIRTUAL_SCORING_DEPENDENCIES
-
-logger = logging.getLogger(__name__)
 
 # 策略开发精简指南路径 (随 backend/app 打包进 Docker, 避免 .dockerignore 排除 docs/ 导致运行时缺失)
 GUIDE_PATH = Path(__file__).resolve().parent / "prompts" / "strategy-guide-compact.md"
@@ -260,18 +259,27 @@ def _strategy_entrypoint_error(code: str, meta: dict | None = None) -> str | Non
 class AIStrategyGenerator:
     """AI 策略生成器"""
 
-    def __init__(self, *, execution_backend: str | None = None) -> None:
+    def __init__(self, *, execution_backend: str | None = None, data_dir: Path | None = None) -> None:
         self._guide_cache: str | None = None
         self._execution_backend = execution_backend
+        self._data_dir = data_dir if data_dir is not None else settings.data_dir
 
     def _get_guide(self) -> str:
         if self._guide_cache is None:
-            if GUIDE_PATH.exists():
+            try:
                 self._guide_cache = GUIDE_PATH.read_text(encoding="utf-8")
-            else:
-                logger.warning("strategy guide not found at %s", GUIDE_PATH)
-                self._guide_cache = ""
-        return self._guide_cache
+            except OSError as exc:
+                raise RuntimeError("策略生成指南缺失或无法读取，请完整升级并重启客户端后重试") from exc
+        columns = self._signal_columns()
+        catalog = "\n".join(f"- `{column}`" for column in sorted(columns))
+        return self._guide_cache + "\n\n## 当前可用信号\n\n" + (
+            catalog or "当前信号库为空，ENTRY_SIGNALS 和 EXIT_SIGNALS 应设为 []。"
+        )
+
+    def _signal_columns(self) -> set[str]:
+        # 与行情管线使用同一编译入口，禁用或无法编译的定义不能用于回测。
+        expressions = custom_signals.build_expressions(custom_signals.load_all(self._data_dir))
+        return {column for column in expressions if column.startswith(("signal_", "csg_"))}
 
     async def generate(self, user_prompt: str) -> dict:
         """根据用户描述生成策略代码
@@ -350,6 +358,7 @@ class AIStrategyGenerator:
 
         try:
             self._validate_meta_semantics(code, meta)
+            self._validate_signals(code)
         except ValueError as e:
             return {
                 "code": code,
@@ -372,7 +381,35 @@ class AIStrategyGenerator:
             _POLARS_ENTRYPOINT_ERROR,
             _MATRIX_ENTRYPOINT_ERROR,
             _MINUTE_ENTRYPOINT_ERROR,
-        } or error.startswith(("META.params", "META.scoring", "生成结果执行后端", "分钟策略 META.timeframes"))
+        } or error.startswith((
+            "META.params", "META.scoring", "生成结果执行后端", "分钟策略 META.timeframes",
+            "ENTRY_SIGNALS", "EXIT_SIGNALS",
+        ))
+
+    def _validate_signals(self, code: str) -> None:
+        tree = ast.parse(code)
+        columns = self._signal_columns()
+        allowed = columns | {column.removeprefix("signal_") for column in columns}
+        unknown: set[str] = set()
+        for name in ("ENTRY_SIGNALS", "EXIT_SIGNALS"):
+            found = _top_level_assignment(tree, name)
+            if found is None:
+                continue
+            try:
+                signals = ast.literal_eval(found[1])
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError(f"{name} 必须为信号 ID 的字面量列表") from exc
+            if not isinstance(signals, (list, tuple)) or any(
+                not isinstance(signal, str) or not signal for signal in signals
+            ):
+                raise ValueError(f"{name} 必须为非空信号 ID 的列表，可用 [] 表示无附加信号")
+            unknown.update(set(signals) - allowed)
+        if unknown:
+            raise ValueError(
+                f"ENTRY_SIGNALS/EXIT_SIGNALS 引用了信号库中不可用的信号: {sorted(unknown)}。"
+                "请按当前可用信号清单修正，或用 [] 并在策略过滤逻辑中实现条件。"
+                "自行计算同名列不会注册买卖信号。"
+            )
 
     @staticmethod
     def _validate_meta_semantics(code: str, meta: dict) -> None:
