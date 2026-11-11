@@ -29,7 +29,7 @@ def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None
     if mode is not None:
         try:
             os.chmod(tmp, mode)
-        except OSError:
+        except OSError:  # noqa: R002 -- chmod 失败不该让写入失败, 理由见上方 docstring
             pass
     os.replace(tmp, path)
 
