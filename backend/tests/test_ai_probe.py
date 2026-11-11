@@ -15,6 +15,29 @@ from app.api import settings as settings_api
 from app.services import ai_provider
 
 
+@pytest.mark.parametrize("failure", [None, "Codex CLI 不可用", "Codex CLI 调用失败: 405 Method Not Allowed"])
+def test_registered_codex_probe_route_returns_json_before_static_fallback(monkeypatch, failure):
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setattr("app.services.auth.is_configured", lambda: False)
+    monkeypatch.setattr("app.api.auth._is_local_network", lambda ip: True)
+    monkeypatch.setattr(secrets_store, "get_ai_key", lambda: "")
+    probe = AsyncMock(return_value="OK", side_effect=RuntimeError(failure) if failure else None)
+    monkeypatch.setattr(ai_provider, "_probe_codex_cli", probe)
+    response = TestClient(app).post("/api/settings/ai/test", json={"provider": "codex_cli", "model": ""})
+    assert response.status_code == 200
+    probe.assert_awaited_once_with(model="")
+    assert response.json()["ok"] is (failure is None)
+    if failure:
+        assert response.json()["error"] == failure
+    else:
+        assert response.json()["response"] == "OK"
+
+
 def test_probe_requires_base_url_model_and_key(monkeypatch):
     monkeypatch.setattr(secrets_store, "get_ai_key", lambda: "")
 

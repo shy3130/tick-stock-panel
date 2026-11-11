@@ -2852,15 +2852,28 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   /** 草稿连通性测试 — 只验证当前表单值, 不保存任何配置 */
-  testAiSettings: (
+  testAiSettings: async (
     ai: { provider?: string; base_url?: string; api_key?: string; model?: string; protocol?: string },
     opts?: { timeoutMs?: number },
-  ) =>
-    request<{ ok: boolean; model?: string; response?: string; error?: string; error_type?: string }>('/api/settings/ai/test', {
-      method: 'POST',
-      body: JSON.stringify(ai),
-      ...(opts?.timeoutMs != null ? { timeoutMs: opts.timeoutMs } : {}),
-    }),
+  ) => {
+    const invalidResponse = 'AI 连接测试未收到有效的后端响应。请确认前后端版本一致，重启 TSP 后刷新页面，并检查代理是否将 /api 请求转发到 TSP 后端。'
+    try {
+      const result = await request<{ ok: boolean; model?: string; response?: string; error?: string; error_type?: string }>('/api/settings/ai/test', {
+        method: 'POST',
+        body: JSON.stringify(ai),
+        quiet: true,
+        ...(opts?.timeoutMs != null ? { timeoutMs: opts.timeoutMs } : {}),
+      })
+      if (typeof result?.ok !== 'boolean') throw new ApiError(invalidResponse, 502)
+      return result
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 405)) {
+        throw new ApiError(`AI 连接测试接口不可用（HTTP ${error.status}）。请确认前后端版本一致，完整升级并重启 TSP 后刷新页面。使用代理时，请确认 POST /api/settings/ai/test 转发到 TSP 后端。`, error.status)
+      }
+      if (error instanceof SyntaxError) throw new ApiError(invalidResponse, 502)
+      throw error
+    }
+  },
 
   upgradeGuardStatus: () => request<UpgradeGuardStatus>('/api/upgrade-guard/status'),
   upgradeGuardScan: () => request<UpgradeGuardStatus>('/api/upgrade-guard/scan', { method: 'POST' }),
