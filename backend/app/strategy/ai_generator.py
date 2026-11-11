@@ -358,7 +358,7 @@ class AIStrategyGenerator:
 
         try:
             self._validate_meta_semantics(code, meta)
-            self._validate_signals(code)
+            self._validate_signals(code, execution_backend=backend)
         except ValueError as e:
             return {
                 "code": code,
@@ -386,7 +386,7 @@ class AIStrategyGenerator:
             "ENTRY_SIGNALS", "EXIT_SIGNALS",
         ))
 
-    def _validate_signals(self, code: str) -> None:
+    def _validate_signals(self, code: str, *, execution_backend: str) -> None:
         tree = ast.parse(code)
         columns = self._signal_columns()
         allowed = columns | {column.removeprefix("signal_") for column in columns}
@@ -404,7 +404,8 @@ class AIStrategyGenerator:
             ):
                 raise ValueError(f"{name} 必须为非空信号 ID 的列表，可用 [] 表示无附加信号")
             unknown.update(set(signals) - allowed)
-        if unknown:
+        # MatrixStrategy 的信号标签来自 compute_signals，不经过列信号注册表。
+        if unknown and execution_backend != "matrix_native":
             raise ValueError(
                 f"ENTRY_SIGNALS/EXIT_SIGNALS 引用了信号库中不可用的信号: {sorted(unknown)}。"
                 "请按当前可用信号清单修正，或用 [] 并在策略过滤逻辑中实现条件。"
