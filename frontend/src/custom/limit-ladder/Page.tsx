@@ -239,6 +239,7 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
   const [showMonitorMenu, setShowMonitorMenu] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null)
   const code = stock.symbol.replace(/\.BJ$/, '').replace(/\.SZ$/, '').replace(/\.SH$/, '')
+  const name = stock.name?.trim() || undefined
   const tag = boardTag(stock.symbol)
   const status = stock.status || (direction === 'down' ? 'limit_down' : 'limit_up')
   const style = STATUS_STYLE[status] || STATUS_STYLE[direction === 'down' ? 'limit_down' : 'limit_up']
@@ -296,11 +297,11 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
       <div
       role="button"
       tabIndex={0}
-      onClick={() => onClick(stock.symbol, stock.name ?? undefined)}
+      onClick={() => onClick(stock.symbol, name)}
       onKeyDown={event => {
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
-        onClick(stock.symbol, stock.name ?? undefined)
+        onClick(stock.symbol, name)
       }}
       className={`w-full flex flex-col items-start gap-1 px-2.5 py-2 rounded-md transition-all duration-200 cursor-pointer hover:opacity-100 ${style.bg} ${style.bar} ${monitored ? 'ring-1 ring-amber-400/50 ring-inset' : ''} ${active ? 'ring-1 ring-accent/60 ring-inset' : ''}`}
       style={style.cardStyle ? { ...style.cardStyle } : undefined}
@@ -315,7 +316,10 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
     >
       {/* 名称行 */}
       <div className="flex items-center gap-1.5 w-full min-w-0 pr-4">
-        <span className={`${style.nameCls} font-medium truncate`}>{stock.name}</span>
+        <span className={`${style.nameCls} font-medium truncate`}
+          title={name ? undefined : '名称数据缺失，请同步标的信息'}>
+          {name || '名称待同步'}
+        </span>
         {stock.is_one_word && (
           <span className={`shrink-0 rounded-sm border px-1 py-px text-[9px] font-medium leading-none ${
             direction === 'down'

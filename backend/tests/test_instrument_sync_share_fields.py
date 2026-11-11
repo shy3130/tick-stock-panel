@@ -125,6 +125,20 @@ def test_partial_provider_fields_filled_per_row(tmp_path, monkeypatch) -> None:
     assert by_symbol["000001.SZ"]["float_shares"] == pytest.approx(1.9e10)
 
 
+@pytest.mark.parametrize("missing_name", [None, "", "   "])
+def test_sync_preserves_known_names_when_provider_has_blanks(tmp_path, monkeypatch, missing_name):
+    _write_existing(tmp_path)
+    rows = pl.read_parquet(tmp_path / "instruments/instruments.parquet").to_dicts()
+    rows[0]["name"] = missing_name
+    rows[1]["name"] = "更新后的名称"
+    monkeypatch.setattr(isync, "_fetch_instruments_via_provider", lambda: rows)
+
+    isync.sync_instruments(tmp_path)
+
+    result = pl.read_parquet(tmp_path / "instruments/instruments.parquet")
+    assert result["name"].to_list() == ["浦发银行", "更新后的名称"]
+
+
 def test_daily_price_limits_are_not_inherited_from_old_metadata(tmp_path, monkeypatch):
     _write_existing(tmp_path)
     monkeypatch.setattr(isync, "_fetch_instruments_via_provider", lambda: _provider_rows("600000.SH"))

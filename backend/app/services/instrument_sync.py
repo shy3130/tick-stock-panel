@@ -98,7 +98,7 @@ def sync_instruments(data_dir: Path) -> int:
         return 0
 
     df = pl.DataFrame(all_rows)
-    df = _preserve_share_fields(df, data_dir)
+    df = _preserve_instrument_fields(df, data_dir)
     df = df.with_columns(pl.lit(cn_today()).alias("as_of"))
 
     out = data_dir / "instruments" / "instruments.parquet"
@@ -118,13 +118,15 @@ _SHARE_FIELDS = (
 )
 
 
-def _preserve_share_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
-    """用现有维表补全 provider 未提供的股本/交易规则字段 (按 symbol 左连接)。
+def _preserve_instrument_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
+    """用现有维表补全 provider 未提供的名称、股本和交易规则字段。
 
     新增标的仍保留 null (没有历史值可用, 不伪造); 只在同一 symbol 上把
     provider 的空值替换为既有值, 并在日志里给出补全规模。
     """
-    available = [c for c in _SHARE_FIELDS if c in df.columns]
+    if "name" in df.columns:
+        df = df.with_columns(pl.col("name").cast(pl.Utf8).str.strip_chars().replace("", None))
+    available = [c for c in ("name", *_SHARE_FIELDS) if c in df.columns]
     if not available:
         return df
     if all(df[c].null_count() == 0 for c in available):
@@ -133,8 +135,8 @@ def _preserve_share_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
     path = data_dir / "instruments" / "instruments.parquet"
     if not path.exists():
         logger.warning(
-            "instruments provider 未提供股本字段且无历史维表可补全: "
-            "enriched 换手率/市值将为 null, 依赖它们的策略会筛不出标的"
+            "instruments provider 缺少标的信息且无历史维表可补全: %s",
+            "/".join(c for c in available if df[c].null_count()),
         )
         return df
     try:
