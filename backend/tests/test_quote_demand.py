@@ -16,6 +16,11 @@ def market(monkeypatch, tmp_path):
     monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "tickflow")
     monkeypatch.setattr(preferences, "get_realtime_pull_stock", lambda: True)
     monkeypatch.setattr(preferences, "get_realtime_pull_etf", lambda: False)
+    # 隔离本地 preferences.json: _fetch_full_market_quotes 除了调上面的 getter, 还会
+    # 直接 `preferences.load()` 取 realtime_data_provider 做二次覆盖。本机若配成
+    # fuyao, provider_name 会被改成 fuyao 走自定义源分支, 被 mock 的 TickFlow 客户端
+    # 永不调用 (call_args 为 None) —— CI 干净环境没有该文件, 所以一直是绿的。
+    monkeypatch.setattr(preferences, "load", lambda: {"realtime_data_provider": "tickflow"})
     repo = SimpleNamespace(
         store=SimpleNamespace(data_dir=tmp_path),
         get_index_symbol_set=lambda: set(CORE_INDEX_SYMBOLS) | {"000985.SH", "000300.SH"},

@@ -1,3 +1,4 @@
+from tests._platform_caps import skip_no_cgroup
 from types import SimpleNamespace
 
 import psutil
@@ -28,6 +29,7 @@ def write(group, **controls):
         (group / name.replace("_", ".")).write_text(str(value))
 
 
+@skip_no_cgroup
 def test_parent_limit_accounts_for_sibling_usage_and_recovers(cgroup):
     _, mount = cgroup
     write(mount / "parent", memory_max=4*GIB, memory_current=3*GIB)
@@ -37,12 +39,14 @@ def test_parent_limit_accounts_for_sibling_usage_and_recovers(cgroup):
     assert memory_budget.memory_budget().available_bytes == 3*GIB
 
 
+@skip_no_cgroup
 def test_memory_high_is_an_admission_budget(cgroup):
     _, mount = cgroup
     write(mount / "parent/job", memory_max=4*GIB, memory_high=2*GIB, memory_current=GIB)
     assert memory_budget.memory_budget() == memory_budget.MemoryBudget(2*GIB, GIB)
 
 
+@skip_no_cgroup
 def test_heavy_gate_and_batch_size_use_container_budget(cgroup, monkeypatch):
     _, mount = cgroup
     write(mount / "parent/job", memory_max=2*GIB, memory_current=3*GIB//2)
@@ -54,6 +58,7 @@ def test_heavy_gate_and_batch_size_use_container_budget(cgroup, monkeypatch):
     assert pipeline._adaptive_sym_batch(1000, 1500) == 1000
 
 
+@skip_no_cgroup
 def test_v1_bind_mount_and_unlimited_sentinel(cgroup):
     proc, mount = cgroup
     (proc / "cgroup").write_text("2:cpu:/other\n4:memory:/docker/app\n")
@@ -73,12 +78,14 @@ def test_missing_or_malformed_controls_preserve_host_fallback(cgroup):
     assert memory_budget.memory_budget().available_bytes == 16*GIB
 
 
+@skip_no_cgroup
 def test_exhausted_limit_never_returns_negative_available(cgroup):
     _, mount = cgroup
     write(mount / "parent/job", memory_max=GIB, memory_current=2*GIB)
     assert memory_budget.memory_budget().available_bytes == 0
 
 
+@skip_no_cgroup
 def test_health_keeps_host_counters_and_exposes_effective_budget(cgroup, monkeypatch):
     from app.api.routes import _memory_snapshot
 
@@ -92,6 +99,7 @@ def test_health_keeps_host_counters_and_exposes_effective_budget(cgroup, monkeyp
     assert snapshot["effective_available_bytes"] == GIB
 
 
+@skip_no_cgroup
 def test_escaped_mount_path_and_host_pressure(cgroup, monkeypatch):
     proc, mount = cgroup
     moved = mount.with_name("group with space")

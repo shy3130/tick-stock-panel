@@ -1,4 +1,4 @@
-# tickflow-stock-panel - one-shot launcher for backend + frontend (Windows / PowerShell)
+﻿# tickflow-stock-panel - one-shot launcher for backend + frontend (Windows / PowerShell)
 #
 # Usage:
 #   .\dev.ps1

@@ -15,6 +15,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: 基础代码预检
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 零依赖(纯标准库)。检查项见 scripts/preflight.py, 每条都对应一次真实事故:
+      # 语法不过 / except 吞异常 / polars Int8 溢出 / bat 编码换行 /
+      # parquet 分区内重复文件 / 新增组件与已有同名。
+      - name: 预检
+        run: python scripts/preflight.py
+
   backend:
     runs-on: ubuntu-latest
     defaults:
