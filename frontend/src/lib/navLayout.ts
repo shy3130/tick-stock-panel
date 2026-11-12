@@ -12,7 +12,8 @@ export const navPageIds = (node: NavNode) => node.type === 'group' ? node.childr
 export function resolveNavLayout(
   layout: NavLayout | null | undefined, entries: readonly { id: string }[], legacyOrder: readonly string[] = [],
 ): NavLayout {
-  const seen = new Set<string>(['/'])
+  // 设置由侧栏底部固定入口承载，兼容忽略旧布局里的可移动引用。
+  const seen = new Set<string>(['/', '/settings'])
   const items: NavNode[] = []
   if (layout?.v === 1 && Array.isArray(layout.items)) {
     for (const node of layout.items) {

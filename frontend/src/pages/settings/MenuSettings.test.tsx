@@ -73,6 +73,25 @@ it('pins home and atomically saves a new group, child move, and visibility', asy
   expect(vi.mocked(api.saveNavLayout).mock.calls[0][1]).toEqual(['/data'])
 })
 
+it.each([false, true])('excludes fixed settings from editing and saving old layouts (nested: %s)', async nested => {
+  const settings = { type: 'page' as const, id: '/settings' }
+  const layout: NavLayout = { v: 1, items: [
+    { type: 'page', id: '/' },
+    { type: 'group', id: 'group:tools', label: '工具', children: [
+      { type: 'page', id: '/watchlist' }, ...(nested ? [settings] : []),
+    ] },
+    ...(nested ? [] : [settings]),
+  ] }
+  client.setQueryData(QK.preferences, { nav_layout: layout, nav_hidden: ['/settings'], nav_order: [] })
+  await mount()
+  expect(host.querySelector('[data-nav-id="/settings"]')).toBeNull()
+  expect(host.querySelector('select[aria-label="移动设置到"]')).toBeNull()
+  await createGroup(); await click('保存布局')
+  const [saved, hidden] = vi.mocked(api.saveNavLayout).mock.calls[0]
+  expect(saved?.items.flatMap(node => node.type === 'group' ? node.children : [node]).map(node => node.id)).not.toContain('/settings')
+  expect(hidden).not.toContain('/settings')
+})
+
 it('creates the category directly below home and focuses it instead of appending it offscreen', async () => {
   await mount()
   const group = await createGroup()

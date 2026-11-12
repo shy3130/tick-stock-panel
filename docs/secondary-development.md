@@ -192,6 +192,8 @@ const extension: FrontendExtension = {
 
 用户可在「设置 → 页面管理 → 菜单与页面」将内置、分析及扩展导航归入一级分类，扩展清单仍沿用上面的 v1 契约，无需声明 `parentId` 或修改路由。宿主用实际路由路径作为页面 ID（声明式分析页统一为 `/analysis/<id>`），显示名称和图标仍来自原注册项。
 
+设置始终位于侧栏底部固定入口；宿主读取旧布局时忽略已有的 `/settings` 页面引用，保留其他页面的顺序和归属。
+
 布局持久化字段为 `preferences.nav_layout`：`{v: 1, items: [...]}`，顶层项为 `{type: 'page', id: '/path'}` 或 `{type: 'group', id: 'group:<id>', label, children: [{type: 'page', id: '/path'}]}`。分类不能嵌套，看板固定在顶层首位，同一页面不能重复；保存接口为 `PUT /api/settings/preferences/nav-layout`，提交 `nav_layout` 和可选的 `nav_hidden`。归属、顺序与隐藏项统一原子保存，并同步平铺 `nav_order` 供旧版本回退；更高布局版本拒绝覆盖。无新布局时兼容原有 `nav_order`、`nav_hidden` 和分析页裸 ID。暂时不可用的页面引用保留在配置中，侧栏只显示已注册且可见的页面；新建的空分类保留显示，包含页面但其全部隐藏或不可用的分类暂不显示。
 
 完整前端模板位于 [`frontend/src/custom/_template/extension.tsx.example`](../frontend/src/custom/_template/extension.tsx.example)。

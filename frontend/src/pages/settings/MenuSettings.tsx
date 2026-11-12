@@ -86,7 +86,7 @@ export function SettingsMenuSettingsPanel() {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const layout = resolveNavLayout(draft ?? prefs?.nav_layout, entries, prefs?.nav_order)
-  const hidden = hiddenDraft ?? (prefs?.nav_hidden ?? []).map(canonicalNavId).filter(id => id !== '/')
+  const hidden = hiddenDraft ?? (prefs?.nav_hidden ?? []).map(canonicalNavId).filter(id => id !== '/' && id !== '/settings')
   const dirty = draft !== null || hiddenDraft !== null
   const groups = layout.items.filter((x): x is NavGroup => x.type === 'group')
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -173,7 +173,7 @@ export function SettingsMenuSettingsPanel() {
   return <div className="max-w-5xl space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div><h2 className="text-xl font-semibold text-foreground">组织左侧菜单</h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">把常用页面归入分类，缩短侧栏。看板固定置顶，其余菜单可拖动或选择归属；自选保留原有分组。</p></div>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">把常用页面归入分类，缩短侧栏。看板固定置顶，设置固定在侧栏底部；其他菜单可拖动或选择归属，自选保留原有分组。</p></div>
       <Link to="/settings?tab=pages&section=ext-pages" className="rounded-lg border border-border px-3 py-2 text-xs text-secondary hover:bg-elevated">管理扩展页面</Link>
     </div>
     <div className="flex flex-wrap items-center gap-2">
