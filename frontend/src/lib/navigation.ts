@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BarChart3, Settings, Tags } from 'lucide-react'
+import { BarChart3, Tags } from 'lucide-react'
 import {
   IconDashboard, IconWatchlist, IconStrategy, IconFactors, IconBacktest,
   IconRegime, IconIndices, IconData, type BrandIconProps,
@@ -22,7 +22,6 @@ export const CORE_NAVIGATION: NavigationEntry[] = [
   { id: '/regime', label: '市场环境', icon: IconRegime },
   { id: '/indices', label: '指数', icon: IconIndices },
   { id: '/data', label: '数据', icon: IconData },
-  { id: '/settings', label: '设置', icon: Settings },
 ].map(x => ({ ...x, to: x.id, type: 'builtin', visible: true, arch: 'core' }))
 
 /** 宿主与管理页共用来源及 ID，分析页历史裸 ID 只在兼容读取时转换。 */

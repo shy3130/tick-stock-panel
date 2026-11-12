@@ -97,7 +97,28 @@ it('expands the active folder, preserves watchlist groups and stops hidden group
   await act(async () => folder.click())
   expect(folder.getAttribute('aria-expanded')).toBe('false')
   expect(stats.isActive()).toBe(false)
-  expect(host.querySelector('a[href="/settings?tab=pages&section=menus"]')).not.toBeNull()
+  expect(host.querySelector('a[href="/settings"]')).not.toBeNull()
+})
+
+it.each(['expanded', 'rail', 'mobile'])('keeps settings in the fixed footer with a saved layout in %s mode', async mode => {
+  localStorage.setItem('tf-nav-state', mode === 'rail' ? 'rail' : 'expanded')
+  layoutMocks.desktop = mode !== 'mobile'
+  layoutMocks.prefs.nav_layout = { v: 1, items: [
+    { type: 'page', id: '/' },
+    { type: 'group', id: 'group:tools', label: '工具', children: [
+      { type: 'page', id: '/watchlist' }, { type: 'page', id: '/settings' },
+    ] },
+  ] }
+  await act(async () => root.render(<MemoryRouter initialEntries={['/watchlist']}><QueryClientProvider client={client}>
+    <Layout />
+  </QueryClientProvider></MemoryRouter>))
+  if (mode === 'mobile') await act(async () => host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!.click())
+  const settings = host.querySelectorAll<HTMLAnchorElement>('aside a[href="/settings"]')
+  expect(settings).toHaveLength(1)
+  expect(host.querySelector('aside nav')?.contains(settings[0])).toBe(false)
+  if (mode === 'rail') expect(settings[0].title).toBe('设置')
+  else expect(settings[0].textContent).toContain('设置')
+  expect(host.querySelector('a[href="/settings?tab=pages&section=menus"]')).toBeNull()
 })
 
 it('opens folder links in a portal in rail mode and closes with Escape', async () => {

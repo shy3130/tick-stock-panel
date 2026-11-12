@@ -395,7 +395,6 @@ export function Layout() {
   const navById = new Map(allNav.map(item => [item.id, item]))
   const layout = resolveNavLayout(prefs?.nav_layout, allNav, prefs?.nav_order)
   const visibleLayout = visibleNavLayout(layout, allNav, prefs?.nav_hidden ?? [])
-  if (!prefs?.nav_layout) visibleLayout.items = visibleLayout.items.filter(node => node.id !== '/settings')
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>(() => {
     try {
       const value = JSON.parse(localStorage.getItem('tf-nav-groups') || '{}')
@@ -1083,8 +1082,8 @@ export function Layout() {
           <div className={railMode ? 'flex flex-col items-center gap-1' : 'flex items-center gap-1'}>
             <ThemeToggle />
             <NavLink
-              to={prefs?.nav_layout ? '/settings?tab=pages&section=menus' : '/settings'}
-              title={railMode ? (prefs?.nav_layout ? '菜单管理' : '设置') : undefined}
+              to="/settings"
+              title={railMode ? '设置' : undefined}
               className={({ isActive }) =>
                 cn(
                   'group relative flex items-center rounded-btn text-sm transition-all duration-150 ease-smooth',
@@ -1104,7 +1103,7 @@ export function Layout() {
                     )}
                   />
                   <Settings className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                  {!railMode && <span className="whitespace-nowrap">{prefs?.nav_layout ? '菜单管理' : '设置'}</span>}
+                  {!railMode && <span className="whitespace-nowrap">设置</span>}
                   {!railMode && version && (
                     <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-muted/50 select-none shrink-0">
                       {version}
