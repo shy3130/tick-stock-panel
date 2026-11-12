@@ -165,6 +165,7 @@ def test_derive_thscode_market_suffix():
     assert dt.derive_thscode("600519") == "600519.SH"
     assert dt.derive_thscode("688111") == "688111.SH"
     assert dt.derive_thscode("830799") == "830799.BJ"
+    assert dt.derive_thscode("920099") == "920099.BJ"   # 北交所 920 新代码段
     assert dt.derive_thscode("900920") == "900920.SH"   # 沪B
     assert dt.derive_thscode("200468") == "200468.SZ"   # 深B
     assert dt.derive_thscode("600519.SH") == "600519.SH"  # 已带后缀原样返回
