@@ -155,8 +155,6 @@ def cancel_job(job_id: str) -> dict:
 
 
 @router.get("/jobs")
-def list_jobs(limit: int = 20) -> dict:
-    return {
-        "active_id": job_store.active_id(),
-        "jobs": job_store.list_recent(limit=limit),
-    }
+async def list_jobs(limit: int = 20) -> dict:
+    # 常驻侧栏轮询只读内存，不排队等待长计算占用的同步路由线程。
+    return job_store.recent_snapshot(limit)

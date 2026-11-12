@@ -8,7 +8,7 @@
   - 实例化时扫描磁盘,把上个进程遗留的 pending/running 孤儿记录补标为
     failed(中断);finished_at 取文件 mtime(最后已知存活时刻),不用下次
     开机时间虚增时长
-  - 列表查询 = 内存中的活跃 job + 磁盘文件扫描,按时间排序
+  - 列表查询读取原子发布的内存摘要；启动加载历史，生命周期与进度变化同步更新
   - 单个查询 = 内存优先,没有则读磁盘
   - 创建新 job 前检查文件数量,>= max_jobs 时删除最老的文件
 """
@@ -111,6 +111,18 @@ class JobStore:
         self._lock = threading.Lock()
         self._store_dir.mkdir(parents=True, exist_ok=True)
         self._reap_orphans()
+        self._summary_snapshot: tuple[str | None, tuple[dict[str, Any], ...]] = (
+            None,
+            tuple(_summary(j) for j in self._job_files_sorted()[:max_jobs]),
+        )
+
+    def _publish_summary(self, job: dict[str, Any]) -> None:
+        """Caller holds _lock. Publish status before potentially slow persistence."""
+        _, previous = self._summary_snapshot
+        summaries = [_summary(job), *(j for j in previous if j["id"] != job["id"])]
+        summaries = summaries[:self._max_jobs]
+        summaries.sort(key=lambda j: j.get("started_at") or "", reverse=True)
+        self._summary_snapshot = self._active_id, tuple(summaries)
 
     # ===== persistence =====
 
@@ -147,25 +159,35 @@ class JobStore:
             logger.warning("failed to read job file %s", path)
             return None
 
-    def _delete_oldest(self) -> None:
-        """删除最老的 job 文件,保持文件数量 < max_jobs。"""
+    def _delete_oldest(self, writing_id: str) -> None:
+        """留出待写文件的位置，清理文件时同步移除历史摘要。"""
         try:
             files = sorted(self._store_dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
         except Exception:
             return
-        while len(files) >= self._max_jobs:
+        # 覆盖 pending/running 的已有文件时，不额外占用历史记录名额。
+        keep = self._max_jobs - int(not any(f.stem == writing_id for f in files))
+        deleted: set[str] = set()
+        while len(files) > keep:
             oldest = files.pop(0)
             try:
                 oldest.unlink()
+                if oldest.stem != writing_id:
+                    deleted.add(oldest.stem)
             except Exception:
                 logger.warning("failed to delete old job file %s", oldest)
+        if deleted:
+            active_id, summaries = self._summary_snapshot
+            self._summary_snapshot = active_id, tuple(j for j in summaries if j["id"] not in deleted)
 
     def _job_files_sorted(self) -> list[dict[str, Any]]:
         """扫描磁盘上所有 job 文件,按 started_at 从新到旧排序。"""
         jobs: list[dict[str, Any]] = []
         for f in self._store_dir.glob("*.json"):
             try:
-                jobs.append(json.loads(f.read_text("utf-8")))
+                job = json.loads(f.read_text("utf-8"))
+                _summary(job)
+                jobs.append(job)
             except Exception:
                 continue
         jobs.sort(key=lambda j: j.get("started_at") or "", reverse=True)
@@ -184,6 +206,8 @@ class JobStore:
             try:
                 j = json.loads(f.read_text("utf-8"))
             except Exception:
+                continue
+            if not isinstance(j, dict):
                 continue
             orig_status = j.get("status")
             if not j.get("id") or orig_status not in ("pending", "running"):
@@ -263,7 +287,8 @@ class JobStore:
             self._active_jobs[job_id] = job
             self._active_id = job_id
             # pending 即落盘: 进程在 start() 前死亡时记录也不丢
-            self._delete_oldest()
+            self._delete_oldest(job_id)
+            self._publish_summary(job)
             self._write_file(job)
         _register_cancel_flag(job_id)
         return job_id, True
@@ -278,6 +303,7 @@ class JobStore:
             # 心跳基准初始化为启动时刻: start() 到首次 progress() 之间的
             # 初始化阶段(解析标的池等)同样计入停滞计时。
             j["last_progress_at"] = j["started_at"]
+            self._publish_summary(j)
             # running 快照落盘: 进程死亡后由下次启动的 _reap_orphans 补录
             self._write_file(j)
 
@@ -293,7 +319,8 @@ class JobStore:
             j["duration_s"] = _duration_s(j)
             if self._active_id == job_id:
                 self._active_id = None
-            self._delete_oldest()
+            self._delete_oldest(job_id)
+            self._publish_summary(j)
             self._write_file(j)
 
     def fail(self, job_id: str, error: str) -> None:
@@ -307,7 +334,8 @@ class JobStore:
             j["duration_s"] = _duration_s(j)
             if self._active_id == job_id:
                 self._active_id = None
-            self._delete_oldest()
+            self._delete_oldest(job_id)
+            self._publish_summary(j)
             self._write_file(j)
 
     # ===== progress =====
@@ -344,6 +372,7 @@ class JobStore:
                 j["log"].append(entry)
                 if len(j["log"]) > 200:
                     j["log"] = j["log"][-200:]
+            self._publish_summary(j)
         # 锁外检查取消: reap 可能在本次更新刚结束后置位,下一次回调必然命中;
         # 在这里立即检查可以把终止延迟压缩到当次回调。
         ev = _CANCEL_FLAGS.get(job_id)
@@ -364,21 +393,15 @@ class JobStore:
             return self._read_file(job_id)
 
     def list_recent(self, limit: int = 20) -> list[dict[str, Any]]:
-        # 合并: 内存中的活跃 job + 磁盘文件
-        all_jobs: list[dict[str, Any]] = list(self._active_jobs.values())
-        all_jobs.extend(self._job_files_sorted())
-        # 按 started_at 从新到旧排序,去重(理论上不会有重复)
-        seen: set[str] = set()
-        result: list[dict[str, Any]] = []
-        for j in sorted(all_jobs, key=lambda x: x.get("started_at") or "", reverse=True):
-            jid = j["id"]
-            if jid in seen:
-                continue
-            seen.add(jid)
-            result.append(_summary(j))
-            if len(result) >= limit:
-                break
-        return result
+        return self.recent_snapshot(limit)["jobs"]
+
+    def recent_snapshot(self, limit: int = 20) -> dict[str, Any]:
+        """Read one consistent status snapshot without disk I/O or the writer lock."""
+        active_id, summaries = self._summary_snapshot
+        return {
+            "active_id": active_id,
+            "jobs": [dict(j) for j in summaries[:max(1, limit)]],
+        }
 
     def active_id(self) -> str | None:
         return self._active_id
@@ -482,6 +505,7 @@ class JobStore:
         with self._lock:
             self._active_jobs.clear()
             self._active_id = None
+            self._summary_snapshot = None, ()
             for f in self._store_dir.glob("*.json"):
                 try:
                     f.unlink()
