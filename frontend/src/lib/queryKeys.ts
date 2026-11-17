@@ -10,7 +10,7 @@
 /** 日K修正后的直接消费查询; SSE 与数据页共用, 不扩散到分钟和财务数据。 */
 export const DAILY_DATA_QUERY_PREFIXES = new Set([
   'screener-cached', 'screener-kline-batch', 'market-snapshot', 'overview-market',
-  'index-quotes', 'index-daily', 'watchlist-enriched', 'kline-batch', 'kline', 'kline-latest', 'stock-levels',
+  'index-quotes', 'index-daily', 'watchlist-enriched', 'kline-batch', 'kline', 'kline-latest', 'stock-levels', 'holding-chips', 'holdings',
   'regime-history', 'regime-latest', 'regime-states', 'regime-coverage', 'regime-phases', 'regime-mainline',
 ])
 
@@ -27,6 +27,8 @@ export const EXT_DATA_QUERY_PREFIXES = new Set([
 ])
 
 export const QK = {
+  holdings: ['holdings'] as const,
+  holdingChips: (symbol: string) => ['holding-chips', symbol] as const,
   dataVersions: ['data-versions'] as const,
   extensionPackages: ['extension-packages'] as const,
   // 全局 / 共享 (Layout 预取)

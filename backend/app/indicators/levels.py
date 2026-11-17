@@ -59,7 +59,7 @@ LEVEL_TYPES = {
 # 1. 压力位 / 支撑位 —— 成交量分布 (Volume Profile)
 # ================================================================
 
-def _support_resistance(df: pl.DataFrame, bins: int = 40) -> list[dict]:
+def _support_resistance(df: pl.DataFrame, bins: int = 40, *, distribution: bool = False) -> list[dict]:
     """筹码分布(换手率衰减模型) —— 国内主流 A 股支撑/压力位算法。
 
     算法依据:大智慧/同花顺/通达信"筹码分布"专利模型(CN109711994A),物理含义是
@@ -140,6 +140,10 @@ def _support_resistance(df: pl.DataFrame, bins: int = 40) -> list[dict]:
     bin_ids = [k for k in range(bins) if chips[k] > 0]
     if not bin_ids:
         return []
+    if distribution:
+        total = sum(chips)
+        return [{"price": (edges[k] + edges[k + 1]) / 2, "weight": chips[k] / total}
+                for k in range(bins)]
     vals = [chips[k] for k in bin_ids]
     mean_val = sum(vals) / len(vals) if vals else 0
 
@@ -648,3 +652,8 @@ def _aggregate_levels(values: list[float], tol: float) -> list[float]:
         else:
             out.append(v)
     return out
+
+
+def compute_chip_distribution(df: pl.DataFrame, bins: int = 40) -> list[dict]:
+    """Estimated market distribution using the shared turnover decay model."""
+    return _support_resistance(df, bins, distribution=True)

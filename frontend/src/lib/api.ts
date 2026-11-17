@@ -2804,7 +2804,25 @@ export interface LabReport {
 }
 
 // ===== API surface =====
+export interface HoldingTrade {
+  id: string; symbol: string; traded_at: string; side: 'buy' | 'sell'; qty: number;
+  price: string; fee: string; note: string; order: number; voided: boolean;
+}
+export interface HoldingPosition {
+  id: string; symbol: string; name: string; qty: number; cost: number; avg_cost: number | null;
+  realized: number; bought: number; sold: number; opened: string; closed?: string; holding_days: number;
+  last_price: number | null; quote_date: string | null; market_value: number | null; unrealized: number | null;
+}
+export interface HoldingsState {
+  version: number; revision: string; positions: HoldingPosition[]; trades: HoldingTrade[];
+  transactions: (HoldingTrade & {cycle_id: string; balance: number; avg_cost: number | null; realized: number})[];
+  market_error: string | null;
+}
 export const api = {
+  holdingsRestore: (revision: string, trades: HoldingTrade[]) => request('/api/custom/holdings/restore', {method: 'POST', body: JSON.stringify({revision, version: 1, trades})}),
+  holdings: () => request<HoldingsState>('/api/custom/holdings'),
+  holdingTrade: (revision: string, trade: HoldingTrade) => request('/api/custom/holdings/trade', {method: 'PUT', body: JSON.stringify({revision, trade})}),
+  holdingChips: (symbol: string) => request<{bins: {price: number; weight: number}[]; message: string; as_of?: string}>(`/api/custom/holdings/chips?symbol=${encodeURIComponent(symbol)}`),
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
   // ===== Auth (访问认证) =====
