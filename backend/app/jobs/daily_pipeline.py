@@ -604,7 +604,12 @@ def run_now(
                 etf_inst = repo.get_etf_instruments()
                 if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
                     etf_symbols = sorted(set(etf_inst["symbol"].to_list()))
-                if etf_symbols and capset.has(Cap.ADJ_FACTOR):
+                _adj_provider = _prefs.get_adj_factor_provider()
+                _adj_custom = (
+                    _adj_provider != "tickflow"
+                    and custom_sources.provider_has_dataset(_adj_provider, "adj_factor")
+                )
+                if etf_symbols and (capset.has(Cap.ADJ_FACTOR) or _adj_custom):
                     try:
                         emit("sync_index", 88, "同步 ETF 除权因子…")
                         from datetime import datetime, timedelta

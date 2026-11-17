@@ -87,6 +87,51 @@ class ScreenerResult:
     elapsed_ms: float = 0.0
 
 
+def _ext_series(name: str, values: list) -> pl.Series:
+    """扩展列建列: 全数值 → Float64, 含文本 → Utf8。
+
+    历史实现无条件按 Float64 建列, 文本型扩展源 (行业/概念名、板块标签) 会在
+    Series 构建期抛 TypeError("found value of type String") 直接 500; 文本列
+    本应可参与 WHERE 等值/排序, 所以按内容判型而不是写死数值。
+    """
+    present = [v for v in values if v is not None]
+    numeric = all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in present
+    )
+    if present and not numeric:
+        return pl.Series(name, [None if v is None else str(v) for v in values], dtype=pl.Utf8)
+    return pl.Series(name, values, dtype=pl.Float64)
+
+
+def join_ext_maps(df: pl.DataFrame, ext_maps: dict[str, dict] | None) -> pl.DataFrame:
+    """把扩展列按 symbol 映射成 DataFrame 列（SQL 过滤/排序前调用）。
+
+    两种列名同时提供, 兼容两套既有约定:
+      - ``{config_id}__{field}``: 返回投影的输出列名 (parse_ext_columns)
+      - ``ext_{config_id}_{field}``: 扩展表字段 join 进 enriched 帧的列名
+        (ext_factors 注册名), 单下划线
+    untouched 的符号取不到值 → null, 交由调用方的 WHERE 自行处理。
+    """
+    if not ext_maps or "symbol" not in df.columns:
+        return df
+    symbols = df["symbol"].to_list()
+    for out_col, vmap in ext_maps.items():
+        if not vmap:
+            continue
+        values = [vmap.get(str(sym)) for sym in symbols]
+        names = [out_col]
+        # 因子注册名是 ext_{config}_{field} (单下划线): 直接拼 out_col 会得到
+        # ext_af_signal__composite(双下划线), 与面板 enriched 里既有的空因子列同名不了,
+        # 结果「按 ext_af_signal_composite 排序」拿到的是那列全 null —— 必须把它们对齐。
+        alias = out_col if out_col.startswith("ext_") else f"ext_{out_col.replace('__', '_')}"
+        if alias != out_col:
+            names.append(alias)
+        df = df.with_columns([
+            _ext_series(name, values).alias(name) for name in names
+        ])
+    return df
+
+
 class ScreenerService:
     def __init__(self, repo: KlineRepository, asset_type: str = "stock") -> None:
         self.repo = repo
@@ -247,7 +292,7 @@ class ScreenerService:
                 )
                 .sort(["symbol", "date"])
             )
-            available = [c for c in read_cols if c in lf.schema]
+            available = [c for c in read_cols if c in lf.collect_schema().names()]
             df_hist = lf.select(available).collect()
         except Exception as e:  # noqa: BLE001
             logger.warning("warmup history load failed: %s", e)
@@ -393,18 +438,24 @@ class ScreenerService:
         order_by: str | None = None,
         limit: int = 30,
         pool: list[str] | None = None,
+        ext_maps: dict[str, dict] | None = None,
     ) -> ScreenerResult:
         """自定义 SQL 条件筛选。
 
         先通过 Polars 即时计算完整指标, 再用 DuckDB 做 SQL WHERE 过滤。
         kline_enriched DuckDB 视图只有 14 列, 不能直接用于指标过滤。
+
+        ext_maps: {输出列名: {symbol: value}} (来自 _load_ext_value_maps)。
+        非空时把扩展列 join 进过滤帧, 使 WHERE/ORDER BY 能用扩展字段 ——
+        原先扩展列只在返回前投影, 用户拿它排序会 Binder Error (#af_signal)。
+        同时提供两种别名: `{config_id}__{field}` (投影输出名) 与
+        `ext_{config_id}_{field}` (因子注册名), 两种写法都能用。
         """
         self._assert_integrity(as_of)
         t0 = time.perf_counter()
 
-        if not conditions:
-            return ScreenerResult(as_of=as_of, strategy=None)
-
+        # 空 conditions = 无条件扫描(纯排序/全池浏览), 不能早退成空结果:
+        # 按扩展信号 top-N 排序是最常见的用法(#af_signal), 早退会让它静默失效。
         # 从即时计算获取完整 enriched 数据
         df = self._load_enriched_for_date(as_of)
         if df.is_empty():
@@ -413,6 +464,9 @@ class ScreenerService:
         # Pool 过滤
         if pool:
             df = df.filter(pl.col("symbol").is_in(pool))
+
+        # 扩展列 join (过滤/排序可用); 空值保持 null, 由条件自行处理
+        df = join_ext_maps(df, ext_maps)
 
         # 用 DuckDB 做 SQL 过滤 (注册临时视图)
         # 用独立的 :memory: 连接 (而非复用 repo 共享连接的 cursor): conditions 是用户
@@ -428,7 +482,9 @@ class ScreenerService:
             )
             con.register("enriched", df.to_arrow())
             where = " AND ".join(f"({c})" for c in conditions)
-            sql = f"SELECT * FROM enriched WHERE {where}"
+            sql = "SELECT * FROM enriched"
+            if where:
+                sql += f" WHERE {where}"
             if order_by:
                 sql += f" ORDER BY {order_by}"
             if limit:

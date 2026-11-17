@@ -73,11 +73,47 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
     return rows
 
 
+def _custom_instruments_df() -> pl.DataFrame | None:
+    """自定义日K源直接返回 DataFrame 维表时走这条 (内置插件同样适配)。
+
+    旧 _fetch_instruments_via_provider 只认 dict 列表且 is_custom_provider 不含
+    内置插件, 会让 af_local 这类内置源仍回落到 TickFlow 全市场 5892 只。
+    """
+    from app.services import preferences
+    from app.data_providers import custom as custom_sources
+
+    name = preferences.get_daily_data_provider()
+    if name == "tickflow" or not custom_sources.provider_has_dataset(name, "daily"):
+        return None
+    provider = custom_sources.get_provider(name)
+    if not hasattr(provider, "get_instruments"):
+        return None
+    try:
+        df = provider.get_instruments("stock")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("provider %s get_instruments(stock) 失败: %s", name, e)
+        return None
+    if df is None or getattr(df, "is_empty", lambda: True)():
+        return None
+    logger.info("instruments(stock) 来自自定义源 %s: %d 只", name, df.height)
+    return df
+
+
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
     返回写入的行数。
     """
+    custom_df = _custom_instruments_df()
+    if custom_df is not None:
+        df = _preserve_instrument_fields(custom_df, data_dir)
+        df = df.with_columns(pl.lit(cn_today()).alias("as_of"))
+        out = data_dir / "instruments" / "instruments.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_parquet(df, out)
+        logger.info("instruments synced (custom): %d rows → %s", df.height, out)
+        return df.height
+
     all_rows = _fetch_instruments_via_provider()
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连

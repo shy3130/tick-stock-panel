@@ -492,13 +492,16 @@ def run_custom(req: CustomRequest, request: Request):
     key = (str(as_of), identity,
            screener_work.source_version(repo, req.asset_type, "1d", as_of),
            screener_work.digest(req.model_dump()))
+    # 扩展列先在结果日分区算一次: 既供 SQL 过滤/排序 join, 也供返回投影
+    ext_values = _load_ext_value_maps(repo, req.ext_columns, as_of=str(as_of))
+
     def compute():
         from app.services.heavy_job_limiter import shared_heavy_job_limiter
 
         _admit_submission(request)
         with shared_heavy_job_limiter.slot("exclusive"):
             result = svc.run(as_of=as_of, conditions=req.conditions, order_by=req.order_by,
-                             limit=req.limit, pool=req.pool)
+                             limit=req.limit, pool=req.pool, ext_maps=ext_values)
             screener_work.assert_current(repo, None, req.asset_type, identity)
             return _safe(asdict(result))
 
@@ -506,8 +509,8 @@ def run_custom(req: CustomRequest, request: Request):
     warnings = _coverage_warnings(svc, as_of)
     if warnings:
         safe_data["warnings"] = warnings
-    # 投影取结果日分区 (与过滤同口径), 而非最新分区
-    ext_values = _load_ext_value_maps(repo, req.ext_columns, as_of=str(as_of))
+    # 投影取结果日分区 (与过滤同口径), 而非最新分区。
+    # ext_values 在 compute 之前算好并传给 svc.run, 保证「过滤用的值」与「展示的值」同一份。
     return _result_with_ext(safe_data, ext_values)
 
 

@@ -1,0 +1,23 @@
+# alpha-factory 本地数据源 — 直接读取本项目 (alpha-factory) 落盘的 parquet。
+# 只读，无网络请求; 路径可通过环境变量 AF_LOCAL_* 覆盖 (Docker 下挂载到 /af-local)。
+# 数据集: daily(日K, 不复权原始价) + adj_factor(累积复权因子)。
+# 单位约定遵循插件开发指南: volume=手, amount=元, 百分比→小数制。
+
+name: af_local
+display_name: "alpha-factory 本地"
+runtime: none
+entry: app.plugins.af_local.provider:AfLocalProvider
+check: app.plugins.af_local.provider:availability
+datasets: [daily, adj_factor]
+description: |
+  ## 数据来源
+  读取 alpha-factory 仓库落盘的本地 parquet，只读、无外网请求：
+
+  - **ETF 全市场**：`ETF数据更新至2026.7.10/etf_daily.parquet`（口径与项目 `ashare_etf_data.NEW_2026` 一致）
+  - **A 股样本**：`baiduyun/stock_daily.parquet`
+
+  日 K 返回**不复权原始价**；复权走 `adj_factor` 数据集，由主程序投影。
+usage_notes:
+  - "ETF: 2682 只，2009 起；A 股样本: 50 只，2020 起"
+  - "volume 已按「手」返回；amount 已由千元换算为元"
+  - "无实时行情、无分钟K：对应能力自动回退 TickFlow（未配置 Key 时为空）"

@@ -75,12 +75,41 @@ def _quotes_to_index_instruments(resp) -> pl.DataFrame:
 
 
 def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> pl.DataFrame:
-    """用免费的 exchanges.get_instruments 拉取指定类型的标的列表。
+    """拉取指定类型的标的列表。
 
-    None/Free 档均可使用(标的信息查询免费开放)。
+    自定义日K源优先接管 (#af_local): 用户已把日K路由到本地/第三方源时,
+    标的维表也应来自同一源, 否则无 TickFlow 凭据的环境会把整个盘后管道卡在
+    这一层 (面板只认 TickFlow 维表 = 集成缺口)。自定义源无该类维表时返回空表,
+    由调用方按 0 只处理, 不静默回退 TickFlow。
     instrument_type: 'index' / 'etf'
     asset_type_label: 写入 instruments 表的 asset_type 标记('index' / 'etf')
     """
+    try:
+        from app.services import preferences
+        from app.data_providers import custom as custom_sources
+
+        daily_provider = preferences.get_daily_data_provider()
+        if daily_provider != "tickflow" and custom_sources.provider_has_dataset(daily_provider, "daily"):
+            provider = custom_sources.get_provider(daily_provider)
+            df = provider.get_instruments(instrument_type)
+            if df is None:
+                return pl.DataFrame()
+            if not df.is_empty():
+                out = df.select(
+                    pl.col("symbol").cast(pl.Utf8),
+                    pl.col("name").cast(pl.Utf8),
+                ).with_columns([
+                    pl.col("symbol").str.split(".").list.first().alias("code"),
+                    pl.lit(asset_type_label).alias("asset_type"),
+                ]).unique(subset=["symbol"], keep="last").sort("symbol")
+                logger.info("instruments(%s) 来自自定义源 %s: %d 只",
+                            instrument_type, daily_provider, out.height)
+                return out
+            logger.info("自定义源 %s 无 %s 维表, 本次按 0 只处理", daily_provider, instrument_type)
+            return pl.DataFrame()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("自定义源维表获取失败, 回退 TickFlow: %s", e)
+
     tf = get_client()
     rows: list[dict] = []
     for ex in _EXCHANGES:
