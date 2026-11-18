@@ -43,15 +43,19 @@
 
 <div align="center">
 
-<a href="https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
-  <img src="docs/sponsors/runninghub-banner-v3.svg?v=3" alt="RunningHub API — 单一接口直连 400+ 主流大模型" width="100%">
+<a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC" target="_blank" rel="noopener noreferrer">
+  <img src="docs/sponsors/modelflare_banner_zh.png?v=1" alt="Modelflare — 低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型" width="100%">
 </a>
 
-<a href="https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
-  <img src="docs/sponsors/runninghub-intro-card.svg?v=4" alt="About RunningHub API — 产品介绍" width="100%">
+**感谢 [Modelflare](https://modelflare.dev/sign-up?partner=CFYSN0AM2APC) 赞助本项目！** 由美国 Havenbyte LLC 运营，满血稳定不掺水，低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型。指定 OpenAI 分组提供 65% / 75% / 85% 每日缓存命中率保障；单笔充值 US$20 解锁 GPT 0.015x，US$50 解锁 Claude 0.03x。**[专属链接注册 →](https://modelflare.dev/sign-up?partner=CFYSN0AM2APC)**
+
+---
+
+<a href="https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
+  <img src="docs/sponsors/runninghub-banner-v8.svg?v=2" alt="RunningHub API — 一个 API Key 直连 400+ 主流大模型" width="100%">
 </a>
 
-**本项目由 [RunningHub](https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c) 提供支持** · 单一接口直连 400+ 主流大模型 · [DeepSeek v4.1 Flash 3-6 折](https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c) · 免费测试
+**本项目由赞助商 [RunningHub](https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c) 提供支持** · 一个 API Key 直连 400+ 主流大模型 · **[立即免费测试 →](https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c)**
 
 </div>
 
