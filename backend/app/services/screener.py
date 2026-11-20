@@ -51,6 +51,44 @@ _HISTORY_CACHE_TTL = 120.0  # 秒
 # load_prior_consecutive 最多回看多少个已存在的日分区 (缺列时继续往前找的上限)
 _PRIOR_PARTITION_SCAN = 10
 
+# gap 连板口径最多回看的交易日数 (10 板 × 每次最多断 6 天); 更长历史降级为严格口径
+_GAP_MAX_HISTORY_DAYS = 60
+
+
+def gap_aware_consecutive(up_by_day: list[dict[str, bool]], gap: int) -> dict[str, tuple[int, int, int]]:
+    """最大断板 gap 个交易日口径的连板计数。
+
+    up_by_day 由旧到新, 每项为 symbol → 当日是否涨跌停。
+    返回 symbol → (连板数, 跨度交易日数, 昨日连板数)。
+    """
+    history: dict[int, dict[str, tuple[int, int]]] = {}
+    for idx, up_map in enumerate(up_by_day):
+        current: dict[str, tuple[int, int]] = {}
+        previous_days = [history.get(idx - d, {}) for d in range(1, gap + 2)]
+        for symbol, is_up in up_map.items():
+            if not is_up:
+                current[symbol] = (0, idx)
+                continue
+            best_count, best_start = 0, idx
+            for previous in previous_days:
+                count, start = previous.get(symbol, (0, idx))
+                if count > best_count:
+                    best_count, best_start = count, start
+            current[symbol] = (best_count + 1, best_start)
+        history[idx] = current
+        history.pop(idx - gap - 2, None)
+
+    today = len(up_by_day) - 1
+    yesterday = history.get(today - 1, {})
+    return {
+        symbol: (
+            count,
+            today - start + 1 if count else 0,
+            yesterday.get(symbol, (0, today - 1))[0],
+        )
+        for symbol, (count, start) in history.get(today, {}).items()
+    }
+
 
 def _join_instruments(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.DataFrame:
     if instruments.is_empty():
@@ -192,6 +230,39 @@ class ScreenerService:
                 logger.warning("load_prior_consecutive read failed for %s: %s", candidate, e)
                 return pl.DataFrame()
         return pl.DataFrame()
+
+    def load_gap_consecutive(
+        self, as_of: date, consec_col: str, gap: int, today: pl.DataFrame,
+    ) -> dict[str, tuple[int, int, int]]:
+        """按最大断板 gap 天重算连板数, 供 ladder 视图使用。
+
+        历史日的涨跌停直接取已存储的 consec 列 >0 (pipeline 的 run-length 口径:
+        0 即当日未涨停), 只读 symbol + consec 两列, 不触发全量指标重算。
+        """
+        symbols = today["symbol"].to_list()
+        if not symbols:
+            return {}
+
+        up_by_day: list[dict[str, bool]] = []
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
+        for day in reversed(self._prior_partition_dates(as_of, _GAP_MAX_HISTORY_DAYS)):
+            path = enriched_dir / f"date={day.isoformat()}" / "part.parquet"
+            try:
+                part = pl.read_parquet(path, columns=["symbol", consec_col])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("load_gap_consecutive read failed for %s: %s", day, e)
+                continue
+            up_by_day.append(dict(
+                part.unique(subset="symbol", keep="first")
+                .filter(pl.col("symbol").is_in(symbols))
+                .select(pl.col("symbol"), (pl.col(consec_col).fill_null(0) > 0).alias("up"))
+                .iter_rows()
+            ))
+
+        up_by_day.append(dict(
+            today.select(pl.col("symbol"), (pl.col(consec_col).fill_null(0) > 0).alias("up")).iter_rows()
+        ))
+        return gap_aware_consecutive(up_by_day, gap)
 
     def _prior_partition_dates(self, as_of: date, limit: int) -> list[date]:
         """enriched 目录里早于 as_of 的分区日期, 由近到远最多 limit 个。

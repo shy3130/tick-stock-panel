@@ -141,6 +141,9 @@ export const storage = {
   /** 连板梯队 封单显示模式: vol=按成交量(手), amount=按金额(元) */
   limitLadderSealMode:  kv<'vol' | 'amount'>('limit-ladder-seal-mode'),
 
+  /** 连板梯队 最大断板天数 (0-5, 0=原严格连板口径) */
+  limitLadderGap:       kv<number>('limit-ladder-gap'),
+
   /** 策略创建草稿（新建专用） */
   strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-draft'),
 

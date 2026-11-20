@@ -125,6 +125,12 @@ function getExtTags(stock: LimitLadderStock, item?: ExtFieldItem): string[] {
 
 type Direction = 'up' | 'down'
 
+/** 最大断板天数: 脏数据(旧值/越界)自愈为 0 */
+function loadGap(): number {
+  const v = storage.limitLadderGap.get(0)
+  return Number.isInteger(v) && v >= 0 && v <= 5 ? v : 0
+}
+
 /** 格式化封单量(手/股): 大数转万/亿 */
 function fmtSealVol(v: number): string {
   if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
@@ -329,6 +335,11 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
         )}
         {tag && (
           <span className={`shrink-0 text-[9px] px-1 py-px rounded-full border leading-none ${tag.cls}`}>{tag.label}</span>
+        )}
+        {isLimitHit && !!stock.span_days && stock.span_days > (consecNum ?? 0) && (
+          <span className="shrink-0 text-[9px] leading-none px-1 py-px rounded-sm border border-accent/25 bg-accent/10 text-accent">
+            {stock.span_days}天{consecNum ?? 0}{direction === 'down' ? '跌' : '板'}
+          </span>
         )}
       </div>
       {/* 代码 + 数字行 */}
@@ -1465,6 +1476,7 @@ export function LimitUpLadder() {
   const [asOf, setAsOf] = useState('')
   const [direction, setDirection] = useState<Direction>(() => storage.limitLadderDirection.get('up'))
   const [sealMode, setSealMode] = useState<'vol' | 'amount'>(() => storage.limitLadderSealMode.get('vol'))
+  const [gap, setGap] = useState(loadGap)
   const [filterKeys, setFilterKeys] = useState<Set<FilterKey>>(loadFilterKeys)
   const [extFields, setExtFields] = useState<ExtFieldConfig>(loadExtFields)
   const [showExtConfig, setShowExtConfig] = useState(false)
@@ -1546,13 +1558,13 @@ export function LimitUpLadder() {
     // key 必须拍平 (spread 展开): key[0] 为字符串 'limit-ladder' 才能被 SSE 前缀失效
     // 命中实现实时刷新, depth_updated 事件 (invalidate ['limit-ladder']) 也才能匹配本查询。
     // 嵌套数组 key 会导致前者靠 String() 侥幸命中、后者永远失配。
-    queryKey: [...QK.limitLadder(asOf || undefined), extColumnsParam, direction],
-    queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
+    queryKey: [...QK.limitLadder(asOf || undefined), extColumnsParam, direction, gap],
+    queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction, gap),
     staleTime: 5 * 60_000,
-    // 改扩展列重取期间沿用上一份「同日期同方向」数据不闪空; 涨跌切换不透传反向梯队
+    // 改扩展列重取期间沿用上一份「同日期同方向同间隔」数据不闪空; 涨跌切换不透传反向梯队
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
-      return prevKey?.[1] === (asOf || undefined) && prevKey?.[3] === direction ? prev : undefined
+      return prevKey?.[1] === (asOf || undefined) && prevKey?.[3] === direction && prevKey?.[4] === gap ? prev : undefined
     },
   })
   const handleOpenDimension = useCallback((kind: DimensionKind, value: string, sourceField?: string) => {
@@ -1670,6 +1682,23 @@ export function LimitUpLadder() {
                 <span>{data?.counts?.down ?? 0}</span>
               </button>
             </div>
+            {/* 最大断板天数: 0=原严格连板, 1-5=允许中间断板 N 天 */}
+            <label className="flex items-center gap-1 text-xs text-muted" title="连板间隔: 允许的断板天数">
+              <span>间隔</span>
+              <select
+                value={gap}
+                onChange={e => {
+                  const next = Number(e.target.value)
+                  setGap(next)
+                  storage.limitLadderGap.set(next)
+                }}
+                className="h-7 bg-elevated border border-border rounded px-1.5 text-xs text-foreground focus:outline-none focus:border-accent/50"
+              >
+                {[0, 1, 2, 3, 4, 5].map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
           </div>
         }
         right={
