@@ -332,8 +332,14 @@ def run_now(
         #   today_exists 时 latest_daily=今天, 不取 min 会漏掉坏日。
         start_date = min(d for d in (latest_daily, stale_day) if d is not None)
         daily_range_start = start_date
-        emit("sync_daily", 12, f"获取日K [{start_date} ~ {today}]…")
-        logger.info("sync_daily: [%s ~ %s] %s", start_date, today,
+        # #574: 批量接口按 [start, end) 语义取数。交易日收盘后当天分区已存在
+        # (15:00 实时行情写过) 时 start_date == today, 若右端点也取 today 就是
+        # 零宽窗口: 上游 200 空 payload、0 行、不报错, 当天收盘价永远拉不进来
+        # (free/none 档没有实时覆写分支, 会落到这里)。收盘后拉取必须把右端点
+        # 放宽到次日 00:00, 才能覆盖当天这根日K。
+        end_date = today + _td(days=1) if today_exists else today
+        emit("sync_daily", 12, f"获取日K [{start_date} ~ {end_date}]…")
+        logger.info("sync_daily: [%s ~ %s] %s", start_date, end_date,
                     "refresh today" if today_exists else "gap fill")
 
         def _daily_chunk_progress(cur: int, tot: int) -> None:
@@ -342,13 +348,17 @@ def run_now(
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
-            end_date=_dt.combine(today, _dt.min.time()),
+            end_date=_dt.combine(end_date, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
         )
-        gap_days = (today - start_date).days
+        gap_days = (end_date - start_date).days
         new_daily_days = gap_days
         emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
-        logger.info("sync_daily: [%s ~ %s] done, %d days", start_date, today, gap_days)
+        logger.info("sync_daily: [%s ~ %s] done, %d days", start_date, end_date, gap_days)
+        if written_daily == 0 and today_exists:
+            # 收盘后本应拉到当天日K: 0 行说明窗口或接口异常, 不能静默当成功 (#574)
+            stage_errors.append(
+                f"日K批量同步 0 行(窗口 {start_date} ~ {end_date}): 收盘后未写入当天日K")
     else:
         # 首次：无任何数据 → batch 拉 1 年
         start_date = today - _td(days=365)
