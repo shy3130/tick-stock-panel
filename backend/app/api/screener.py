@@ -1124,6 +1124,7 @@ def limit_ladder(
     as_of: Optional[date] = None,
     direction: str = Query("up", description="up=涨停梯队 | down=跌停梯队"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    gap: int = Query(0, ge=0, le=5, description="最大断板天数: 0=原严格连板口径, 1-5=允许断板"),
 ):
     """连板/连跌梯队 — 按连板数分组, 含三状态。
     返回: tiers = [{ boards, count, stocks: [{symbol,name,change_pct,status,...}] }]
@@ -1134,6 +1135,7 @@ def limit_ladder(
       status: limit_down=跌停 | recovery=翘板(跌停后回升,含收阳条件) | failed=止跌(昨日跌停今日未跌停也未翘板)
 
     ext_columns: 动态 JOIN 扩展数据, 如 "concept.concept,industry.industry"
+    gap: 最大断板天数, >0 时连板数按「允许中间 gap 天未涨停」重算, 并附跨度天数 span_days。
     """
     import polars as pl
 
@@ -1210,6 +1212,22 @@ def limit_ladder(
     consec = pl.col(consec_col).fill_null(0) if consec_col in df.columns else pl.lit(0)
     prev_c = pl.col("prev_consec").fill_null(0)
 
+    # gap>0: 用历史已存储的 consec 列重建「允许断板」口径的连板数/跨度
+    boards_expr, prev_boards, span_expr = consec, prev_c, pl.lit(0)
+    if gap > 0:
+        gap_stats = svc.load_gap_consecutive(as_of, consec_col, gap, df)
+        if gap_stats:
+            gap_df = pl.DataFrame({
+                "symbol": list(gap_stats),
+                "_gap_boards": [v[0] for v in gap_stats.values()],
+                "_gap_span": [v[1] for v in gap_stats.values()],
+                "_gap_prev": [v[2] for v in gap_stats.values()],
+            })
+            df = df.join(gap_df, on="symbol", how="left")
+            boards_expr = pl.col("_gap_boards").fill_null(consec)
+            prev_boards = pl.col("_gap_prev").fill_null(prev_c)
+            span_expr = pl.col("_gap_span").fill_null(0)
+
     # 计算 status + boards (结构涨跌停对称, 仅字段与字面量不同)
     is_failed = ~is_limit & ~is_broken & (prev_c > 0)
     df = df.with_columns([
@@ -1217,10 +1235,17 @@ def limit_ladder(
         .when(is_broken).then(pl.lit(status_broken))
         .when(is_failed).then(pl.lit(status_failed))
         .otherwise(None).alias("status"),
-        pl.when(is_limit).then(consec)
-        .when(is_broken | is_failed).then(prev_c + 1)
+        pl.when(is_limit).then(boards_expr)
+        .when(is_broken | is_failed).then(prev_boards + 1)
         .otherwise(0).cast(pl.UInt32).alias("boards"),
+        span_expr.cast(pl.UInt32).alias("span_days"),
     ])
+
+    if gap > 0 and consec_col in df.columns:
+        # 卡片连板数展示与梯队分组同口径 (gap=0 保持原严格值不变)
+        df = df.with_columns(
+            pl.when(is_limit).then(pl.col("boards")).otherwise(pl.col(consec_col)).alias(consec_col)
+        )
 
     df = df.filter(pl.col("status").is_not_null() & (pl.col("boards") > 0))
 
@@ -1351,7 +1376,7 @@ def limit_ladder(
                         pass
 
     # 选择输出列
-    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word"] + ext_col_names
+    cols = ["symbol", "name", "close", "change_pct", "boards", "span_days", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word"] + ext_col_names
     df = df.select([c for c in cols if c in df.columns])
     # 排序: boards 降序, status 按主状态→炸/翘→断/止
     status_order = pl.when(pl.col("status") == status_main).then(0)

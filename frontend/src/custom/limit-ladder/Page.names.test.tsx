@@ -23,7 +23,7 @@ it.each(['up', 'down'] as const)('keeps names, stock navigation and the requeste
   const requestedDate = direction === 'down' ? '2026-11-10' : undefined
   const path = requestedDate ? `/limit-ladder?direction=down&date=${requestedDate}` : '/limit-ladder'
   const status = direction === 'down' ? 'limit_down' : 'limit_up'
-  client.setQueryData([...QK.limitLadder(requestedDate), undefined, direction], {
+  client.setQueryData([...QK.limitLadder(requestedDate), undefined, direction, 0], {
     as_of: '2026-11-10',
     tiers: [{ boards: 3, count: 4, stocks: [
       { symbol: '002623.SZ', name: null, status, consecutive_limit_ups: 3, is_one_word: true },
