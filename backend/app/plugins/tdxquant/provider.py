@@ -514,8 +514,10 @@ class TdxQuantProvider:
             return None
         fallback_ms = int(time.time() * 1000)
         records = []
+        # 原生快照别名只用于请求；下游按项目标准指数代码分类和查询。
+        reverse_codes = {wire: symbol for symbol, wire in _INDEX_CODE_MAP.items()}
         for code, row in rows.items():
-            rec = _map_snapshot_row(code, row, fallback_ms)
+            rec = _map_snapshot_row(reverse_codes.get(code, code), row, fallback_ms)
             if rec is not None:
                 records.append(rec)
         logger.info("TdxQuant 指数行情拉取完成: %d 条(请求 %d 只)", len(records), len(wanted))
