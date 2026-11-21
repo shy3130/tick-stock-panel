@@ -79,6 +79,7 @@ type AiPreset = {
   provider?: string
   url: string
   model: string
+  models?: string[]
   codexCommand?: string
   website: string
   websiteLabel: string
@@ -116,6 +117,26 @@ function SponsorIntro() {
 
 const PRESETS: AiPreset[] = [
   { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true, icon: SlidersHorizontal },
+  {
+    label: 'MiniMax',
+    url: 'https://api.minimax.io/v1',
+    model: 'MiniMax-M3.1-Flash',
+    models: ['MiniMax-M3.1-Flash', 'MiniMax-M3'],
+    website: 'https://platform.minimax.io/docs',
+    websiteLabel: 'platform.minimax.io',
+    description: 'MiniMax official OpenAI-compatible API with current text model presets.',
+    icon: Sparkles,
+  },
+  {
+    label: 'MiniMax (China)',
+    url: 'https://api.minimaxi.com/v1',
+    model: 'MiniMax-M3.1-Flash',
+    models: ['MiniMax-M3.1-Flash', 'MiniMax-M3'],
+    website: 'https://platform.minimaxi.com/docs',
+    websiteLabel: 'platform.minimaxi.com',
+    description: 'MiniMax China OpenAI-compatible API with current text model presets.',
+    icon: Sparkles,
+  },
   { label: 'RunningHub', url: 'https://llm.runninghub.ai/v1', model: 'openai/gpt-6-astra-saver', website: 'https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c', websiteLabel: 'www.runninghub.ai · 赞助', sponsor: true, icon: Sparkles, description: <SponsorIntro /> },
   { label: 'OpenAI', provider: OPENAI_PROVIDER, url: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL, website: 'https://platform.openai.com/', websiteLabel: 'platform.openai.com', description: 'OpenAI 官方接口，可单独配置模型支持的推理强度。', icon: Atom },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。', icon: Waves },
@@ -642,7 +663,12 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
                 </Field>
                 <Field label="模型">
                   <div ref={modelBoxRef} className="relative">
-                    <input type="text" value={model} onChange={e => handleModelChange(e.target.value)} placeholder="gpt-5.6-sol" className={`${INPUT_CLS} ${selectedPreset?.sponsor ? 'pr-9' : ''}`} />
+                    <input type="text" value={model} list={selectedPreset.models ? 'ai-preset-models' : undefined} onChange={e => handleModelChange(e.target.value)} placeholder="gpt-5.6-sol" className={`${INPUT_CLS} ${selectedPreset?.sponsor ? 'pr-9' : ''}`} />
+                    {selectedPreset.models && (
+                      <datalist id="ai-preset-models">
+                        {selectedPreset.models.map(value => <option key={value} value={value} />)}
+                      </datalist>
+                    )}
                     {selectedPreset?.sponsor && (
                       <button type="button" onClick={fetchModelOptions} aria-label="获取模型列表"
                         className="absolute right-1.5 top-1/2 flex h-6 w-7 -translate-y-1/2 items-center justify-center rounded-md border border-border/40 bg-base text-muted transition-colors hover:border-accent/40 hover:text-accent">
