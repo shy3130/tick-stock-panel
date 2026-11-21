@@ -383,7 +383,7 @@ class FinancialScheduler:
             from app.services import preferences
             preferences.set_financial_sync_time(table, ts)
         except Exception as e:  # noqa: BLE001
-            logger.warning("persist financial_sync_time(%s) failed: %s", e)
+            logger.warning("persist financial_sync_time(%s) failed: %s", table, e)
 
     def update_capabilities(self, capset: CapabilitySet) -> None:
         """刷新调度器持有的能力集。
