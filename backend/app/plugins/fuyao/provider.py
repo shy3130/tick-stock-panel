@@ -520,6 +520,26 @@ class FuyaoProvider:
                 dump = self._daily10_for_window(start_d, end_d)
                 if _dump_covers(dump, start_d, end_d):
                     df = self._daily_from_dump(dump, symset, start_d, end_d)
+                    # A dump's date range does not prove per-symbol coverage.
+                    # Exact-day repair requests include known local records;
+                    # ask the historical API for omitted names before declaring
+                    # success. Empty groups remain empty (never fabricate bars).
+                    if start_d == end_d:
+                        present = set(df["symbol"].to_list()) if not df.is_empty() else set()
+                        missing = sorted(symset - present)
+                        frames = [df] if not df.is_empty() else []
+                        for offset in range(0, len(missing), _HIST_SYMBOL_BATCH):
+                            batch = missing[offset:offset + _HIST_SYMBOL_BATCH]
+                            rows = self._historical_batch_rows(batch, start_d, end_d)
+                            extra = normalize_daily(rows, source=self.name)
+                            if not extra.is_empty():
+                                extra = extra.filter((pl.col("date") == start_d) & pl.col("symbol").is_in(batch))
+                                if not extra.is_empty():
+                                    frames.append(extra)
+                        if frames:
+                            df = pl.concat(frames, how="diagonal_relaxed").unique(
+                                subset=["symbol", "date"], keep="last",
+                            )
                     if on_chunk_done:
                         on_chunk_done(1, 1)
                     if not df.is_empty():
