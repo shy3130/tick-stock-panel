@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
+
+from tests._platform_caps import skip_windows_path_semantics
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -330,7 +332,7 @@ def test_plain_zip_can_supply_dependencies_for_separately_uploaded_strategy(env,
     assert result["imported"] == 3
 
 
-@pytest.mark.parametrize("name", ["../策略.py", "/策略.py", "包/../策略.py", "包\\策略.py"])
+@pytest.mark.parametrize("name", ["../策略.py", "/策略.py", "包/../策略.py", pytest.param("包\\策略.py", marks=skip_windows_path_semantics)])
 def test_plain_zip_rejects_unsafe_paths(env, name):
     with pytest.raises(resource_bundle.ResourceBundleError, match=r"路径|条目"):
         inspect(loose_zip({name: strategy("custom_a").encode()}))

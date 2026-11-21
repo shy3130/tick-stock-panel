@@ -1,5 +1,6 @@
 """日K修补的业务边界: 精确取数、先校验、完整历史计算、隔离其他股票。"""
 from __future__ import annotations
+from tests._platform_caps import skip_no_atomic_replace, skip_no_symlink
 
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
@@ -317,6 +318,7 @@ def test_empty_custom_stock_daily_does_not_silently_switch_to_tickflow(env, monk
     assert "provider=test_source" in caplog.text
 
 
+@skip_no_atomic_replace
 def test_one_corrupt_file_falls_back_to_only_its_day(env):
     path = env.root / f"kline_daily/date={BAD_DAY}/part.parquet"
     path.write_bytes(b"unreadable whole day")
@@ -408,6 +410,7 @@ def test_targeted_repair_keeps_unhandled_issue_and_does_not_recompute_its_stock(
 
 
 @pytest.mark.parametrize("table", ["kline_daily", "kline_daily_enriched"])
+@skip_no_symlink
 def test_repair_rejects_linked_history_and_preserves_outside_file(env, table):
     from app.services import daily_health
 

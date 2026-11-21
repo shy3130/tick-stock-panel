@@ -1,5 +1,6 @@
 """P2d 组合扫描/创建 + P3 名额门槛与实验室战报测试。"""
 from __future__ import annotations
+from tests._platform_caps import skip_no_symlink
 
 from datetime import date, timedelta
 from pathlib import Path
@@ -348,6 +349,7 @@ def test_guardian_api_combination_endpoints(tmp_path, monkeypatch):
     assert body["combinations"]["suggestions"][0]["a"] == "x"
 
 
+@skip_no_symlink
 def test_create_composite_accepts_symlinked_data_dir(tmp_path):
     """data_dir 含符号链接时 (如 macOS /tmp) 不能误判为路径逃逸。"""
     from app.strategy.engine import StrategyEngine

@@ -50,6 +50,46 @@ logger = logging.getLogger(__name__)
 _ENRICHED_WARMUP_MAX_ATTEMPTS = 3
 _ENRICHED_WARMUP_PUBLISH_WAIT_SECONDS = 5.0
 
+# 连板/连跌数在 pipeline 里固定产出 UInt32。日分区共用一个 `**/*.parquet` glob
+# 扫描, 同一列只要有一天 dtype 不同, 整段查询就直接失败 (polars:
+# "data type mismatch ... incoming: Int64 != target: UInt32"), 而该异常会被
+# `except` 吞成空 DataFrame —— 表现为「日K查不到数据」却几乎没有报错线索。
+# 事故: 2026-11-09 单日重写把这两列写成 Int64, 另外 2670 个 UInt32 分区一起查不出来。
+_ENRICHED_UINT_COLS = ("consecutive_limit_ups", "consecutive_limit_downs")
+
+# 扫描态辅助列绝不该落盘: `filename` 来自 DuckDB `read_parquet(filename=true)`,
+# 列名冲突时 DuckDB 会改名为 `filename_1`。一次性修复脚本 SELECT * 写回后,
+# 242 个分区凭空多出 `filename_1` 列 (其余分区靠 union_by_name 补 null), 于是
+# 同一个 glob 下出现 4 种 schema。
+_AUX_SCAN_COLS = ("filename", "_pri")
+
+
+def normalize_partition_frame(df: pl.DataFrame) -> pl.DataFrame:
+    """写盘前归一帧: 剥掉扫描辅助列 + 把连板/连跌数归一到 UInt32。
+
+    dtype 归一的原因: 日分区共用一个 `**/*.parquet` glob 扫描, 同一列只要有一天
+    dtype 不同, 整段查询就直接失败 (polars: "data type mismatch ... incoming:
+    Int64 != target: UInt32"), 而该异常会被 `except` 吞成空 DataFrame —— 表现为
+    「日K查不到数据」却几乎没有报错线索。事故: 2026-11-09 单日重写把这两列写成
+    Int64, 另外 2670 个 UInt32 分区一起查不出来。
+
+    `strict=False`: 这两列语义是计数 (≥0), 真出现负值/超界时置 null 而非让整个
+    写盘失败 —— 丢掉一天的写入比丢掉一列更糟; 归一动作会记 debug 日志留痕。
+    """
+    aux = [c for c in df.columns if c in _AUX_SCAN_COLS or c.startswith("filename_")]
+    if aux:
+        logger.warning("丢弃不应落盘的扫描辅助列: %s", aux)
+        df = df.drop(aux)
+    fix = [
+        pl.col(c).cast(pl.UInt32, strict=False).alias(c)
+        for c in _ENRICHED_UINT_COLS
+        if c in df.columns and df.schema[c] != pl.UInt32
+    ]
+    if not fix:
+        return df
+    logger.debug("归一分区 dtype 至 UInt32: %s", [c for c in _ENRICHED_UINT_COLS if c in df.columns])
+    return df.with_columns(fix)
+
 
 def replace_with_retry(src: Path, dst: Path, *, attempts: int = 10, delay_s: float = 0.5) -> None:
     """os.replace 的 Windows 读锁重试版。
@@ -2598,6 +2638,9 @@ class KlineRepository:
 
     def _write_daily_partition(self, df: pl.DataFrame, table: str) -> None:
         """按 date 分区写入 parquet，每个日期一个文件，支持 merge-upsert。"""
+        # 所有日分区的唯一写入口: 在此剥离扫描辅助列并归一折列 dtype, 保证同
+        # glob 下每个分区的 schema 一致 (见 normalize_partition_frame 的事故说明)。
+        df = normalize_partition_frame(df)
         base = self.store.data_dir / table
         generation_asset = {
             "kline_daily_enriched": "stock",

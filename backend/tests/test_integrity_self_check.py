@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._platform_caps import skip_no_atomic_replace, skip_no_symlink
 
 from datetime import date
 from types import SimpleNamespace
@@ -120,6 +121,7 @@ def test_halted_rows_allow_zero_prices_but_reject_nonfinite_values(tmp_path, clo
     assert [i.kind for i in issues] == expected
 
 
+@skip_no_atomic_replace
 def test_report_persists_and_repair_rechecks_with_backup(tmp_path, monkeypatch):
     from app.services import integrity_check, kline_sync
     from app.tickflow.repository import DataStore, KlineRepository
@@ -189,6 +191,7 @@ def test_repair_refuses_stale_report(tmp_path, monkeypatch):
         integrity_check.run_repair(repo, object(), report["id"] + "old")
 
 
+@skip_no_symlink
 def test_scan_rejects_outside_symlink(tmp_path):
     outside = tmp_path / "outside.parquet"
     outside.write_bytes(b"do not touch")
@@ -202,6 +205,7 @@ def test_scan_rejects_outside_symlink(tmp_path):
 
 
 @pytest.mark.parametrize("linked_table", [False, True])
+@skip_no_symlink
 def test_repair_refuses_linked_daily_directories(tmp_path, monkeypatch, linked_table):
     from app.services import integrity_check, kline_sync
     from app.tickflow.repository import DataStore, KlineRepository

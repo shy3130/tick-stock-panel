@@ -705,8 +705,11 @@ class MiningCandidateService:
             "FactorRankResearchMatrixStrategy\n\n"
             f"META = {meta!r}\n\n"
             'EXECUTION_BACKEND = "matrix_native"\n'
-            'ENTRY_SIGNALS = ["signal_factor_rank_entry"]\n'
-            'EXIT_SIGNALS = ["signal_factor_rank_exit"]\n'
+            # matrix_native 的买卖信号由 MATRIX_STRATEGY.make_signal_matrix 生成;
+            # factor_rank 信号是内置研究策略产物, 不在自定义信号库里。声明成
+            # ENTRY_SIGNALS 会被校验器判为「引用了不可用的信号」而拒绝发布。
+            'ENTRY_SIGNALS = []\n'
+            'EXIT_SIGNALS = []\n'
             "STOP_LOSS = -0.08\n"
             "MAX_HOLD_DAYS = 30\n\n"
             f"SCORING = {scoring!r}\n"

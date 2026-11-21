@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._platform_caps import skip_no_atomic_replace, skip_no_symlink
 
 from datetime import date, timedelta
 
@@ -335,6 +336,7 @@ def test_panel_audit_freezes_external_timeseries_values(service_factory, monkeyp
     assert "ext_test_value" in result.evidence["data"]["datasets"]["daily_base"]["fields"]
 
 
+@skip_no_symlink
 def test_report_path_rejects_symlink_even_inside_data_directory(tmp_path):
     target = tmp_path / "other"
     target.mkdir()
@@ -343,6 +345,7 @@ def test_report_path_rejects_symlink_even_inside_data_directory(tmp_path):
         save_evidence(tmp_path, {"schema_version": 1, "run_id": "012345abcd"})
 
 
+@skip_no_atomic_replace
 def test_concurrent_manifest_writes_never_replace_an_existing_version(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 

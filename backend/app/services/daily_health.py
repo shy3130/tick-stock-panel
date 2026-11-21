@@ -70,6 +70,39 @@ def revision(root: Path, asset_type: str = "stock") -> str:
     return f"{own}:{benchmark}" if benchmark != "0" else own
 
 
+def _is_stale_non_trading_entry(entry: dict) -> bool:
+    """非交易日的 missing 条目 = 僵化误报, 应跳过并清理。
+
+    只认 kind == 'missing': 休市日不该有日K, 修补任务永远拿不到该日数据,
+    这条记录无法完成, 留在状态里会让 realtime_gate 无限 409
+    (2026-11-08 周日曾被误当缺失日, 见 data_integrity 注释)。
+    snapshot / corrupt / invalid 有真实分区数据支撑, 绝不在此放宽。
+    """
+    if entry.get("kind") != "missing":
+        return False
+    try:
+        day = date.fromisoformat(entry["day"])
+    except (TypeError, ValueError):
+        return False
+    from app.services.data_integrity import is_confirmed_non_trading_day
+    return is_confirmed_non_trading_day(day)
+
+
+def purge_stale_non_trading_entries(root: Path) -> int:
+    """清除状态文件里的非交易日误报条目, 返回清除数量。
+
+    不在行情热路径调用; 由自检/修补入口显式触发。写回走 _save,
+    会按资产更新 revision, 让依赖缓存自然失效。
+    """
+    with _LOCK:
+        old = snapshot(root)
+        kept = [e for e in old["entries"] if not _is_stale_non_trading_entry(e)]
+        if len(kept) == len(old["entries"]):
+            return 0
+        _save(root, old, kept)
+        return len(old["entries"]) - len(kept)
+
+
 def _key(entry: dict):
     return entry["asset_type"], entry["day"], entry["symbol"]
 
@@ -99,6 +132,8 @@ def _issue_entries(issues) -> dict:
             entry = {"asset_type": TABLE_FAMILY[issue.table], "day": issue.day.isoformat(),
                      "symbol": symbol, "needs_raw": True, "needs_enriched": True,
                      "kind": issue.kind, "reason": issue.reason}
+            if _is_stale_non_trading_entry(entry):
+                continue
             found[_key(entry)] = entry
     return found
 
@@ -110,7 +145,8 @@ def record_issues(root: Path, issues) -> None:
         return
     with _LOCK:
         old = snapshot(root)
-        entries = [e for e in old["entries"] if _key(e) not in found]
+        entries = [e for e in old["entries"]
+                   if _key(e) not in found and not _is_stale_non_trading_entry(e)]
         _save(root, old, [*entries, *found.values()])
 
 
@@ -121,7 +157,7 @@ def record_scan(root: Path, issues, *, assets: list[str], start: date, end: date
         entries = []
         for entry in old["entries"]:
             key = _key(entry)
-            if key in found:
+            if key in found or _is_stale_non_trading_entry(entry):
                 continue
             entry = dict(entry)
             if entry["asset_type"] in assets and start.isoformat() <= entry["day"] <= end.isoformat():
@@ -180,6 +216,8 @@ def assert_usable(
 ) -> None:
     end = end or date.max
     for entry in snapshot(root)["entries"]:
+        if _is_stale_non_trading_entry(entry):
+            continue
         if enriched_only and not entry["needs_raw"] and not entry.get("needs_enriched", True):
             continue
         dependency = entry["asset_type"] == "index" and asset_type in {"stock", "etf"}

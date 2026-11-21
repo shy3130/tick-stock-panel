@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._platform_caps import skip_no_exec_bit
 
 import os
 import sys
@@ -800,6 +801,7 @@ def test_resolve_macos_codex_command_scans_user_locations(tmp_path, monkeypatch)
     assert ai_provider._resolve_macos_codex_command() == str(local_bin)
 
 
+@skip_no_exec_bit
 def test_resolve_macos_codex_command_skips_non_executable_file(tmp_path, monkeypatch):
     """同名但无可执行位的文件不是可用 CLI: 只查 is_file 会解析到它, 运行时报错不直观。"""
     monkeypatch.setattr(ai_provider, "_MACOS_SYSTEM_APPLICATIONS", tmp_path / "no-such-apps")

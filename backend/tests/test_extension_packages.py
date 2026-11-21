@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._platform_caps import skip_no_symlink, skip_windows_path_semantics
 
 import io
 import os
@@ -152,12 +153,13 @@ def test_digest_revision_version_and_compatibility_guards(tmp_path):
         store.install(future, preview["digest"], preview["revision"])
 
 
-@pytest.mark.parametrize("name", ["../escape.py", "/tmp/evil.py", "a\\evil.py", "a/../x.py", "CON.py", "x.dll", "backend/extension.py/child.py"])
+@pytest.mark.parametrize("name", ["../escape.py", "/tmp/evil.py", pytest.param("a\\evil.py", marks=skip_windows_path_semantics), "a/../x.py", "CON.py", "x.dll", "backend/extension.py/child.py"])
 def test_invalid_archive_paths_and_payloads_are_rejected(tmp_path, name):
     with pytest.raises(ValueError):
         ExtensionPackageStore(tmp_path).inspect(bundle(extra={name: "pass"}))
 
 
+@skip_no_symlink
 def test_symlink_and_corrupt_state_cannot_escape_or_block_other_packages(tmp_path):
     store = ExtensionPackageStore(tmp_path)
     data = io.BytesIO(bundle())
