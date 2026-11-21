@@ -19,7 +19,7 @@ it('labels missing names while preserving codes, names and stock navigation', as
   client.setQueryData(QK.capabilities, {})
   client.setQueryData(QK.preferences, {})
   client.setQueryData(QK.monitorRules, { rules: [] })
-  client.setQueryData([...QK.limitLadder(undefined), undefined, 'up'], {
+  client.setQueryData([...QK.limitLadder(undefined), undefined, 'up', 0], {
     as_of: '2026-11-10',
     tiers: [{ boards: 3, count: 4, stocks: [
       { symbol: '002623.SZ', name: null, status: 'limit_up', consecutive_limit_ups: 3, is_one_word: true },

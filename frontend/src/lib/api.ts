@@ -1465,6 +1465,8 @@ export interface LimitLadderStock {
   consecutive_limit_ups?: number | null
   consecutive_limit_downs?: number | null
   status?: 'limit_up' | 'broken' | 'failed' | 'limit_down' | 'recovery' | null
+  /** gap>0 时连板跨度(交易日数), 0/null=原严格口径 */
+  span_days?: number | null
   /** 五档 sealed: real=真封板, fake=假涨停(已归炸板), pending=待确认, null=降级/无能力 */
   sealed_status?: 'real' | 'fake' | 'pending' | null
   /** 封单量(买一/卖一量), 仅真封板有值 */
@@ -3743,11 +3745,12 @@ export const api = {
       body: JSON.stringify({ config }),
     }),
 
-  limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
+  limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down', gap?: number) => {
     const params = new URLSearchParams()
     if (asOf) params.set('as_of', asOf)
     if (extColumns) params.set('ext_columns', extColumns)
     if (direction === 'down') params.set('direction', 'down')
+    if (gap && gap > 0) params.set('gap', String(gap))
     const qs = params.toString()
     return request<LimitLadderResult>(
       `/api/screener/limit-ladder${qs ? `?${qs}` : ''}`,
