@@ -64,8 +64,9 @@ class Candidate(Contract):
 
 class SnapshotStore:
     def __init__(self, root: str | Path):
-        self.root = Path(root).expanduser().resolve()
-        durable_mkdir(self.root)
+        directory = Path(root).expanduser().resolve()
+        durable_mkdir(directory)
+        self.root = directory.resolve(strict=True)
         self.index = self.path("index.sqlite3")
         with self.transaction() as connection:
             tables = {
@@ -123,7 +124,18 @@ class SnapshotStore:
                 raise TiveloError(
                     ErrorCode.SNAPSHOT_CORRUPT, "Data paths must not contain symbolic links"
                 )
-        if not candidate.resolve().is_relative_to(self.root):
+        # Resolve an existing path so Windows never compares a partially
+        # resolved name while another publisher creates the directory or file.
+        existing = candidate
+        while True:
+            try:
+                resolved = existing.resolve(strict=True)
+                break
+            except FileNotFoundError as exc:
+                if existing == self.root:
+                    raise TiveloError(ErrorCode.SNAPSHOT_CORRUPT, "Data store is unavailable") from exc
+                existing = existing.parent
+        if not resolved.is_relative_to(self.root):
             raise TiveloError(ErrorCode.SNAPSHOT_CORRUPT, "Data path escapes the store")
         return candidate
 
