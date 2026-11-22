@@ -201,9 +201,11 @@ jobs:
             # 只提供 GTK 的 Python 绑定，避免 PyInstaller 收进 Ubuntu 的 pkg_resources 等模块。
             gtk_bindings="$RUNNER_TEMP/tsp-gtk-bindings"
             mkdir -p "$gtk_bindings"
-            ln -s /usr/lib/python3/dist-packages/{gi,cairo} "$gtk_bindings/"
+            gtk_system=/usr/lib/python3/dist-packages
+            # PyInstaller 的 GI hook 读取 PyGObject 发行包版本来选择隐藏导入。
+            ln -s "$gtk_system/gi" "$gtk_system/cairo" "$gtk_system"/PyGObject-*.egg-info "$gtk_bindings/"
             export PYTHONPATH="$gtk_bindings"
-            uv run --no-sync python -c 'import pydantic; from webview.platforms import gtk; print(gtk.webkit_ver)'
+            uv run --no-sync python -c 'from importlib.metadata import version; from webview.platforms import gtk; print(version("PyGObject"), gtk.webkit_ver)'
           fi
           uv run --no-sync pyinstaller ../packaging/tsp.spec --noconfirm
 
