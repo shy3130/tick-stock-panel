@@ -1237,8 +1237,11 @@ class MonitorRuleEngine:
         if self._data_dir:
             try:
                 overrides = _strategy_config.load_override(self._data_dir, sid)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 参数覆盖读不出来 => 用默认参数跑, 与用户设定不符且无迹可查。
+                # 与上方 #490 同因: 静默空转最容易骗人, 至少留 debug 线索。
+                logger.debug("monitor: 策略 %s 的参数覆盖读取失败, 本轮用默认参数", sid,
+                             exc_info=True)
 
         # 声明 filter_history 的策略 (如反包) 需要多日历史窗口才能判定形态。
         # 旧实现因"实时监控不支持 history loader"直接跳过 → 反包等策略盘中永不触发。
@@ -1390,8 +1393,10 @@ class MonitorRuleEngine:
         try:
             for row in df.iter_rows(named=True):
                 row_map.setdefault(str(row.get("symbol", "")), row)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            # row_map 已有 result.rows 兜底, 这里只补 df 侧列 => 降级可用。
+            # 但缺列会让后续取字段落空, 留 debug 便于倒查。
+            logger.debug("monitor: row_map 补充失败, 退回 result.rows", exc_info=True)
 
         entry_signal_hits = result.entry_signal_hits
         if score_filter_enabled:

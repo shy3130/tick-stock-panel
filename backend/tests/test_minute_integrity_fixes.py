@@ -175,13 +175,22 @@ def test_gate_allows_local_read_when_service_healthy(monkeypatch):
 
 
 def test_gate_rejects_when_service_absent_or_unhealthy(monkeypatch):
-    """③ 服务缺席或不健康且无能力 → 维持 403 (回落现状, 拉取仍需 Pro+)。"""
+    """③ 服务缺席或不健康、无能力、且本地无该日数据 → 403 (拉取仍需 Pro+)。
+
+    注意: 权限门已升级为「本地分区已有该日分钟数据就放行」—— 否则会出现
+    「数据明明已落盘, 用户却 403 看不到图」。_gate_env 默认让 repo 返回 240 根,
+    因此本用例必须显式把本地清空, 才落在真正需要拦截的那条分支上。
+    """
+    import polars as pl
+
     kline_api, request = _gate_env(monkeypatch, healthy=None)
+    request.app.state.repo.get_minute_batch.return_value = pl.DataFrame()
     with pytest.raises(HTTPException) as exc:
         kline_api.get_minute_batch(request, {"symbols": [_SYM], "date": str(_BJ)})
     assert exc.value.status_code == 403
 
     kline_api, request = _gate_env(monkeypatch, healthy=False)
+    request.app.state.repo.get_minute_batch.return_value = pl.DataFrame()
     with pytest.raises(HTTPException) as exc:
         kline_api.get_minute_batch(request, {"symbols": [_SYM], "date": str(_BJ)})
     assert exc.value.status_code == 403

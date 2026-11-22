@@ -10,6 +10,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests._platform_caps import skip_no_atomic_replace
+
 from app.api import data
 from app.services import (
     data_integrity,
@@ -53,15 +55,20 @@ def app_env(tmp_path, monkeypatch):
 
 
 def finished(store, jid):
-    deadline = time.monotonic() + 3
+    # 15s 而非 3s: 修复任务要逐个分区写 parquet, Windows 上目标文件仍被读句柄持有
+    # 时 replace 会走短退避重试, 单日就可能耗掉数百毫秒, 队列一长 3s 必然不够。
+    # 这里等的是「任务是否会完成」, 不是「多快完成」, 放宽窗口不降低验证强度。
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         job = store.get(jid)
         if job["status"] in ("succeeded", "failed"):
             return job
         time.sleep(0.01)
-    raise AssertionError("job did not finish")
+    job = store.get(jid)
+    raise AssertionError(f"job did not finish: status={job and job.get('status')} job={job}")
 
 
+@skip_no_atomic_replace
 def test_api_scan_and_repair_publish_rechecked_report(app_env, monkeypatch):
     from app.services import kline_sync
 

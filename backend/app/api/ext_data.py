@@ -1733,8 +1733,9 @@ def _refresh_views(request: Request) -> None:
             )
             try:
                 db.execute(sql)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 仅兼容旧路径; 建不上不影响新路径视图, 降级可用。
+                logger.debug("注册兼容视图 %s 失败", name, exc_info=True)
 
     # 注册新路径视图：每个扩展表一个视图 ext_{config_id}
     ext_base = Path(d) / "ext_data"
@@ -1763,8 +1764,10 @@ def _refresh_views(request: Request) -> None:
                         f"SELECT * FROM read_parquet('{glob_pattern}', union_by_name=true)"
                     )
                     db.execute(sql)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 该扩展表的视图建不上 => 界面查不到数据, 而配置列表里仍显示存在。
+                # 用户会以为「配置好了但没数据」, 必须留痕。
+                logger.warning("注册扩展表视图失败: %s", cp, exc_info=True)
 
     # 扩展列已接入 enriched 帧 (compute_signals/compute_enriched_today 注入):
     # repo 内存 enriched 缓存 (_enriched_cache/_etf_/_index_) 持有含旧扩展列的

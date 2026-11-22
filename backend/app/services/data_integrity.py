@@ -417,6 +417,22 @@ def _trading_calendar() -> set[date] | None:
         return _CAL[1]
 
 
+def is_confirmed_non_trading_day(day: date) -> bool:
+    """该日能否**确证**为非 A 股交易日。
+
+    周末零成本且永远正确; 工作日的节假日只在权威日历可用时才敢下结论。
+    日历不可用时对工作日一律返回 False —— 宁可让门禁多报一次, 也不能把
+    真实的日K缺失当成休市放过 (fail-closed)。
+
+    供 daily_health 判定僵化的 missing 条目: 休市日永远拉不到修补数据,
+    该条目会让 realtime_gate 无限 409 (2026-11-08 周日实证)。
+    """
+    if day.weekday() >= 5:
+        return True
+    calendar = _trading_calendar()
+    return calendar is not None and day not in calendar
+
+
 def scan_recent_integrity(
     data_dir: Path,
     *,
@@ -467,7 +483,13 @@ def scan_recent_integrity(
         else:
             unconfirmed = weekdays - known_days
             candidates = weekdays & known_days
-        candidates |= {d for d in known_days if window_start <= d < today}
+        # 本地分区存在 ≠ 当天开市: 实时轮询曾把休市日 (2026-11-08 周日)
+        # 的指数/日K写进分区, 这些残留日会把非交易日并进候选, 生成永远
+        # 修补不掉的 missing 条目 (realtime_gate 循环 409)。只并入能确证
+        # 为交易日的日期; 日历不可用时工作日仍按原逻辑保留。
+        candidates |= {d for d in known_days
+                       if window_start <= d < today
+                       and not is_confirmed_non_trading_day(d)}
         candidates |= unconfirmed
 
     total = max(1, len(selected) * len(candidates))

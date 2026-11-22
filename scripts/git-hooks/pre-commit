@@ -1,0 +1,39 @@
+#!/bin/sh
+# 基础代码预检门禁。
+#
+# 安装: sh scripts/git-hooks/install.sh
+# 绕过: git commit --no-verify  (仅在明确知道原因时使用)
+#
+# 只检查暂存文件, 保证提交时耗时可接受; 全量检查跑 python scripts/preflight.py。
+
+set -e
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+PY=""
+for cand in backend/.venv/Scripts/python.exe backend/.venv/bin/python; do
+    if [ -f "$cand" ]; then
+        PY="$cand"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    for cand in python3 python; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            PY="$cand"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PY" ]; then
+    echo "[preflight] 未找到 Python 解释器, 跳过预检"
+    exit 0
+fi
+
+if ! "$PY" scripts/preflight.py --staged; then
+    echo ""
+    echo "[preflight] 提交被拦截: 上面每一条都是真实踩过的坑。"
+    echo "[preflight] 确认可接受时才绕过: git commit --no-verify"
+    exit 1
+fi

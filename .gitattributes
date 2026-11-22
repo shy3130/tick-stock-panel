@@ -1,1 +1,15 @@
 backend/uv.lock text eol=lf
+
+# .gitattributes 自身必须 LF: 若被转成 CRLF, 规则行尾会带上 \r, 匹配可能失效。
+.gitattributes text eol=lf
+
+# Windows 启动脚本必须恒为 CRLF。不锁的话, 某个在 Linux/macOS 上提交的机器会把
+# 它们归一化成 LF, 回到 Windows 就变成「双击闪退、不报错」—— 排查成本极高。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# sh 脚本必须恒为 LF: 本机 core.autocrlf=true, 不锁的话 checkout 出来是 CRLF,
+# `#!/bin/sh\r` 在 Git Bash / Linux 下直接 bad interpreter, 钩子静默失效。
+*.sh text eol=lf
+scripts/git-hooks/pre-commit text eol=lf
