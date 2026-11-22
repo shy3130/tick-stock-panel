@@ -336,3 +336,66 @@ def test_open_window_does_not_clear_existing_browser_profile(data_dir, monkeypat
     desktop._open_window("http://127.0.0.1:3018")
 
     assert marker.read_bytes() == b"keep me"
+
+
+# ---------- WebView2 运行时预检 ----------
+
+def _fake_winreg(values: dict[tuple[str, str], str]):
+    """按 (hive, 键路径) 返回 pv 值的伪 winreg; 未登记的键位抛 OSError (同真实缺键)。"""
+    from contextlib import nullcontext
+
+    def open_key(hive, path):
+        if (hive, path) not in values:
+            raise FileNotFoundError(path)
+        return nullcontext((hive, path))
+
+    return SimpleNamespace(
+        HKEY_LOCAL_MACHINE="HKLM",
+        HKEY_CURRENT_USER="HKCU",
+        OpenKey=open_key,
+        QueryValueEx=lambda key, name: (values[key], 1),
+    )
+
+
+_WV2_KEY = "Software\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({("HKCU", _WV2_KEY): "131.0.2903.70"}, True),
+        ({}, False),
+        ({("HKCU", _WV2_KEY): "0.0.0.0"}, False),
+        ({("HKCU", _WV2_KEY): ""}, False),
+    ],
+)
+def test_webview2_runtime_detection(monkeypatch, values, expected):
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg(values))
+    assert desktop._webview2_runtime_available() is expected
+
+
+def test_webview2_check_skipped_off_windows(monkeypatch):
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    monkeypatch.setitem(sys.modules, "winreg", None)  # 一旦导入即 ImportError
+    assert desktop._webview2_runtime_available() is True
+
+
+def test_main_reports_missing_webview2_instead_of_opening_window(data_dir, monkeypatch):
+    """缺 WebView2 时 pywebview 会静默降级到 IE 内核导致白屏, 必须弹框指引并退出。"""
+    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg({}))
+    errors, opened = [], []
+    monkeypatch.setattr(desktop, "_show_crash", lambda *args: errors.append(args))
+    monkeypatch.setattr(desktop, "_open_window", opened.append)
+    monkeypatch.setattr(desktop, "_open_static_window", opened.append)
+    monkeypatch.setattr(desktop, "_run_uvmicorn", lambda *a: opened.append("backend"))
+
+    assert desktop.main() == 1
+    assert opened == []
+    assert len(errors) == 1
+    assert "WebView2" in errors[0][0]
+    assert "https://developer.microsoft.com/microsoft-edge/webview2/" in errors[0][1]
