@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       PYTHONUTF8: '1'
+      UV_MANAGED_PYTHON: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +35,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+      - name: Install managed Python
+        run: uv python install ${{ matrix.python }}
       - name: Build contract and engines
         run: |
           uv build packages/tivelo-contracts --out-dir dist/tivelo-contracts

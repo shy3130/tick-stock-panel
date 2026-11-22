@@ -271,6 +271,12 @@ def _reserve_listener(start: int, count: int = _PORT_PROBE_RANGE) -> socket.sock
         try:
             if sys.platform == "win32":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                if port:
+                    # Winsock may let the same user bind loopback over a wildcard
+                    # listener. Probe all interfaces while keeping Uvicorn local.
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                        probe.bind(("0.0.0.0", port))
             listener.bind(("127.0.0.1", port))
             # macOS 可允许在通配地址已监听时绑定具体地址；监听成功才算占用成功。
             listener.listen(socket.SOMAXCONN)
