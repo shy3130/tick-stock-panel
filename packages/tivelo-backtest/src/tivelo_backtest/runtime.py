@@ -364,6 +364,10 @@ def _cached_image_file(path, identity):
 
 
 def _image_file(path):
+    # On Windows ctime tracks creation, and equal modification times can
+    # describe different bytes even when size and file identity match.
+    if os.name == "nt":
+        return _file_record("image", path)["sha256"]
     info = path.stat()
     return _cached_image_file(
         path, (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)

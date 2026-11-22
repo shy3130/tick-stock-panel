@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sys
 from email.message import Message
@@ -225,7 +226,9 @@ def test_frozen_lock_follows_deployed_image_and_ignores_adjacent_user_data(tmp_p
     native.write_bytes(b"modified")
     assert _frozen_image()[0] == first[0]
     assert _frozen_image()[1] != first[1]
+    modified = native.stat()
     native.write_bytes(b"original")
+    os.utime(native, ns=(modified.st_atime_ns, modified.st_mtime_ns))
     assert _frozen_image() == first
 
 
