@@ -319,6 +319,28 @@ def test_d08_concurrent_publish_and_reference_protection(make_bar, make_engine):
     assert reopened.dataset_version(versions[0].version_id) == versions[0]
 
 
+
+@pytest.mark.parametrize("existing", [b"candidate", b"different"])
+def test_concurrent_immutable_manifest_preserves_the_first_writer(tmp_path, monkeypatch, existing):
+    store = SnapshotStore(tmp_path / "store")
+    destination = store.path("example/manifest.json")
+
+    def install_first(source, target):
+        assert source.read_bytes() == b"candidate"
+        assert target == destination
+        target.write_bytes(existing)
+        raise FileExistsError(target)
+
+    monkeypatch.setattr(type(destination), "rename", install_first)
+    if existing == b"candidate":
+        store.write_atomic("example/manifest.json", b"candidate")
+    else:
+        with pytest.raises(TiveloError) as raised:
+            store.write_atomic("example/manifest.json", b"candidate")
+        assert raised.value.code == ErrorCode.SNAPSHOT_CORRUPT
+    assert destination.read_bytes() == existing
+    assert list(destination.parent.iterdir()) == [destination]
+
 def test_killed_reader_releases_only_its_own_snapshot_reference(make_bar, make_engine):
     engine, _, plan = make_engine((make_bar(),))
     _, version, snap = publish(engine, plan)

@@ -57,6 +57,17 @@ def durable_mkdir(path: Path) -> None:
         _sync_directory(directory.parent)
 
 
+
+def _install_immutable(source: Path, destination: Path) -> bool:
+    # Windows cannot replace a file another publisher has open. Rename
+    # without replacing it there, and let the caller verify the existing bytes.
+    try:
+        source.rename(destination)
+    except FileExistsError:
+        return False
+    _sync_directory(destination.parent)
+    return True
+
 class Candidate(Contract):
     candidate_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     version: DatasetVersion
@@ -198,8 +209,8 @@ class SnapshotStore:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, destination)
-            _sync_directory(destination.parent)
+            if not _install_immutable(temporary, destination) and destination.read_bytes() != content:
+                raise TiveloError(ErrorCode.SNAPSHOT_CORRUPT, "Immutable manifest content differs")
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -272,8 +283,13 @@ class SnapshotStore:
                         raise TiveloError(
                             ErrorCode.SNAPSHOT_CORRUPT, "Staged facts changed during publication"
                         )
-                    os.replace(temporary, destination)
-                    _sync_directory(destination.parent)
+                    if (
+                        not _install_immutable(temporary, destination)
+                        and file_digest(destination) != artifact.sha256
+                    ):
+                        raise TiveloError(
+                            ErrorCode.SNAPSHOT_CORRUPT, "Existing immutable facts are corrupt"
+                        )
                 finally:
                     temporary.unlink(missing_ok=True)
         self.write_atomic(relative, canonical_bytes(version))
