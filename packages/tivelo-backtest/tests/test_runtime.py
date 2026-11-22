@@ -3,6 +3,7 @@ import shutil
 import sys
 from email.message import Message
 from importlib import metadata
+from pathlib import Path
 
 import pytest
 from tivelo_contracts.errors import ErrorCode, TiveloError
@@ -241,7 +242,7 @@ def test_frozen_macos_bundle_links_bind_targets_and_reject_external_content(tmp_
     (resources / "preset.json").write_text("v1")
     link = internal / "preset.json"
     try:
-        link.symlink_to("../Resources/preset.json")
+        link.symlink_to(Path("..") / "Resources" / "preset.json")
     except OSError:
         pytest.skip("symbolic links unavailable")
     monkeypatch.setattr(sys, "_MEIPASS", str(internal), raising=False)
@@ -250,6 +251,6 @@ def test_frozen_macos_bundle_links_bind_targets_and_reject_external_content(tmp_
     (resources / "preset.json").write_text("v2")
     assert before != _frozen_image()
     link.unlink()
-    link.symlink_to(tmp_path)
+    link.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(TiveloError, match="leaves its image"):
         _frozen_image()
