@@ -69,6 +69,7 @@ const TARGET_OPTIONS: Record<DatasetKey, string[]> = {
       k => [k, TARGET_FIELDS[k]],
     ),
   ),
+  adj_factor: [...TARGET_FIELDS.adj_factor, 'event_status'],
   financial: [...FINANCIAL_ALL_FIELDS],
 } as Record<DatasetKey, string[]>
 
@@ -85,6 +86,7 @@ const FIELD_LABELS: Record<string, string> = {
   amount: '成交额 (元)',
   trade_date: '除权日期 (YYYY-MM-DD)',
   ex_factor: '复权因子',
+  event_status: '除权事件状态（event / no_events）',
   name: '股票名称',
   last_price: '最新价',
   prev_close: '昨收价',
@@ -553,6 +555,53 @@ function DatasetDetail({
                 />
               </Field>
             </div>
+
+            {datasetKey === 'daily' && (
+              <Field label="日线研究口径">
+                <select
+                  aria-label="日线研究口径"
+                  className={INPUT_CLS}
+                  value={cfg.research_profile ?? ''}
+                  onChange={e => onUpdate({ research_profile: e.target.value ? 'cn.equity.regular.raw.lot100.v1' : null })}
+                >
+                  <option value="">未声明</option>
+                  <option value="cn.equity.regular.raw.lot100.v1">沪深 A 股常规竞价 · 未复权 · 手 / 元</option>
+                </select>
+                <p className="mt-1 text-xs text-muted">选择前请核对上游日线。此口径包含收盘竞价，每手 100 股，成交额以人民币元计。</p>
+              </Field>
+            )}
+
+            {datasetKey === 'minute' && (
+              <Field label="分钟研究口径">
+                <select
+                  aria-label="分钟研究口径"
+                  aria-describedby="minute-research-help"
+                  className={INPUT_CLS}
+                  value={cfg.research_profile ?? ''}
+                  onChange={e => onUpdate({ research_profile: (e.target.value || null) as DatasetConfig['research_profile'] })}
+                >
+                  <option value="">未声明</option>
+                  <option value="cn.equity.regular.1m.raw.lot100.start.v1">时间戳为分钟开始（首根 09:30）</option>
+                  <option value="cn.equity.regular.1m.raw.lot100.end.v1">时间戳为分钟结束（首根 09:31）</option>
+                </select>
+                <p id="minute-research-help" className="mt-1 text-xs text-muted">仅用于沪深股票的未复权 1 分钟线。时间为北京时间，映射后的成交量以手计，每手 100 股。成交额以人民币元计，缺失可留空。</p>
+              </Field>
+            )}
+
+            {datasetKey === 'adj_factor' && (
+              <Field label="除权因子研究口径">
+                <select
+                  aria-label="除权因子研究口径"
+                  className={INPUT_CLS}
+                  value={cfg.research_profile ?? ''}
+                  onChange={e => onUpdate({ research_profile: e.target.value ? 'cn.equity.ex-factor.events.v1' : null })}
+                >
+                  <option value="">未声明</option>
+                  <option value="cn.equity.ex-factor.events.v1">沪深 A 股 · 单次除权前价 / 除权后价</option>
+                </select>
+                <p className="mt-1 text-xs text-muted">每次请求须返回区间内完整的除权事件。供应商能确认无事件时，可映射 event_status 为 no_events。</p>
+              </Field>
+            )}
 
             {/* 请求参数字段映射 — 折叠区 */}
             <div>

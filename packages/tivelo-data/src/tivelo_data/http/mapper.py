@@ -1,0 +1,99 @@
+"""Mapping helpers for custom data sources."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+import polars as pl
+
+
+def extract_rows(payload: Any, response_path: str = "", *, strict: bool = False) -> list[dict]:
+    """Extract a list of row dicts from a JSON payload using dot-path lookup."""
+    data = payload
+    if response_path:
+        for part in response_path.split("."):
+            if not part:
+                continue
+            if isinstance(data, dict):
+                data = data.get(part)
+            else:
+                data = None
+                break
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        if strict and any(not isinstance(item, dict) for item in data):
+            raise ValueError("Response contains a non-object row")
+        return [item for item in data if isinstance(item, dict)]
+    if strict:
+        raise ValueError("Response does not contain the configured rows")
+    return []
+
+
+def map_rows(rows: list[dict], field_map: dict[str, str]) -> pl.DataFrame:
+    if not rows:
+        return pl.DataFrame()
+    # 全量扫描推断: 默认 100 行采样会把稀疏列(前 100 行全 null, 如仅银行股
+    # 有值的财务费用)推断成 Null 列, 后续数值行 append 直接 ComputeError —
+    # 财务批 batch=100 时整表拉空 (与 fuyao 插件 infer_schema_length=None 同因)。
+    df = pl.DataFrame(rows, infer_schema_length=None)
+    rename = {src: dst for src, dst in field_map.items() if src in df.columns and src != dst}
+    if rename:
+        df = df.rename(rename)
+    keep = list(dict.fromkeys(field_map.values()))
+    keep = [col for col in keep if col in df.columns]
+    return df.select(keep) if keep else pl.DataFrame()
+
+
+def apply_transforms(
+    df: pl.DataFrame, transforms: dict[str, str], *, strict: bool = False
+) -> pl.DataFrame:
+    """Apply a small safe transform set. No eval is used."""
+    if df.is_empty() or not transforms:
+        return df
+    out = df
+    for col, expr in transforms.items():
+        if col not in out.columns:
+            if strict:
+                raise ValueError("Transform column missing from response")
+            continue
+        text = expr.strip()
+        if text == "value * 100":
+            out = out.with_columns((pl.col(col).cast(pl.Float64, strict=False) * 100).alias(col))
+        elif text == "value / 100":
+            out = out.with_columns((pl.col(col).cast(pl.Float64, strict=False) / 100).alias(col))
+        elif text == "value / 10000":
+            out = out.with_columns((pl.col(col).cast(pl.Float64, strict=False) / 10000).alias(col))
+        elif text.startswith("parse_date("):
+            fmt = _extract_format(text) or "%Y-%m-%d"
+            out = out.with_columns(
+                pl.col(col)
+                .cast(pl.Utf8, strict=False)
+                .str.strptime(pl.Date, format=fmt, strict=False)
+                .alias(col)
+            )
+        elif text.startswith("parse_datetime("):
+            fmt = _extract_format(text) or "%Y-%m-%d %H:%M:%S"
+            out = out.with_columns(
+                pl.col(col)
+                .cast(pl.Utf8, strict=False)
+                .str.strptime(pl.Datetime, format=fmt, strict=False)
+                .alias(col)
+            )
+        elif strict:
+            raise ValueError("Unsupported source transformation")
+    return out
+
+
+def _extract_format(expr: str) -> str | None:
+    for quote in ("'", '"'):
+        if quote in expr:
+            parts = expr.split(quote)
+            if len(parts) >= 3:
+                return parts[1]
+    return None
+
+
+def datetime_payload(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None

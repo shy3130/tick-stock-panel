@@ -290,6 +290,11 @@ def _load_cached_capset(cache_path: Path) -> CapabilitySet | None:
         return None
 
 
+def cached_tickflow_capabilities() -> CapabilitySet | None:
+    """Read vendor capability limits for an offline plan without triggering a probe."""
+    return _load_cached_capset(settings.data_dir / _CAPSET_CACHE_FILE)
+
+
 def detect_capabilities(force: bool = False) -> CapabilitySet:
     """探测当前可用的能力集 (TickFlow API Key 档位 + 自定义/插件数据源)。
 

@@ -2,6 +2,10 @@ import { api, type ResourceRef, type ResourceTransferEntry } from './api'
 
 export async function downloadResourceBundle(resources: ResourceRef[], filename: string, revision?: string): Promise<void> {
   const blob = await api.resourcesExport(resources, revision)
+  downloadBlob(blob, filename)
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

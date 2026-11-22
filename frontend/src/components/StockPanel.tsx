@@ -5,6 +5,7 @@ import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import { klineDailyQueryOptions, klineMinuteQueryOptions, klineMinuteRangeQueryOptions, DEFAULT_INTRADAY_DAYS, cnToday } from '@/lib/kline'
 import { useQuoteSubscription } from '@/lib/useQuoteSubscription'
 import { StockInfoBar } from '@/components/StockInfoBar'
+import { StockInfoBarCustomizer } from '@/components/StockInfoBarCustomizer'
 import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
@@ -12,19 +13,20 @@ import { useCapabilities } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
 import type { ChartMarker, ChartPriceLine, ChartRange, ChartRenderer } from '@/lib/chart-types'
 import { dailyChartHeight } from '@/lib/chart-layout'
-import {
-  loadInfoFields,
-  saveInfoFields,
-  buildInfoExtColumnsParam,
-  type ColumnConfig,
-} from '@/lib/stock-info-fields'
+import './charts/chart-comparison.css'
+import { buildInfoExtColumnsParam } from '@/lib/stock-info-fields'
+import { useStockInfoBarLayout } from '@/lib/useStockInfoBarLayout'
 
 interface Props {
+  customIndicators?: boolean
   symbol: string
   onAssetType?: (assetType: 'stock' | 'etf' | 'index') => void
   renderer?: ChartRenderer
   /** 详情顶栏已有名称时可隐藏报价条的重复身份；独立面板默认保留。 */
   showQuoteIdentity?: boolean
+  showInfoBarCustomizer?: boolean
+  /** 宿主可让信息条快捷入口共用其配置弹窗。 */
+  onCustomizeInfoBar?: () => void
   height?: number
   showIntraday?: boolean
   className?: string
@@ -71,6 +73,8 @@ export function StockPanel({
   onAssetType,
   renderer = 'echarts',
   showQuoteIdentity = true,
+  showInfoBarCustomizer = true,
+  onCustomizeInfoBar,
   height = 520,
   showIntraday = true,
   className,
@@ -96,20 +100,16 @@ export function StockPanel({
   dailyKlineFlex = 'flex-1',
   visibleBars,
   addedDate,
+  customIndicators = false,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [internalSelectedDate, setSelectedDate] = useState<string | null>(null)
   const selectedDate = controlledSelectedDate === undefined ? internalSelectedDate : controlledSelectedDate
   const dateSelectedByUser = useRef(false)
   const [intradayDismissed, setIntradayDismissed] = useState(false)
-  // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
-  const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
+  const { fields } = useStockInfoBarLayout()
+  const [customizerOpen, setCustomizerOpen] = useState(false)
   const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
-
-  const handleFieldsChange = useCallback((next: ColumnConfig[]) => {
-    setFields(next)
-    saveInfoFields(next)
-  }, [])
 
   // 财务指标：仅当信息条配置含可见的财务字段且用户具备财务数据能力 (financial) 时才请求
   // 无能力时跳过请求, 避免后端抛 CapabilityDenied (403) 导致 free/starter 档弹错误提示
@@ -201,13 +201,14 @@ export function StockPanel({
   const prevClose = selectedIdx > 0
     ? rows[selectedIdx - 1].close
     : undefined
+  const pairedCharts = renderer === 'lightweight' && customIndicators && showIntraday && !!selectedDate && !intradayDismissed
   if (!symbol) return null
 
   // 财务指标最新一期（metrics 按 period_end 排序，取首项）
   const financialMetrics: FinancialMetricRecord | undefined = financials.data?.data?.[0]
 
   return (
-    <div className={className}>
+    <div className={`${className ?? ''} ${renderer === 'lightweight' && customIndicators ? 'stock-chart-pair-container' : ''}`}>
       <StockInfoBar
         freshness={kline.data?.quote_freshness}
         assetType={kline.data?.asset_type}
@@ -217,7 +218,7 @@ export function StockPanel({
         stockInfo={stockInfo}
         rows={rawRows}
         fields={fields}
-        onFieldsChange={handleFieldsChange}
+        onCustomize={showInfoBarCustomizer ? onCustomizeInfoBar ?? (() => setCustomizerOpen(true)) : undefined}
         financialMetrics={financialMetrics}
         onMonitor={onMonitor}
         inWatchlist={inWatchlist}
@@ -227,15 +228,19 @@ export function StockPanel({
         addedDate={addedDate}
       />
 
+      {customizerOpen && <StockInfoBarCustomizer onClose={() => setCustomizerOpen(false)} />}
+
       {infoBarOnly ? null : (
-      <div className={renderer === 'lightweight'
+      <div className={pairedCharts ? 'stock-chart-pair overflow-hidden rounded-lg border border-border/70' : renderer === 'lightweight'
         ? `grid min-w-0 grid-cols-1 items-start overflow-hidden rounded-lg border border-border/70 ${showIntraday && selectedDate && !intradayDismissed ? 'xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]' : ''}`
         : 'flex gap-3 items-start'}>
         <StockDailyKChart
+          alignedLayout={pairedCharts}
+          customIndicators={customIndicators}
           symbol={symbol}
           renderer={renderer}
           height={height}
-          className={renderer === 'lightweight' ? 'min-w-0' : `${dailyKlineFlex} min-w-0`}
+          className={pairedCharts ? 'stock-chart-column stock-chart-column--daily min-w-0' : renderer === 'lightweight' ? 'min-w-0' : `${dailyKlineFlex} min-w-0`}
           dateRange={dateRange}
           markers={markers}
           ranges={ranges}
@@ -251,7 +256,7 @@ export function StockPanel({
         />
 
         {showIntraday && selectedDate && !intradayDismissed && (
-          <div className={renderer === 'lightweight' ? 'relative min-w-0 border-t border-border/60 xl:border-l xl:border-t-0' : 'relative flex-1 min-w-0 border-l border-border pl-3'}>
+          <div className={pairedCharts ? 'stock-chart-column stock-chart-column--minute relative min-w-0 border-border/60' : renderer === 'lightweight' ? 'relative min-w-0 border-t border-border/60 xl:border-l xl:border-t-0' : 'relative flex-1 min-w-0 border-l border-border pl-3'}>
             <button
               onClick={() => onIntradayClose ? onIntradayClose() : setIntradayDismissed(true)}
               className={renderer === 'lightweight' ? 'absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-elevated hover:text-foreground' : 'absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated'}
@@ -261,10 +266,12 @@ export function StockPanel({
               <X className="h-3 w-3" />
             </button>
             <StockIntradayChart
+              alignedLayout={pairedCharts}
+              customIndicators={customIndicators}
               symbol={symbol}
               renderer={renderer}
               date={selectedDate}
-              height={renderer === 'lightweight' ? dailyChartHeight(height, 1) : height}
+              height={renderer === 'lightweight' && !customIndicators ? dailyChartHeight(height, 1) : height}
               prevClose={prevClose}
               dailySummary={selectedRow}
               onPriceHover={setLinkedPrice}

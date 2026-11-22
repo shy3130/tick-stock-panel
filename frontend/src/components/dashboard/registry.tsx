@@ -8,12 +8,13 @@ import type { CSSProperties } from 'react'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, BarChart3, BellRing, Flame, Gauge, LineChart, Link2, Sparkles, Target, TrendingUp, TrendingDown, Coins, Repeat } from 'lucide-react'
+import { BarChart3, BellRing, Flame, Gauge, LineChart, Link2, Sparkles, Target, TrendingUp, TrendingDown, Coins, Repeat } from 'lucide-react'
 import type { AlertEvent, OverviewMarket } from '@/lib/api'
 import { fmtBigNum } from '@/lib/format'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import type { DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { SealedBadge } from '@/components/SealedBadge'
-import { scoreColor, fmtPrice, fmtStockPct, pctClass, compactCount, SectionTitle, MiniMetric, KpiCell } from './shared'
+import { scoreColor, fmtPrice, fmtStockPct, pctClass, compactCount, SectionTitle, MiniMetric, KpiCell, StockNameButton } from './shared'
 import { EmotionScoreConfigDialog } from './EmotionScoreConfigDialog'
 import {
   IndexTicker, BreadthBar, DistributionBars, EmotionRadar, LadderMini, StockList, HotRankCard, MonitorWidget,
@@ -29,12 +30,15 @@ export interface WidgetCtx {
   hasDepth: boolean
   sealedReady: boolean
   isSealedDegrade: boolean
+  hasExtensionRoute: (path: string) => boolean
   /** 来源榜当前选中的 symbol (StockPreviewDialog 高亮), source 如 'gain' | 'concept' | 'alert' */
-  activeSymbol: (source: string) => string | undefined
-  openStock: (source: string, symbol: string, name?: string, navList?: { symbol: string; name?: string }[]) => void
+  activeSymbol: (source: DashboardPreviewSource) => string | undefined
+  openStock: (source: DashboardPreviewSource, symbol: string, name?: string, navList?: NavItem[]) => void
   openDimension: (t: DimensionMembersTarget) => void
-  openAlert: (ev: AlertEvent, navList?: { symbol: string; name?: string }[]) => void
+  openAlert: (ev: AlertEvent, navList?: NavItem[]) => void
 }
+
+export type DashboardPreviewSource = 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert' | 'highest-streak' | 'ladder'
 
 export interface WidgetDef {
   id: WidgetType
@@ -52,7 +56,7 @@ function sectionCard(children: ReactNode, opts: { className?: string; style?: CS
   return (
     <section
       style={opts.style}
-      className={`h-full overflow-hidden rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)] ${opts.className ?? ''}`}
+      className={`h-full overflow-hidden rounded-card border border-border bg-surface/80 p-1.5 ${opts.className ?? ''}`}
     >
       {children}
     </section>
@@ -83,21 +87,65 @@ function EmotionRadarCard({ ctx }: { ctx: WidgetCtx }) {
   )
 }
 
+function ladderHref(ctx: WidgetCtx, direction: 'up' | 'down' = 'up'): string | undefined {
+  if (!ctx.hasExtensionRoute('/limit-ladder')) return undefined
+  const params = new URLSearchParams({ direction })
+  if (ctx.data.as_of) params.set('date', ctx.data.as_of)
+  return `/limit-ladder?${params}`
+}
+
+function LadderMetric({ to, label, className, children }: {
+  to?: string
+  label: string
+  className: string
+  children: ReactNode
+}) {
+  if (!to) return <span className={className}>{children}</span>
+  return (
+    <Link to={to} aria-label={label}
+      className={`${className} rounded-sm underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent`}
+    >
+      {children}
+    </Link>
+  )
+}
+
 function KpiWidget({ ctx }: { ctx: WidgetCtx }) {
   const { data, hasDepth, isSealedDegrade, sealedReady } = ctx
   const strongUp = data.breadth.strong_up ?? 0
   const strongDown = data.breadth.strong_down ?? 0
+  const upLadder = ladderHref(ctx)
+  const downLadder = ladderHref(ctx, 'down')
+  const highestTier = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
+  const topStocks = (highestTier?.stocks ?? []).filter(stock => stock.symbol).slice(0, 3)
+  const highestBoards = `${data.limit.max_boards || 0}板`
   return (
     <div className="grid h-full grid-cols-3 gap-1 xl:grid-cols-6">
       <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
       <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
-      <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-      <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
-        const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
-        const stocks = top?.stocks ?? []
-        if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
-        return `梯队 ${data.limit.tiers.length}`
-      })()} tone="accent" />
+      <KpiCell
+        label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>}
+        value={<>
+          <LadderMetric to={upLadder} label={`查看涨停梯队，${data.limit.limit_up}只`} className="text-bull">{data.limit.limit_up}</LadderMetric>
+          <span className="text-muted">/</span>
+          <LadderMetric to={downLadder} label={`查看跌停梯队，${data.limit.limit_down}只`} className="text-bear">{data.limit.limit_down}</LadderMetric>
+        </>}
+        sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`}
+      />
+      <KpiCell
+        label="最高连板"
+        value={<LadderMetric to={upLadder} label={`查看连板梯队，最高${highestBoards}`} className="text-accent">{highestBoards}</LadderMetric>}
+        sub={topStocks.length ? (
+          <span className="flex gap-1.5">
+            {topStocks.map(stock => (
+              <StockNameButton key={stock.symbol} symbol={stock.symbol} name={stock.name}
+                onClick={(symbol, name) => ctx.openStock('highest-streak', symbol, name, toNavItems(topStocks))}
+                className={ctx.activeSymbol('highest-streak') === stock.symbol ? 'text-accent' : 'text-secondary'}
+              />
+            ))}
+          </span>
+        ) : `梯队 ${data.limit.tiers.length}`}
+      />
       <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
       <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
     </div>
@@ -109,7 +157,8 @@ function TrendWidget({ ctx }: { ctx: WidgetCtx }) {
   return (
     <div className="flex h-full flex-col">
       <div>
-        <SectionTitle icon={LineChart} title="趋势强度" hint="均线/新高低" />
+        <SectionTitle icon={LineChart} title="趋势强度"
+          action={ctx.hasExtensionRoute('/regime') ? { to: '/regime', label: '市场环境' } : undefined} />
         <div className="grid grid-cols-3 gap-1.5">
           <MiniMetric label="站上MA5" value={`${data.trend.above_ma5_pct.toFixed(0)}%`} cls="text-accent" />
           <MiniMetric label="站上MA20" value={`${data.trend.above_ma20_pct.toFixed(0)}%`} cls="text-accent" />
@@ -135,20 +184,13 @@ function TrendWidget({ ctx }: { ctx: WidgetCtx }) {
 }
 
 function MonitorSection({ ctx }: { ctx: WidgetCtx }) {
+  const monitorHref = ctx.hasExtensionRoute('/monitor') ? '/monitor' : undefined
   return (
-    <section className="h-full overflow-hidden rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <BellRing className="h-3.5 w-3.5 text-accent" />
-          <h2 className="text-xs font-semibold text-foreground">监控中心</h2>
-          <span className="font-mono text-[10px] text-muted">实时信号</span>
-        </div>
-        <Link to="/monitor" className="inline-flex items-center justify-center h-5 w-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors" title="进入监控中心">
-          <ArrowUpRight className="h-3.5 w-3.5" />
-        </Link>
-      </div>
-      <div className="max-h-full overflow-y-auto">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-border bg-surface/80 p-1.5">
+      <SectionTitle icon={BellRing} title="监控中心" action={monitorHref ? { to: monitorHref, label: '触发记录' } : undefined} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <MonitorWidget
+          monitorHref={monitorHref}
           activeSymbol={ctx.activeSymbol('alert')}
           onStockClick={ctx.openAlert}
         />
@@ -199,7 +241,8 @@ export const WIDGET_DEFS: WidgetDef[] = [
   {
     id: 'concept-rank', label: '概念热度', icon: Flame, minW: 3, minH: 6, defW: 6, defH: 8,
     render: ctx => (
-      <HotRankCard title="概念热度" rank={ctx.data.concept_rank} configUrl="/concept-analysis"
+      <HotRankCard title="概念热度" rank={ctx.data.concept_rank}
+        configUrl={ctx.hasExtensionRoute('/concept-analysis') ? '/concept-analysis' : undefined}
         activeSymbol={ctx.activeSymbol('concept')}
         onStockClick={(symbol, name) => ctx.openStock('concept', symbol, name, rankNav(ctx.data.concept_rank))}
         onDimensionClick={ctx.openDimension} />
@@ -208,7 +251,8 @@ export const WIDGET_DEFS: WidgetDef[] = [
   {
     id: 'industry-rank', label: '行业热度', icon: Flame, minW: 3, minH: 6, defW: 6, defH: 8,
     render: ctx => (
-      <HotRankCard title="行业热度" rank={ctx.data.industry_rank} configUrl="/industry-analysis"
+      <HotRankCard title="行业热度" rank={ctx.data.industry_rank}
+        configUrl={ctx.hasExtensionRoute('/industry-analysis') ? '/industry-analysis' : undefined}
         activeSymbol={ctx.activeSymbol('industry')}
         onStockClick={(symbol, name) => ctx.openStock('industry', symbol, name, rankNav(ctx.data.industry_rank))}
         onDimensionClick={ctx.openDimension} />
@@ -248,12 +292,21 @@ export const WIDGET_DEFS: WidgetDef[] = [
   },
   {
     id: 'ladder', label: '涨停梯队', icon: Flame, minW: 3, minH: 6, defW: 4, defH: 8,
-    render: ctx => sectionCard(
-      <>
-        <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${ctx.data.limit.limit_up}`}{ctx.isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{ctx.hasDepth ? '未修正' : '降级'}</span>}</span>} />
-        <LadderMini limit={ctx.data.limit} />
-      </>,
-    ),
+    render: ctx => {
+      const to = ladderHref(ctx)
+      return sectionCard(
+        <>
+          <SectionTitle icon={Flame} title="涨停梯队"
+            action={to ? { to, label: '完整梯队' } : undefined}
+            hint={<span className="inline-flex items-center gap-1">{`涨停 ${ctx.data.limit.limit_up}`}{ctx.isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{ctx.hasDepth ? '未修正' : '降级'}</span>}</span>}
+          />
+          <LadderMini limit={ctx.data.limit} activeSymbol={ctx.activeSymbol('ladder')}
+            onStockClick={(symbol, name, navList) => ctx.openStock('ladder', symbol, name, navList)}
+          />
+        </>,
+        { className: 'flex min-h-0 flex-col' },
+      )
+    },
   },
   {
     id: 'monitor', label: '监控中心', icon: BellRing, minW: 2, minH: 6, defW: 4, defH: 10,

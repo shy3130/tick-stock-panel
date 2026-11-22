@@ -842,9 +842,10 @@ def test_loader_manifest_parses_and_entry_importable():
     assert manifest["name"] == "tdxquant"
     assert manifest["display_name"] == "TdxQuant (TdxAiData)"
     assert set(manifest["datasets"]) == {"realtime", "depth5", "daily", "adj_factor", "minute", "full_minute"}
-    # 计费标识与 Key/积分管理页 (设置页积分角标 + 商城入口的契约来源)
+    # 计费标识与注册入口由插件清单声明。
     assert manifest["billing"] == "points"
-    assert manifest["key_manage_url"].startswith("https://vip.tdx.com.cn/")
+    assert "key_manage_url" not in manifest
+    assert manifest["register_url"].startswith("https://agent.tdx.com.cn/tdx-mcp/register.html?")
     # 计费提示与使用要点 (设置页警示框 + 详情列表的契约来源)
     assert "积分" in manifest["billing_note"] and "间隔" in manifest["billing_note"]
     assert len(manifest["usage_notes"]) >= 4

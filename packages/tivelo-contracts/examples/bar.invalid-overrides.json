@@ -1,0 +1,9 @@
+[
+  {"case": "naive_time", "replace": {"available_at": "2025-01-02T15:00:00"}},
+  {"case": "future_close_known_early", "replace": {"available_at": "2025-01-02T06:59:00Z"}},
+  {"case": "float_financial_fact", "replace": {"volume": 10000}},
+  {"case": "negative_volume", "replace": {"volume": "-1"}},
+  {"case": "invalid_ohlc", "replace": {"high": "9"}},
+  {"case": "unsupported_schema", "replace": {"schema_version": "3.0"}},
+  {"case": "unknown_required_field", "replace": {"undocumented_unit": "lots"}}
+]

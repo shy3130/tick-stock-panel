@@ -27,14 +27,30 @@ export const EXT_DATA_QUERY_PREFIXES = new Set([
 ])
 
 export const QK = {
+  engineJobsRoot: ['engine-jobs'] as const,
+  engineInputs: ['engine-jobs', 'inputs'] as const,
+  enginePriceViews: ['engine-jobs', 'price-views'] as const,
+  engineJobs: (limit = 50) => ['engine-jobs', 'list', limit] as const,
+  engineJob: (id: string) => ['engine-jobs', 'job', id] as const,
+  engineJobPlan: (id: string) => ['engine-jobs', 'plan', id] as const,
+  engineJobReport: (id: string, nodeId: string) => ['engine-jobs', 'report', id, nodeId] as const,
+  engineJobSnapshot: (id: string, nodeId: string) => ['engine-jobs', 'snapshot', id, nodeId] as const,
+  engineSchedules: (limit = 50) => ['engine-jobs', 'schedules', limit] as const,
+  engineSchedule: (id: string) => ['engine-jobs', 'schedule', id] as const,
+  engineScheduleCalendar: (id: string) => ['engine-jobs', 'schedule-calendar', id] as const,
+  engineCalendarPresets: ['engine-jobs', 'calendar-presets'] as const,
+  engineScheduleDeliveries: (id: string, limit = 50) => ['engine-jobs', 'deliveries', id, limit] as const,
   dataVersions: ['data-versions'] as const,
   extensionPackages: ['extension-packages'] as const,
+  engineReleaseCandidates: ['engine-extension-packages'] as const,
+  engineLicenses: ['engine-licenses'] as const,
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,
   settings:       ['settings'] as const,
   endpoints:      ['endpoints'] as const,
   version:        ['version'] as const,
   preferences:    ['preferences'] as const,
+  automaticBackup: ['automatic-config-backup'] as const,
   soundPacks:     ['sound-packs'] as const,
   dataSources:    ['data-sources'] as const,
   capabilityMatrix: ['capability-matrix'] as const,
@@ -127,6 +143,9 @@ export const QK = {
   extPagesSourceNamespaces: ['ext-pages', 'source-namespaces'] as const,
 
   // Kline
+  chartIndicatorLibrary: ['chart-indicators'] as const,
+  chartIndicatorValues: (symbol: string, timeframe: string, program: string, source: string) =>
+    ['chart-indicator-values', symbol, timeframe, program, source] as const,
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   // 批量标的名称查询键: 排序后 join — 同一集合不同来源顺序 (draft/分组成员/

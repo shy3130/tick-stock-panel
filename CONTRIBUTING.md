@@ -6,6 +6,8 @@ This document applies to the entire repository and is shared by contributors, AI
 
 When doing secondary development, also follow [`docs/secondary-development.md`](docs/secondary-development.md). On the frontend, prefer real, existing controlled slots or registration entry points; on the backend, prefer small-grained strategy interfaces and dependency injection. When existing extension points cannot express a core behavior change, modifying the source directly is allowed, but the change must stay focused and must come with compatibility verification.
 
+For current user and extension documentation, start from the [documentation index](docs/README.md). The [AI integration guide](docs/ai-integration.md) distinguishes the built-in assistant, public Open API and MCP, and source or package development.
+
 ## 1. Core Principles
 
 ### 1.1 Understand Before Modifying
@@ -41,7 +43,7 @@ When doing secondary development, also follow [`docs/secondary-development.md`](
 ### 2.1 Tech Stack
 
 - Backend: Python 3.11+, FastAPI, Pydantic v2, Polars, DuckDB, PyArrow.
-- The backtest boundary may use pandas; business data computation should prefer Polars. `vectorbt` is an optional dependency and must never break main flows when it is not installed.
+- Strategy and signal backtests use Tivelo for execution and Polars for data preparation.
 - Frontend: React 18, TypeScript, Vite, TanStack Query, Tailwind CSS, ECharts, lightweight-charts.
 - Package management and verification commands: the backend uses `uv`, the frontend uses `pnpm`.
 
@@ -99,7 +101,7 @@ The `bid_volumes` / `ask_volumes` of the five-level order book follow the existi
 
 ### 3.2 Prices and Adjustment
 
-- The `open/high/low/close` in enriched data are forward-adjusted prices.
+- The `open/high/low/close` in enriched data are forward-adjusted prices. Ordinary strategy backtests default to `qfq` and also accept `hfq`. Keep the selected research price basis distinct from raw execution prices and price-limit checks.
 - `raw_close/raw_high/raw_low` are unadjusted raw prices.
 - `limit_up_price` / `limit_down_price` are runtime columns for **limit judgment**: the exchange-effective price with a ∓0.005 tolerance (`raw_close >= limit_up_price` means limit-up; `null` on days without price limits or when the base price is missing). They are an engine capability, not a signal — signals that reference them (limit-up/limit-down/touch-and-break/limit-up break) are ordinary custom signal definitions; deleting the definition does not affect the judgment columns, and referencing parties degrade gracefully.
 - Limit-up, limit-down, one-line boards, limit-up breaks, and exchange price limits must be determined from raw prices and the corresponding trading-day rules.
@@ -440,6 +442,8 @@ The measure of following this guide is not how much documentation is written, bu
 
 涉及代码二次开发时，同时遵循 [`docs/secondary-development.md`](docs/secondary-development.md)。前端优先使用真实存在的受控插槽或注册入口，后端优先使用小粒度策略接口和依赖注入；现有扩展点无法表达核心行为变化时允许直接修改源码，但必须保持改动聚焦并补足兼容性验证。
 
+当前使用说明和扩展契约从[文档索引](docs/README.md)进入。[AI 接入指南](docs/ai-integration.md)列出了内置助手、Open API、MCP 和扩展开发的适用入口。
+
 ## 1. 基本原则
 
 ### 1.1 修改前先理解
@@ -475,7 +479,7 @@ The measure of following this guide is not how much documentation is written, bu
 ### 2.1 技术栈
 
 - 后端：Python 3.11+、FastAPI、Pydantic v2、Polars、DuckDB、PyArrow。
-- 回测边界允许使用 pandas；业务数据计算优先使用 Polars。`vectorbt` 是可选依赖，不得让未安装它的主流程失效。
+- 策略回测和信号回测使用 Tivelo 撮合，行情和信号通过 Polars 准备。
 - 前端：React 18、TypeScript、Vite、TanStack Query、Tailwind CSS、ECharts、lightweight-charts。
 - 包管理和验证命令：后端使用 `uv`，前端使用 `pnpm`。
 
@@ -534,7 +538,7 @@ The measure of following this guide is not how much documentation is written, bu
 
 ### 3.2 价格与复权
 
-- enriched 的 `open/high/low/close` 为前复权价格。
+- enriched 的 `open/high/low/close` 为前复权价格。普通策略回测默认 `qfq`，也支持 `hfq`。成交记录和涨跌停判定应沿用原价口径。
 - `raw_close/raw_high/raw_low` 为不复权原始价格。
 - `limit_up_price` / `limit_down_price` 为涨跌停**判定价**运行时列:交易所生效价 ∓0.005 容差(`raw_close >= limit_up_price` 即涨停;无涨跌幅限制日或基准价缺失为 null)。它们是引擎能力而非信号——引用它们的信号(涨停/跌停/翘板/炸板)是普通自定义信号定义,删除定义后判定价列不受影响,引用方优雅降级。
 - 涨停、跌停、一字板、炸板和交易所价格限制必须基于原始价及对应交易日规则判断。

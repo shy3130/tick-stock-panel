@@ -9,7 +9,10 @@ import { SettingsImportCenterPanel } from './ImportCenter'
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(), install: vi.fn(), backup: vi.fn(), resources: vi.fn(), source: vi.fn(),
   packages: vi.fn(), pages: vi.fn(), sources: vi.fn(), namespaces: vi.fn(), matrix: vi.fn(),
-  manage: vi.fn(), loadErrors: vi.fn(),
+  manage: vi.fn(), loadErrors: vi.fn(), stageEngine: vi.fn(), candidates: vi.fn(), switchEngine: vi.fn(),
+  uninstallPro: vi.fn(),
+  licenses: vi.fn(), identity: vi.fn(), importLease: vi.fn(),
+  chartImport: vi.fn(),
 }))
 vi.mock('@/lib/api', () => ({ api: {
   importCenterInspect: mocks.inspect, installExtensionPackage: mocks.install,
@@ -18,6 +21,11 @@ vi.mock('@/lib/api', () => ({ api: {
   extPagesSourceNamespaces: mocks.namespaces,
   capabilityMatrix: mocks.matrix,
   manageExtensionPackage: mocks.manage,
+  stageEngineRelease: mocks.stageEngine, engineReleaseCandidates: mocks.candidates,
+  switchEngineRelease: mocks.switchEngine,
+  uninstallProDynamic: mocks.uninstallPro,
+  engineLicenses: mocks.licenses, createEngineIdentity: mocks.identity, importEngineLicense: mocks.importLease,
+  importChartIndicators: mocks.chartImport,
 } }))
 vi.mock('@/custom/source-packages/extension', () => ({ PackageActions: () => null }))
 vi.mock('./DataSources', () => ({ PluginKeyConfig: ({ plugin }: { plugin: { name: string } }) => <div data-key-config={plugin.name}>API Key configuration</div> }))
@@ -37,6 +45,221 @@ let qc: QueryClient
 const node = document.createElement('div')
 document.body.appendChild(node)
 const button = (text: string) => [...node.querySelectorAll('button')].find(el => el.textContent?.trim() === text)!
+
+it('stores a signed engine candidate and shows its pending status without requesting code execution', async () => {
+  const preview = { manifest: { id: 'demo.price', version: '1.0.0', issuer: 'demo', kind: 'backtest-extension',
+    license_kind: 'commercial', provides: [{ id: 'demo.dynamic' }] }, kid: 'vendor-release', digest: 'fixture-digest',
+    errors: [], revision: 'review-revision', state: 'inspected' }
+  mocks.inspect.mockResolvedValue({ kind: 'engine', preview })
+  mocks.stageEngine.mockResolvedValue({ ...preview, state: 'staged' })
+  mocks.candidates.mockResolvedValue([{ id: 'demo.price', version: '1.0.0', digest: 'fixture-digest', kid: 'vendor-release', state: 'staged' }])
+  await render()
+  await pick('engine.zip')
+  expect(node.textContent).toContain('已验证的发行签名')
+  expect(node.textContent).toContain('商业制品，运行时另行授权')
+  expect(node.querySelector('input[type="checkbox"]')).toBeNull()
+  await click(button('保存候选包'))
+  expect(mocks.stageEngine).toHaveBeenCalledWith(expect.any(File), 'fixture-digest', 'review-revision')
+  expect(mocks.install).not.toHaveBeenCalled()
+  expect(node.textContent).toContain('引擎候选包已保存')
+  await click(button('查看已安装扩展'))
+  await vi.waitFor(() => expect(node.querySelector('[data-extension-detail]')?.textContent).toContain('fixture-digest'))
+  expect(node.querySelector('[data-extension-detail]')?.textContent).toContain('候选版本')
+})
+
+it('disables candidate staging on a declared runtime mismatch', async () => {
+  mocks.inspect.mockResolvedValue({ kind: 'engine', preview: { manifest: { id: 'demo.price', version: '1.0.0',
+    issuer: 'demo', license_kind: 'commercial', provides: [] }, kid: 'root', errors: ['ABI 不兼容'] } })
+  await render()
+  await pick()
+  expect(button('保存候选包').disabled).toBe(true)
+  expect(node.textContent).toContain('ABI 不兼容')
+})
+
+it('previews chart definitions and requires confirmation of an ID conflict', async () => {
+  const definition = { id: 'user_ma', name: '自定义均线', syntax: 'tdx', source: '均线:MA(C,5);' }
+  const packageData = { format: 'tick-chart-indicators', version: 1, definitions: [definition] }
+  mocks.inspect.mockResolvedValue({ kind: 'chart_indicators', preview: {
+    package: packageData, revision: 'charts-1', entries: [{ id: 'user_ma', name: '自定义均线', action: 'conflict' }],
+  } })
+  const library = { library: { definitions: [definition] }, revision: 'charts-2' }
+  mocks.chartImport.mockRejectedValueOnce(new Error('指标暂时无法保存')).mockResolvedValueOnce(library)
+  await render()
+  await pick('indicators.json')
+  expect(button('确认导入').disabled).toBe(true)
+  expect(mocks.chartImport).not.toHaveBeenCalled()
+  await click(node.querySelector('[aria-label="确认替换自定义均线"]')!)
+  await click(button('确认导入'))
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain('指标暂时无法保存')
+  await click(button('确认导入'))
+  expect(mocks.chartImport).toHaveBeenLastCalledWith(packageData, ['user_ma'], ['user_ma'], 'charts-1')
+  expect(qc.getQueryData(['chart-indicators'])).toEqual(library)
+  expect(node.textContent).toContain('图表指标已导入')
+})
+
+it('shows the declared research capability id for an installed data package', async () => {
+  mocks.candidates.mockResolvedValue([{ id: 'desk.feed', version: '1', digest: 'active-feed',
+    kid: 'publisher', state: 'active', provider_ids: ['desk.raw-bars'] }])
+  await render('/settings?tab=import&view=installed&selected=engine%3Aactive-feed')
+  await vi.waitFor(() => expect(node.textContent).toContain('研究数据源 desk.raw-bars'))
+  expect(button('彻底卸载')).toBeUndefined()
+})
+
+it('asks before uninstalling Pro and refreshes its installed and price-view status after confirmation', async () => {
+  const id = 'tivelo.pro.dynamic-adjustment'
+  const version = { id, version: '1.0', digest: 'active-pro', kid: 'publisher',
+    state: 'active', generation: 2 }
+  const previous = { ...version, version: '0.9', digest: 'older-pro', state: 'previous' }
+  mocks.candidates.mockResolvedValue([version, previous])
+  mocks.uninstallPro.mockRejectedValueOnce(new Error('研究任务正在使用 Tivelo Pro'))
+    .mockImplementationOnce(async () => {
+      mocks.candidates.mockResolvedValue([])
+      return { id, removed: 2 }
+    })
+  await render('/settings?tab=import&view=installed&selected=engine%3Aactive-pro')
+  await vi.waitFor(() => expect(button('彻底卸载')).toBeTruthy())
+  await click(button('彻底卸载'))
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain('所有版本')
+  expect(mocks.uninstallPro).not.toHaveBeenCalled()
+  await click(button('取消'))
+  expect(mocks.uninstallPro).not.toHaveBeenCalled()
+  expect(node.querySelector('[role="dialog"]')).toBeNull()
+  await click(button('彻底卸载'))
+  await click(button('确认卸载'))
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain('研究任务正在使用 Tivelo Pro')
+  expect(node.textContent).toContain('active-pro')
+  await click(button('彻底卸载'))
+  await click(button('确认卸载'))
+  expect(mocks.uninstallPro).toHaveBeenLastCalledWith({ generation: 2, digests: ['active-pro', 'older-pro'] })
+  await vi.waitFor(() => {
+    expect(node.textContent).toContain('Tivelo Pro 已卸载')
+    expect(node.textContent).not.toContain('active-pro')
+  })
+})
+
+it('switches the displayed candidate with its generation and exposes rollback for the active version', async () => {
+  const candidate = { id: 'demo.views', version: '2', digest: 'new', kid: 'publisher', state: 'staged', generation: 2 }
+  mocks.candidates.mockResolvedValue([candidate])
+  mocks.switchEngine.mockImplementation(async () => {
+    mocks.candidates.mockResolvedValue([{ ...candidate, state: 'active', generation: 3, rollback_digest: 'old' }])
+    return { id: 'demo.views', active_digest: 'new', generation: 3 }
+  })
+  await render('/settings?tab=import&view=installed&selected=engine%3Anew')
+  await vi.waitFor(() => expect(button('验证并启用版本')).toBeTruthy())
+  expect(mocks.switchEngine).not.toHaveBeenCalled()
+  await click(button('验证并启用版本'))
+  expect(mocks.switchEngine).toHaveBeenCalledWith('new', 'activate', 2)
+  await vi.waitFor(() => expect(button('回退至上一个版本')).toBeTruthy())
+  mocks.switchEngine.mockRejectedValue(new Error('自检期间活动版本发生变化'))
+  await click(button('回退至上一个版本'))
+  expect(mocks.switchEngine).toHaveBeenLastCalledWith('new', 'rollback', 3)
+  expect(node.textContent).toContain('自检期间活动版本发生变化')
+  expect(button('停用引擎扩展')).toBeTruthy()
+})
+
+it('registers the device and imports a lease for the selected active commercial digest', async () => {
+  const identity = { public_key: 'installation-public-key', sha256: 'hash', storage: 'private_file' }
+  const summary = { license_policy: 'subscription', lease_expires_at: '2027-01-01T00:00:00Z' }
+  mocks.candidates.mockResolvedValue([{ id: 'demo.views', version: '1', digest: 'active', kid: 'vendor',
+    state: 'active', generation: 1, license_kind: 'commercial' }])
+  mocks.licenses.mockResolvedValue({ identity: null, leases: [] })
+  mocks.identity.mockImplementation(async () => {
+    mocks.licenses.mockResolvedValue({ identity, leases: [] })
+    return identity
+  })
+  mocks.importLease.mockRejectedValueOnce(new Error('本机使用凭证校验失败'))
+    .mockImplementationOnce(async () => {
+      const lease = { extension_id: 'demo.views', revision: 1, summary }
+      mocks.licenses.mockResolvedValue({ identity, leases: [lease] })
+      return lease
+    })
+  await render('/settings?tab=import&view=installed&selected=engine%3Aactive')
+  await vi.waitFor(() => expect(button('生成本机安装身份')).toBeTruthy())
+  expect(mocks.identity).not.toHaveBeenCalled()
+  await click(button('生成本机安装身份'))
+  await vi.waitFor(() => expect(node.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe(identity.public_key))
+  const input = node.querySelector<HTMLInputElement>('[aria-label="商业授权"] input[type="file"]')!
+  expect(input.hidden).toBe(false)
+  const pickerLabel = input.labels?.[0]
+  expect(pickerLabel?.textContent?.trim()).toBe('选择凭证文件')
+  expect(input.getAttribute('accept')).toBe('.lic,.json,application/json')
+  expect(document.getElementById(input.getAttribute('aria-describedby') ?? '')?.textContent).toContain('.lic')
+  const openPicker = vi.fn()
+  input.addEventListener('click', openPicker)
+  await click(pickerLabel!)
+  expect(openPicker).toHaveBeenCalledOnce()
+  expect(mocks.importLease).not.toHaveBeenCalled()
+  const file = new File(['signed'], 'lease.lic')
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain('本机使用凭证校验失败')
+  expect(input.value).toBe('')
+  expect(input.disabled).toBe(false)
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  await vi.waitFor(() => expect(node.textContent).toContain('已登记订阅凭证'))
+  expect(node.querySelector('[role="alert"]')).toBeNull()
+  expect(mocks.importLease).toHaveBeenCalledTimes(2)
+  expect(mocks.importLease).toHaveBeenCalledWith('active', file, 0)
+})
+
+it('imports a single dropped credential using the existing device authorization', async () => {
+  const identity = { public_key: 'device', sha256: 'hash', storage: 'private_file' }
+  mocks.candidates.mockResolvedValue([{ id: 'demo.views', version: '1', digest: 'active', kid: 'vendor',
+    state: 'active', generation: 1, license_kind: 'commercial' }])
+  mocks.licenses.mockResolvedValue({ identity, leases: [] })
+  mocks.importLease.mockResolvedValue({})
+  await render('/settings?tab=import&view=installed&selected=engine%3Aactive')
+  const area = () => node.querySelector('[aria-label="拖入使用凭证"]')!
+  await vi.waitFor(() => expect(area()).toBeTruthy())
+  const file = new File(['isolated drop fixture'], 'device.lic')
+  function drop(files: File[]) {
+    const event = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: { files } })
+    return act(async () => area().dispatchEvent(event))
+  }
+  await drop([file, file])
+  expect(mocks.importLease).not.toHaveBeenCalled()
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain('请一次拖入一个')
+  await drop([file])
+  expect(mocks.importLease).toHaveBeenCalledExactlyOnceWith('active', file, 0)
+  expect(node.querySelector('[role="alert"]')).toBeNull()
+})
+
+it('submits pasted credential contents only after confirmation and clears a successful draft', async () => {
+  const identity = { public_key: 'device', sha256: 'hash', storage: 'private_file' }
+  mocks.candidates.mockResolvedValue([{ id: 'demo.views', version: '1', digest: 'active', kid: 'vendor',
+    state: 'active', generation: 1, license_kind: 'commercial' }])
+  mocks.licenses.mockResolvedValue({ identity, leases: [] })
+  mocks.importLease.mockRejectedValueOnce(new Error('本机使用凭证校验失败')).mockResolvedValueOnce({})
+  await render('/settings?tab=import&view=installed&selected=engine%3Aactive')
+  const summary = () => Array.from(node.querySelectorAll('summary')).find(item => item.textContent === '粘贴凭证 JSON')!
+  await vi.waitFor(() => expect(summary()).toBeTruthy())
+  await click(summary())
+  const field = node.querySelector<HTMLTextAreaElement>('textarea[aria-label="凭证 JSON"]')!
+  const confirm = button('核验并导入')
+  expect(confirm.disabled).toBe(true)
+  const contents = ' { "signed": "isolated", "signature": "test" }\n'
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, contents)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(mocks.importLease).not.toHaveBeenCalled()
+  await click(confirm)
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain('本机使用凭证校验失败')
+  expect(field.value).toBe(contents)
+  await click(confirm)
+  expect(mocks.importLease).toHaveBeenCalledTimes(2)
+  const [digest, submitted, revision] = mocks.importLease.mock.calls[1] as [string, File, number]
+  expect([digest, submitted.name, revision]).toEqual(['active', 'tivelo-license.json', 0])
+  const sent = await new Promise(resolve => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.readAsText(submitted)
+  })
+  expect(sent).toBe(contents)
+  expect(field.value).toBe('')
+})
+
 async function click(el: HTMLElement) { expect(el).toBeTruthy(); await act(async () => el.click()) }
 async function render(url = '/settings?tab=import') {
   qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -55,6 +278,7 @@ beforeEach(() => {
   mocks.install.mockResolvedValue({ id: 'demo.backend', message: '扩展包已保存，重启主程序后生效' })
   mocks.backup.mockResolvedValue({ categories: [{ key: 'watchlist', label: '自选股', imported: 1, skipped_conflict: 0, failed: [] }], skipped_unselected: 2, out_of_scope_files: 0 })
   mocks.packages.mockResolvedValue([])
+  mocks.candidates.mockResolvedValue([])
   mocks.pages.mockResolvedValue([])
   mocks.sources.mockResolvedValue({ plugins: [] })
   mocks.namespaces.mockResolvedValue([])

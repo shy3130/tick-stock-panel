@@ -17,6 +17,7 @@ vi.mock('@/lib/kline', async importOriginal => ({
 }))
 vi.mock('./charts/LightweightDaily', () => ({ LightweightDaily: (props: any) => <output>{JSON.stringify(props)}</output> }))
 vi.mock('./EChartsCandlestick', () => ({ EChartsCandlestick: (props: any) => <output>{JSON.stringify(props)}</output> }))
+vi.mock('./charts/CustomChart', () => ({ CustomDaily: (props: any) => <output>{JSON.stringify(props)}</output> }))
 
 let host: HTMLDivElement, root: Root
 const originalRows = fixture.rows
@@ -30,6 +31,20 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); lo
 const props = () => JSON.parse(host.querySelector('output')!.textContent!)
 const render = async (extra: Partial<Parameters<typeof StockDailyKChart>[0]> = {}) => act(async () => {
   root.render(<StockDailyKChart symbol="605365.SH" renderer="lightweight" {...extra} />)
+})
+
+it('moves volume comparison controls out of the custom daily toolbar while preserving legacy callers and preferences', async () => {
+  localStorage.setItem('stock_volume_compare', JSON.stringify({ enabled: false, days: 7 }))
+  await render({ customIndicators: true })
+  expect([...host.querySelectorAll('button[aria-pressed]')].map(button => button.textContent)).toEqual(['异动'])
+  expect(host.querySelector('[aria-label="开启量能对比"]')).toBeNull()
+  expect(host.querySelector('[aria-label="量能对比周期"]')).toBeNull()
+  expect(props().volumeCompare).toBeUndefined()
+  expect(props().activeIndicators).toBeUndefined()
+  await render()
+  expect(props().volumeCompare).toEqual({ enabled: false, days: 7 })
+  expect(host.querySelector('[aria-label="开启量能对比"]')).not.toBeNull()
+  expect((host.querySelector('[aria-label="量能对比周期"]') as HTMLSelectElement).value).toBe('7')
 })
 
 it('identifies limit events from existing signals, prioritizing a limit-down close over a broken limit-up', async () => {

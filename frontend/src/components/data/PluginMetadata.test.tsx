@@ -27,10 +27,11 @@ async function render(fields: Partial<PluginDataSourceItem>) {
 
 it('shows configurable links without requiring API Key configuration', async () => {
   await render({ homepage: 'https://example.com/docs', homepage_label: '使用文档',
-    key_manage_url: 'https://example.com/account', key_manage_label: '获取个人 Key' })
+    key_manage_url: 'https://example.com/account', key_manage_label: '获取个人 Key',
+    register_url: 'https://example.com/register' })
   const links = [...host.querySelectorAll('a')]
-  expect(links.map(link => link.textContent)).toEqual(['使用文档', '获取个人 Key'])
-  expect(links.map(link => link.href)).toEqual(['https://example.com/docs', 'https://example.com/account'])
+  expect(links.map(link => link.textContent)).toEqual(['使用文档', '获取个人 Key', '注册'])
+  expect(links.map(link => link.href)).toEqual(['https://example.com/docs', 'https://example.com/account', 'https://example.com/register'])
   expect(links.every(link => link.target === '_blank' && link.rel.includes('noopener'))).toBe(true)
 })
 

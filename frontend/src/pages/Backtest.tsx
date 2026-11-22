@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { BookmarkCheck, FlaskConical, Info, ShieldCheck } from 'lucide-react'
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, BookmarkCheck, FlaskConical, Info, ShieldCheck } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { ResearchCandidatesDialog } from './backtest/ResearchCandidatesDialog'
 import { RobustnessValidation } from './backtest/RobustnessValidation'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
-import { type ResearchCandidate } from '@/lib/api'
+import { useQuery } from '@tanstack/react-query'
+import { api, type ResearchCandidate } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 
 type Tab = 'strategy' | 'robustness'
 
@@ -20,6 +22,42 @@ const MODES: Record<Tab, { title: string; subtitle: string; icon: typeof FlaskCo
     subtitle: '稳健参数筛选与滚动样本外检验',
     icon: ShieldCheck,
   },
+}
+
+function SnapshotBacktest({ jobId, nodeId }: { jobId: string; nodeId: string }) {
+  const snapshot = useQuery({
+    queryKey: QK.engineJobSnapshot(jobId, nodeId),
+    queryFn: () => api.engineJobSnapshot(jobId, nodeId),
+    enabled: !!jobId && !!nodeId,
+    retry: false,
+  })
+  const data = snapshot.data
+  const jobLink = `/research/engines?${new URLSearchParams({ job: jobId, node: nodeId })}`
+  return (
+    <div className="flex min-h-full flex-col bg-base">
+      <PageHeader
+        title="快照回测"
+        className="flex-wrap gap-y-2 px-3 lg:px-5"
+        right={<Link to={jobLink} className="inline-flex min-h-9 items-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-sm text-secondary hover:text-accent focus-visible:outline focus-visible:outline-accent">
+          <ArrowLeft aria-hidden="true" className="size-4" />返回数据快照
+        </Link>}
+      />
+      <main className="min-h-0 flex-1 p-3 lg:p-4">
+        {snapshot.isFetching && !data ? (
+          <p role="status" className="p-3 text-sm text-secondary">正在读取固定数据快照…</p>
+        ) : snapshot.error || !data?.backtest ? (
+          <p role="alert" className="rounded-btn border border-danger/30 bg-surface px-3 py-2 text-sm text-danger">
+            {snapshot.error?.message ?? '请从引擎研究打开含日K和完整复权因子的快照。'}
+          </p>
+        ) : (
+          <StrategyBacktest key={data.snapshot_id} snapshotInput={{
+            ...data.backtest,
+            ref: { job_id: jobId, node_id: nodeId, snapshot_id: data.snapshot_id },
+          }} />
+        )}
+      </main>
+    </div>
+  )
 }
 
 export function Backtest() {
@@ -38,6 +76,10 @@ export function Backtest() {
     setPendingLoad(stateCandidate)
     navigate({ pathname: location.pathname, search: location.search }, { replace: true })
   }, [stateCandidate, location.pathname, location.search, navigate])
+
+  if (searchParams.has('snapshotJob') || searchParams.has('snapshotNode')) {
+    return <SnapshotBacktest jobId={searchParams.get('snapshotJob') ?? ''} nodeId={searchParams.get('snapshotNode') ?? ''} />
+  }
 
   // 旧链接兼容: 因子已升级为一级路由 /factors, 保留其余参数重定向
   if (requestedTab === 'factor') {

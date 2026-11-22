@@ -113,7 +113,7 @@ def validate_manifest(doc: dict):
     datasets = doc.get("datasets")
     if not isinstance(datasets, list) or not datasets or any(not isinstance(x, str) or x not in DATASETS for x in datasets):
         raise ValueError("datasets 必须声明已支持的数据集")
-    for key in ("display_name", "description", "api_key_env", "homepage", "key_manage_url", "author", "billing", "billing_note", "install_hint"):
+    for key in ("display_name", "description", "api_key_env", "homepage", "key_manage_url", "register_url", "author", "billing", "billing_note", "install_hint"):
         if key in doc and (not isinstance(doc[key], str) or len(doc[key]) > 4000):
             raise ValueError(f"{key} 必须是文本且不超过 4000 字符")
     for key in ("homepage_label", "key_manage_label"):
@@ -121,7 +121,7 @@ def validate_manifest(doc: dict):
             raise ValueError(f"{key} 必须是文本且不超过 200 字符")
     if doc.get("api_key_env") and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", doc["api_key_env"]):
         raise ValueError("api_key_env 必须是大写环境变量名")
-    for key in ("homepage", "key_manage_url"):
+    for key in ("homepage", "key_manage_url", "register_url"):
         if doc.get(key) and not doc[key].startswith("https://"):
             raise ValueError(f"{key} 必须使用 HTTPS")
     if "usage_notes" in doc and (not isinstance(doc["usage_notes"], list) or any(not isinstance(x, str) for x in doc["usage_notes"])):

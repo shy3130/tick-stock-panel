@@ -151,7 +151,9 @@ export function DashboardGrid({ ctx, items, onItemsChange, editing }: DashboardG
                 )}
                 {/* 编辑态阻断组件内部交互(点击/悬停/iframe), 拖拽由外层网格项接管;
                     卡片撑满格子(h-full), 内容超出格子时在本组件边界内裁切 */}
-                <div className={cn('h-full [&>div]:h-full', editing && 'pointer-events-none')}>{renderWidget(it)}</div>
+                <div className={cn('h-full [&>div]:h-full', editing && 'pointer-events-none')} {...(editing ? { inert: '' } : {})}>
+                  {renderWidget(it)}
+                </div>
               </div>
             )
           })}

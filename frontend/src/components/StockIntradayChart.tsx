@@ -9,8 +9,11 @@ import type { ChartRenderer } from '@/lib/chart-types'
 
 const EChartsIntraday = lazy(() => import('./EChartsIntraday').then(m => ({ default: m.EChartsIntraday })))
 const LightweightIntraday = lazy(() => import('./charts/LightweightIntraday').then(m => ({ default: m.LightweightIntraday })))
+const CustomIntraday = lazy(() => import('./charts/CustomChart').then(m => ({ default: m.CustomIntraday })))
 
 interface Props {
+  alignedLayout?: boolean
+  customIndicators?: boolean
   symbol: string
   renderer?: ChartRenderer
   date: string | null
@@ -27,8 +30,10 @@ interface Props {
 }
 
 export function StockIntradayChart({
+  alignedLayout = false,
   symbol,
   renderer = 'echarts',
+  customIndicators = false,
   date,
   height = 520,
   prevClose,
@@ -67,8 +72,18 @@ export function StockIntradayChart({
   const sourceIsNone = minute.data?.source === 'none'
   // 指数分钟K无本地存储且不支持落库获取 (后端 sync_minute_single 显式拒绝), 不显示获取按钮
   const isIndex = minute.data?.asset_type === 'index'
-  const Chart = renderer === 'lightweight' ? LightweightIntraday : EChartsIntraday
-  const chartHeight = renderer === 'lightweight' && minute.data?.source === 'local_partial' ? Math.max(260, height - 32) : height
+  const customChart = renderer === 'lightweight' && customIndicators
+  const Chart = customChart ? CustomIntraday : renderer === 'lightweight' ? LightweightIntraday : EChartsIntraday
+  const chartHeight = renderer === 'lightweight' && !customChart && minute.data?.source === 'local_partial' ? Math.max(260, height - 32) : height
+  const partialNotice = minute.data?.source === 'local_partial' ? (
+    <div className={`${customChart ? '' : 'mb-1'} flex flex-wrap items-center gap-2 rounded border border-warning/30 bg-warning/5 px-2 py-1 text-[10px] text-warning`}>
+      <span>该日分钟数据不完整：{minute.data.actual ?? minuteRows.length}/{minute.data.expected ?? 240} 根</span>
+      <button type="button" onClick={() => fetchMinute.mutate()} disabled={fetchMinute.isPending}
+        className="ml-auto shrink-0 rounded border border-warning/40 px-1.5 py-0.5 hover:bg-warning/10 disabled:opacity-50">
+        {fetchMinute.isPending ? '补齐中…' : '尝试补齐'}
+      </button>
+    </div>
+  ) : undefined
 
   useEffect(() => {
     setMinuteDismissed(false)
@@ -78,7 +93,8 @@ export function StockIntradayChart({
   if (!symbol || !date) return null
 
   return (
-    <div className={className} style={{ height: renderer === 'lightweight' && minuteRows.length > 0 ? undefined : height, minHeight: height, flexShrink: 0 }}>
+    <div className={`${className ?? ''} ${alignedLayout ? 'stock-chart-stack' : ''}`} style={{ height: renderer === 'lightweight' && minuteRows.length > 0 ? undefined : height, minHeight: height, flexShrink: 0 }}>
+      {minuteRows.length === 0 && <div className={alignedLayout ? 'stock-chart-full-state h-full' : 'h-full'}>
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>
@@ -132,25 +148,15 @@ export function StockIntradayChart({
           )}
         </>
       )}
+      </div>}
       {minuteRows.length > 0 && (
-        <>
-          {minute.data?.source === 'local_partial' && (
-            <div className="mb-1 flex items-center gap-2 rounded border border-warning/30 bg-warning/5 px-2 py-1 text-[10px] text-warning">
-              <span>
-                该日分钟数据不完整：{minute.data.actual ?? minuteRows.length}/{minute.data.expected ?? 240} 根
-              </span>
-              <button
-                type="button"
-                onClick={() => fetchMinute.mutate()}
-                disabled={fetchMinute.isPending}
-                className="ml-auto shrink-0 rounded border border-warning/40 px-1.5 py-0.5 hover:bg-warning/10 disabled:opacity-50"
-              >
-                {fetchMinute.isPending ? '补齐中…' : '尝试补齐'}
-              </button>
-            </div>
-          )}
-          <Suspense fallback={<div className="text-xs text-muted py-4">正在加载图表…</div>}>
+        <div className={alignedLayout ? 'stock-chart-stack' : undefined}>
+          {!customChart && partialNotice}
+          <Suspense fallback={<div className="stock-chart-full-state text-xs text-muted py-4">正在加载图表…</div>}>
           <Chart
+            alignedLayout={alignedLayout}
+            {...(customChart ? { chartNotice: partialNotice } : {})}
+            {...(customChart ? { indicatorRevision: minute.dataUpdatedAt } : {})}
             assetType={minute.data?.asset_type}
             symbol={symbol}
             data={minuteRows}
@@ -165,7 +171,7 @@ export function StockIntradayChart({
             priceLines={priceLines}
           />
           </Suspense>
-        </>
+        </div>
       )}
     </div>
   )

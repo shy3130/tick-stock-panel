@@ -36,6 +36,36 @@ def test_run_numba_parallel_serializes_concurrent_calls():
     assert max_active == 1
 
 
+def test_workbench_and_independent_engine_share_the_parallel_lock():
+    from tivelo_backtest.research.numba_runtime import run_numba_parallel as engine_run
+
+    holding = threading.Event()
+    release = threading.Event()
+    started = threading.Event()
+    entered = threading.Event()
+
+    def host_work():
+        holding.set()
+        assert release.wait(5)
+
+    def engine_work():
+        started.set()
+        engine_run(entered.set)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        host = pool.submit(run_numba_parallel, host_work)
+        assert holding.wait(5)
+        engine = pool.submit(engine_work)
+        try:
+            assert started.wait(5)
+            assert not entered.wait(0.1)
+        finally:
+            release.set()
+        host.result(timeout=5)
+        engine.result(timeout=5)
+    assert entered.is_set()
+
+
 @pytest.mark.skipif(
     __import__("importlib").util.find_spec("numba") is None,
     reason="numba not installed on this platform",

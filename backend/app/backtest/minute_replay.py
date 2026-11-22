@@ -17,8 +17,11 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import polars as pl
+from tivelo_backtest.research.matrix import LEGACY_PRICE_SCALE
 
+from app.backtest.price_basis import BacktestPriceBasis
 from app.price_limits import is_risk_warning_name, price_limit_pct
+from app.services.minute_adjust import ADJUSTED_COLS
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
 
 # 日线面板列: 基础行情 + 涨停/炸板信号 (策略日线窗口契约) + 基础过滤/展示列。
@@ -136,6 +139,7 @@ class MinuteSignalReplayer:
         progress_cb: Callable[[dict], None] | None = None,
         cancel_event=None,
         evidence=None,
+        price_basis: BacktestPriceBasis = "qfq",
     ) -> MinuteReplayResult:
         t0 = time.perf_counter()
         result = MinuteReplayResult()
@@ -165,8 +169,8 @@ class MinuteSignalReplayer:
         prev_raw_close: dict[str, float] = {}
         prev_name: dict[str, str] = {}
         prev_adj_factor: dict[str, float] = {}
-        adj_factor: dict[str, float] = {}
 
+        reader = repo.get_minute_for_backtest if price_basis == "hfq" else repo.get_minute_by_dates
         for i, day in enumerate(minute_days):
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -177,10 +181,23 @@ class MinuteSignalReplayer:
                     "date": str(day),
                 })
 
-            history = repo.get_minute_by_dates(universe, [day], "stock")
+            history = reader(universe, [day], "stock")
             if history.is_empty():
                 result.skipped_days.append(day)
                 continue
+            day_rows = panel.filter(pl.col("date") == day)
+            if price_basis == "hfq" and LEGACY_PRICE_SCALE in day_rows.columns:
+                history = (
+                    history.join(
+                        day_rows.select("symbol", LEGACY_PRICE_SCALE),
+                        on="symbol", how="left", maintain_order="left",
+                    )
+                    .with_columns(
+                        (pl.col(column) * pl.col(LEGACY_PRICE_SCALE).fill_null(1.0)).alias(column)
+                        for column in ADJUSTED_COLS if column in history.columns
+                    )
+                    .drop(LEGACY_PRICE_SCALE)
+                )
             if evidence is not None:
                 evidence.record_frame(f"minute_replay/{day}", history)
 
@@ -200,11 +217,7 @@ class MinuteSignalReplayer:
 
                 # T-1 收盘/名称 + T 日复权因子查表。
                 _refresh_day_lookups(prev_raw_close, prev_name, prev_adj_factor, current, prior)
-                day_rows = panel.filter(pl.col("date") == day).select(
-                    "symbol", "close", "raw_close",
-                )
-                adj_factor.clear()
-                adj_factor.update(_adj_factors(day_rows))
+            adj_factor = _adj_factors(day_rows)
 
             context = StrategyDataContext(
                 asset_type="stock",
@@ -247,9 +260,7 @@ class MinuteSignalReplayer:
                 name = prev_name.get(str(symbol), "")
                 prev = prev_raw_close.get(str(symbol))
                 # 涨停拒买: 触发分钟收盘已达当日涨停价 (按 T-1 原始收盘 + 板块规则)。
-                # 分钟 close 为前复权口径 (raw 基准分区在 get_minute_by_dates 读取时
-                # 投影, 存量分区即复权存储), 涨停价是原始价口径 → 按 T 日复权比例
-                # 还原到原始价后再比对。
+                # 分钟 close 为运行所选的复权口径, 涨停价按原始价格比较。
                 adj = adj_factor.get(str(symbol), 1.0)
                 minute_raw = minute_close / adj if adj and adj > 0 else minute_close
                 if prev is not None and prev > 0:
@@ -321,6 +332,8 @@ def _refresh_day_lookups(
 
 def _adj_factors(day_rows: pl.DataFrame) -> dict[str, float]:
     """T 日 复权close/原始close 比例: 把复权分钟价还原到原始价系 (涨停比对用)。"""
+    if LEGACY_PRICE_SCALE in day_rows.columns:
+        return dict(day_rows.select("symbol", LEGACY_PRICE_SCALE).iter_rows())
     factors: dict[str, float] = {}
     if day_rows.is_empty() or "raw_close" not in day_rows.columns:
         return factors

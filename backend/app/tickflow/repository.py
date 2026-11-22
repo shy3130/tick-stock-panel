@@ -117,7 +117,7 @@ def _last_available_rows(df: pl.DataFrame, cutoff: date) -> pl.DataFrame:
 class DataStore:
     """唯一的存储入口 — 进程启动时创建。"""
 
-    def __init__(self, data_dir: Path | None = None) -> None:
+    def __init__(self, data_dir: Path | None = None, *, defer_database: bool = False) -> None:
         self.data_dir = Path(data_dir or settings.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,11 +157,33 @@ class DataStore:
         for sub in ("metrics", "income", "balance_sheet", "cash_flow", "shares"):
             (self.data_dir / "financials" / sub).mkdir(parents=True, exist_ok=True)
 
+        self._db_lock = threading.Lock()
+        self._db = None if defer_database else self._open_database()
+
+    def _open_database(self) -> duckdb.DuckDBPyConnection:
         # DuckDB 内存模式 — 不建 .db 文件(§7.1)
         with startup_phase(logger, "DuckDB connection"):
-            self.db = duckdb.connect(database=":memory:")
-        with startup_phase(logger, "DuckDB view registration"):
-            self._register_views()
+            db = duckdb.connect(database=":memory:")
+        try:
+            with startup_phase(logger, "DuckDB view registration"):
+                self._register_views(db)
+        except BaseException:
+            db.close()
+            raise
+        return db
+
+    @property
+    def db(self) -> duckdb.DuckDBPyConnection:
+        if self._db is None:
+            with self._db_lock:
+                if self._db is None:
+                    self._db = self._open_database()
+        return self._db
+
+    def close(self) -> None:
+        with self._db_lock:
+            if self._db is not None:
+                self._db.close()
 
     def _migrate_legacy_data_dir(self) -> None:
         """Compatibility entry for frozen workers and callers outside desktop.main."""
@@ -169,7 +191,7 @@ class DataStore:
 
         recover_desktop_data(self.data_dir)
 
-    def _register_views(self) -> None:
+    def _register_views(self, db: duckdb.DuckDBPyConnection) -> None:
         """把 Parquet 目录挂载为 DuckDB 视图(§7.3)。"""
         d = self.data_dir.as_posix()
         statements = [
@@ -221,14 +243,14 @@ class DataStore:
         for sql in statements:
             try:
                 with startup_phase(logger, f"DuckDB view {sql.split()[4]}"):
-                    self.db.execute(sql)
+                    db.execute(sql)
             except Exception as e:  # noqa: BLE001
                 # 空数据目录(首次启动)或权限问题时 DuckDB 会抛 IOException;
                 # 跨版本/平台也可能抛 CatalogException 等。空目录缺视图不影响启动
                 # (后续同步写入数据后会重新刷新视图),这里一律降级为 debug 日志。
                 logger.debug("view registration skipped (no parquet yet): %s", sql[:60])
         with startup_phase(logger, "unified DuckDB views"):
-            self._register_unified_views()
+            self._register_unified_views(db)
 
     def _has_parquet(self, subdir: str) -> bool:
         return any((self.data_dir / subdir).rglob("*.parquet"))
@@ -335,7 +357,6 @@ class KlineRepository:
 
     def __init__(self, store: DataStore) -> None:
         self.store = store
-        self.db = store.db
         # DuckDB 读并发: cursor() 即同一内存库实例的独立连接 (MVCC 快照隔离,
         # 1.5.3 实测并发读+换视图零异常)。用信号量限制同时进行的扫描数, 取代
         # 原全局互斥 —— 同步期的长查询 (全视图扫描) 不再把交互读堵到超时。
@@ -396,11 +417,13 @@ class KlineRepository:
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
         self._index_enriched_glob = str(store.data_dir / "kline_index_enriched" / "**" / "*.parquet")
         self._etf_enriched_glob = str(store.data_dir / "kline_etf_enriched" / "**" / "*.parquet")
-        self._minute_glob = str(store.data_dir / "kline_minute" / "**" / "*.parquet")
-        self._etf_minute_glob = str(store.data_dir / "kline_etf_minute" / "**" / "*.parquet")
         self._inst_glob = str(store.data_dir / "instruments" / "**" / "*.parquet")
         self._index_inst_glob = str(store.data_dir / "instruments_index" / "**" / "*.parquet")
         self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
+
+    @property
+    def db(self) -> duckdb.DuckDBPyConnection:
+        return self.store.db
 
     def _new_cursor(self):
         """从根连接复制一个独立连接 (共享同一库实例, 创建开销极低)。"""
@@ -1698,6 +1721,37 @@ class KlineRepository:
         # 回退 scan_parquet
         return self._scan_daily_batch(symbols, start, end, columns)
 
+    def get_backtest_raw_daily(self, symbols, start: date, end: date) -> pl.DataFrame:
+        """Read original OHLC from the date partitions, never from enriched prices."""
+        from tivelo_contracts.errors import TiveloError
+        from tivelo_data.legacy.repository_files import date_partition_files
+
+        table = self.store.data_dir / daily_dirname("stock")
+        try:
+            files = date_partition_files(table, start, end)
+            if not files:
+                raise ValueError("回测区间没有本地原始日 K，请先同步行情")
+            query = pl.scan_parquet(
+                sorted(files), hive_partitioning=True, extra_columns="ignore",
+                schema={"symbol": pl.String, "date": pl.Date,
+                        **dict.fromkeys(("open", "high", "low", "close"), pl.Float64)},
+                cast_options=pl.ScanCastOptions(float_cast="upcast", integer_cast="allow-float"),
+            )
+            if symbols:
+                query = query.filter(pl.col("symbol").is_in(symbols))
+            prices = guarded_collect(query.select(
+                "symbol", pl.col("date").cast(pl.Date),
+                *(pl.col(name).cast(pl.Float64).alias(f"raw_{name}")
+                  for name in ("open", "high", "low", "close")),
+            ))
+            if files != date_partition_files(table, start, end):
+                raise ValueError("回测期间原始日 K 已更新，请重新运行")
+        except (TiveloError, OSError, pl.exceptions.PolarsError) as exc:
+            raise ValueError("无法读取完整的原始日 K，请检查行情同步状态") from exc
+        if prices.is_empty():
+            raise ValueError("所选标的没有本地原始日 K，请先同步行情")
+        return prices
+
     def get_index_daily(
         self,
         symbol: str,
@@ -1774,9 +1828,52 @@ class KlineRepository:
             return self.get_etf_daily(symbol, start, end, columns)
         return pl.DataFrame()
 
+    def chart_history_version(
+        self, timeframe: str, asset_type: str, symbol: str, start: date, end: date,
+    ) -> tuple | None:
+        """Version a bounded chart warmup without scanning historical quotes.
+
+        Daily warmup follows the enriched generation. Minute warmup depends on
+        minute partitions, factors and the raw-basis marker. Legacy symbol
+        partitions remain readable through the uncached path.
+        """
+        from datetime import timedelta
+
+        root = self.store.data_dir
+        if timeframe == "daily":
+            return str(root.resolve()), self.get_matrix_data_generation(asset_type)
+
+        def stamp(path: Path):
+            try:
+                stat = path.stat()
+                return str(path), stat.st_mtime_ns, stat.st_size
+            except FileNotFoundError:
+                return str(path), None
+
+        try:
+            base = self._minute_dir_for(asset_type)
+            if (base / f"symbol={symbol}").exists():
+                return None
+            parts = tuple(
+                stamp(base / f"date={(start + timedelta(days=i)).isoformat()}" / "part.parquet")
+                for i in range((end - start).days + 1)
+            )
+            factors = root / ("adj_factor_etf" if asset_type == "etf" else "adj_factor")
+            return (
+                str(root.resolve()),
+                minute_basis_is_raw(root),
+                parts,
+                tuple(stamp(path) for path in sorted(factors.glob("*.parquet"))),
+            )
+        except OSError as exc:
+            logger.warning("分时指标预热版本不可用，跳过历史缓存: %s", exc.strerror or type(exc).__name__)
+            return None
+
+    def _minute_dir_for(self, asset_type: str) -> Path:
+        return self.store.data_dir / ("kline_etf_minute" if asset_type == "etf" else "kline_minute")
+
     def _minute_glob_for(self, asset_type: str) -> str:
-        """按资产类型选择分钟K parquet glob。ETF 分钟数据独立存储于 kline_etf_minute。"""
-        return self._etf_minute_glob if asset_type == "etf" else self._minute_glob
+        return str(self._minute_dir_for(asset_type) / "**" / "*.parquet")
 
     def _maybe_adjust_minute(self, df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
         """原始基准标记开启时应用读取时复权投影 (services/minute_adjust 三层架构)。
@@ -1794,9 +1891,8 @@ class KlineRepository:
 
     def _minute_partition_path(self, asset_type: str, trade_date: date) -> str | None:
         """单日分钟K分区文件路径; 不存在 (含存量未迁移的旧 symbol= 分区) 返回 None。"""
-        base = self._minute_glob_for(asset_type).rsplit("/", 2)[0]
-        p = f"{base}/date={trade_date.isoformat()}/part.parquet"
-        return p if Path(p).exists() else None
+        path = self._minute_dir_for(asset_type) / f"date={trade_date.isoformat()}" / "part.parquet"
+        return str(path) if path.exists() else None
 
     def get_minute(
         self,
@@ -1899,15 +1995,31 @@ class KlineRepository:
         缺失的日期分区直接跳过 (该日无分钟K数据)。
         返回列: symbol, datetime, open, high, low, close, volume, amount。
         """
+        return self._maybe_adjust_minute(self._read_minute_dates(symbols, dates, asset_type), asset_type)
+
+    def get_minute_for_backtest(self, symbols, dates, asset_type="stock") -> pl.DataFrame:
+        """Return trade-date exchange prices for replay and fills."""
+        from app.services.minute_adjust import legacy_minutes_at_trade_price
+
+        raw_basis = minute_basis_is_raw(self.store.data_dir)
+        frame = self._read_minute_dates(symbols, dates, asset_type)
+        if not raw_basis and minute_basis_is_raw(self.store.data_dir):
+            # Migration atomically replaced the partitions during our read.
+            return self._read_minute_dates(symbols, dates, asset_type)
+        if raw_basis:
+            return frame
+        return legacy_minutes_at_trade_price(frame, self.store.data_dir, asset_type)
+
+    def _read_minute_dates(self, symbols, dates, asset_type) -> pl.DataFrame:
         if not symbols or not dates:
             return pl.DataFrame()
-        base = self._etf_minute_glob.rsplit("/", 2)[0] if asset_type == "etf" else self._minute_glob.rsplit("/", 2)[0]
+        base = self._minute_dir_for(asset_type)
         # 收集存在的分区文件路径, 避免对不存在的文件 scan 报错
         parts: list[str] = []
         for d in dates:
-            p = f"{base}/date={d.isoformat()}/part.parquet"
-            if Path(p).exists():
-                parts.append(p)
+            path = base / f"date={d.isoformat()}" / "part.parquet"
+            if path.exists():
+                parts.append(str(path))
         if not parts:
             return pl.DataFrame()
         try:
@@ -1920,7 +2032,7 @@ class KlineRepository:
                 .sort(["symbol", "datetime"]),
                 streaming=True,
             )
-            return self._maybe_adjust_minute(df, asset_type)
+            return df
         except Exception as e:  # noqa: BLE001
             logger.warning("分钟K按日期查询失败: %s", e)
             return pl.DataFrame()

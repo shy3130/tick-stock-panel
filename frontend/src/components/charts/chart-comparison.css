@@ -1,0 +1,29 @@
+/* Rows share their natural heights only while the two charts sit side by side. */
+.stock-chart-pair-container { container: stock-chart-pair / inline-size; }
+.stock-chart-pair { display: grid; grid-template-columns: minmax(0, 1fr); }
+.stock-chart-column--minute { border-top-width: 1px; }
+
+@container stock-chart-pair (min-width: 64rem) {
+  .stock-chart-pair {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+  }
+  .stock-chart-pair .stock-chart-column,
+  .stock-chart-pair .stock-chart-stack {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 1 / span 4;
+    min-width: 0;
+  }
+  .stock-chart-column--daily { grid-column: 1; }
+  .stock-chart-column--minute { grid-column: 2; border-top-width: 0; border-left-width: 1px; }
+  .stock-chart-pair .stock-chart-body {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 2 / span 3;
+    min-width: 0;
+  }
+  .stock-chart-pair .stock-chart-contents { display: contents; }
+  .stock-chart-pair .stock-chart-full-state { grid-row: 1 / -1; }
+  .stock-chart-pair [data-chart-engine] { align-self: start; }
+}

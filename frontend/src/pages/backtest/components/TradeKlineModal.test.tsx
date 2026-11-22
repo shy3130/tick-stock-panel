@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, useState, type ComponentProps } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { StrategyBacktestTrade } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
 import type { TradeNavItem } from '../tradeNav'
 import { TradeKlineModal } from './TradeKlineModal'
 
@@ -26,14 +28,16 @@ const first: StrategyBacktestTrade = {
 let root: Root
 let host: HTMLDivElement
 let close: ReturnType<typeof vi.fn>
+let client: QueryClient
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   close = vi.fn()
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
 })
-afterEach(async () => { await act(async () => root.unmount()); host.remove() })
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove() })
 const render = (props: Partial<ComponentProps<typeof TradeKlineModal>> = {}) => act(async () => {
-  root.render(<TradeKlineModal trade={first} onClose={close} {...props} />)
+  root.render(<QueryClientProvider client={client}><TradeKlineModal trade={first} onClose={close} {...props} /></QueryClientProvider>)
 })
 async function click(label: string) {
   const button = [...host.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent?.trim()) === label)
@@ -56,6 +60,19 @@ it('uses Lightweight Charts and fits the entire trade with explicit buy/sell and
   expect(panel.selectedDate).toBe('2026-09-01')
   expect(host.querySelector('[role="dialog"]')?.getAttribute('aria-modal')).toBe('true')
   expect(host.querySelector('[role="dialog"] button[aria-label="关闭交易回放"]')).not.toBeNull()
+})
+
+it('aligns exchange fills from an HFQ result to the QFQ replay axes', async () => {
+  client.setQueryData(QK.kline(first.symbol, '2026-07-18', '2026-11-18'), {
+    symbol: first.symbol,
+    rows: [
+      { date: first.entry_date, close: 5, raw_close: 10 },
+      { date: first.exit_date, close: 10, raw_close: 10 },
+    ],
+  })
+  await render({ priceBasis: 'hfq' })
+  expect(panel.priceLines.map((line: any) => line.value)).toEqual([4.94, 10.23])
+  expect(panel.markers[0].label).toContain('9.88')
 })
 
 it('preserves ETF three-decimal fill prices in the summary, markers and price lines', async () => {
@@ -107,7 +124,7 @@ it('resets the selected date when navigating another trade of the same symbol wh
     return <TradeKlineModal trade={current.trade} navItems={items} currentKey={current.key}
       onNavigate={setCurrent} onClose={close} />
   }
-  await act(async () => root.render(<Harness />))
+  await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>))
   await click('选择历史日K')
   await act(async () => host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
   expect(panel.selectedDate).toBe('2026-10-15')

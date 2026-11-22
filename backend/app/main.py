@@ -16,9 +16,11 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    chart_indicators,
     config_backup,
     data,
     definitions,
+    engine_jobs,
     events,
     ext_data,
     ext_pages,
@@ -493,9 +495,19 @@ async def _application_lifespan(app: FastAPI):
         current_extension_context(data_dir=store.data_dir, repository=repo),
         extension_registry,
     )
+    from app.services.engine_jobs.manager import EngineJobManager
+
+    try:
+        app.state.engine_job_manager = EngineJobManager(store.data_dir)
+    except Exception:  # noqa: BLE001 — optional engine service failure must not disable the host
+        app.state.engine_job_manager = None
+        logger.error("独立引擎任务服务启动失败，已有功能继续运行", exc_info=False)
     try:
         yield
     finally:
+        engine_manager = getattr(app.state, "engine_job_manager", None)
+        if engine_manager and not engine_manager.shutdown():
+            logger.warning("独立引擎任务进程尚未退出，保留执行锁")
         repo._on_refresh_done = None  # noqa: SLF001
         wd = getattr(app.state, "watchdog", None)
         if wd:
@@ -691,6 +703,7 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
+app.include_router(chart_indicators.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
@@ -713,6 +726,7 @@ app.include_router(data.router)
 app.include_router(ext_data.router)
 app.include_router(ext_pages.router)
 app.include_router(task_registry.router)
+app.include_router(engine_jobs.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)

@@ -8,19 +8,22 @@ import uuid
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import date
-from itertools import pairwise
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import polars as pl
 import psutil
-
-
-class EnrichedGenerationUnavailableError(RuntimeError):
-    """The enriched dataset has no stable generation available for readers."""
-
+from tivelo_data.legacy.repository_state import _MAX_RANGE_GENERATIONS as _MAX_RANGE_GENERATIONS
+from tivelo_data.legacy.repository_state import (
+    EnrichedGenerationSnapshot,
+    EnrichedGenerationUnavailableError,
+    _is_ready_payload,
+    _marker_path,
+    _read_marker,
+    _ready_payload,
+    _snapshot,
+)
 
 _WRITER_LOCKS_GUARD = threading.Lock()
 _WRITER_LOCKS: dict[tuple[str, str], threading.RLock] = {}
@@ -35,84 +38,10 @@ _HEARTBEAT_INTERVAL_S = 30.0
 # 没有这层兜底时, 一次异常中断留下的 publishing 标记会永久驻留 —— 所有读取
 # 持续 fail-closed, 而停止实时行情 (运行期唯一频繁的写入方) 反而移除了自愈路径。
 CLAIM_STALE_SECONDS = 600.0
-# A bounded prefix-version timeline: changes on D invalidate D and later windows
-# (indicators may depend on all preceding history), never windows ending before D.
-_MAX_RANGE_GENERATIONS = 128
-
-
-@dataclass(frozen=True)
-class EnrichedGenerationSnapshot:
-    generation: str
-    base_generation: str
-    ranges: tuple[tuple[date, str], ...] = ()
-
-    def through(self, end: date) -> str:
-        return next((token for day, token in reversed(self.ranges) if day <= end), self.base_generation)
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            **_ready_payload(self.generation),
-            "base_generation": self.base_generation,
-            "range_generations": [[day.isoformat(), token] for day, token in self.ranges],
-        }
-
-    def changed(self, generation: str, start: date | None) -> EnrichedGenerationSnapshot:
-        if start is None:
-            return EnrichedGenerationSnapshot(generation, generation)
-        ranges = tuple((day, token) for day, token in self.ranges if day < start)
-        ranges += ((start, generation),)
-        base = self.base_generation
-        if len(ranges) > _MAX_RANGE_GENERATIONS:
-            base = ranges[-_MAX_RANGE_GENERATIONS - 1][1]
-            ranges = ranges[-_MAX_RANGE_GENERATIONS:]
-        return EnrichedGenerationSnapshot(generation, base, ranges)
-
-
-def _snapshot(payload: dict[str, Any]) -> EnrichedGenerationSnapshot:
-    generation = payload["generation"]
-    # Older writers omit range metadata: conservatively invalidate every range.
-    if "range_generations" not in payload:
-        return EnrichedGenerationSnapshot(generation, generation)
-    try:
-        base = payload["base_generation"]
-        ranges = tuple((date.fromisoformat(day), token) for day, token in payload["range_generations"])
-        if (
-            not isinstance(base, str) or not base
-            or len(ranges) > _MAX_RANGE_GENERATIONS
-            or any(not isinstance(token, str) or not token for _, token in ranges)
-            or any(a[0] >= b[0] for a, b in pairwise(ranges))
-            or (ranges[-1][1] if ranges else base) != generation
-        ):
-            raise ValueError("invalid range generations")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise EnrichedGenerationUnavailableError("enriched range generation marker is invalid") from exc
-    return EnrichedGenerationSnapshot(generation, base, ranges)
-
-
-def _marker_path(data_dir: Path, asset_type: str) -> Path:
-    return Path(data_dir) / f".matrix_generation_{asset_type}.json"
-
-
 def _writer_lock(data_dir: Path, asset_type: str) -> threading.RLock:
     key = (str(Path(data_dir).resolve()), asset_type)
     with _WRITER_LOCKS_GUARD:
         return _WRITER_LOCKS.setdefault(key, threading.RLock())
-
-
-def _read_marker(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise EnrichedGenerationUnavailableError(
-            "enriched data generation marker is invalid"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise EnrichedGenerationUnavailableError(
-            "enriched data generation marker is invalid"
-        )
-    return payload
 
 
 def _fsync_directory(path: Path) -> None:
@@ -199,23 +128,6 @@ def _process_is_alive(pid: Any) -> bool:
         return True
     # Windows interprets signal 0 as a console event, not a read-only probe.
     return psutil.pid_exists(pid)
-
-
-def _ready_payload(generation: str) -> dict[str, Any]:
-    return {
-        "state": "ready",
-        "generation": generation,
-        "updated_at_ns": time.time_ns(),
-    }
-
-
-def _is_ready_payload(payload: dict[str, Any]) -> bool:
-    generation = payload.get("generation")
-    return (
-        payload.get("state", "ready") == "ready"
-        and isinstance(generation, str)
-        and bool(generation)
-    )
 
 
 def _claim_age_seconds(payload: dict[str, Any]) -> float | None:

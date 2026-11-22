@@ -445,3 +445,57 @@ def test_minute_replay_checks_intraday_future_and_tracks_minute_inputs(tmp_path,
     assert result.error is None
     assert result.evidence["lookahead"]["status"] == ("failed" if leak else "passed")
     assert len([key for key in result.evidence["data"]["datasets"] if key.startswith("minute_replay/")]) == 4
+
+
+@pytest.mark.parametrize("backend", ["matrix_native", "polars_expr"])
+def test_backward_adjusted_run_preserves_exchange_fills_across_split(service_factory, tmp_path, backend):
+    service = service_factory(backend)
+    event = date(2024, 1, 8)
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(exist_ok=True)
+    # 一条早于行情范围的无效因子不阻断后复权，正常除权仍生效。
+    pl.DataFrame({
+        "symbol": ["600000.SH", "000001.SZ", "600000.SH"],
+        "trade_date": [event, event, date(2000, 1, 1)], "ex_factor": [2.0, 2.0, -2.0],
+    }).write_parquet(factor_path)
+
+    for path in (tmp_path / "kline_daily_enriched").glob("*/part.parquet"):
+        frame = pl.read_parquet(path)
+        if frame["date"][0] >= event:
+            frame = frame.with_columns(pl.col("raw_close", "raw_high", "raw_low") / 2)
+        frame.with_columns(pl.col("open", "high", "low", "close") / 2).write_parquet(path)
+
+    options = {
+        "mode": "full", "matching": "close_t", "fees_pct": 0, "slippage_bps": 0,
+        "holding_days": 1,
+    }
+    forward = service.run_with_evidence(_config(**options))
+    backward = service.run_with_evidence(_config(price_basis="hfq", **options))
+    assert forward.error is None
+    assert backward.error is None
+    assert forward.config["price_basis"] == "qfq"
+    assert backward.evidence["data"]["daily_price_basis"] == "hfq"
+
+    forward_trades = {(trade["symbol"], trade["entry_date"]): trade for trade in forward.trades}
+    assert backward.trades
+    assert len(backward.trades) == len(forward_trades)
+    assert any(trade["entry_date"] < str(event) <= trade["exit_date"] for trade in backward.trades)
+    for trade in backward.trades:
+        other = forward_trades[trade["symbol"], trade["entry_date"]]
+        assert trade["entry_price"] == pytest.approx(
+            other["entry_price"] * (2 if trade["entry_date"] < str(event) else 1)
+        )
+        assert trade["exit_price"] == pytest.approx(
+            other["exit_price"] * (2 if trade["exit_date"] < str(event) else 1)
+        )
+        assert trade["pnl_pct"] == pytest.approx(other["pnl_pct"], abs=1e-4)
+
+    # 后复权运行不得改写共享的前复权矩阵/面板。
+    assert service.run(_config(**options)).trades == forward.trades
+
+
+@pytest.mark.parametrize("backend", ["polars_expr", "matrix_native"])
+def test_dynamic_replay_requires_an_admitted_extension(service_factory, backend):
+    service = service_factory(backend)
+    result = service.run(_config(price_basis="dynamic"))
+    assert result.error == "动态复权需要独立回测工作进程"

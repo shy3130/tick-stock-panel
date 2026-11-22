@@ -10,29 +10,51 @@ import {
   type OssLicenseEntry,
 } from '@/data/ossLicenses'
 
-/** 页面与弹窗共用的许可合规声明 — 界面常驻, 移除即构成违约 */
+/** 页面与弹窗共用的 TSP 本体许可声明。 */
 export function LicenseComplianceNotice({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/5 ${compact ? 'p-3 mt-4' : 'p-3'}`}>
       <ShieldAlert className="h-4 w-4 text-warning shrink-0 mt-px" />
       <div className="min-w-0">
-        <div className="text-xs font-medium text-warning">许可合规声明</div>
+        <div className="text-xs font-medium text-warning">TSP 工作台分发须知</div>
         <p className="mt-1 text-[11px] leading-relaxed text-secondary">
-          本项目基于 MIT 协议开源, 协议要求分发本软件或其任何部分时
-          <span className="text-warning font-medium">必须完整保留原始版权声明与许可文本</span>。
-          未经版权所有者书面许可, 移除、遮蔽或篡改版权署名、许可声明及本声明,
-          以及将本项目重新分发时隐匿来源的行为, 均构成协议违约与著作权侵权;
-          版权所有者保留依法追究责任的权利。
+          TSP 工作台采用 {PROJECT_LICENSE_NAME} 许可。分发软件的副本或实质部分时，须保留原始版权声明与许可文本。
         </p>
       </div>
     </div>
   )
 }
 
-/**
- * 开源许可对话框 — 设置→关于「查看许可」入口。
- * 展示本项目 LICENSE 全文与随应用分发的第三方组件许可清单。
- */
+export function TiveloLicenseNotice() {
+  return (
+    <section aria-label="Tivelo 组件许可" className="rounded-card border border-warning/30 bg-warning/5 p-4">
+      <div className="flex items-center gap-2">
+        <ShieldAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-foreground">Tivelo 组件许可</h3>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-secondary">
+        采用 PolyForm Noncommercial License 1.0.0 的 Tivelo 自有实现，
+        <strong className="font-semibold text-warning">许可范围外的商用须另获权利人书面授权。</strong>
+      </p>
+      <p className="mt-2 break-words font-mono text-[11px] leading-relaxed text-secondary">
+        tivelo-data · tivelo-backtest · tivelo-contracts · tivelo-market-cn · tivelo-extensions
+      </p>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted">
+        各组件的适用范围见随包附带的 LICENSE、LICENSE-MIT 和 NOTICE。已授予的 MIT 权利继续有效。
+      </p>
+      <a
+        href="https://spdx.org/licenses/PolyForm-Noncommercial-1.0.0.html"
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 inline-block text-[11px] text-accent underline underline-offset-2 hover:text-foreground"
+      >
+        查看 PolyForm 非商业许可全文
+      </a>
+    </section>
+  )
+}
+
+/** 设置 → 关于「查看许可」入口，展示工作台和随应用分发的组件许可。 */
 export function OssLicenseDialog({ onClose }: { onClose: () => void }) {
   return (
     <Modal
@@ -44,7 +66,7 @@ export function OssLicenseDialog({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <ScrollText className="h-4 w-4 text-accent" />
-          <h2 id="oss-license-title" className="text-sm font-medium text-foreground">开源许可</h2>
+          <h2 id="oss-license-title" className="text-sm font-medium text-foreground">软件许可</h2>
         </div>
         <button
           onClick={onClose}
@@ -81,16 +103,16 @@ export function OssLicenseDialog({ onClose }: { onClose: () => void }) {
           </a>
         </section>
 
-        {/* 第三方组件 */}
+        <TiveloLicenseNotice />
+
+        {/* 其他依赖组件 */}
         <LicenseSection title="前端组件" entries={FRONTEND_DEPENDENCIES} />
         <LicenseSection title="后端组件" entries={BACKEND_DEPENDENCIES} />
 
         <p className="text-[10px] leading-relaxed text-muted border-t border-border pt-3">
-          清单口径: 前后端直接运行时依赖 (构建工具与开发依赖不随产物分发, 故不列于此);
-          传递依赖由各自分发包携带许可。各组件的完整许可文本见其官方仓库。
+          清单列出前后端直接运行时依赖。传递依赖的许可随各自的分发包提供。
         </p>
 
-        {/* 弹窗内再放一份声明 — 页面声明被移除时这里仍是威慑 */}
         <LicenseComplianceNotice />
       </div>
     </Modal>

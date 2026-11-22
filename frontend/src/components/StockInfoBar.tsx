@@ -3,10 +3,8 @@ import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
 import type { KlineRow, FinancialMetricRecord, QuoteFreshness } from '@/lib/api'
 import { QuoteFreshnessBadge } from '@/components/QuoteFreshnessBadge'
 import { fmtPrice, fmtBigNum, fmtVolume, fmtAssetPrice } from '@/lib/format'
-import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
-import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
-import { storage } from '@/lib/storage'
+import type { ColumnConfig } from '@/lib/stock-info-fields'
 import { buildStockExternalUrl, loadStockExternalTemplate } from '@/lib/stock-external-link'
 
 const BULL = '#C74040'
@@ -23,7 +21,7 @@ interface Props {
   rows: KlineRow[]
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
-  onFieldsChange: (fields: ColumnConfig[]) => void
+  onCustomize?: () => void
   /** 财务指标最新一期（来自 useFinancialMetrics，受 Cap.FINANCIAL 门控） */
   financialMetrics?: FinancialMetricRecord
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
@@ -112,7 +110,7 @@ export function StockInfoBar({
   stockInfo,
   rows,
   fields,
-  onFieldsChange,
+  onCustomize,
   financialMetrics,
   onMonitor,
   inWatchlist,
@@ -121,8 +119,6 @@ export function StockInfoBar({
   watchlistPending,
   addedDate,
 }: Props) {
-  // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
-  const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
   const [expandedExt, setExpandedExt] = useState<Set<string>>(new Set())
 
@@ -320,13 +316,18 @@ export function StockInfoBar({
               自选于 {addedDate}
             </span>
           )}
-          <button
-            onClick={() => setCustomizerOpen(true)}
-            className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors"
-            title="自定义信息条"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
+          {onCustomize && (
+            <button
+              type="button"
+              onClick={onCustomize}
+              className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors"
+              title="自定义信息条"
+              aria-label="自定义信息条"
+              aria-haspopup="dialog"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -347,23 +348,6 @@ export function StockInfoBar({
           </div>
         )
       })}
-
-      <ListColumnCustomizer
-        columns={fields}
-        groups={INFO_GROUPS}
-        onChange={onFieldsChange}
-        open={customizerOpen}
-        onClose={() => setCustomizerOpen(false)}
-        title="信息条指标"
-        builtinSectionLabel="可选指标"
-        extColumnAlign="left"
-        showStandaloneToggle
-        disableBackdropBlur
-        baselineStore={{
-          get: () => storage.stockInfoBarFieldsBaseline.get(null) as ColumnConfig[] | null,
-          set: cols => storage.stockInfoBarFieldsBaseline.set(cols),
-        }}
-      />
     </div>
   )
 }

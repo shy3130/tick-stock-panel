@@ -102,6 +102,9 @@ def manifest_path() -> Path:
     """随程序落盘的清单位置 (是否存在由调用方判断)。"""
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        if sys.platform == "darwin" and base.name == "Frameworks" and base.parent.name == "Contents":
+            # PyInstaller 将 .app 的程序资源放在真实目录 Resources 中。
+            base = base.parent / "Resources"
         return base / "app" / MANIFEST_NAME
     # 源码布局: app/services/upgrade_guard.py → app/upgrade_manifest.json
     return Path(__file__).resolve().parent.parent / MANIFEST_NAME
@@ -111,6 +114,7 @@ def program_root() -> Path | None:
     """程序文件根目录 (清单存在的父布局); 无清单 (源码运行) 返回 None。
 
     frozen (PyInstaller onedir): 清单落在 _internal/app/, 根 = _MEIPASS;
+    macOS .app: 清单落在 Contents/Resources/app/, 根 = Contents/Resources;
     Docker: /app/app/upgrade_manifest.json, 根 = /app;
     源码: backend/app/upgrade_manifest.json (仅 CI 生成过才有), 根 = backend/。
     """

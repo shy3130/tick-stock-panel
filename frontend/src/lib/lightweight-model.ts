@@ -17,6 +17,9 @@ export interface PlotSeries {
   color?: string
   /** 线宽(默认 1)；悬浮高亮时加粗 */
   lineWidth?: 1 | 2 | 3 | 4
+  lineVisible?: boolean
+  lineStyle?: 0 | 1 | 2 | 3 | 4
+  pointMarkersVisible?: boolean
   priceFormat?: 'price' | 'volume' | 'percent'
   priceScaleId?: 'left'
   axisTicks?: PlotAxisTick[]

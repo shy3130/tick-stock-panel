@@ -77,17 +77,18 @@ def _numeric_fields(config) -> list:
     return [f for f in config.fields if f.dtype in _NUMERIC_DTYPES]
 
 
-def numeric_timeseries_ext_columns(data_dir: Path | None = None) -> frozenset[str]:
+def numeric_timeseries_ext_columns(data_dir: Path | None = None, *, inputs=None) -> frozenset[str]:
     """时序模式数值扩展字段的列名集合 — 回测矩阵可注入的白名单。
 
     快照模式 (mode=snapshot) 刻意排除: 快照是"最新值", 回看历史注入即未来函数,
     帧路径的 include_snapshot=False 同理只放行时序。
     """
     root = _resolve_dir(data_dir)
+    configs = inputs.configs() if inputs is not None else _load_configs(root)
     return frozenset(
         ext_column_name(cfg.id, f.name)
-        for cfg in _load_configs(root)
-        if cfg.mode == "timeseries"
+        for cfg in configs
+        if cfg.mode == "timeseries" and not cfg.market_level
         for f in _numeric_fields(cfg)
     )
 
@@ -245,13 +246,15 @@ def _timeseries_frame(root: Path, config, fields: list) -> pl.DataFrame:
             except Exception as e:
                 logger.warning("扩展表 %s 分区 %s 读取失败, 跳过: %s", config.id, d.name, e)
                 continue
-            frag = _select_fields(raw, config, fields, with_date=d.name[5:])
+            frag = _select_fields(raw, config, fields, with_date=None)
             if not frag.is_empty():
-                parts.append(frag)
-    frame = (
-        pl.concat(parts, how="diagonal").unique(subset=["symbol", "_ext_date"], keep="last")
-        if parts else pl.DataFrame()
-    )
+                # Each partition owns one date. Reduce intraday records before
+                # concatenation so the join never materializes the full tape.
+                parts.append(
+                    frag.unique(subset=["symbol"], keep="last", maintain_order=True)
+                    .with_columns(pl.lit(d.name[5:]).alias("_ext_date"))
+                )
+    frame = pl.concat(parts, how="diagonal") if parts else pl.DataFrame()
     if sig is not None:
         _frame_cache[key] = (sig, frame)
     return frame
@@ -286,6 +289,8 @@ def attach_ext_columns(
     *,
     include_snapshot: bool,
     data_dir: Path | None = None,
+    inputs=None,
+    names: frozenset[str] | None = None,
 ) -> pl.DataFrame:
     """把扩展表信号列 (数值 + 字符串) join 到 enriched 帧上 (无配置/无匹配时原样返回)。
 
@@ -295,7 +300,7 @@ def attach_ext_columns(
     if df.is_empty() or "symbol" not in df.columns:
         return df
     root = _resolve_dir(data_dir)
-    configs = _load_configs(root)
+    configs = inputs.configs() if inputs is not None else _load_configs(root)
     if not configs:
         return df
 
@@ -305,14 +310,21 @@ def attach_ext_columns(
     tmp_date = False
     try:
         for cfg in configs:
+            if cfg.market_level:
+                continue
             fields = _signal_fields(cfg)
+            if names is not None:
+                fields = [field for field in fields if ext_column_name(cfg.id, field.name) in names]
             if not fields:
                 continue
             try:
                 if cfg.mode == "timeseries":
                     if not has_date:
                         continue  # 无日期列无法 PIT 对齐, 跳过 (ETF/指数单行帧等)
-                    ext = _timeseries_frame(root, cfg, fields)
+                    ext = inputs.legacy_frame(cfg) if inputs is not None else _timeseries_frame(root, cfg, fields)
+                    if inputs is not None and not ext.is_empty():
+                        columns = {ext_column_name(cfg.id, field.name) for field in fields}
+                        ext = ext.select("symbol", "_ext_date", *sorted(columns & set(ext.columns)))
                     if ext.is_empty():
                         continue
                     if not tmp_date:
@@ -335,6 +347,10 @@ def attach_ext_columns(
                         continue
                     df = df.join(snap.select(["symbol", *new_cols]), on="symbol", how="left")
             except Exception as e:
+                if inputs is not None:
+                    if isinstance(e, ValueError):
+                        raise
+                    raise ValueError(f"扩展表「{cfg.label}」无法对齐回测数据") from e
                 logger.warning("扩展表 %s 列注入失败, 跳过该表: %s", cfg.id, e)
     finally:
         if tmp_date:
@@ -342,7 +358,7 @@ def attach_ext_columns(
     return df
 
 
-def attach_matrix_ext_fields(market: Any, data_dir: Path | None, names: Any) -> Any:
+def attach_matrix_ext_fields(market: Any, data_dir: Path | None, names: Any, *, inputs=None) -> Any:
     """把时序扩展数值列作为 matrix fields 附加到 (frozen) MarketDataMatrix 副本。
 
     回测矩阵只读 enriched parquet 的 14 个存储列 (扩展列按设计不落盘, 见
@@ -370,7 +386,9 @@ def attach_matrix_ext_fields(market: Any, data_dir: Path | None, names: Any) -> 
         "date": np.repeat(np.array(labels, dtype=object), n_a),
         "symbol": np.tile(np.array(symbols, dtype=object), n_t),
     })
-    enriched = attach_ext_columns(skeleton, include_snapshot=False, data_dir=data_dir)
+    enriched = attach_ext_columns(
+        skeleton, include_snapshot=False, data_dir=data_dir, inputs=inputs, names=frozenset(wanted),
+    )
     missing = [c for c in wanted if c not in enriched.columns]
     if missing:
         raise ValueError(

@@ -12,7 +12,7 @@ it('详情报价及开高低按资产精度显示, 涨跌幅仍为两位', async
   const host = document.createElement('div')
   const root = createRoot(host)
   cleanup = async () => { await act(async () => root.unmount()) }
-  const props = { symbol: '159558.SZ', onFieldsChange: () => {},
+  const props = { symbol: '159558.SZ',
     rows: [{ date: '2026-11-04', open: 0.750, high: 0.755, low: 0.747, close: 0.752 },
       { date: '2026-11-05', open: 0.751, high: 0.828, low: 0.747, close: 0.827 }],
     fields: ['open', 'high', 'low'].map(key => ({ id: `builtin:${key}`, source: { type: 'builtin' as const, key }, label: key, visible: true })),

@@ -43,6 +43,9 @@ def data_source_stamp() -> tuple:
 
     data = load()
     data.pop("last_fetch_ms", None)
+    data.pop("chart_indicators", None)
+    data.pop("stock_preview_daily_bars", None)
+    data.pop("stock_info_bar_layout", None)
     result = [hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()]
     for name in ("secrets.json",):
         path = settings.data_dir / "user_data" / name
@@ -127,6 +130,18 @@ def set_realtime_quote_interval(interval: float) -> float:
 
 def get_minute_sync_enabled() -> bool:
     return load().get("minute_sync_enabled", False)
+
+
+STOCK_PREVIEW_DAILY_BARS_MAX = 2**53 - 1  # JavaScript 安全整数上限
+
+
+def valid_stock_preview_daily_bars(value: object) -> bool:
+    return type(value) is int and 1 <= value <= STOCK_PREVIEW_DAILY_BARS_MAX
+
+
+def get_stock_preview_daily_bars() -> int:
+    value = load().get("stock_preview_daily_bars")
+    return value if valid_stock_preview_daily_bars(value) else 60
 
 
 def get_minute_intraday_refresh() -> bool:
@@ -378,20 +393,30 @@ def _validated_provider(raw: str, pref_key: str) -> str:
     return "tickflow"
 
 
+def configured_daily_data_provider() -> str:
+    """Return the explicit selection before the legacy availability fallback."""
+    return str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
+
+
 def get_daily_data_provider() -> str:
-    provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
-    return _validated_provider(provider, "daily_data_provider")
+    return _validated_provider(configured_daily_data_provider(), "daily_data_provider")
 
 
 def get_adj_factor_provider() -> str:
     # 「跟随日K」(same_as_daily) 特殊值已下线: 存量配置里的旧值按非法值回退 tickflow
-    provider = str(load().get("adj_factor_provider", "tickflow") or "tickflow").lower()
-    return _validated_provider(provider, "adj_factor_provider")
+    return _validated_provider(configured_adj_factor_provider(), "adj_factor_provider")
+
+
+def configured_adj_factor_provider() -> str:
+    return str(load().get("adj_factor_provider", "tickflow") or "tickflow").lower()
+
+
+def configured_minute_data_provider() -> str:
+    return str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
 
 
 def get_minute_data_provider() -> str:
-    provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
-    return _validated_provider(provider, "minute_data_provider")
+    return _validated_provider(configured_minute_data_provider(), "minute_data_provider")
 
 
 def get_full_minute_data_provider() -> str:
