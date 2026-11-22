@@ -11,6 +11,10 @@ pnpm install && pnpm build      # → dist/extension.js
 
 打开宿主「设置 → 导入与备份」→ 选择 `dist/extension.js` → 预览页面标识（字母/数字/下划线）、确认来源及同名替换 → 导入并校验 → 刷新页面。
 
+### 导入源码或产物
+
+单文件 `.tsx` 或项目内源码页面也可从统一入口导入。当前部署须能解析源码依赖并找到 esbuild；源码编译成功后产物仍按 Page Pack v1 契约校验。源码清单中的受控插槽由项目构建加载，导入为页面包时只保留能挂载的页面能力。现成 `extension.js` 用同一入口预览，刷新后验证页面与菜单。[统一导入的兼容范围](./extension-packages.md#导入与管理)
+
 ## 产物契约 (apiVersion 1)
 
 产物必须 `export default` 一个清单对象：
@@ -113,6 +117,10 @@ import { openStockPreview, closeStockPreview } from '@/extensions/stockPreview'
 | --- | --- | --- |
 | 页面插件（运行时产物） | 免重建挂载、独立分发 | 本文档 |
 | 源码级扩展 `frontend/src/custom/<ns>/extension.tsx` | 随宿主一起构建维护、可用全部核心模块 | `docs/secondary-development.md` §3 |
-| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 扩展页面 |
+| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 页面管理 → 扩展页面 |
 
 配套后台扩展可使用 [前后端完整包](extension-packages.md)；单独上传 JS/TSX 只导入前端页面。
+
+## 交给 AI 开发
+
+给出页面路由、要读取的数据、表格列和预期操作。请 AI 先从 `frontend/page-pack-template/src/extension.tsx` 复制最小清单，使用 SDK 暴露的 `ctx`，再打包及检查唯一 ID、路由冲突、读取权限、返回清理函数和刷新后的导航。需要宿主局部插槽时，从 [源码扩展契约](./secondary-development.md#3-前端扩展规范)开始。

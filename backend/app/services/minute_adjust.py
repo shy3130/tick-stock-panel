@@ -23,34 +23,29 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import date
+from datetime import time as wall_time
 from pathlib import Path
 
 import polars as pl
+from tivelo_data.legacy.minute_prices import (
+    MAX_ANCHOR_RATIO,
+    MIN_ANCHOR_RATIO,
+    marker_path,
+    minute_basis_is_raw,
+)
+from tivelo_data.legacy.minute_prices import (
+    minute_dir as minute_dir,
+)
 
 logger = logging.getLogger(__name__)
 
 PRICE_COLS = ("open", "high", "low", "close")
 ADJUSTED_COLS = ("open", "high", "low", "close", "amount")
 
-_MARKER_NAME = ".raw_basis"
-
-# 因子表内存缓存: (data_dir, 表名) -> (源文件最新 mtime, fs帧, total帧)。
+# 因子表内存缓存: (data_dir, 表名, 是否忽略无效因子) -> (mtime, fs帧, total帧)。
 # 因子表仅数千行 (全市场一年 ~5000 事件), 读盘 ~10ms, 按 mtime 失效。
-_factor_cache: dict[tuple[str, str], tuple[float, pl.DataFrame, pl.DataFrame]] = {}
+_factor_cache: dict[tuple[str, str, bool], tuple[float, pl.DataFrame, pl.DataFrame]] = {}
 _factor_cache_lock = threading.Lock()
-
-
-def minute_dir(data_dir: Path | str) -> Path:
-    return Path(data_dir) / "kline_minute"
-
-
-def marker_path(data_dir: Path | str) -> Path:
-    return minute_dir(data_dir) / _MARKER_NAME
-
-
-def minute_basis_is_raw(data_dir: Path | str) -> bool:
-    """分区数据是否已迁移为原始口径 (标记文件存在)。"""
-    return marker_path(data_dir).exists()
 
 
 def mark_minute_basis_raw(data_dir: Path | str) -> None:
@@ -69,7 +64,9 @@ def _factor_table_dir(data_dir: Path, asset_type: str) -> Path:
     return data_dir / ("adj_factor_etf" if asset_type == "etf" else "adj_factor")
 
 
-def _load_factor_frames(data_dir: Path, asset_type: str) -> tuple[pl.DataFrame, pl.DataFrame]:
+def _load_factor_frames(
+    data_dir: Path, asset_type: str, *, positive_only: bool = False,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """读因子表并构建 (symbol, trade_date, cum) 与 (symbol, total) 两帧, 按 mtime 缓存。
 
     返回空帧表示该资产类型无因子数据 (调用方按恒等处理)。
@@ -79,7 +76,7 @@ def _load_factor_frames(data_dir: Path, asset_type: str) -> tuple[pl.DataFrame, 
     if not files:
         return (pl.DataFrame(), pl.DataFrame())
     newest = max(f.stat().st_mtime for f in files)
-    key = (str(data_dir), table_dir.name)
+    key = (str(data_dir), table_dir.name, positive_only)
     with _factor_cache_lock:
         cached = _factor_cache.get(key)
         if cached is not None and cached[0] == newest:
@@ -96,7 +93,14 @@ def _load_factor_frames(data_dir: Path, asset_type: str) -> tuple[pl.DataFrame, 
             )
             .select("symbol", "trade_date", "ex_factor")
             .drop_nulls()
-            .unique(subset=["symbol", "trade_date"])
+        )
+        if positive_only:
+            valid = fs.filter(pl.col("ex_factor").is_finite() & (pl.col("ex_factor") > 0))
+            if valid.height != fs.height:
+                logger.warning("后复权忽略 %s 条非正或非有限除权因子", fs.height - valid.height)
+            fs = valid
+        fs = (
+            fs.unique(subset=["symbol", "trade_date"])
             .sort(["symbol", "trade_date"])
             .with_columns(pl.col("ex_factor").cum_prod().over("symbol").alias("cum"))
         )
@@ -198,8 +202,8 @@ def _partition_anchor_ratio(minute_df: pl.DataFrame, daily_close: dict[str, floa
         .with_columns((pl.col("_last") / pl.col("_raw")).alias("_k"))
         .filter(
             pl.col("_k").is_finite()
-            & (pl.col("_k") > 0.2)
-            & (pl.col("_k") < 5.0)   # 锚点换算的合理界: 远超个股除权幅度视为数据异常
+            & (pl.col("_k") > MIN_ANCHOR_RATIO)
+            & (pl.col("_k") < MAX_ANCHOR_RATIO)
         )
         .select("symbol", "_k")
     )
@@ -284,3 +288,36 @@ def migrate_minute_to_raw(
             stats["partitions"], stats["converted_symbols"], stats["skipped_no_daily"],
         )
     return stats
+
+
+class MinutePriceBasisError(ValueError):
+    """A saved legacy minute partition cannot be converted to exchange prices."""
+
+
+def legacy_minutes_at_trade_price(df: pl.DataFrame, data_dir: Path, asset_type: str) -> pl.DataFrame:
+    """Decode the old download-time basis from the completed session's close.
+
+    Old partitions have no per-row basis stamp. Use the same independent raw
+    daily close anchor as migration. A partial session has no reliable anchor.
+    The original turnover amount was already in exchange yuan.
+    """
+    if df.is_empty() or asset_type == "index":
+        return df
+    daily = data_dir / ("kline_etf_daily" if asset_type == "etf" else "kline_daily")
+    parts = []
+    for (day,), part in df.with_columns(pl.col("datetime").dt.date().alias("_day")).partition_by(
+        "_day", as_dict=True, maintain_order=True,
+    ).items():
+        raw_close = _daily_close_lookup(daily, day)
+        if not raw_close:
+            raise MinutePriceBasisError(f"{day} 缺少原始日 K，无法还原旧分钟 K 的成交价格")
+        last = part.group_by("symbol").agg(pl.col("datetime").max().alias("_end"))
+        if last.filter(pl.col("_end").dt.time() < wall_time(14, 59)).height:
+            raise MinutePriceBasisError(f"{day} 的旧分钟 K 缺收盘锚点，请补齐该日分钟数据")
+        ratios = _partition_anchor_ratio(part, raw_close)
+        if ratios.height != last.height:
+            raise MinutePriceBasisError(f"{day} 的旧分钟 K 缺少可靠原始价格锚点，请补齐行情")
+        parts.append(part.join(ratios, on="symbol", how="left", maintain_order="left").with_columns(
+            (pl.col(c) / pl.col("_k")).alias(c) for c in PRICE_COLS if c in part.columns
+        ).drop("_day", "_k"))
+    return pl.concat(parts)

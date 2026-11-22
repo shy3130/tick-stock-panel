@@ -3,10 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/cn'
 import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
+  inputId?: string
+  className?: string
   onSelect: (symbol: string, name: string) => void
   /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index' */
   assetTypes?: string
@@ -17,7 +20,7 @@ interface Props {
  * 复用 instrumentSearch 后端(代码 / 名称模糊匹配),单选即跳转该股财务详情。
  * 模式对齐 Watchlist.StockSearchBox:useQuery + 外部点击关闭 + 键盘导航。
  */
-export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
+export function StockFinancialSearch({ onSelect, assetTypes, inputId, className }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
@@ -70,10 +73,11 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
   const trimmed = query.trim()
 
   return (
-    <div ref={containerRef} className="relative w-full max-w-xl mx-auto">
+    <div ref={containerRef} className={cn("relative mx-auto w-full max-w-xl", className)}>
       <div className="relative flex items-center">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
         <input
+          id={inputId}
           ref={inputRef}
           type="text"
           placeholder="输入股票代码或名称，如 600000 / 浦发"

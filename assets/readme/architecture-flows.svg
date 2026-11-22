@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="594" viewBox="0 0 1120 594" role="img" aria-labelledby="title description">
+  <title id="title">TSP 数据与执行流程</title>
+  <desc id="description">行情同步写入本地仓库，盘中行情用于监控与告警。普通策略回测可以直接读取工作区行情，也可以选用 Tivelo Data 发布的日 K 快照。归档研究使用匹配的快照与策略归档。两条回测路径均调用 Tivelo Backtest，分别生成回测结果与研究报告。</desc>
+  <style>
+    svg {
+      --paper: #fff; --ink: #1b263a; --muted: #4d5d74; --line: #d4dce7;
+      --surface: #f5f7fa; --wire: #6a7a91; --core: #eef4ff; --core-line: #93afd6; --core-ink: #214f8c;
+      --engine: #f5f0fb; --engine-line: #b9a7d4; --engine-ink: #5a3e85;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --paper: #10151e; --ink: #eef2f8; --muted: #b7c2d3; --line: #384459;
+        --surface: #182130; --wire: #8b9db7; --core: #192942; --core-line: #5579b1; --core-ink: #b1ceff;
+        --engine: #282039; --engine-line: #8165ad; --engine-ink: #ddc7fb;
+      }
+    }
+    text { fill: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    .title { font-size: 30px; font-weight: 700; }
+    .section { font-size: 23px; font-weight: 700; }
+    .label { font-size: 19px; font-weight: 650; }
+    .text { font-size: 17px; fill: var(--muted); }
+    .small { font-size: 16px; fill: var(--muted); }
+    .edge { font-size: 14px; fill: var(--muted); }
+    .core-text { fill: var(--core-ink); }
+    .engine-text { fill: var(--engine-ink); }
+    .paper { fill: var(--paper); stroke: var(--line); }
+    .surface { fill: var(--surface); stroke: var(--line); }
+    .core { fill: var(--core); stroke: var(--core-line); }
+    .engine { fill: var(--engine); stroke: var(--engine-line); }
+    .wire, .invoke { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .wire { stroke: var(--wire); }
+    .invoke { stroke: var(--engine-ink); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path fill="var(--wire)" d="M0 0 8 4 0 8z"/>
+    </marker>
+    <marker id="engine-arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path fill="var(--engine-ink)" d="M0 0 8 4 0 8z"/>
+    </marker>
+    <g id="lane">
+      <rect class="surface" width="1064" height="43" rx="7"/>
+      <g class="wire" marker-end="url(#arrow)">
+        <path d="M415 21.5h48"/>
+        <path d="M744 21.5h48"/>
+      </g>
+    </g>
+  </defs>
+
+  <rect class="paper" x=".5" y=".5" width="1119" height="593" rx="14"/>
+  <text class="title" x="28" y="49">数据与执行流程</text>
+
+  <use href="#lane" x="28" y="70"/>
+  <text class="label" x="46" y="98">历史同步</text>
+  <text class="text" x="224" y="98">行情 Provider</text>
+  <text class="text" x="515" y="98">能力路由 · 校验 · 归一化</text>
+  <text class="label" x="844" y="98">本地行情仓库</text>
+
+  <use href="#lane" x="28" y="124"/>
+  <text class="label" x="46" y="152">盘中监控</text>
+  <text class="text" x="224" y="152">实时行情</text>
+  <text class="text" x="515" y="152">行情订阅 · 规则评估</text>
+  <text class="label" x="844" y="152">告警 · 推送 · SSE</text>
+
+  <rect class="surface" x="28" y="194" width="1064" height="372" rx="10"/>
+  <text class="section" x="48" y="229">日 K 快照与回测</text>
+
+  <g class="wire" marker-end="url(#arrow)">
+    <path d="M278 282h102"/>
+    <path d="M163 323v23"/>
+    <path d="M163 416v24"/>
+    <path d="M278 465h38V324h64"/>
+    <path d="M278 491h102"/>
+  </g>
+  <text class="edge" x="328" y="273" text-anchor="middle">直接读取</text>
+  <text class="edge" x="323" y="401">选用快照</text>
+  <text class="edge" x="328" y="483" text-anchor="middle">配对归档</text>
+
+  <g>
+    <rect class="paper" x="48" y="253" width="230" height="70" rx="7"/>
+    <text class="label" x="64" y="283">工作区行情</text>
+    <text class="small" x="64" y="307">原始日 K · 累计复权因子</text>
+    <rect class="engine" x="48" y="350" width="230" height="66" rx="7"/>
+    <text class="label engine-text" x="64" y="378">Tivelo Data</text>
+    <text class="small" x="64" y="401">按标的与日期采集并发布</text>
+    <rect class="core" x="48" y="444" width="230" height="72" rx="7"/>
+    <text class="label core-text" x="64" y="474">日 K 快照</text>
+    <text class="small" x="64" y="499">固定版本 · 数据覆盖范围</text>
+  </g>
+
+  <g>
+    <rect class="paper" x="384" y="248" width="270" height="94" rx="7"/>
+    <text class="label" x="400" y="276">普通策略回测</text>
+    <text class="small" x="400" y="302">使用工作区策略生成信号</text>
+    <text class="small" x="400" y="325">回测过滤 · 锁定扩展数据版本</text>
+    <rect class="paper" x="384" y="443" width="270" height="94" rx="7"/>
+    <text class="label" x="400" y="471">归档研究</text>
+    <text class="small" x="400" y="497">匹配快照与策略归档</text>
+    <text class="small" x="400" y="520">预检固定输入并提交任务</text>
+  </g>
+
+  <path class="invoke" d="M654 295h47v196h-47"/>
+  <path class="invoke" d="M701 351h54" marker-end="url(#engine-arrow)"/>
+  <rect class="engine" x="759" y="310" width="313" height="81" rx="8"/>
+  <text class="section engine-text" x="775" y="344">Tivelo Backtest</text>
+  <text class="small" x="775" y="372">交易规则 · 模拟撮合 · 账户记账</text>
+
+  <path class="invoke" d="M915 391v28M833 419h164"/>
+  <g class="invoke" marker-end="url(#engine-arrow)">
+    <path d="M833 419v35"/>
+    <path d="M997 419v35"/>
+  </g>
+  <g>
+    <rect class="core" x="759" y="458" width="149" height="79" rx="7"/>
+    <text class="label core-text" x="775" y="490">回测结果</text>
+    <text class="small" x="775" y="515">净值与成交</text>
+    <rect class="core" x="922" y="458" width="150" height="79" rx="7"/>
+    <text class="label core-text" x="938" y="490">研究报告</text>
+    <text class="small" x="938" y="515">报告与结果 ZIP</text>
+  </g>
+</svg>

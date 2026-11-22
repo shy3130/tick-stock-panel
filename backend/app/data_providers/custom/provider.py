@@ -9,27 +9,33 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
 import polars as pl
+from tivelo_data.http import config as research_config
+from tivelo_data.http.client import DAILY_FIELDS, CheckedDailyClient
 
 from app.config import settings
 from app.data_providers.base import AssetType, ProviderRequestError
-from app.data_providers.custom.config import CustomSourceConfig, DatasetConfig
+from app.data_providers.custom.config import CN_RAW_DAILY_PROFILE, CustomSourceConfig, DatasetConfig
 from app.data_providers.custom.mapper import (
     apply_transforms,
-    datetime_payload,
-    extract_rows,
     map_rows,
 )
-from app.data_providers.minute_stream import RequestPacer
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
 from app.market_time import cn_now
 from app.tickflow.rate_limits import chunked, sleep_between_batches
 
 logger = logging.getLogger(__name__)
 
+# Keep saved declarations readable when the independent Data release is rolled back.
+CN_EX_FACTOR_PROFILE = "cn.equity.ex-factor.events.v1"
+RESEARCH_PROFILES = {
+    "daily": (CN_RAW_DAILY_PROFILE,),
+    "adj_factor": (CN_EX_FACTOR_PROFILE,),
+    "minute": ("cn.equity.regular.1m.raw.lot100.start.v1", "cn.equity.regular.1m.raw.lot100.end.v1"),
+}
+
 _REQUIRED = {
-    "daily": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
+    "daily": DAILY_FIELDS,
     "adj_factor": {"symbol", "trade_date", "ex_factor"},
     "realtime": {"symbol", "last_price", "prev_close", "open", "high", "low", "volume"},
     "minute": {"symbol", "datetime", "open", "high", "low", "close", "volume"},
@@ -96,21 +102,24 @@ def _normalize_pct_units(
     return df
 
 
-class GenericHTTPProvider:
+class GenericHTTPProvider(CheckedDailyClient):
     """HTTP-backed custom source. It only handles fetching and schema mapping."""
 
     def __init__(self, config: CustomSourceConfig) -> None:
-        self.config = config
-        self.name = config.name
-        self._client = httpx.Client(timeout=30.0)
-        self._minute_pacer = RequestPacer()
+        super().__init__(config, lambda name: _token_from_env(name))
 
-    def close(self) -> None:
-        self._client.close()
 
     def validate(self) -> list[str]:
         errors: list[str] = []
         for dataset, cfg in self.config.datasets.items():
+            if cfg.research_profile is not None and cfg.research_profile not in RESEARCH_PROFILES.get(dataset, ()):
+                errors.append(f"{dataset}: unknown research profile")
+            if dataset == "minute" and cfg.research_profile in RESEARCH_PROFILES["minute"]:
+                check = getattr(research_config, "minute_mapping_error", None)
+                if check and (error := check(cfg, self.config.auth)):
+                    errors.append(f"{dataset}: {error}")
+            if cfg.research_profile == CN_EX_FACTOR_PROFILE and cfg.transforms:
+                errors.append(f"{dataset}: the research profile requires ISO ex-dates and untransformed event ratios")
             if not cfg.url:
                 errors.append(f"{dataset}: url is required")
             required = _REQUIRED.get(dataset)
@@ -205,6 +214,7 @@ class GenericHTTPProvider:
                 len(failed), len(symbols), ", ".join(failed[:20]),
             )
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+
 
     def get_adj_factors(
         self,
@@ -506,72 +516,10 @@ class GenericHTTPProvider:
             "preview": df.head(5).to_dicts() if not df.is_empty() else [],
         }
 
-    def _dataset(self, name: str) -> DatasetConfig:
-        cfg = self.config.datasets.get(name)
-        if not cfg:
-            raise ValueError(f"Custom data source '{self.name}' does not configure dataset '{name}'")
-        return cfg
 
     def _mapped_frame(self, cfg: DatasetConfig, rows: list[dict]) -> pl.DataFrame:
         df = map_rows(rows, cfg.field_map)
         return apply_transforms(df, cfg.transforms)
-
-    def _request_rows(
-        self,
-        cfg: DatasetConfig,
-        *,
-        symbols: list[str] | None = None,
-        start_time: datetime | None = None,
-        end_time: datetime | None = None,
-        override_params: dict[str, Any] | None = None,
-        override_body: dict[str, Any] | None = None,
-    ) -> list[dict]:
-        headers, auth_params = self._auth_parts()
-        params = dict(cfg.params)
-        params.update(auth_params)
-        if override_params:
-            params.update(override_params)
-        body = dict(cfg.body)
-        if override_body:
-            body.update(override_body)
-        if symbols:
-            body[cfg.symbols_param] = symbols
-            params.setdefault(cfg.symbols_param, ",".join(symbols))
-        start_value = datetime_payload(start_time)
-        end_value = datetime_payload(end_time)
-        if start_value:
-            body[cfg.start_param] = start_value
-            params.setdefault(cfg.start_param, start_value)
-        if end_value:
-            body[cfg.end_param] = end_value
-            params.setdefault(cfg.end_param, end_value)
-
-        method = cfg.method.upper()
-        request_kwargs: dict[str, Any] = {"headers": headers, "timeout": cfg.timeout}
-        if method == "GET":
-            request_kwargs["params"] = params
-        else:
-            request_kwargs["params"] = auth_params
-            request_kwargs["json"] = body
-        resp = self._client.request(method, cfg.url, **request_kwargs)
-        resp.raise_for_status()
-        return extract_rows(resp.json(), cfg.response_path)
-
-    def _auth_parts(self) -> tuple[dict[str, str], dict[str, str]]:
-        auth = self.config.auth
-        if auth.type == "none":
-            return {}, {}
-        token = _token_from_env(auth.token_env) if auth.token_env else None
-        if not token:
-            logger.warning("custom data source %s auth token is not set", self.name)
-            return {}, {}
-        if auth.type == "bearer":
-            return {auth.header: f"Bearer {token}"}, {}
-        if auth.type == "header":
-            return {auth.header: token}, {}
-        if auth.type == "query":
-            return {}, {auth.param: token}
-        return {}, {}
 
 
 def _normalize_depth_levels(value: Any) -> list[list[float]]:

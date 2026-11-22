@@ -58,6 +58,9 @@ export interface ListColumnCustomizerProps {
     get: () => ColumnConfig[] | null
     set: (cols: ColumnConfig[]) => void
   }
+  /** 需要显式保存的调用方可提供提交区。 */
+  footer?: React.ReactNode
+  submitting?: boolean
 }
 
 /** 判断扩展数据字段类型是否为数字(int/float/double/number/decimal 等)。
@@ -265,6 +268,8 @@ export function ListColumnCustomizerInner({
   showStandaloneToggle = false,
   disableBackdropBlur = false,
   baselineStore,
+  footer,
+  submitting = false,
 }: ListColumnCustomizerProps) {
   const extSchema = useQuery({
     queryKey: QK.extDataSchemaAll,
@@ -1391,6 +1396,10 @@ function extGranularityOf(
           <motion.div
             initial={{ scale: 0.97, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.97, opacity: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            role="dialog"
+            aria-label={title}
+            aria-modal="true"
+            aria-busy={submitting || undefined}
             className="relative w-[900px] max-w-[94vw] max-h-[min(720px,82vh)] bg-base border border-border rounded-card shadow-2xl flex flex-col overflow-hidden"
           >
             {/* 头部: 标题 + 全局搜索 + 已选计数 + 关闭 */}
@@ -1400,6 +1409,7 @@ function extGranularityOf(
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted" />
                 <input
                   type="text"
+                  autoFocus={!!footer}
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="搜索列名 / 扩展字段…"
@@ -1410,13 +1420,16 @@ function extGranularityOf(
               {baselineStore && (
                 <button
                   onClick={saveAsBaseline}
-                  className="ml-auto sm:ml-0 shrink-0 h-7 px-2.5 rounded-btn bg-elevated border border-border text-[11px] text-secondary hover:text-foreground hover:border-accent/50 transition-colors"
-                  title="把当前列配置存为默认方案；之后「恢复默认」回到这份设置"
+                  disabled={submitting}
+                  className="ml-auto sm:ml-0 shrink-0 h-7 px-2.5 rounded-btn bg-elevated border border-border text-[11px] text-secondary hover:text-foreground hover:border-accent/50 transition-colors disabled:opacity-50"
+                  title="把当前列配置设为默认方案；之后「恢复默认」回到这份设置"
                 >
-                  {baselineSavedAt && Date.now() - baselineSavedAt < 2000 ? '✓ 已保存' : '保存为默认方案'}
+                  {baselineSavedAt && Date.now() - baselineSavedAt < 2000
+                    ? (footer ? '✓ 已设为默认' : '✓ 已保存')
+                    : (footer ? '设为默认方案' : '保存为默认方案')}
                 </button>
               )}
-              <button onClick={onClose} aria-label="关闭列设置" className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors shrink-0">
+              <button onClick={onClose} disabled={submitting} aria-label="关闭列设置" className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors shrink-0 disabled:opacity-50">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -1578,6 +1591,8 @@ function extGranularityOf(
                 </div>
               </div>
             </div>
+
+            {footer}
 
             {/* 恢复默认二次确认: 覆盖在主弹窗内 (不叠第二层遮罩), 明确说清恢复目标。
                 用条件渲染而非 AnimatePresence — 嵌套在弹窗 motion 树里时退出动画

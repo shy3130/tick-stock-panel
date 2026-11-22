@@ -388,7 +388,7 @@ def _get_price_limit_info(
         instruments = repo.get_instruments_asset(asset_type)
         available = [
             column
-            for column in ("symbol", "limit_up", "limit_down", "listing_date")
+            for column in ("symbol", "limit_up", "limit_down", "listing_date", "as_of")
             if column in instruments.columns
         ]
         if "symbol" in available and len(available) > 1:
@@ -409,10 +409,9 @@ def _get_price_limit_info(
     if trade_date != cn_today():
         return info
 
-    if row is None:
+    if row is None or ("as_of" in row and parse_listing_date(row["as_of"]) != trade_date):
         return info
 
-    has_authoritative_price = False
     for field in ("limit_up", "limit_down"):
         value = row.get(field)
         if value is None:
@@ -421,10 +420,14 @@ def _get_price_limit_info(
             numeric = float(value)
         except (TypeError, ValueError):
             continue
-        if math.isfinite(numeric) and 0 < numeric < 10_000:
-            info[field] = numeric
-            has_authoritative_price = True
-    if has_authoritative_price:
+        if not math.isfinite(numeric) or numeric <= 0:
+            continue
+        if numeric >= 10_000:
+            if field == "limit_up":
+                info.update(no_limit=True, source="instrument")
+                return info
+            continue
+        info[field] = numeric
         info["source"] = "instrument"
     return info
 

@@ -11,6 +11,14 @@
 # ===== 用户运行时数据(绝不应进镜像) =====
 data
 backend/data
+**/.playwright-cli
+**/.impeccable
+**/.v2c
+**/MagicMock
+tivelo-pro-dynamic
+**/tivelo-pro-dynamic*.zip
+**/tivelo_pro_dynamic*.whl
+**/*.lic
 
 # ===== 前端构建产物 / 依赖(镜像内会重新 build, 带进来反而污染) =====
 frontend/node_modules

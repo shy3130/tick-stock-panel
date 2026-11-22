@@ -1,0 +1,185 @@
+{
+  "format": "tivelo-wire-examples-v2",
+  "valid": {
+    "coverage-complete": {
+      "model": "Coverage",
+      "value": {
+        "status": "complete",
+        "requested_units": 1,
+        "completed_units": 1,
+        "row_count": 3,
+        "issues": []
+      }
+    },
+    "coverage-partial": {
+      "model": "Coverage",
+      "value": {
+        "status": "partial",
+        "requested_units": 2,
+        "completed_units": 1,
+        "row_count": 2,
+        "issues": [
+          {
+            "instrument_id": "fixture.asset-b",
+            "reason": "missing",
+            "detail": "One requested synthetic instrument is missing"
+          }
+        ]
+      }
+    },
+    "coverage-empty": {
+      "model": "Coverage",
+      "value": {
+        "status": "empty",
+        "requested_units": 2,
+        "completed_units": 2,
+        "row_count": 0,
+        "issues": [
+          {
+            "instrument_id": null,
+            "reason": "no_events",
+            "detail": "The synthetic source explicitly reported zero actions"
+          }
+        ]
+      }
+    },
+    "coverage-error": {
+      "model": "Coverage",
+      "value": {
+        "status": "error",
+        "requested_units": 2,
+        "completed_units": 0,
+        "row_count": 0,
+        "issues": [
+          {
+            "instrument_id": null,
+            "reason": "source_error",
+            "detail": "The synthetic source failed before returning records"
+          }
+        ]
+      }
+    },
+    "symbol-mapping": {
+      "model": "SymbolMapping",
+      "value": {
+        "valid_from": "2025-01-01T00:00:00Z",
+        "valid_to": null,
+        "available_at": "2025-01-01T00:00:00Z",
+        "revision_id": "r1",
+        "source_id": "fixture",
+        "instrument_id": "fixture.asset-a",
+        "venue_id": "XSHG",
+        "symbol": "TEST"
+      }
+    },
+    "dataset-version": {
+      "model": "DatasetVersion",
+      "value": {
+        "version_id": "3e2cc171717c55edf19205ce7a181683f30b52053def1415c5606b5a7a40078a",
+        "contents": {
+          "schema_version": "2.0",
+          "hash_encoding": "tivelo-json-v1",
+          "dataset_id": "bar.raw",
+          "record_type": "bar",
+          "knowledge_basis": "historical_versions",
+          "price_basis": "raw",
+          "source_ids": [
+            "fixture"
+          ],
+          "artifacts": [
+            {
+              "path": "bar.raw.jsonl",
+              "sha256": "ae7c2f853c98cd4f9b93dc604b4fd1e35525feadf46d72766cdb06c283a08844",
+              "size_bytes": 1532,
+              "row_count": 3
+            }
+          ],
+          "coverage": {
+            "status": "complete",
+            "requested_units": 1,
+            "completed_units": 1,
+            "row_count": 3,
+            "issues": []
+          },
+          "normalization_version": "memory-reference-v1",
+          "source_selection_digest": "b501eaf89ab2dd566dae857a5827b49c1888184ed3d15e6148daba4625d5bf1c",
+          "scope": null
+        }
+      }
+    },
+    "snapshot-manifest": {
+      "model": "SnapshotManifest",
+      "value": {
+        "snapshot_id": "2691bce196cf8da16e0169ac1f4dc60ee7a1a625dcdecfb31cfa56eacfd5e6b9",
+        "contents": {
+          "schema_version": "2.0",
+          "hash_encoding": "tivelo-json-v1",
+          "datasets": [
+            {
+              "dataset_id": "bar.raw",
+              "version_id": "3e2cc171717c55edf19205ce7a181683f30b52053def1415c5606b5a7a40078a"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "invalid": [
+    {
+      "base": "coverage-complete",
+      "replace": {
+        "row_count": 0
+      },
+      "rule": "A complete nonempty response needs at least one row."
+    },
+    {
+      "base": "coverage-partial",
+      "replace": {
+        "issues": []
+      },
+      "rule": "Partial coverage has to identify its missing work."
+    },
+    {
+      "base": "coverage-empty",
+      "replace": {
+        "row_count": 1
+      },
+      "rule": "An explained empty response has zero rows."
+    },
+    {
+      "base": "coverage-error",
+      "replace": {
+        "status": "success"
+      },
+      "rule": "Every coverage state is part of the published enum."
+    },
+    {
+      "base": "symbol-mapping",
+      "replace": {
+        "available_at": "2025-01-02T09:35:00"
+      },
+      "rule": "Knowledge time needs an explicit time zone."
+    },
+    {
+      "base": "symbol-mapping",
+      "replace": {
+        "required_future_key": 1
+      },
+      "rule": "Version 2 records are closed to unknown keys."
+    },
+    {
+      "base": "dataset-version",
+      "replace": {
+        "version_id": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "rule": "The content fingerprint must match the dataset contents."
+    },
+    {
+      "base": "snapshot-manifest",
+      "replace": {
+        "snapshot_id": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "rule": "The content fingerprint must match the snapshot contents."
+    }
+  ]
+}

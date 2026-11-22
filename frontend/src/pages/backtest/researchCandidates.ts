@@ -16,7 +16,7 @@ const STRATEGY_CONFIG_FIELDS = [
   'entry_fill', 'exit_fill', 'fees_pct', 'commission_pct', 'stamp_tax_pct',
   'slippage_bps', 'max_positions', 'max_exposure_pct', 'initial_capital',
   'position_sizing', 'mode', 'holding_days', 'asset_type', 'minute_fill',
-  'regime_filter',
+  'regime_filter', 'price_basis', 'entry_filters', 'filter_data_version',
 ] as const
 
 function pickConfig(source: Record<string, any>, fields: readonly string[]) {

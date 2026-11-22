@@ -71,6 +71,17 @@ it('并发加载仍按源顺序处理重复 ID，隔离同步抛错的模块', a
   expect(registry.getFrontendExtensionLoadErrors().map(e => e.source)).toEqual(['broken', 'z'])
 })
 
+it('市场环境以官方扩展注册并使用原有路径', async () => {
+  const registry = await import('./registry')
+  await registry.loadFrontendExtensions({ regime: () => import('../custom/market-regime/extension') })
+  registry.finalizeFrontendExtensions(new Set(['/']))
+  const { getNavigationEntries } = await import('@/lib/navigation')
+  expect(getNavigationEntries().filter(entry => entry.id === '/regime')).toMatchObject([{
+    label: '市场环境', type: 'extension', arch: 'ext', extensionId: 'official.market-regime',
+  }])
+  expect(registry.getFrontendExtensionRoutes().map(route => route.path)).toEqual(['/regime'])
+})
+
 it('个股详情标签标题为空或 ID 冲突时只拒绝对应扩展', async () => {
   const registry = await import('./registry')
   const tab = { name: 'stock-preview.tabs' as const, id: 'research', label: '研究', component: () => null }

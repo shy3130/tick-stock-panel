@@ -10,8 +10,10 @@ import type { ChartRenderer } from '@/lib/chart-types'
 
 const EChartsMultiDayIntraday = lazy(() => import('./EChartsMultiDayIntraday').then(m => ({ default: m.EChartsMultiDayIntraday })))
 const LightweightIntraday = lazy(() => import('./charts/LightweightIntraday').then(m => ({ default: m.LightweightIntraday })))
+const CustomIntraday = lazy(() => import('./charts/CustomChart').then(m => ({ default: m.CustomIntraday })))
 
 interface Props {
+  customIndicators?: boolean
   symbol: string
   renderer?: ChartRenderer
   days: number
@@ -28,6 +30,7 @@ function errorMessage(error: unknown): string {
 export function StockMultiDayIntradayChart({
   symbol,
   renderer = 'echarts',
+  customIndicators = false,
   days,
   height = 420,
   refetchIntervalMs,
@@ -123,7 +126,8 @@ export function StockMultiDayIntradayChart({
   }, [symbol, days, localSessionCount, loading, isIndex, history.error, history.isPlaceholderData, syncMinute.isPending])
 
   const chartHeight = Math.max(260, height - (showCoverage || syncMinute.isPending ? 32 : 0) - (partialDates.length ? 32 : 0))
-  const Chart = renderer === 'lightweight' ? LightweightIntraday : EChartsMultiDayIntraday
+  const customChart = renderer === 'lightweight' && customIndicators
+  const Chart = customChart ? CustomIntraday : renderer === 'lightweight' ? LightweightIntraday : EChartsMultiDayIntraday
 
   if (loading) {
     return (
@@ -214,6 +218,7 @@ export function StockMultiDayIntradayChart({
       )}
       <Suspense fallback={<div className="text-xs text-muted py-4">正在加载图表…</div>}>
       <Chart
+        {...(customChart ? { indicatorRevision: `${history.dataUpdatedAt}:${latest.dataUpdatedAt}` } : {})}
         assetType={history.data?.asset_type ?? latest.data?.asset_type}
         {...(renderer === 'lightweight' ? {
           priceLimit: sessions.length === 1 && sessions[0].date === latest.data?.date ? latest.data?.price_limit ?? undefined : undefined,

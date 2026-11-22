@@ -213,7 +213,8 @@ def test_desktop_recovers_before_backend_reads_keys_and_preferences(installed, m
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
     monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
     monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
-    monkeypatch.setattr(desktop, "_find_free_port", lambda _: 59998)
+    listener = SimpleNamespace(getsockname=lambda: ("127.0.0.1", 59998), close=lambda: None)
+    monkeypatch.setattr(desktop, "_reserve_listener", lambda _: listener)
     monkeypatch.setattr(desktop, "_wait_for_server", lambda port, timeout, done_event: done_event.wait(1))
     seen = []
 
@@ -244,7 +245,8 @@ def test_saved_access_password_is_restored_before_env_bootstrap(installed, monke
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
     monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
     monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
-    monkeypatch.setattr(desktop, "_find_free_port", lambda _: 59998)
+    listener = SimpleNamespace(getsockname=lambda: ("127.0.0.1", 59998), close=lambda: None)
+    monkeypatch.setattr(desktop, "_reserve_listener", lambda _: listener)
     monkeypatch.setattr(desktop, "_wait_for_server", lambda port, timeout, done_event: done_event.wait(1))
     seen = []
 

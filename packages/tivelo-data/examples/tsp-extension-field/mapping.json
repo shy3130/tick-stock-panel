@@ -1,0 +1,14 @@
+{
+  "dataset_id": "desk.rank",
+  "source_id": "desk.hotlist",
+  "table_id": "hot",
+  "field_id": "rank",
+  "field_version": "1",
+  "unit": "ordinal_rank",
+  "market_id": "cn.equity",
+  "asset_class": "equity",
+  "timezone": "Asia/Shanghai",
+  "start": "2025-01-01T00:00:00Z",
+  "end": "2030-01-01T00:00:00Z",
+  "symbols": {"600000.SH": "A", "600001.SH": "B"}
+}

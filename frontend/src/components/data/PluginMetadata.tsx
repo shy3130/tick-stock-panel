@@ -7,6 +7,7 @@ export function PluginMetadata({ plugin }: { plugin: PluginDataSourceItem }) {
   const links = [
     { url: plugin.homepage, label: plugin.homepage_label?.trim() || `${plugin.display_name} 官网` },
     { url: plugin.key_manage_url, label: plugin.key_manage_label?.trim() || '管理 Key / 查看账户用量' },
+    { url: plugin.register_url, label: '注册' },
   ].filter(link => link.url)
 
   return <div className="min-w-0 space-y-3">

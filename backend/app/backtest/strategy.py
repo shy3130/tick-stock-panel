@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,7 +19,9 @@ from typing import Literal
 
 import numpy as np
 import polars as pl
+from tivelo_backtest.research.matrix import LEGACY_PRICE_SCALE
 
+from app.backtest.dynamic_daily import REPLAY_SCALE, current_replay
 from app.backtest.engine import (
     BacktestEngine,
     MatcherConfig,
@@ -26,6 +29,7 @@ from app.backtest.engine import (
     SimulationOptions,
     history_load_start,
 )
+from app.backtest.entry_inputs import EntryFilters, EntryInputData
 from app.backtest.fundamentals import FUNDAMENTAL_FACTOR_NAMES
 from app.backtest.matrix import (
     MarketDataMatrix,
@@ -54,6 +58,7 @@ from app.backtest.minute_trigger import (
     build_minute_entry_reference,
     unsupported_minute_exit_signals,
 )
+from app.backtest.price_basis import BacktestPriceBasis, BackwardAdjustment
 from app.config import settings
 from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
@@ -61,6 +66,7 @@ from app.indicators.pipeline import (
     LIMIT_SIGNAL_OUTPUTS,
     get_signal_dependencies,
 )
+from app.services.engine_jobs.daily_snapshot import DailySnapshotRef
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
@@ -662,8 +668,14 @@ class StrategyBacktestConfig:
     # 市场环境过滤: {"states": ["strong",...], "min_score": 60}。
     # 强制 T-1: regime[T-1] 决定 entry[T](防未来函数)。None=不过滤。
     regime_filter: dict | None = None
+    entry_filters: EntryFilters | None = None
+    filter_data_version: str | None = None
+    price_basis: BacktestPriceBasis = "qfq"
+    snapshot: DailySnapshotRef | None = None
 
     def __post_init__(self) -> None:
+        if self.price_basis not in ("qfq", "hfq", "dynamic"):
+            raise ValueError("无效的策略回测复权方式")
         if self.entry_fill is None:
             self.entry_fill = self.matching
         if self.exit_fill is None:
@@ -886,6 +898,7 @@ class StrategyBacktestService:
             config.asset_type,
             config.holding_days,
             config.minute_fill,
+            config.price_basis,
             json.dumps(config.overrides or {}, sort_keys=True, ensure_ascii=False, default=str),
             json.dumps(config.regime_filter or {}, sort_keys=True, ensure_ascii=False, default=str),
         )
@@ -1102,6 +1115,7 @@ class StrategyBacktestService:
                 cache_profile=cache_profile,
                 coverage_start=coverage_start,
                 coverage_end=coverage_end,
+                **({"price_basis": first.price_basis} if first.price_basis == "hfq" else {}),
             )
             direct_load_ms = round((time.perf_counter() - started) * 1000, 1)
         else:
@@ -1123,6 +1137,10 @@ class StrategyBacktestService:
                 int(visible_ids[0]),
                 int(visible_ids[-1]) + 1,
             )
+            if first.price_basis == "hfq":
+                market_data = BackwardAdjustment(
+                    self.engine.repo.store.data_dir, first.asset_type,
+                ).matrix(market_data)
             direct_load_ms = 0.0
         timing_ms["load_panel"] = direct_load_ms
         timing_ms["market_data_matrix_build"] = 0.0
@@ -1253,6 +1271,7 @@ class StrategyBacktestService:
 
         panel = self.engine.load_panel_for_backtest(
             first.symbols, load_start, load_end, feature_plan, asset_type=first.asset_type,
+            **({"price_basis": first.price_basis} if first.price_basis == "hfq" else {}),
         )
         if panel.is_empty():
             raise ValueError("共享特征面板无数据，请检查日期范围或先运行盘后管道")
@@ -1264,7 +1283,8 @@ class StrategyBacktestService:
         try:
             sim_range = self._date_range_mask(panel, first.start, sim_end)
             sim_columns = [
-                column for column in feature_plan.matrix_columns if column in panel.columns
+                column for column in feature_plan.matrix_columns | {LEGACY_PRICE_SCALE}
+                if column in panel.columns
             ]
             sim_panel = panel.filter(sim_range).select(sorted(sim_columns))
             sim_encoding = encode_panel_matrix(
@@ -1298,11 +1318,29 @@ class StrategyBacktestService:
         recorder = EvidenceRecorder(data_dir, config, strategy, self.strategy_engine, cancel_event)
         # 每个正式回测 worker 拥有独立引擎；仅在本次运行内观察成交用分钟数据。
         previous = getattr(self.engine, "_evidence", None)
+        previous_inputs = getattr(self.engine, "_entry_data", None)
+        try:
+            inputs = EntryInputData(data_dir, config.filter_data_version)
+        except ValueError as exc:
+            return StrategyBacktestResult(
+                run_id=uuid.uuid4().hex[:10], config=self._config_to_dict(config), error=str(exc),
+            )
         self.engine._evidence = recorder
+        self.engine._entry_data = inputs
         try:
             result = self.run(config, progress_cb, cancel_event, evidence=recorder)
+            if result.error is None:
+                try:
+                    version = inputs.freeze()
+                except (OSError, ValueError, pl.exceptions.PolarsError):
+                    result.error = "未能保存本次回测的过滤数据版本，请检查数据目录"
+                else:
+                    if version:
+                        result.config["filter_data_version"] = version
+                        result.config["filter_data_sources"] = inputs.sources()
         finally:
             self.engine._evidence = previous
+            self.engine._entry_data = previous_inputs
         if result.error == "cancelled":
             return result
         effective = {
@@ -1329,11 +1367,30 @@ class StrategyBacktestService:
         prepared_panel: PreparedPanelBacktest | None = None,
         evidence=None,
     ) -> StrategyBacktestResult:
+        with ExitStack() as replay_scope:
+            return self._run(
+                config, progress_cb, cancel_event, prepared, result_policy, prepared_panel, evidence,
+                replay_scope=replay_scope,
+            )
+
+    def _run(
+        self,
+        config: StrategyBacktestConfig,
+        progress_cb: Callable[[dict], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        prepared: PreparedMatrixBacktest | None = None,
+        result_policy: BacktestResultPolicy | None = None,
+        prepared_panel: PreparedPanelBacktest | None = None,
+        evidence=None,
+        *,
+        replay_scope: ExitStack,
+    ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
         result_policy = result_policy or BacktestResultPolicy()
         # 因子归因快照容器: 日线路径在 _apply_score 里填充, 其余路径保持空
         factor_snapshot: dict = {}
+        basis_options = {"price_basis": config.price_basis} if config.price_basis == "hfq" else {}
 
         def _err(msg: str) -> StrategyBacktestResult:
             return StrategyBacktestResult(
@@ -1356,6 +1413,49 @@ class StrategyBacktestService:
             )
         except ValueError as e:
             return _err(str(e))
+
+        dynamic = config.price_basis == "dynamic"
+        if dynamic:
+            from app.backtest import dynamic_daily
+
+            if config.asset_type != "stock" or s.execution_backend == "minute_filter":
+                return _err("动态复权支持 A 股日线策略")
+            if config.minute_fill or config.exit_fill == "signal_next_minute":
+                return _err("动态复权请使用日线成交口径")
+            if config.snapshot is not None or prepared is not None or prepared_panel is not None:
+                return _err("动态复权需要从普通回测直接准备本地日线数据")
+            try:
+                replay = replay_scope.enter_context(
+                    dynamic_daily.open_dynamic_replay(self.engine.repo.store.data_dir)
+                )
+                if evidence is not None:
+                    evidence.runtime["price_view_extension"] = replay.extension_reference.model_dump(mode="json")
+            except ValueError as exc:
+                return _err(str(exc))
+
+        snapshot = None
+        if config.snapshot is not None:
+            snapshot = getattr(self.engine, "snapshot", None)
+            if snapshot is None or snapshot.ref != config.snapshot:
+                return _err("未加载指定的回测快照")
+            if s.execution_backend == "minute_filter":
+                return _err("该策略需要分钟K，请在日线快照回测中选择日线策略")
+            try:
+                snapshot.validate_config(config)
+            except ValueError as e:
+                return _err(str(e))
+            if not config.symbols:
+                config = replace(config, symbols=sorted(snapshot.scope.symbols.values()))
+
+        inputs = getattr(self.engine, "_entry_data", None)
+        extension_filters = config.entry_filters if config.entry_filters and config.entry_filters.enabled else None
+        if extension_filters:
+            if inputs is None or prepared is not None or prepared_panel is not None:
+                return _err("扩展回测过滤需要独立运行一次策略回测")
+            if config.asset_type != "stock" or s.execution_backend == "minute_filter":
+                return _err("扩展回测过滤用于 A 股日线策略")
+            if extension_filters.market and config.regime_filter:
+                return _err("请选择一个市场级过滤来源")
 
         params = self._normalize_params(config.params or {}, s)
         overrides = config.overrides or {}
@@ -1469,9 +1569,12 @@ class StrategyBacktestService:
 
         # 加载 warmup + 正式区间。矩阵策略的 warmup 由协议解析，不再依赖策略名称。
         shared = prepared or prepared_panel
-        load_start = shared.load_start if shared is not None else history_load_start(
-            self.engine, config.start, config.asset_type, feature_plan.warmup_bars,
-        )
+        if snapshot is not None:
+            load_start = snapshot.scope.start
+        else:
+            load_start = shared.load_start if shared is not None else history_load_start(
+                self.engine, config.start, config.asset_type, feature_plan.warmup_bars,
+            )
 
         # 全量模式: entries 只在正式区间触发, exits 需要 end 之后的尾部数据继续执行策略卖点。
         # 若策略有 max_hold_days, 用它决定尾部窗口；否则 holding_days 只作为兜底观察上限。
@@ -1481,8 +1584,37 @@ class StrategyBacktestService:
         if config.mode == "full":
             fwd_buffer = full_horizon_days + 5  # 多取几天, 容错停牌缺口/open_t+1
             load_end = config.end + timedelta(days=fwd_buffer * 2)  # 日历日放宽, 确保覆盖 N 个交易日
+            if snapshot is not None:
+                load_end = min(load_end, snapshot.scope.end)
 
+        if inputs is not None:
+            try:
+                inputs.set_scope(load_start, load_end, config.symbols)
+                if config.regime_filter and (config.regime_filter.get("states") or config.regime_filter.get("min_score") is not None):
+                    inputs.builtin()
+                if extension_filters:
+                    for market, conditions in ((True, extension_filters.market), (False, extension_filters.stocks)):
+                        for table_id in dict.fromkeys(rule.table_id for rule in conditions):
+                            inputs.table(table_id, market=market)
+            except ValueError as exc:
+                return _err(str(exc))
         sim_end = load_end if config.mode == "full" else config.end
+        dynamic_quotes = None
+        if dynamic:
+            if progress_cb is not None:
+                progress_cb({"day": 0, "total": 0, "date": str(config.start), "equity": 0,
+                             "phase": "dynamic_prepare"})
+            try:
+                generation = self.engine.data_generation_await(config.asset_type)
+                dynamic_quotes = self.engine.repo.get_backtest_raw_daily(
+                    config.symbols, load_start, load_end,
+                )
+                replay.check()
+            except (ValueError, OSError) as exc:
+                return _err(str(exc))
+            basis_options = {"price_basis": "dynamic", "raw_execution_quotes": dynamic_quotes}
+            if evidence is not None:
+                evidence.record_frame("raw_execution_quotes", dynamic_quotes)
         panel: pl.DataFrame | None = None
         formal_range: pl.Series | None = None
         market_data: MarketDataMatrix | None = None
@@ -1507,36 +1639,43 @@ class StrategyBacktestService:
                 )
         elif s.execution_backend in ("matrix_native", "composite"):
             t_load = time.perf_counter()
-            max_hold_for_profile = self._override_value(
-                overrides,
-                "max_hold_days",
-                s.max_hold_days,
-            )
-            profile_forward = max(int(max_hold_for_profile or config.holding_days or 5), 1)
-            cache_profile = build_matrix_cache_profile(
-                self.strategy_engine,
-                config.asset_type,
-                requested_plan=feature_plan,
-                requested_forward_bars=profile_forward,
-                max_disk_bytes=settings.backtest_matrix_cache_max_mb * 1024 * 1024,
-            )
-            coverage_start = history_load_start(self.engine, config.start, config.asset_type, cache_profile.warmup_bars)
-            coverage_end = config.end
-            if config.mode == "full":
-                coverage_end = config.end + timedelta(
-                    days=(cache_profile.forward_bars + 5) * 2
+            cache_options = {}
+            if snapshot is None:
+                max_hold_for_profile = self._override_value(
+                    overrides,
+                    "max_hold_days",
+                    s.max_hold_days,
                 )
+                profile_forward = max(int(max_hold_for_profile or config.holding_days or 5), 1)
+                cache_profile = build_matrix_cache_profile(
+                    self.strategy_engine,
+                    config.asset_type,
+                    requested_plan=feature_plan,
+                    requested_forward_bars=profile_forward,
+                    max_disk_bytes=settings.backtest_matrix_cache_max_mb * 1024 * 1024,
+                )
+                coverage_start = history_load_start(self.engine, config.start, config.asset_type, cache_profile.warmup_bars)
+                coverage_end = config.end
+                if config.mode == "full":
+                    coverage_end = config.end + timedelta(
+                        days=(cache_profile.forward_bars + 5) * 2
+                    )
+                cache_options = {
+                    "cache_profile": cache_profile,
+                    "coverage_start": coverage_start,
+                    "coverage_end": coverage_end,
+                }
             try:
+                direct_basis = {"expected_generation": generation} if dynamic else basis_options
                 market_data = self.engine.load_market_data_matrix_for_backtest(
-                    config.symbols,
-                    load_start,
-                    load_end,
-                    feature_plan,
-                    asset_type=config.asset_type,
-                    cache_profile=cache_profile,
-                    coverage_start=coverage_start,
-                    coverage_end=coverage_end,
+                    config.symbols, load_start, load_end, feature_plan,
+                    asset_type=config.asset_type, **cache_options, **direct_basis,
                 )
+                if dynamic:
+                    market_data = replay.continuous_market(
+                        dynamic_daily.attach_exchange_matrix(market_data, dynamic_quotes),
+                        self.engine.repo.store.data_dir, config.asset_type,
+                    )
             except (ValueError, OSError) as e:
                 return _err(f"回测矩阵准备失败: {e}")
             direct_load_ms = round((time.perf_counter() - t_load) * 1000, 1)
@@ -1588,6 +1727,7 @@ class StrategyBacktestService:
                         load_end,
                         feature_plan,
                         asset_type=config.asset_type,
+                        **basis_options,
                         **({"evidence": evidence} if evidence is not None else {}),
                     )
                 except (ValueError, pl.exceptions.PolarsError) as e:
@@ -1606,6 +1746,12 @@ class StrategyBacktestService:
             if not formal_range.any():
                 return _err("正式回测区间内无数据")
             feature_width = int(panel.width)
+
+        if dynamic:
+            self.engine.assert_data_generation(config.asset_type, generation)
+            if progress_cb is not None:
+                progress_cb({"day": 0, "total": 0, "date": str(config.start), "equity": 0,
+                             "phase": "dynamic_signals"})
 
         position_policy_compute, position_policy_params = _resolve_position_policy(config)
         matcher_config = MatcherConfig(
@@ -1656,6 +1802,7 @@ class StrategyBacktestService:
                     required_start=config.start,
                     required_end=config.end,
                     evidence=evidence,
+                    inputs=inputs,
                 )
             except ValueError as e:
                 return _err(str(e))
@@ -1717,6 +1864,15 @@ class StrategyBacktestService:
                 exit_time_mask[start_id:stop_id],
             )
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
+            if extension_filters:
+                from app.backtest.entry_filtering import apply_matrix_entry_filter
+
+                try:
+                    sim_signal_matrix = apply_matrix_entry_filter(
+                        inputs, sim_market_data, sim_signal_matrix, extension_filters, config.start, config.end,
+                    )
+                except ValueError as exc:
+                    return _err(str(exc))
             if not sim_signal_matrix.entry.any():
                 return _err("在指定区间内未产生买入信号")
 
@@ -1770,6 +1926,7 @@ class StrategyBacktestService:
                         required_start=config.start,
                         required_end=config.end,
                         evidence=evidence,
+                        inputs=inputs,
                     )
                 except ValueError as e:
                     return _err(str(e))
@@ -1864,6 +2021,15 @@ class StrategyBacktestService:
                     entry=overlay_entry,
                 )
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
+            if extension_filters:
+                from app.backtest.entry_filtering import apply_matrix_entry_filter
+
+                try:
+                    sim_signal_matrix = apply_matrix_entry_filter(
+                        inputs, sim_market_data, sim_signal_matrix, extension_filters, config.start, config.end,
+                    )
+                except ValueError as exc:
+                    return _err(str(exc))
             if not sim_signal_matrix.entry.any():
                 return _err("在指定区间内未产生买入信号")
 
@@ -1920,6 +2086,7 @@ class StrategyBacktestService:
                         required_start=config.start,
                         required_end=config.end,
                         evidence=evidence,
+                        inputs=inputs,
                     )
                 except ValueError as e:
                     return _err(str(e))
@@ -1934,11 +2101,23 @@ class StrategyBacktestService:
             exit_range = self._date_range_mask(panel, config.start, load_end) if config.mode == "full" else formal_range
             exit_mask = raw_exit_mask & exit_range
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
+            if extension_filters:
+                from app.backtest.entry_filtering import panel_entry_filter
+
+                try:
+                    entry_mask = panel_entry_filter(inputs, panel, formal_range, entry_mask, extension_filters)
+                except ValueError as exc:
+                    return _err(str(exc))
             if not entry_mask.any():
                 return _err("在指定区间内未产生买入信号")
 
             sim_range = self._date_range_mask(panel, config.start, sim_end)
-            sim_columns = [column for column in feature_plan.matrix_columns if column in panel.columns]
+            if dynamic:
+                panel = replay.execution_panel(panel, LEGACY_PRICE_SCALE)
+            sim_columns = [
+                column for column in feature_plan.matrix_columns | {LEGACY_PRICE_SCALE}
+                if column in panel.columns
+            ]
             sim_panel = panel.filter(sim_range).select(sorted(sim_columns))
             sim_entry_mask = entry_mask.filter(sim_range)
             sim_exit_mask = exit_mask.filter(sim_range)
@@ -2001,6 +2180,12 @@ class StrategyBacktestService:
             timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
             del panel, sim_panel, sim_entry_mask, sim_exit_mask
 
+        if dynamic:
+            try:
+                replay.check()
+                market_matrix = dynamic_daily.exact_execution_prices(market_matrix, dynamic_quotes)
+            except ValueError as exc:
+                return _err(str(exc))
         t_sim = time.perf_counter()
 
         # 撮合 — 两条生产路径共享同一只读 MarketMatrix。
@@ -2035,6 +2220,14 @@ class StrategyBacktestService:
 
         if result.stats.get("error"):
             return _err(result.stats["error"])
+
+        if dynamic:
+            try:
+                replay.check()
+            except ValueError as exc:
+                return _err(str(exc))
+            result.stats["execution_price_basis"] = "raw_daily"
+            result.stats["signal_price_basis"] = "effective_date_reconstruction"
 
         timing_ms["total"] = round((time.perf_counter() - t0) * 1000, 1)
         result.stats["timing_ms"] = timing_ms
@@ -2192,6 +2385,7 @@ class StrategyBacktestService:
                 load_end,
                 feature_plan,
                 asset_type="stock",
+                **({"price_basis": config.price_basis} if config.price_basis == "hfq" else {}),
                 **({"evidence": evidence} if evidence is not None else {}),
             )
         except (ValueError, OSError, pl.exceptions.PolarsError) as e:
@@ -2203,18 +2397,22 @@ class StrategyBacktestService:
             evidence.record_frame("minute_daily_features", panel)
 
         replayer = MinuteSignalReplayer(self.engine, self.strategy_engine)
-        replay = replayer.replay(
-            s,
-            panel=panel,
-            start=config.start,
-            end=config.end,
-            params=params,
-            overrides=overrides,
-            symbols=config.symbols,
-            progress_cb=progress_cb,
-            cancel_event=cancel_event,
-            **({"evidence": evidence} if evidence is not None else {}),
-        )
+        try:
+            replay = replayer.replay(
+                s,
+                panel=panel,
+                start=config.start,
+                end=config.end,
+                params=params,
+                overrides=overrides,
+                symbols=config.symbols,
+                progress_cb=progress_cb,
+                cancel_event=cancel_event,
+                price_basis=config.price_basis,
+                **({"evidence": evidence} if evidence is not None else {}),
+            )
+        except (ValueError, OSError, pl.exceptions.PolarsError) as e:
+            return _err(f"分钟行情准备失败: {e}")
         timing_ms["minute_replay"] = replay.elapsed_ms
         if cancel_event is not None and cancel_event.is_set():
             return StrategyBacktestResult(
@@ -2306,7 +2504,9 @@ class StrategyBacktestService:
         )
 
         t_matrix = time.perf_counter()
-        market_data = build_market_data_matrix(sim_panel)
+        market_data = build_market_data_matrix(
+            sim_panel, field_columns={LEGACY_PRICE_SCALE} & set(sim_panel.columns),
+        )
         market_matrix = build_market_matrix_from_signals(
             market_data,
             signals,
@@ -2596,6 +2796,7 @@ class StrategyBacktestService:
         required_start: date | None = None,
         required_end: date | None = None,
         evidence=None,
+        inputs=None,
     ) -> np.ndarray | None:
         """构造逐日 T-1 regime mask, 保留历史静态入口兼容调用方。"""
         if not regime_filter:
@@ -2610,7 +2811,7 @@ class StrategyBacktestService:
         from app.backtest.regime_alignment import build_regime_filter_mask
         from app.services import regime_builder
 
-        regime_df = regime_builder.load_regime_history(data_dir)
+        regime_df = inputs.builtin() if inputs is not None else regime_builder.load_regime_history(data_dir)
         if evidence is not None:
             evidence.record_frame("regime_history", regime_df)
         regime_by_date = {
@@ -2634,6 +2835,13 @@ class StrategyBacktestService:
         *, factor_snapshot=None,
     ):
         """生产回测与时间切片检查共用信号管线，日期/成交延迟在其后应用。"""
+        if REPLAY_SCALE in panel.columns:
+            return current_replay().evaluate_panel_decisions(
+                panel, strategy, params, overrides, basic_filter, entry_signals, exit_signals,
+                evaluate=self._evaluate_panel_decisions,
+                candidate_filter=self._build_candidate_filter_mask,
+                factor_snapshot=factor_snapshot,
+            )
         basic_mask = pl.Series("_basic", [True] * len(panel), dtype=pl.Boolean)
         if basic_filter and basic_filter.get("enabled", True):
             expr = StrategyEngine._basic_filter_expr(panel, basic_filter)
@@ -2769,6 +2977,8 @@ class StrategyBacktestService:
         沿时间轴回看 N 个交易日 (越界前置 NaN → 不命中)。字符串字段在保存期
         已对 matrix_native 策略拒绝, 这里对 contains 再兜底拦截。
         """
+        if REPLAY_SCALE in market_data.fields:
+            return current_replay().overlay_matrix_mask(market_data, conditions, cls._overlay_matrix_mask)
         n_times = len(market_data.timestamp_labels)
         n_assets = len(market_data.symbols)
         mask = np.ones((n_times, n_assets), dtype=bool)
@@ -3040,10 +3250,14 @@ class StrategyBacktestService:
             "position_policy": c.position_policy,
             "position_policy_params": c.position_policy_params,
             "asset_type": c.asset_type,
+            "price_basis": c.price_basis,
+            **({"snapshot": c.snapshot.model_dump()} if c.snapshot is not None else {}),
             "mode": c.mode,
             "holding_days": c.holding_days,
             "minute_fill": c.minute_fill,
             "regime_filter": c.regime_filter,
+            **({"entry_filters": c.entry_filters.model_dump()} if c.entry_filters and c.entry_filters.enabled else {}),
+            **({"filter_data_version": c.filter_data_version} if c.filter_data_version else {}),
         }
 
     @staticmethod

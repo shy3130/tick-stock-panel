@@ -34,7 +34,7 @@ export const CATEGORY_OPTIONS: { key: string; label: string; desc: string; sensi
   { key: 'ext_data',           label: '扩展数据集配置', desc: '不含数据本体与 Key' },
   { key: 'sound_packs',        label: '语音包',         desc: '自定义提示音' },
   { key: 'history',            label: '历史记录',       desc: '告警历史与助手会话' },
-  { key: 'preferences',        label: '偏好设置',       desc: '界面与通知偏好' },
+  { key: 'preferences',        label: '偏好设置',       desc: '界面、通知偏好与自定义图表指标' },
   { key: 'secrets',            label: '密钥（API Key）', desc: '当前生效的 AI / 数据源 / 扩展数据 Key 及通知密钥', sensitive: true },
   { key: 'auth',               label: '访问凭证',       desc: '访问密码与会话 — 导入后原密码在本机生效', sensitive: true },
 ]
@@ -47,6 +47,7 @@ const SCOPE_EXCLUDED = '行情数据、K 线缓存、回测矩阵和任务记录
 /** 导入成功后需要失效的查询 — 与备份类别覆盖的领域对应。 */
 export const INVALIDATE_KEYS: readonly (readonly unknown[])[] = [
   QK.preferences,
+  QK.chartIndicatorLibrary,
   QK.settings,
   QK.monitorRules,
   QK.customSignals,

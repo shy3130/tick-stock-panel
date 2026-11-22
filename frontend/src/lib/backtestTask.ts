@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react'
-import type { StrategyBacktestResult } from './api'
+import type { BacktestPriceBasis, StrategyBacktestResult } from './api'
+import type { DailySnapshotRef } from './engineJobTypes'
+import type { EntryFilters } from './entryFilterTypes'
 import { fetchRunningTask, reportTaskFinished, reportTaskRunning } from './taskRegistry'
 
 /**
@@ -14,6 +16,7 @@ import { fetchRunningTask, reportTaskFinished, reportTaskRunning } from './taskR
  */
 
 export interface BacktestProgress {
+  phase?: 'dynamic_prepare' | 'dynamic_signals'
   day: number
   total: number
   date: string
@@ -22,6 +25,7 @@ export interface BacktestProgress {
 
 export interface BacktestTask {
   id: number
+  snapshotId?: string
   isPending: boolean
   result: StrategyBacktestResult | null
   progress: BacktestProgress | null
@@ -213,8 +217,12 @@ export function startBacktest(params: {
   holding_days?: number
   asset_type?: 'stock' | 'etf'
   minute_fill?: boolean
+  price_basis?: BacktestPriceBasis
+  snapshot?: DailySnapshotRef
   regime_filter?: { states?: string[]; min_score?: number } | null
-  /** 忽略服务端同参数任务的结果缓存 (5 分钟), 必然重新计算; 重连/取消按 qs 对齐同一任务 */
+  entry_filters?: EntryFilters
+  filter_data_version?: string
+  /** 重跑标记。每次主动提交生成请求编号，预检、重连和取消共用同一编号。 */
   force?: boolean
 }): void {
   // 关闭旧 SSE 连接 (断开不取消, 后端任务继续跑)
@@ -223,7 +231,10 @@ export function startBacktest(params: {
     eventSource = null
   }
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
+  current = {
+    id, snapshotId: params.snapshot?.snapshot_id, isPending: true,
+    result: null, progress: null, error: null, reconnecting: false,
+  }
   emit()
 
   const qs = buildQuery({
@@ -248,16 +259,18 @@ export function startBacktest(params: {
     holding_days: params.holding_days,
     asset_type: params.asset_type,
     minute_fill: params.minute_fill,
+    price_basis: params.price_basis,
+    snapshot: params.snapshot ? JSON.stringify(params.snapshot) : undefined,
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
+    entry_filters: params.entry_filters ? JSON.stringify(params.entry_filters) : undefined,
+    filter_data_version: params.filter_data_version,
+    request_id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`,
     force: params.force ? 1 : undefined,
   })
 
   // 键上还挂着旧任务且新任务参数不同 (不同 job_key): 先取消旧任务, 否则它会
   // 占着重任务槽一直跑到自然结束。不看 prevPending — 重连放弃 (give-up) 分支
-  // 不清 RECONNECT_KEY 也不调 finishTaskRegistry, 后端任务仍在跑, 此时同样要
-  // 取消。参数相同 (同参重跑) 时跳过 — 后端按同 key 复用运行中任务 / force
-  // 重建已完成任务, 先取消反而会误杀刚接上的任务 (已结束任务的 cancel 是无害
-  // no-op, 但同 key 场景必须在覆盖键前区分开)。
+  // 切换请求编号前取消上一次未结束的任务，重连继续沿用原查询参数。
   const prevQs = localStorage.getItem(RECONNECT_KEY)
   if (prevQs && prevQs !== qs) {
     void fetch('/api/backtest/strategy/cancel', {
@@ -330,7 +343,14 @@ export function tryReconnect(): boolean {
   }
   // 有未完成的任务, 重连
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
+  let snapshotId: string | undefined
+  const snapshot = new URLSearchParams(qs).get('snapshot')
+  if (snapshot) {
+    try {
+      snapshotId = (JSON.parse(snapshot) as DailySnapshotRef | null)?.snapshot_id
+    } catch { /* 服务端会返回快照标识无效 */ }
+  }
+  current = { id, snapshotId, isPending: true, result: null, progress: null, error: null, reconnecting: false }
   emit()
   connectSSE(`/api/backtest/strategy/stream?${qs}`)
   return true

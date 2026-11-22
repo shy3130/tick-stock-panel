@@ -4,9 +4,7 @@ Starlette 的 JSONResponse 用 json.dumps(..., allow_nan=False) 渲染, 响应�
 只要出现一个 inf/NaN, 整个 POST /api/backtest/run 直接 500
 (ValueError: Out of range float values are not JSON compliant)。
 
-vectorbt 的 pf.stats() 常态产出这类值: 全部交易都盈利时 Profit Factor = inf,
-零波动/无交易时 Sharpe 等为 NaN; pandas 的 Series.to_dict() 会把 numpy 标量
-装箱成原生 float, 所以 _json_safe 的 (int, float, str, bool) 分支会原样放行。
+统计值可能来自原生 float 或 NumPy 标量，两种非有限值都要清洗。
 """
 from __future__ import annotations
 
@@ -39,7 +37,7 @@ def test_non_finite_values_become_null(value):
 
 
 def test_stats_dict_survives_starlette_json_render():
-    """pf.stats() 形态的统计字典清洗后可被 allow_nan=False 渲染。"""
+    """统计字典清洗后可被 allow_nan=False 渲染。"""
     stats_dict = {
         "Total Return [%]": 12.5,
         "Profit Factor": float("inf"),   # 全胜 → gross_loss = 0

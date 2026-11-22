@@ -1,0 +1,43 @@
+[project]
+name = "tivelo-backtest"
+version = "0.1.0a1"
+description = "Independent backtest simulation and shared matrix research kernels"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "PolyForm-Noncommercial-1.0.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-MIT", "NOTICE"]
+dependencies = [
+    "tivelo-contracts>=0.1.0a1,<0.2",
+    "numpy>=1.24,<3",
+    "polars>=1.44,<1.45",
+    "packaging>=24,<27",
+]
+
+[project.optional-dependencies]
+extensions = ["tivelo-extensions>=0.1.0a1,<0.2"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+tivelo-backtest = "tivelo_backtest.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tivelo_backtest"]
+
+[tool.uv.sources]
+tivelo-extensions = { path = "../tivelo-extensions", editable = true }
+tivelo-contracts = { path = "../tivelo-contracts", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

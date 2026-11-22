@@ -9,58 +9,28 @@ import json
 import threading
 import uuid
 from datetime import date
-from functools import lru_cache
 from pathlib import Path
 
-from app.enriched_generation import EnrichedGenerationUnavailableError
+from tivelo_data.legacy.repository_state import (
+    ASSET_LABELS as ASSET_LABELS,
+)
+from tivelo_data.legacy.repository_state import (
+    DailyIntegrityError as DailyIntegrityError,
+)
+from tivelo_data.legacy.repository_state import (
+    _path,
+    snapshot,
+)
+from tivelo_data.legacy.repository_state import (
+    _read as _read,
+)
+from tivelo_data.legacy.repository_state import (
+    assert_usable as assert_usable,
+)
+
 from app.services.fs_utils import atomic_write_text
 
-ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数"}
 _LOCK = threading.RLock()
-
-
-class DailyIntegrityError(EnrichedGenerationUnavailableError):
-    """已知原始日K异常或其依赖重算未完成, 与暂时正在发布区分。"""
-
-
-def _path(root: Path) -> Path:
-    return Path(root) / "user_data" / "daily_integrity_state.json"
-
-
-@lru_cache(maxsize=32)
-def _read(path: str, mtime: int, size: int) -> dict:
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-        if value["version"] != 1 or not isinstance(value["entries"], list):
-            raise ValueError("unsupported integrity state")
-        for entry in value["entries"]:
-            if entry["asset_type"] not in ASSET_LABELS:
-                raise ValueError("invalid asset")
-            date.fromisoformat(entry["day"])
-            if entry["symbol"] is not None and not isinstance(entry["symbol"], str):
-                raise ValueError("invalid symbol")
-            if (not isinstance(entry["needs_raw"], bool)
-                    or not isinstance(entry.get("needs_enriched", True), bool)
-                    or entry["kind"] not in {"missing", "snapshot", "corrupt", "invalid"}
-                    or not isinstance(entry["reason"], str)):
-                raise ValueError("invalid repair state")
-        revisions = value.get("revisions", {})
-        if not isinstance(revisions, dict) or any(not isinstance(v, str) for v in revisions.values()):
-            raise ValueError("invalid revision")
-        return value
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        raise DailyIntegrityError("日K完整性状态无法读取, 请检查数据目录") from exc
-
-
-def snapshot(root: Path) -> dict:
-    path = _path(root)
-    try:
-        info = path.stat()
-    except FileNotFoundError:
-        return {"version": 1, "entries": [], "revisions": {}}
-    except OSError as exc:
-        raise DailyIntegrityError("日K完整性状态无法读取, 请检查数据目录权限") from exc
-    return _read(str(path), info.st_mtime_ns, info.st_size)
 
 
 def revision(root: Path, asset_type: str = "stock") -> str:
@@ -172,20 +142,3 @@ def clear_assets(root: Path, assets: set[str]) -> None:
             return
         old = snapshot(root)
         _save(root, old, [e for e in old["entries"] if e["asset_type"] not in assets])
-
-
-def assert_usable(
-    root: Path, asset_type: str = "stock", *, symbols: list[str] | None = None, end: date | None = None,
-    enriched_only: bool = False,
-) -> None:
-    end = end or date.max
-    for entry in snapshot(root)["entries"]:
-        if enriched_only and not entry["needs_raw"] and not entry.get("needs_enriched", True):
-            continue
-        dependency = entry["asset_type"] == "index" and asset_type in {"stock", "etf"}
-        if ((entry["asset_type"] == asset_type or dependency) and entry["day"] <= end.isoformat()
-                and (dependency or symbols is None or entry["symbol"] is None or entry["symbol"] in symbols)):
-            raise DailyIntegrityError(
-                f"{ASSET_LABELS[entry['asset_type']]}日K在 {entry['day']} 有未完成修补或重算, "
-                "请到 数据→自检/修补 完成后再计算"
-            )

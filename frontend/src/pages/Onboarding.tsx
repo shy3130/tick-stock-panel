@@ -30,6 +30,7 @@ import { api, type ProviderField } from '@/lib/api'
 import { usePreferences, useSettings } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { Logo } from '@/components/Logo'
+import { TiveloLicenseNotice } from '@/components/OssLicenseDialog'
 import { PROJECT_LICENSE_NAME, PROJECT_LICENSE_TEXT, PROJECT_REPO_URL } from '@/data/ossLicenses'
 
 // ===== 引导页:5 步向导 =====
@@ -165,7 +166,7 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
             TSP · 智能量化<br /><span className="text-violet-700 dark:text-violet-300">工作台引擎</span>
           </h1>
           <p className="mt-5 max-w-md text-sm leading-7 text-secondary">
-            接入行情与扩展数据，用开源引擎回测自己的策略，盘后复核结果。
+            接入行情与扩展数据，回测自己的策略，盘后复核结果。
           </p>
 
           <ol aria-label="研究流程" className="mt-6 grid w-full grid-cols-3 gap-3 md:mt-10 md:block md:space-y-6">
@@ -215,19 +216,22 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
               </dd>
             </div>
             <div className="pt-5">
-              <dt>遵守开源许可与服务协议</dt>
+              <dt>软件许可与服务协议</dt>
               <dd className="mt-2 space-y-2 leading-6 text-violet-950/75 dark:text-violet-100/80">
-                <p>使用、修改或分发本项目须遵守 {PROJECT_LICENSE_NAME} 许可，保留版权与许可声明。软件按现状提供，不作保证。</p>
-                <p>数据源、插件与模型服务适用各自条款。请取得必要授权，遵守使用范围与访问限制；软件开源不等于数据开放授权。</p>
+                <p>TSP 工作台采用 {PROJECT_LICENSE_NAME} 许可。分发副本或实质部分时须保留版权与许可声明。软件按现状提供，不作保证。Tivelo 组件适用各自的许可。</p>
+                <p>数据源、插件与模型服务适用各自条款。请取得必要授权，遵守使用范围与访问限制。</p>
               </dd>
             </div>
           </dl>
           <details className="group mt-4">
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-btn text-sm font-medium text-violet-700 underline decoration-violet-300 underline-offset-4 transition-colors hover:text-violet-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-4 focus-visible:ring-offset-surface dark:text-violet-300 dark:decoration-violet-500/50 dark:hover:text-violet-200 [&::-webkit-details-marker]:hidden">
-              查看完整开源许可（{PROJECT_LICENSE_NAME}）
+              查看软件许可
               <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none" />
             </summary>
-            <pre className="mt-3 whitespace-pre-wrap break-words border-t border-violet-200 pt-4 font-mono text-xs leading-6 text-violet-950/75 dark:border-violet-400/15 dark:text-violet-100/80" lang="en">{PROJECT_LICENSE_TEXT}</pre>
+            <div className="mt-3 space-y-4 border-t border-violet-200 pt-4 dark:border-violet-400/15">
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-violet-950/75 dark:text-violet-100/80" lang="en">{PROJECT_LICENSE_TEXT}</pre>
+              <TiveloLicenseNotice />
+            </div>
           </details>
         </section>
       </div>

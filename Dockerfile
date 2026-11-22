@@ -76,6 +76,12 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend deps
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
+# Keep the same ../packages relation as the source checkout.
+COPY packages/tivelo-contracts /packages/tivelo-contracts
+COPY packages/tivelo-extensions /packages/tivelo-extensions
+COPY packages/tivelo-data /packages/tivelo-data
+COPY packages/tivelo-market-cn /packages/tivelo-market-cn
+COPY packages/tivelo-backtest /packages/tivelo-backtest
 # uv 原生支持同时挂多个 index(主源 + 备用源),会自动在两源中查找,
 # 比逐个重试更稳健 —— 任一源缺包时另一源补位。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \

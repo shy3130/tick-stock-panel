@@ -23,7 +23,6 @@ const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ 
 const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
 const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
-const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 // Onboarding 只在首次使用时进入, Auth 只在登录页用到 — 均改按需加载
 const Onboarding = lazy(() => import('./pages/Onboarding').then(m => ({ default: m.Onboarding })))
@@ -43,7 +42,6 @@ const CORE_ROUTE_PATHS = new Set([
   '/mining',
   '/data',
   '/indices',
-  '/regime',
   '/branding',
   '/settings',
   '/dev',
@@ -139,7 +137,6 @@ export const router = createBrowserRouter([
       { path: 'mining', element: <MiningRedirect /> },
       { path: 'data', element: <Data /> },
       { path: 'indices', element: <Indices /> },
-    { path: 'regime', element: <Regime /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）

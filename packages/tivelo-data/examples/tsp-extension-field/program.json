@@ -1,0 +1,17 @@
+{
+  "format_version": "1.1",
+  "missing_fields": "skip_signal",
+  "field_operands": [
+    {
+      "alias": "ext_rank",
+      "dataset_id": "desk.rank",
+      "field_sha256": "0d3d18b4b3e7a52d86ece1a3cbfe1068cd37de635c737ceefe010c762fa778f9",
+      "value_type": "int"
+    }
+  ],
+  "entry": "ext_rank > 0",
+  "exit": "ext_rank < 0",
+  "score": "-ext_rank",
+  "max_positions": 1,
+  "weight_per_position": "0.5"
+}

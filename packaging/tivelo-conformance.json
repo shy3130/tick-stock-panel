@@ -1,0 +1,1227 @@
+{
+  "datasets": [
+    {
+      "bar_convention_id": null,
+      "coverage": {
+        "completed_units": 1,
+        "issues": [],
+        "requested_units": 1,
+        "row_count": 1,
+        "status": "complete"
+      },
+      "knowledge_basis": "historical_versions",
+      "records": [
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "baseline_id": "fixture.listing",
+          "cancelled": false,
+          "definition_id": "fixture.cumulative",
+          "effective_at": "2025-01-01T00:00:00Z",
+          "factor_id": "baseline",
+          "factor_kind": "cumulative_forward",
+          "instrument_id": "A",
+          "revision_id": "1",
+          "source_id": "synthetic",
+          "value": "1"
+        }
+      ],
+      "request": {
+        "asset_class": "equity",
+        "dataset_id": "adjustment_factor",
+        "end": "2025-01-07T00:00:00Z",
+        "instrument_ids": [
+          "A"
+        ],
+        "market_id": "cn.equity",
+        "record_type": "adjustment_factor",
+        "start": "2025-01-01T00:00:00Z"
+      },
+      "source_id": "synthetic"
+    },
+    {
+      "bar_convention_id": "fixture.daily",
+      "coverage": {
+        "completed_units": 1,
+        "issues": [],
+        "requested_units": 1,
+        "row_count": 3,
+        "status": "complete"
+      },
+      "knowledge_basis": "historical_versions",
+      "records": [
+        {
+          "available_at": "2025-01-02T07:00:00Z",
+          "bar_end": "2025-01-02T07:00:00Z",
+          "bar_start": "2025-01-02T01:00:00Z",
+          "close": "10",
+          "high": "10",
+          "ingested_at": "2025-01-02T07:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "low": "10",
+          "open": "10",
+          "price_basis": "raw",
+          "quantity_unit": "share",
+          "quote_currency": "CNY",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.daily",
+          "source_id": "synthetic",
+          "timeframe": "1d",
+          "trade_count": null,
+          "trading_date": "2025-01-02",
+          "turnover": "100000",
+          "volume": "10000",
+          "vwap": null
+        },
+        {
+          "available_at": "2025-01-03T07:00:00Z",
+          "bar_end": "2025-01-03T07:00:00Z",
+          "bar_start": "2025-01-03T01:00:00Z",
+          "close": "10",
+          "high": "10",
+          "ingested_at": "2025-01-03T07:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "low": "10",
+          "open": "10",
+          "price_basis": "raw",
+          "quantity_unit": "share",
+          "quote_currency": "CNY",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.daily",
+          "source_id": "synthetic",
+          "timeframe": "1d",
+          "trade_count": null,
+          "trading_date": "2025-01-03",
+          "turnover": "100000",
+          "volume": "11000",
+          "vwap": null
+        },
+        {
+          "available_at": "2025-01-06T07:00:00Z",
+          "bar_end": "2025-01-06T07:00:00Z",
+          "bar_start": "2025-01-06T01:00:00Z",
+          "close": "11",
+          "high": "11",
+          "ingested_at": "2025-01-06T07:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "low": "11",
+          "open": "11",
+          "price_basis": "raw",
+          "quantity_unit": "share",
+          "quote_currency": "CNY",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.daily",
+          "source_id": "synthetic",
+          "timeframe": "1d",
+          "trade_count": null,
+          "trading_date": "2025-01-06",
+          "turnover": "100000",
+          "volume": "11000",
+          "vwap": null
+        }
+      ],
+      "request": {
+        "asset_class": "equity",
+        "dataset_id": "bar",
+        "end": "2025-01-07T00:00:00Z",
+        "instrument_ids": [
+          "A"
+        ],
+        "market_id": "cn.equity",
+        "price_basis": "raw",
+        "record_type": "bar",
+        "start": "2025-01-01T00:00:00Z",
+        "timeframe": "1d"
+      },
+      "source_id": "synthetic"
+    },
+    {
+      "bar_convention_id": null,
+      "coverage": {
+        "completed_units": 1,
+        "issues": [
+          {
+            "detail": "Synthetic source confirms no company events in this range",
+            "instrument_id": "A",
+            "reason": "no_events"
+          }
+        ],
+        "requested_units": 1,
+        "row_count": 0,
+        "status": "empty"
+      },
+      "knowledge_basis": "historical_versions",
+      "records": [],
+      "request": {
+        "asset_class": "equity",
+        "dataset_id": "corporate_action",
+        "end": "2025-01-07T00:00:00Z",
+        "instrument_ids": [
+          "A"
+        ],
+        "market_id": "cn.equity",
+        "record_type": "corporate_action",
+        "start": "2025-01-01T00:00:00Z"
+      },
+      "source_id": "synthetic"
+    },
+    {
+      "bar_convention_id": null,
+      "coverage": {
+        "completed_units": 1,
+        "issues": [],
+        "requested_units": 1,
+        "row_count": 5,
+        "status": "complete"
+      },
+      "knowledge_basis": "historical_versions",
+      "records": [
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-01T00:00:00Z",
+          "calendar_id": "fixture",
+          "delisting_date": {
+            "state": "not_yet",
+            "value": null
+          },
+          "display_symbol": "A",
+          "instrument_id": "A",
+          "instrument_type": "common_stock",
+          "listing_date": {
+            "state": "known",
+            "value": "2020-01-01"
+          },
+          "market_id": "cn.equity",
+          "name": "Synthetic",
+          "quote_currency": "CNY",
+          "revision_id": "1",
+          "settlement_currency": "CNY",
+          "source_id": "synthetic",
+          "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+          "timezone": "Asia/Shanghai",
+          "tradable": true,
+          "valid_from": "2025-01-01T00:00:00Z",
+          "valid_to": null,
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-02T12:00:00Z",
+          "calendar_id": "fixture",
+          "delisting_date": {
+            "state": "not_yet",
+            "value": null
+          },
+          "display_symbol": "A",
+          "instrument_id": "A",
+          "instrument_type": "common_stock",
+          "listing_date": {
+            "state": "known",
+            "value": "2020-01-01"
+          },
+          "market_id": "cn.equity",
+          "name": "Synthetic",
+          "quote_currency": "CNY",
+          "revision_id": "normal-ended",
+          "settlement_currency": "CNY",
+          "source_id": "synthetic",
+          "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+          "timezone": "Asia/Shanghai",
+          "tradable": true,
+          "valid_from": "2025-01-01T00:00:00Z",
+          "valid_to": "2025-01-03T00:00:00Z",
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-02T12:00:00Z",
+          "calendar_id": "fixture",
+          "delisting_date": {
+            "state": "not_yet",
+            "value": null
+          },
+          "display_symbol": "A",
+          "instrument_id": "A",
+          "instrument_type": "common_stock",
+          "listing_date": {
+            "state": "known",
+            "value": "2020-01-01"
+          },
+          "market_id": "cn.equity",
+          "name": "Synthetic",
+          "quote_currency": "CNY",
+          "revision_id": "warning",
+          "settlement_currency": "CNY",
+          "source_id": "synthetic",
+          "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+          "timezone": "Asia/Shanghai",
+          "tradable": true,
+          "valid_from": "2025-01-03T00:00:00Z",
+          "valid_to": null,
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-05T00:00:00Z",
+          "calendar_id": "fixture",
+          "delisting_date": {
+            "state": "not_yet",
+            "value": null
+          },
+          "display_symbol": "A",
+          "instrument_id": "A",
+          "instrument_type": "common_stock",
+          "listing_date": {
+            "state": "known",
+            "value": "2020-01-01"
+          },
+          "market_id": "cn.equity",
+          "name": "Synthetic",
+          "quote_currency": "CNY",
+          "revision_id": "warning-ended",
+          "settlement_currency": "CNY",
+          "source_id": "synthetic",
+          "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+          "timezone": "Asia/Shanghai",
+          "tradable": true,
+          "valid_from": "2025-01-03T00:00:00Z",
+          "valid_to": "2025-01-06T00:00:00Z",
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-05T00:00:00Z",
+          "calendar_id": "fixture",
+          "delisting_date": {
+            "state": "not_yet",
+            "value": null
+          },
+          "display_symbol": "A",
+          "instrument_id": "A",
+          "instrument_type": "common_stock",
+          "listing_date": {
+            "state": "known",
+            "value": "2020-01-01"
+          },
+          "market_id": "cn.equity",
+          "name": "Synthetic",
+          "quote_currency": "CNY",
+          "revision_id": "normal-restored",
+          "settlement_currency": "CNY",
+          "source_id": "synthetic",
+          "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+          "timezone": "Asia/Shanghai",
+          "tradable": true,
+          "valid_from": "2025-01-06T00:00:00Z",
+          "valid_to": null,
+          "venue_id": "XSHG"
+        }
+      ],
+      "request": {
+        "asset_class": "equity",
+        "dataset_id": "instrument",
+        "end": "2025-01-07T00:00:00Z",
+        "instrument_ids": [
+          "A"
+        ],
+        "market_id": "cn.equity",
+        "record_type": "instrument",
+        "start": "2025-01-01T00:00:00Z"
+      },
+      "source_id": "synthetic"
+    },
+    {
+      "bar_convention_id": null,
+      "coverage": {
+        "completed_units": 1,
+        "issues": [],
+        "requested_units": 1,
+        "row_count": 3,
+        "status": "complete"
+      },
+      "knowledge_basis": "historical_versions",
+      "records": [
+        {
+          "available_at": "2025-01-02T01:00:00Z",
+          "event_at": "2025-01-02T01:00:00Z",
+          "ingested_at": "2025-01-02T01:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "quote_currency": "CNY",
+          "raw_open": "10",
+          "reference_kind": "previous_close",
+          "reference_price": "10",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.open",
+          "source_id": "synthetic",
+          "state": "tradable",
+          "trading_date": "2025-01-02"
+        },
+        {
+          "available_at": "2025-01-03T01:00:00Z",
+          "event_at": "2025-01-03T01:00:00Z",
+          "ingested_at": "2025-01-03T01:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "quote_currency": "CNY",
+          "raw_open": "10",
+          "reference_kind": "previous_close",
+          "reference_price": "10",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.open",
+          "source_id": "synthetic",
+          "state": "tradable",
+          "trading_date": "2025-01-03"
+        },
+        {
+          "available_at": "2025-01-06T01:00:00Z",
+          "event_at": "2025-01-06T01:00:00Z",
+          "ingested_at": "2025-01-06T01:00:00Z",
+          "instrument_id": "A",
+          "is_final": true,
+          "quote_currency": "CNY",
+          "raw_open": "11",
+          "reference_kind": "previous_close",
+          "reference_price": "10",
+          "revision_id": "1",
+          "schema_version": "2.0",
+          "session_id": "fixture.open",
+          "source_id": "synthetic",
+          "state": "tradable",
+          "trading_date": "2025-01-06"
+        }
+      ],
+      "request": {
+        "asset_class": "equity",
+        "dataset_id": "opening_observation",
+        "end": "2025-01-07T00:00:00Z",
+        "instrument_ids": [
+          "A"
+        ],
+        "market_id": "cn.equity",
+        "record_type": "opening_observation",
+        "start": "2025-01-01T00:00:00Z"
+      },
+      "source_id": "synthetic"
+    }
+  ],
+  "market_profile": {
+    "calendar": {
+      "contents": {
+        "available_at": "2025-01-01T00:00:00Z",
+        "bar_convention_id": "fixture.daily",
+        "calendar_id": "fixture",
+        "days": [
+          {
+            "closed_reason": "synthetic-closed",
+            "is_open": false,
+            "sessions": [],
+            "trading_date": "2025-01-01"
+          },
+          {
+            "closed_reason": null,
+            "is_open": true,
+            "sessions": [
+              {
+                "end": "2025-01-02T07:00:00Z",
+                "kind": "continuous",
+                "session_id": "fixture-2",
+                "start": "2025-01-02T01:00:00Z"
+              }
+            ],
+            "trading_date": "2025-01-02"
+          },
+          {
+            "closed_reason": null,
+            "is_open": true,
+            "sessions": [
+              {
+                "end": "2025-01-03T07:00:00Z",
+                "kind": "continuous",
+                "session_id": "fixture-3",
+                "start": "2025-01-03T01:00:00Z"
+              }
+            ],
+            "trading_date": "2025-01-03"
+          },
+          {
+            "closed_reason": "synthetic-closed",
+            "is_open": false,
+            "sessions": [],
+            "trading_date": "2025-01-04"
+          },
+          {
+            "closed_reason": "synthetic-closed",
+            "is_open": false,
+            "sessions": [],
+            "trading_date": "2025-01-05"
+          },
+          {
+            "closed_reason": null,
+            "is_open": true,
+            "sessions": [
+              {
+                "end": "2025-01-06T07:00:00Z",
+                "kind": "continuous",
+                "session_id": "fixture-6",
+                "start": "2025-01-06T01:00:00Z"
+              }
+            ],
+            "trading_date": "2025-01-06"
+          },
+          {
+            "closed_reason": null,
+            "is_open": true,
+            "sessions": [
+              {
+                "end": "2025-01-07T07:00:00Z",
+                "kind": "continuous",
+                "session_id": "fixture-7",
+                "start": "2025-01-07T01:00:00Z"
+              }
+            ],
+            "trading_date": "2025-01-07"
+          }
+        ],
+        "schema_version": "1.0",
+        "source_id": "synthetic",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "timezone": "Asia/Shanghai",
+        "venue_id": "XSHG"
+      },
+      "version_id": "9c1f0770a584b1b4f67d603d9832ac2a9954df5670c7d54f91ff5d9321549588"
+    },
+    "configuration": {
+      "currency": "CNY",
+      "fee_rules": [
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "commission",
+          "included_fee_ids": [
+            "handling",
+            "regulatory"
+          ],
+          "minimum": "5",
+          "quantum": "0.01",
+          "rate": "0.0002",
+          "revision_id": "0742338daae102b09597483f8b717e526370945c2d777ff10245284e499934eb",
+          "rounding": "half_up",
+          "side": "both",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        },
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "stamp",
+          "included_fee_ids": [],
+          "minimum": "0",
+          "quantum": "0.01",
+          "rate": "0.0005",
+          "revision_id": "cf189746a3e217d1e074e2f0b8183f71890259463bb16822cf4eb658108ac195",
+          "rounding": "half_up",
+          "side": "sell",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        },
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "transfer",
+          "included_fee_ids": [],
+          "minimum": "0",
+          "quantum": "0.01",
+          "rate": "0.00001",
+          "revision_id": "66907fa291a09e172d992d23ef2230ddb66cb714c577a2199a46b4a0dcb16573",
+          "rounding": "half_up",
+          "side": "both",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        }
+      ],
+      "instrument_classes": [
+        {
+          "board": "main",
+          "class_format": "tivelo-cn-equity-class-v1",
+          "instrument_type": "common_stock",
+          "listing_phase": "regular",
+          "risk_status": "normal",
+          "venue_id": "XSHG"
+        },
+        {
+          "board": "main",
+          "class_format": "tivelo-cn-equity-class-v1",
+          "instrument_type": "common_stock",
+          "listing_phase": "regular",
+          "risk_status": "risk_warning",
+          "venue_id": "XSHG"
+        }
+      ],
+      "profile_id": "cn.synthetic",
+      "profile_version": "1",
+      "required_fee_ids": [
+        "commission",
+        "stamp",
+        "transfer"
+      ],
+      "schema_version": "1.2",
+      "terms": [
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-01T00:00:00Z",
+          "buy_increment": "1",
+          "buy_maximum": "100000",
+          "buy_minimum": "200",
+          "currency": "CNY",
+          "instrument_type": "common_stock",
+          "limit_down_ratio": "0.1",
+          "limit_up_ratio": "0.1",
+          "market_id": "cn.equity",
+          "odd_lot_policy": "all_remaining",
+          "order_quantity_rules": [
+            {
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "limit",
+              "sell_increment": "1",
+              "sell_maximum": "100000",
+              "sell_minimum": "200"
+            },
+            {
+              "buy_increment": "1",
+              "buy_maximum": "50000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "market",
+              "sell_increment": "1",
+              "sell_maximum": "50000",
+              "sell_minimum": "200"
+            }
+          ],
+          "price_limit_mode": "relative_reference",
+          "price_tick": "0.01",
+          "quantity_unit": "share",
+          "revision_id": "cn.prices.40cccdd46f2ad0ab1c3d61e1032b944b6e8fc80551ef0b74ddaef3a453571eab",
+          "sell_increment": "1",
+          "sell_lag_sessions": 1,
+          "sell_maximum": "100000",
+          "sell_minimum": "200",
+          "source_id": "tivelo-market-cn",
+          "source_reference": "cn.prices:fa8f5e0d4e5ecd5d40a1a406c0cebf119754eec86ba9c6d58f48adc39dbc24d5",
+          "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+          "valid_from": "2025-01-01T00:00:00Z",
+          "valid_to": "2025-01-07T00:00:00Z",
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-01T00:00:00Z",
+          "buy_increment": "1",
+          "buy_maximum": "100000",
+          "buy_minimum": "200",
+          "currency": "CNY",
+          "instrument_type": "common_stock",
+          "limit_down_ratio": "0.05",
+          "limit_up_ratio": "0.05",
+          "market_id": "cn.equity",
+          "odd_lot_policy": "all_remaining",
+          "order_quantity_rules": [
+            {
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "limit",
+              "sell_increment": "1",
+              "sell_maximum": "100000",
+              "sell_minimum": "200"
+            },
+            {
+              "buy_increment": "1",
+              "buy_maximum": "50000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "market",
+              "sell_increment": "1",
+              "sell_maximum": "50000",
+              "sell_minimum": "200"
+            }
+          ],
+          "price_limit_mode": "relative_reference",
+          "price_tick": "0.01",
+          "quantity_unit": "share",
+          "revision_id": "cn.prices.e9b3ac9119309315925a2ffb232d059d0284765215d2a11c0ea1309cf03df4b2",
+          "sell_increment": "1",
+          "sell_lag_sessions": 1,
+          "sell_maximum": "100000",
+          "sell_minimum": "200",
+          "source_id": "tivelo-market-cn",
+          "source_reference": "cn.prices:3c5954abbf0d3f86713cdd0e432e9812376764c00e63376d094833cc1c00a1af",
+          "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+          "valid_from": "2025-01-01T00:00:00Z",
+          "valid_to": "2025-01-07T00:00:00Z",
+          "venue_id": "XSHG"
+        },
+        {
+          "asset_class": "equity",
+          "available_at": "2025-01-02T12:00:00Z",
+          "buy_increment": "1",
+          "buy_maximum": "100000",
+          "buy_minimum": "200",
+          "currency": "CNY",
+          "instrument_type": "common_stock",
+          "limit_down_ratio": "0.05",
+          "limit_up_ratio": "0.05",
+          "market_id": "cn.equity",
+          "odd_lot_policy": "all_remaining",
+          "order_quantity_rules": [
+            {
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "limit",
+              "sell_increment": "1",
+              "sell_maximum": "100000",
+              "sell_minimum": "200"
+            },
+            {
+              "buy_increment": "1",
+              "buy_maximum": "50000",
+              "buy_minimum": "200",
+              "odd_lot_policy": "all_remaining",
+              "order_type": "market",
+              "sell_increment": "1",
+              "sell_maximum": "50000",
+              "sell_minimum": "200"
+            }
+          ],
+          "price_limit_mode": "relative_reference",
+          "price_tick": "0.01",
+          "quantity_unit": "share",
+          "revision_id": "cn.prices.61593aa6f54bd18e94a4aa1f941b1ea7a2d71c05b44e8cb110cc4466406acc0e",
+          "sell_increment": "1",
+          "sell_lag_sessions": 1,
+          "sell_maximum": "100000",
+          "sell_minimum": "200",
+          "source_id": "tivelo-market-cn",
+          "source_reference": "cn.prices:3c5954abbf0d3f86713cdd0e432e9812376764c00e63376d094833cc1c00a1af",
+          "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+          "valid_from": "2025-01-06T00:00:00Z",
+          "valid_to": "2025-01-07T00:00:00Z",
+          "venue_id": "XSHG"
+        }
+      ]
+    },
+    "fee_compilation": {
+      "fee_rules": [
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "commission",
+          "included_fee_ids": [
+            "handling",
+            "regulatory"
+          ],
+          "minimum": "5",
+          "quantum": "0.01",
+          "rate": "0.0002",
+          "revision_id": "0742338daae102b09597483f8b717e526370945c2d777ff10245284e499934eb",
+          "rounding": "half_up",
+          "side": "both",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        },
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "stamp",
+          "included_fee_ids": [],
+          "minimum": "0",
+          "quantum": "0.01",
+          "rate": "0.0005",
+          "revision_id": "cf189746a3e217d1e074e2f0b8183f71890259463bb16822cf4eb658108ac195",
+          "rounding": "half_up",
+          "side": "sell",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        },
+        {
+          "available_at": "2025-01-01T00:00:00Z",
+          "fee_id": "transfer",
+          "included_fee_ids": [],
+          "minimum": "0",
+          "quantum": "0.01",
+          "rate": "0.00001",
+          "revision_id": "66907fa291a09e172d992d23ef2230ddb66cb714c577a2199a46b4a0dcb16573",
+          "rounding": "half_up",
+          "side": "both",
+          "source_id": "cn.equity.auction-fees",
+          "source_reference": "cn.fees.research-per-fill:09d63f6f2e7294da43366606db6b2f503dd62f21b06fe8204a3600535eb0e5dd",
+          "valid_from": "2025-01-01T16:00:00Z",
+          "valid_to": "2025-01-07T16:00:00Z"
+        }
+      ],
+      "inputs": {
+        "end": "2025-01-07",
+        "policy": {
+          "account_scope": "domestic_cash_standard",
+          "aggregation": "per_fill_research",
+          "available_at": "2025-01-01T00:00:00Z",
+          "commission_includes": [
+            "handling",
+            "regulatory"
+          ],
+          "commission_minimum": "5",
+          "commission_rate": "0.0002",
+          "policy_id": "synthetic-broker-policy",
+          "policy_version": "1",
+          "revision_id": "synthetic-1",
+          "rounding": [
+            {
+              "fee_id": "commission",
+              "quantum": "0.01",
+              "rounding": "half_up"
+            },
+            {
+              "fee_id": "stamp",
+              "quantum": "0.01",
+              "rounding": "half_up"
+            },
+            {
+              "fee_id": "transfer",
+              "quantum": "0.01",
+              "rounding": "half_up"
+            }
+          ],
+          "source_id": "synthetic",
+          "source_reference": "synthetic-policy-not-an-official-commission-default",
+          "valid_from": "2025-01-01T00:00:00Z",
+          "valid_to": null
+        },
+        "preset_version": "2026.1.0",
+        "preset_version_id": "39cda44c3190849356ebf7602594d900d186399aee59cecbdd36038e2b828eae",
+        "start": "2025-01-02",
+        "venue_id": "XSHG"
+      },
+      "required_fee_ids": [
+        "commission",
+        "stamp",
+        "transfer"
+      ],
+      "selected_rate_ids": [
+        "cn.stamp.2023",
+        "cn.transfer.2022",
+        "sse.handling.2023",
+        "sse.regulatory.2012"
+      ]
+    },
+    "price_compilations": [
+      {
+        "inputs": {
+          "base_terms": [
+            {
+              "asset_class": "equity",
+              "available_at": "2025-01-01T00:00:00Z",
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "currency": "CNY",
+              "instrument_type": "common_stock",
+              "limit_down_ratio": "0.1",
+              "limit_up_ratio": "0.1",
+              "market_id": "cn.equity",
+              "odd_lot_policy": "all_remaining",
+              "order_quantity_rules": [
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "100000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "limit",
+                  "sell_increment": "1",
+                  "sell_maximum": "100000",
+                  "sell_minimum": "200"
+                },
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "50000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "market",
+                  "sell_increment": "1",
+                  "sell_maximum": "50000",
+                  "sell_minimum": "200"
+                }
+              ],
+              "price_limit_mode": "relative_reference",
+              "price_tick": "0.01",
+              "quantity_unit": "share",
+              "revision_id": "1",
+              "sell_increment": "1",
+              "sell_lag_sessions": 1,
+              "sell_maximum": "100000",
+              "sell_minimum": "200",
+              "source_id": "synthetic",
+              "source_reference": "synthetic-only",
+              "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+              "valid_from": "2025-01-01T00:00:00Z",
+              "valid_to": "2025-01-07T00:00:00Z",
+              "venue_id": "XSHG"
+            }
+          ],
+          "classification": {
+            "board": "main",
+            "class_format": "tivelo-cn-equity-class-v1",
+            "instrument_type": "common_stock",
+            "listing_phase": "regular",
+            "risk_status": "normal",
+            "venue_id": "XSHG"
+          },
+          "preset_version": "2026.1.0",
+          "preset_version_id": "cbd72ad76b27558322e58770e46921c6c5215c482e052db85ddb7cae4dd3fede"
+        },
+        "selected_rule_ids": [
+          "sse.main.prices.2023"
+        ],
+        "terms": [
+          {
+            "asset_class": "equity",
+            "available_at": "2025-01-01T00:00:00Z",
+            "buy_increment": "1",
+            "buy_maximum": "100000",
+            "buy_minimum": "200",
+            "currency": "CNY",
+            "instrument_type": "common_stock",
+            "limit_down_ratio": "0.1",
+            "limit_up_ratio": "0.1",
+            "market_id": "cn.equity",
+            "odd_lot_policy": "all_remaining",
+            "order_quantity_rules": [
+              {
+                "buy_increment": "1",
+                "buy_maximum": "100000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "limit",
+                "sell_increment": "1",
+                "sell_maximum": "100000",
+                "sell_minimum": "200"
+              },
+              {
+                "buy_increment": "1",
+                "buy_maximum": "50000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "market",
+                "sell_increment": "1",
+                "sell_maximum": "50000",
+                "sell_minimum": "200"
+              }
+            ],
+            "price_limit_mode": "relative_reference",
+            "price_tick": "0.01",
+            "quantity_unit": "share",
+            "revision_id": "cn.prices.40cccdd46f2ad0ab1c3d61e1032b944b6e8fc80551ef0b74ddaef3a453571eab",
+            "sell_increment": "1",
+            "sell_lag_sessions": 1,
+            "sell_maximum": "100000",
+            "sell_minimum": "200",
+            "source_id": "tivelo-market-cn",
+            "source_reference": "cn.prices:fa8f5e0d4e5ecd5d40a1a406c0cebf119754eec86ba9c6d58f48adc39dbc24d5",
+            "spec_revision": "cn.equity.class.8532eb0b87ac7c9adc17b123d7e6c977f8451ee6615936b5c07f5d6d98601440",
+            "valid_from": "2025-01-01T00:00:00Z",
+            "valid_to": "2025-01-07T00:00:00Z",
+            "venue_id": "XSHG"
+          }
+        ]
+      },
+      {
+        "inputs": {
+          "base_terms": [
+            {
+              "asset_class": "equity",
+              "available_at": "2025-01-01T00:00:00Z",
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "currency": "CNY",
+              "instrument_type": "common_stock",
+              "limit_down_ratio": "0.05",
+              "limit_up_ratio": "0.05",
+              "market_id": "cn.equity",
+              "odd_lot_policy": "all_remaining",
+              "order_quantity_rules": [
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "100000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "limit",
+                  "sell_increment": "1",
+                  "sell_maximum": "100000",
+                  "sell_minimum": "200"
+                },
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "50000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "market",
+                  "sell_increment": "1",
+                  "sell_maximum": "50000",
+                  "sell_minimum": "200"
+                }
+              ],
+              "price_limit_mode": "relative_reference",
+              "price_tick": "0.01",
+              "quantity_unit": "share",
+              "revision_id": "warning-original",
+              "sell_increment": "1",
+              "sell_lag_sessions": 1,
+              "sell_maximum": "100000",
+              "sell_minimum": "200",
+              "source_id": "synthetic",
+              "source_reference": "synthetic-only",
+              "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+              "valid_from": "2025-01-01T00:00:00Z",
+              "valid_to": "2025-01-07T00:00:00Z",
+              "venue_id": "XSHG"
+            },
+            {
+              "asset_class": "equity",
+              "available_at": "2025-01-02T12:00:00Z",
+              "buy_increment": "1",
+              "buy_maximum": "100000",
+              "buy_minimum": "200",
+              "currency": "CNY",
+              "instrument_type": "common_stock",
+              "limit_down_ratio": "0.1",
+              "limit_up_ratio": "0.1",
+              "market_id": "cn.equity",
+              "odd_lot_policy": "all_remaining",
+              "order_quantity_rules": [
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "100000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "limit",
+                  "sell_increment": "1",
+                  "sell_maximum": "100000",
+                  "sell_minimum": "200"
+                },
+                {
+                  "buy_increment": "1",
+                  "buy_maximum": "50000",
+                  "buy_minimum": "200",
+                  "odd_lot_policy": "all_remaining",
+                  "order_type": "market",
+                  "sell_increment": "1",
+                  "sell_maximum": "50000",
+                  "sell_minimum": "200"
+                }
+              ],
+              "price_limit_mode": "relative_reference",
+              "price_tick": "0.01",
+              "quantity_unit": "share",
+              "revision_id": "warning-next",
+              "sell_increment": "1",
+              "sell_lag_sessions": 1,
+              "sell_maximum": "100000",
+              "sell_minimum": "200",
+              "source_id": "synthetic",
+              "source_reference": "synthetic-only",
+              "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+              "valid_from": "2025-01-06T00:00:00Z",
+              "valid_to": "2025-01-07T00:00:00Z",
+              "venue_id": "XSHG"
+            }
+          ],
+          "classification": {
+            "board": "main",
+            "class_format": "tivelo-cn-equity-class-v1",
+            "instrument_type": "common_stock",
+            "listing_phase": "regular",
+            "risk_status": "risk_warning",
+            "venue_id": "XSHG"
+          },
+          "preset_version": "2026.1.0",
+          "preset_version_id": "cbd72ad76b27558322e58770e46921c6c5215c482e052db85ddb7cae4dd3fede"
+        },
+        "selected_rule_ids": [
+          "sse.main.prices.2023"
+        ],
+        "terms": [
+          {
+            "asset_class": "equity",
+            "available_at": "2025-01-01T00:00:00Z",
+            "buy_increment": "1",
+            "buy_maximum": "100000",
+            "buy_minimum": "200",
+            "currency": "CNY",
+            "instrument_type": "common_stock",
+            "limit_down_ratio": "0.05",
+            "limit_up_ratio": "0.05",
+            "market_id": "cn.equity",
+            "odd_lot_policy": "all_remaining",
+            "order_quantity_rules": [
+              {
+                "buy_increment": "1",
+                "buy_maximum": "100000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "limit",
+                "sell_increment": "1",
+                "sell_maximum": "100000",
+                "sell_minimum": "200"
+              },
+              {
+                "buy_increment": "1",
+                "buy_maximum": "50000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "market",
+                "sell_increment": "1",
+                "sell_maximum": "50000",
+                "sell_minimum": "200"
+              }
+            ],
+            "price_limit_mode": "relative_reference",
+            "price_tick": "0.01",
+            "quantity_unit": "share",
+            "revision_id": "cn.prices.e9b3ac9119309315925a2ffb232d059d0284765215d2a11c0ea1309cf03df4b2",
+            "sell_increment": "1",
+            "sell_lag_sessions": 1,
+            "sell_maximum": "100000",
+            "sell_minimum": "200",
+            "source_id": "tivelo-market-cn",
+            "source_reference": "cn.prices:3c5954abbf0d3f86713cdd0e432e9812376764c00e63376d094833cc1c00a1af",
+            "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+            "valid_from": "2025-01-01T00:00:00Z",
+            "valid_to": "2025-01-07T00:00:00Z",
+            "venue_id": "XSHG"
+          },
+          {
+            "asset_class": "equity",
+            "available_at": "2025-01-02T12:00:00Z",
+            "buy_increment": "1",
+            "buy_maximum": "100000",
+            "buy_minimum": "200",
+            "currency": "CNY",
+            "instrument_type": "common_stock",
+            "limit_down_ratio": "0.05",
+            "limit_up_ratio": "0.05",
+            "market_id": "cn.equity",
+            "odd_lot_policy": "all_remaining",
+            "order_quantity_rules": [
+              {
+                "buy_increment": "1",
+                "buy_maximum": "100000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "limit",
+                "sell_increment": "1",
+                "sell_maximum": "100000",
+                "sell_minimum": "200"
+              },
+              {
+                "buy_increment": "1",
+                "buy_maximum": "50000",
+                "buy_minimum": "200",
+                "odd_lot_policy": "all_remaining",
+                "order_type": "market",
+                "sell_increment": "1",
+                "sell_maximum": "50000",
+                "sell_minimum": "200"
+              }
+            ],
+            "price_limit_mode": "relative_reference",
+            "price_tick": "0.01",
+            "quantity_unit": "share",
+            "revision_id": "cn.prices.61593aa6f54bd18e94a4aa1f941b1ea7a2d71c05b44e8cb110cc4466406acc0e",
+            "sell_increment": "1",
+            "sell_lag_sessions": 1,
+            "sell_maximum": "100000",
+            "sell_minimum": "200",
+            "source_id": "tivelo-market-cn",
+            "source_reference": "cn.prices:3c5954abbf0d3f86713cdd0e432e9812376764c00e63376d094833cc1c00a1af",
+            "spec_revision": "cn.equity.class.c3e80ee878e830a98e8fcd0dd9f716567902ccc8ef8026147ad657b0da700bc1",
+            "valid_from": "2025-01-06T00:00:00Z",
+            "valid_to": "2025-01-07T00:00:00Z",
+            "venue_id": "XSHG"
+          }
+        ]
+      }
+    ],
+    "profile_format": "tivelo-cn-profile-v3"
+  },
+  "program": {
+    "entry": "close >= open",
+    "exit": "volume > 10000",
+    "format": "tivelo-controlled-daily",
+    "format_version": "1.0",
+    "max_positions": 1,
+    "min_history_bars": 1,
+    "numeric_semantics": "anchor_cancelled_float64_v1",
+    "score": "close / open",
+    "weight_per_position": "0.5"
+  },
+  "request": {
+    "account": {
+      "bound_execution": "block_buy_at_upper_sell_at_lower",
+      "corporate_action_orders": "cancel",
+      "cost_allocation": "fifo_decimal12_half_even",
+      "currency": "CNY",
+      "dividend_treatment": "reject",
+      "order_expiry": "next_session",
+      "sale_cash": "immediately_reinvestable"
+    },
+    "end": "2025-01-06",
+    "execution": {
+      "end_policy": "mark_to_market",
+      "fill_at": "next_open",
+      "intrabar_priority": "stop_first",
+      "missing_data": "reject",
+      "order_expiry": "next_session",
+      "position_policy_failure": "reject",
+      "signal_at": "bar_close",
+      "slippage_bps": "0",
+      "timeframe": "1d"
+    },
+    "initial_capital": "5000",
+    "market": {
+      "adapter_id": "tivelo.market.cn.cash-equity",
+      "distribution": "tivelo-market-cn"
+    },
+    "price_view": {
+      "anchor_at": "2025-01-07T00:00:00Z",
+      "factor_baseline_id": "fixture.listing",
+      "factor_definition_id": "fixture.cumulative",
+      "mode": "qfq",
+      "provider_id": "tivelo.qfq"
+    },
+    "request_version": "1.0",
+    "start": "2025-01-02",
+    "strategy_parameters_json": "{}",
+    "universe": [
+      "A"
+    ],
+    "warmup_start": null
+  }
+}

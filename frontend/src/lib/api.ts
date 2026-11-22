@@ -5,6 +5,11 @@
 
 import { toast } from '@/components/Toast'
 import type { NavLayout } from './navLayout'
+import type { StockInfoBarLayout } from './stock-info-fields'
+import type { ChartIndicatorDefinition, ChartIndicatorLibrary, IndicatorEvaluation, IndicatorEvaluationRequest, IndicatorImportPreview, IndicatorLibraryResponse, IndicatorPackage } from './custom-chart-indicators'
+import type { EngineCalendarPreset, EngineInputCatalog, EngineJobPlan, EngineJobPreview, EngineJobRecord, EngineJobRequest, EngineResearchReport, EngineScheduleCalendar, EngineScheduleDelivery, EngineScheduleRecord, EngineScheduleRequest, EngineSnapshotSummary } from './engineJobTypes'
+import type { EnginePriceChoice, EnginePriceVariant } from './engineJobTypes'
+export type { EngineJobPlan, EngineJobRecord, EngineJobRequest, EngineResearchReport } from './engineJobTypes'
 
 const BASE = ''
 
@@ -96,7 +101,7 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
       } else if (typeof raw === 'string') {
         detail = raw
       } else if (raw && typeof raw === 'object') {
-        detail = JSON.stringify(raw)
+        detail = typeof raw.message === 'string' ? raw.message : JSON.stringify(raw)
       }
     } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
@@ -1996,6 +2001,8 @@ export interface BacktestEvidence {
     origin: string
     asset_type: string
     daily_price_basis: string
+    return_price_basis?: 'adjusted_price_curve' | 'raw_price_curve'
+    corporate_action_accounting?: 'adjustment_only'
     datasets: Record<string, {
       sha256: string; fields: Record<string, string>; rows: number; symbols: number | null
       start: string | null; end: string | null
@@ -2017,7 +2024,15 @@ export interface BacktestEvidence {
     examples: { symbol: string; side: string; signal_date: string; fill_date: string }[]
   }
   limitations: string[]
+  result_summary?: Record<string, number | null>
+  performance?: {
+    phase_ms: Record<string, number>
+    lookahead_check_ms: number
+    lookahead_in_signals_score: boolean
+  }
 }
+
+export type BacktestPriceBasis = 'qfq' | 'hfq' | 'dynamic'
 
 export interface StrategyBacktestResult {
   run_id: string
@@ -2179,6 +2194,32 @@ export interface ExtensionPackagePreview {
   pending_version?: string | null
 }
 
+export interface EngineReleasePreview {
+  manifest: {
+    id: string; version: string; issuer: string; kind: 'backtest-extension' | 'data-provider'
+    license_kind: 'commercial' | 'community'
+    provides: { id: string; kind: string; api_version: number; feature_id?: string | null }[]
+    requires: { target_tags: string[]; engine_version: string }
+  }
+  kid: string; digest: string; revision: string; errors: string[]; state: 'inspected' | 'staged'
+}
+
+export interface EngineReleaseCandidate {
+  id: string; version: string; digest: string; kid: string; state: 'staged' | 'active' | 'previous'
+  generation?: number; rollback_digest?: string | null
+  provider_ids?: string[]
+  license_kind?: 'commercial' | 'community'
+}
+
+export interface ProUninstallRequest { generation: number; digests: string[] }
+
+export interface EngineIdentity { public_key: string; sha256: string; storage: 'system_vault' | 'private_file' }
+export interface EngineLease {
+  extension_id: string; revision: number
+  summary: { license_policy: 'subscription' | 'perpetual_version'; lease_expires_at: string; updates_until: string;
+    usage_until: string | null; generation: number; revocation_epoch: number }
+}
+
 export interface ManagedExtensionPackage {
   id: string
   name: string
@@ -2196,10 +2237,12 @@ export interface ManagedExtensionPackage {
 }
 
 export type ImportCenterPreview =
+  | { kind: 'chart_indicators'; preview: IndicatorImportPreview }
   | { kind: 'resources'; preview: ResourceTransferPreview }
   | { kind: 'backup'; preview: ConfigBackupInspect }
   | { kind: 'source'; preview: SourcePackagePreview }
   | { kind: 'extension'; preview: ExtensionPackagePreview }
+  | { kind: 'engine'; preview: EngineReleasePreview }
   | { kind: 'page'; preview: { filename: string; size: number; digest: string; source: boolean; suggested_id: string } }
 
 export interface PluginDataSourceItem {
@@ -2228,6 +2271,7 @@ export interface PluginDataSourceItem {
   usage_notes?: string[]   // 使用要点 (可选): 各能力规模/节奏, 详情卡以列表展示
   key_manage_url?: string  // Key/账务管理页 (可选): 插件详情展示入口链接
   key_manage_label?: string // 账户入口文案，缺省使用「管理 Key / 查看账户用量」
+  register_url?: string    // 插件详情中的「注册」链接
 }
 
 /** 数据源路由偏好字段 (每个能力一个, 与后端能力注册表一一对应) */
@@ -2312,6 +2356,8 @@ export interface DatasetConfig {
   batch?: number | null
   rpm?: number | null
   response_path: string
+  research_profile?: 'cn.equity.regular.raw.lot100.v1' | 'cn.equity.ex-factor.events.v1'
+    | 'cn.equity.regular.1m.raw.lot100.start.v1' | 'cn.equity.regular.1m.raw.lot100.end.v1' | null
   field_map: Record<string, string>
   transforms?: Record<string, string>
   symbols_param?: string
@@ -2458,6 +2504,9 @@ export interface ConfigBackupApplyResult {
 }
 
 export interface Preferences {
+  /** 个股详情日 K 首屏显示根数 */
+  stock_preview_daily_bars?: number
+  stock_info_bar_layout?: StockInfoBarLayout | null
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
   minute_sync_enabled: boolean
@@ -2807,6 +2856,50 @@ export interface LabReport {
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
+  engineJobSchema: () => request<Record<string, unknown>>('/api/engine-jobs/schema'),
+  engineInputs: () => request<EngineInputCatalog>('/api/engine-jobs/inputs', { quiet: true }),
+  enginePriceViews: () => request<EnginePriceChoice[]>('/api/engine-jobs/price-views', { quiet: true }),
+  saveEnginePriceVariant: (body: EnginePriceVariant) =>
+    request<{ input: EngineInputCatalog['runs'][number]; snapshot: string }>('/api/engine-jobs/inputs/price-variants', {
+      method: 'POST', body: JSON.stringify(body), quiet: true, timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
+    }),
+  previewEngineJob: (body: EngineJobRequest) => request<EngineJobPreview>('/api/engine-jobs/preview', {
+    method: 'POST', body: JSON.stringify(body), quiet: true,
+  }),
+  engineJobs: (limit = 50) => request<{ items: EngineJobRecord[] }>(`/api/engine-jobs?limit=${limit}`, { quiet: true }),
+  engineScheduleSchema: () => request<Record<string, unknown>>('/api/engine-jobs/schedules/schema', { quiet: true }),
+  engineSchedules: (limit = 50) => request<{ items: EngineScheduleRecord[] }>(`/api/engine-jobs/schedules?limit=${limit}`, { quiet: true }),
+  engineSchedule: (id: string) => request<EngineScheduleRecord>(`/api/engine-jobs/schedules/${encodeURIComponent(id)}`, { quiet: true }),
+  engineScheduleCalendar: (id: string) => request<EngineScheduleCalendar>(`/api/engine-jobs/schedules/${encodeURIComponent(id)}/calendar`, { quiet: true }),
+  engineCalendarPresets: () => request<{ items: EngineCalendarPreset[] }>('/api/engine-jobs/schedules/calendar-presets', { quiet: true }),
+  createEngineSchedule: (body: EngineScheduleRequest) => request<EngineScheduleRecord>('/api/engine-jobs/schedules', {
+    method: 'POST', body: JSON.stringify(body), quiet: true,
+  }),
+  setEngineScheduleEnabled: (id: string, enabled: boolean) => request<EngineScheduleRecord>(`/api/engine-jobs/schedules/${encodeURIComponent(id)}/enabled`, {
+    method: 'POST', body: JSON.stringify({ enabled }), quiet: true,
+  }),
+  engineScheduleDeliveries: (id: string, limit = 50) => request<{ items: EngineScheduleDelivery[] }>(`/api/engine-jobs/schedules/${encodeURIComponent(id)}/deliveries?limit=${limit}`, { quiet: true }),
+  engineJob: (id: string) => request<EngineJobRecord>(`/api/engine-jobs/${encodeURIComponent(id)}`, { quiet: true }),
+  engineJobPlan: (id: string) => request<EngineJobPlan>(`/api/engine-jobs/${encodeURIComponent(id)}/plan`, { quiet: true }),
+  submitEngineJob: (body: EngineJobRequest, expectedPlanId?: string) => request<EngineJobRecord>(
+    `/api/engine-jobs${expectedPlanId ? `?expected_plan_id=${encodeURIComponent(expectedPlanId)}` : ''}`, {
+    method: 'POST', body: JSON.stringify(body), quiet: true,
+  }),
+  cancelEngineJob: (id: string) => request<EngineJobRecord>(`/api/engine-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', quiet: true }),
+  retryEngineJob: (id: string) => request<EngineJobRecord>(`/api/engine-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', quiet: true }),
+  engineJobReport: (id: string, nodeId: string) => request<EngineResearchReport>(
+    `/api/engine-jobs/${encodeURIComponent(id)}/reports/${encodeURIComponent(nodeId)}`,
+    { quiet: true },
+  ),
+  engineJobResultZip: (id: string, nodeId: string) => request<Blob>(
+    `/api/engine-jobs/${encodeURIComponent(id)}/results/${encodeURIComponent(nodeId)}.zip`,
+    { quiet: true, responseType: 'blob', timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS },
+  ),
+  engineJobSnapshot: (id: string, nodeId: string) => request<EngineSnapshotSummary>(
+    `/api/engine-jobs/${encodeURIComponent(id)}/snapshots/${encodeURIComponent(nodeId)}`,
+    { quiet: true },
+  ),
+
   // ===== Auth (访问认证) =====
   authStatus: () =>
     request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
@@ -2908,12 +3001,74 @@ export const api = {
     }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
+  updateStockPreviewDailyBars: (bars: number) =>
+    request<{ stock_preview_daily_bars: number }>('/api/settings/preferences/stock-preview', {
+      method: 'PUT', body: JSON.stringify({ stock_preview_daily_bars: bars }), quiet: true,
+    }),
+  updateStockInfoBarLayout: (layout: StockInfoBarLayout, onlyIfUnset = false) =>
+    request<{ stock_info_bar_layout: StockInfoBarLayout }>(
+      '/api/settings/preferences/stock-info-bar' + (onlyIfUnset ? '?only_if_unset=true' : ''),
+      { method: 'PUT', body: JSON.stringify(layout), quiet: true },
+    ),
+  chartIndicatorLibrary: () => request<IndicatorLibraryResponse>('/api/chart-indicators/library', { quiet: true }),
+  compileChartIndicator: (definition: ChartIndicatorDefinition, signal?: AbortSignal) =>
+    request<{ valid: boolean; warmup: number; dependencies: string[] }>('/api/chart-indicators/compile', { method: 'POST', body: JSON.stringify(definition), signal, quiet: true }),
+  exportChartIndicators: (ids: string[], revision: string) => request<Blob>('/api/chart-indicators/export', {
+    method: 'POST', body: JSON.stringify({ ids, revision }), responseType: 'blob', quiet: true,
+  }),
+  importChartIndicators: (packageData: IndicatorPackage, selected: string[], overwrite: string[], revision: string) =>
+    request<IndicatorLibraryResponse>('/api/chart-indicators/import', {
+      method: 'POST', body: JSON.stringify({ package: packageData, selected, overwrite, revision }), quiet: true,
+    }),
+  saveChartIndicatorLibrary: (library: ChartIndicatorLibrary, revision: string) =>
+    request<IndicatorLibraryResponse>('/api/chart-indicators/library', { method: 'PUT', body: JSON.stringify({ library, revision }), quiet: true }),
+  evaluateChartIndicators: async (body: IndicatorEvaluationRequest, signal?: AbortSignal) => {
+    const controller = new AbortController()
+    const cancel = () => controller.abort()
+    const timer = window.setTimeout(cancel, 15_000)
+    if (signal?.aborted) cancel()
+    signal?.addEventListener('abort', cancel, { once: true })
+    try {
+      return await request<IndicatorEvaluation>('/api/chart-indicators/evaluate', {
+        method: 'POST', body: JSON.stringify(body), signal: controller.signal, quiet: true,
+      })
+    } finally {
+      window.clearTimeout(timer)
+      signal?.removeEventListener('abort', cancel)
+    }
+  },
+
   importCenterInspect: (files: File[]) => {
     const body = new FormData()
     files.forEach(file => body.append('files', file))
     return request<ImportCenterPreview>('/api/import-center/inspect', { method: 'POST', body, quiet: true, timeoutMs: 120_000 })
   },
   extensionPackages: () => request<ManagedExtensionPackage[]>('/api/extension-packages'),
+  engineReleaseCandidates: () => request<EngineReleaseCandidate[]>('/api/engine-extension-packages', { quiet: true }),
+  engineLicenses: () => request<{ identity: EngineIdentity | null; leases: EngineLease[] }>('/api/engine-licenses', { quiet: true }),
+  createEngineIdentity: () => request<EngineIdentity>('/api/engine-licenses/identity', { method: 'POST', quiet: true }),
+  importEngineLicense: (digest: string, file: File, revision: number) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('revision', String(revision))
+    return request<EngineLease>('/api/engine-extension-packages/' + encodeURIComponent(digest) + '/license',
+      { method: 'POST', body, quiet: true })
+  },
+  switchEngineRelease: (digest: string, operation: 'activate' | 'rollback' | 'disable', generation: number) =>
+    request<{ id: string; active_digest: string | null; generation: number }>(
+      '/api/engine-extension-packages/' + encodeURIComponent(digest) + '/switch',
+      { method: 'POST', body: JSON.stringify({ operation, generation }), quiet: true }),
+  uninstallProDynamic: (body: ProUninstallRequest) =>
+    request<{ id: string; removed: number }>('/api/engine-extension-packages/pro-dynamic/uninstall', {
+      method: 'POST', body: JSON.stringify(body), quiet: true,
+    }),
+  stageEngineRelease: (file: File, digest: string, revision: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('digest', digest)
+    body.append('revision', revision)
+    return request<EngineReleasePreview>('/api/engine-extension-packages/stage', { method: 'POST', body, quiet: true })
+  },
   installExtensionPackage: (file: File, digest: string, revision: string) => {
     const body = new FormData()
     body.append('file', file); body.append('digest', digest); body.append('revision', revision); body.append('trusted', 'true')
@@ -4023,6 +4178,7 @@ export const api = {
     position_policy_params?: Record<string, number | boolean | string> | null
     asset_type?: 'stock' | 'etf' | 'index'
     minute_fill?: boolean
+    price_basis?: BacktestPriceBasis
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',
@@ -5514,6 +5670,7 @@ export interface ExtDataConfig {
   id: string
   label: string
   mode: 'snapshot' | 'timeseries'
+  market_level?: boolean
   fields: ExtDataField[]
   description?: string
   symbol_map?: Record<string, string>

@@ -487,6 +487,10 @@ def inspect_archive(data: bytes) -> dict[str, Any]:
     """解析备份并给出预览: 各类别条目数、与本地冲突数。不写任何文件。"""
     parsed = _parse_archive(data)
     cats: dict[str, dict[str, Any]] = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for entry in parsed.entries:
+            if entry.category == "preferences":
+                _validate_preferences(_read_entry(archive, entry.name))
     for entry in parsed.entries:
         c = cats.setdefault(
             entry.category,
@@ -532,6 +536,30 @@ def _validate_json_object(payload: bytes, *, what: str) -> dict:
     if not isinstance(doc, dict):
         raise ConfigBackupError(f"{what}内容必须是 JSON 对象")
     return doc
+
+
+def _validate_preferences(payload: bytes) -> dict:
+    document = _validate_json_object(payload, what="偏好设置 ")
+    if "stock_preview_daily_bars" in document:
+        from app.services.preferences import valid_stock_preview_daily_bars
+
+        if not valid_stock_preview_daily_bars(document["stock_preview_daily_bars"]):
+            raise ConfigBackupError("日 K 默认显示根数必须为有效的正整数")
+    if "stock_info_bar_layout" in document:
+        from app.services.stock_info_bar import StockInfoBarLayout
+
+        try:
+            StockInfoBarLayout.model_validate(document["stock_info_bar_layout"])
+        except ValueError as exc:
+            raise ConfigBackupError("个股信息条配置无效") from exc
+    if "chart_indicators" in document:
+        from app.services.chart_indicators import validate_library
+
+        try:
+            validate_library(document["chart_indicators"])
+        except ValueError as exc:
+            raise ConfigBackupError(f"图表指标配置无效：{exc}") from exc
+    return document
 
 
 def _validate_payload(entry: _Entry, payload: bytes) -> None:
@@ -652,7 +680,7 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
                 _result(entry.category)["failed"].append({"file": entry.name, "error": str(e)})
                 continue
             if entry.category == "preferences":
-                prefs_payload = _validate_json_object(payload, what="偏好设置 ")
+                prefs_payload = _validate_preferences(payload)
                 continue
             if entry.category == "secrets":
                 secrets_payload = _validate_json_object(payload, what="密钥文件 ")

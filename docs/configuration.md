@@ -1,6 +1,6 @@
 # 配置详解
 
-所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页面可视化修改。本文件解释每个配置项的作用。
+源码部署可从根目录的 `.env.example` 创建 `.env`。数据源、AI、页面和用户偏好也可以在「设置」中保存。桌面版沿用该部署形态的数据目录。
 
 部署相关配置(端口/密码/老 CPU 兼容)的实操见 [deployment.md](./deployment.md)。
 
@@ -29,7 +29,7 @@ TickFlow 是内置默认数据源;同时支持插件化接入第三方数据源(
 | Expert   | WebSocket + 财务数据 + 全量分钟          |
 
 > 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/),高等档位含较低档全部权益。
-> 在面板 **设置 → 凭据与能力** 点「重新检测」可查看当前档位标签。
+> 在面板 **设置 → 数据源 → TickFlow** 点「重新检测」可查看当前档位标签。
 >
 > **档位仅适用于 TickFlow 数据源**。功能门槛的统一标准是"能力"(`kline.minute.batch`、`depth5.batch`、`financial` 等能力键):其他第三方/自定义数据源以声明的数据集能力为准,系统会按当前数据源配置自动合并判定,UI 提示一律以能力名表达,不再依赖 TickFlow 档位名。
 
@@ -42,7 +42,7 @@ TickFlow 是内置默认数据源;同时支持插件化接入第三方数据源(
 
 接入步骤:
 
-1. **设置 → 凭据与能力**(TickFlow 路径)配置 API Key(Expert 档),或在 **设置 → 数据源** 声明/安装提供 `full_minute` 的源并路由;点「重新检测」后能力列表出现「全量分钟」
+1. **设置 → 数据源 → TickFlow**(TickFlow 路径)配置 API Key(Expert 档),或在 **设置 → 数据源** 声明/安装提供 `full_minute` 的源并路由;点「重新检测」后能力列表出现「全量分钟」
 2. **开启实时行情**后落盘服务自动启动;仅连续竞价时段(9:30–11:30 / 13:00–15:00)运行,午休/收盘自动暂停与恢复
 3. 冷启动(如 10 点才开服务)自动触发**全天修复轮**,一次批量补齐 9:30 起的全部缺口;稳态走**增量轮**(默认 6 秒一轮,可配 3–120 秒),幂等合并滚出全天
 4. 与盘后分钟同步写同一分区(`unique(symbol, datetime)` 幂等合并),互不冲突
@@ -53,7 +53,9 @@ TickFlow 是内置默认数据源;同时支持插件化接入第三方数据源(
 
 ## AI(可选)
 
-用于自然语言生成策略。**所有配置留空即跳过**,不影响核心功能。支持任意 OpenAI 兼容接口。
+用于工作台问答、策略生成、个股分析和复盘。可在「设置 → AI 设置」选择模型服务、测试连接并保存。API 模式填写地址、模型和所需 Key。Codex CLI 模式使用服务所在环境可执行且已登录的 CLI。
+
+**Modelflare** 是「自定义」后的第一个预设。选择后填入 `https://modelflare.dev/v1`，采用 Chat Completions，并以 `gpt-5.6-sol` 为示例模型。填入支持该模型的 Modelflare API Key，测试连接后保存。模型可按 Key 所在分组修改。[Modelflare 快速开始](https://docs.modelflare.dev/zh/quickstart/)
 
 ```ini
 AI_PROVIDER=openai_compat              # openai_compat | ollama
@@ -66,13 +68,13 @@ AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 | 配置项 | 说明 |
 | :--- | :--- |
 | `AI_PROVIDER` | `openai_compat`(OpenAI 兼容,支持 DeepSeek / 通义 / OpenAI 等)或 `ollama`(本地模型) |
-| `AI_PROTOCOL` | 请求协议: `chat_completions`(默认, 兼容面最广)或 `responses`(OpenAI 官方新协议, DeepSeek 官方亦已支持); 仅 openai 系 provider 生效, 也可在设置页切换 |
+| `AI_PROTOCOL` | API 请求协议。默认 `chat_completions`，可按供应商实际支持切换为 `responses` |
 | `AI_BASE_URL` | 接口地址,如 DeepSeek `https://api.deepseek.com/v1` |
-| `AI_API_KEY` | 留空则关闭 AI 功能 |
+| `AI_API_KEY` | API 模式的服务密钥，可在面板保存 |
 | `AI_MODEL` | 模型名,如 `deepseek-chat` |
 | `AI_DAILY_TOKEN_BUDGET` | 每日 token 预算,超限后当日不再调用 |
 
-接入示例见 [strategy.md](./strategy.md) 的「AI 生成策略」章节。
+策略自动迭代另需模型工具调用能力或可返回结构化结果的 Codex CLI。外部 MCP 客户端通过工作台 API Token 连接，配置见 [AI 接入指南](./ai-integration.md)。
 
 ---
 
@@ -152,14 +154,12 @@ API Token 通道(开放接口 / MCP / SSE 票据签发)默认只接受**本机�
 BACKEND_EXTRAS=             # 留空默认;legacy-cpu 兼容老 CPU
 ```
 
-老 CPU 无 AVX2/FMA 支持时设为 `legacy-cpu`,会给 Polars 切到 `rtcompat` 运行时;需回测则 `legacy-cpu backtest`。Docker 构建和 `./dev.sh` / `.\dev.ps1` 都会读取此值并同步依赖。详见 [deployment.md → 老 CPU 兼容](./deployment.md#老-cpu-兼容avx2fma-缺失)。
+老 CPU 缺少 AVX2/FMA 时设为 `legacy-cpu`，Polars 使用 `rtcompat` 运行时。Tivelo 回测引擎已经是默认依赖，旧脚本里的 `backtest` extra 仍可读取。Docker 构建和 `./dev.sh` / `.\dev.ps1` 都会读取此值并同步依赖。详见 [deployment.md → 老 CPU 兼容](./deployment.md#老-cpu-兼容avx2fma-缺失)。
 
 ---
 
 ## 配置优先级
 
-1. **面板设置页**(`设置 → ...`):UI 修改后立即生效,持久化到 `data/`
-2. **`.env` 文件**:启动时读取
-3. **环境变量**:Docker / 系统环境变量,优先级最高
-
-> 多数配置可在面板设置页修改,无需手动编辑 `.env`。仅 AI Key、API Key 等敏感项建议放 `.env`(不提交到 git)。
+- **启动配置**由进程环境和配置文件共同提供，同名的进程环境变量优先于 `.env`。端口、数据目录等参数在服务启动时读取。
+- **面板持久化配置**按模块在实际 `DATA_DIR` 中保存。AI 服务、数据源密钥等模块优先读取已保存的值，并在缺失时回退到启动配置。
+- **偏好与连接信息**分开管理。图表、导航、自定义信息条等走偏好设置备份，密钥和访问凭证需要在备份导入预览里明确勾选。[配置备份与安装文件](./extension-packages.md)

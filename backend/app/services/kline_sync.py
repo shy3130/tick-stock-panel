@@ -465,34 +465,38 @@ def _persist_daily_chunks(chunks, repo: KlineRepository) -> int:
         for index, df in enumerate(chunks):
             if df.is_empty():
                 continue
-            for date_df in df.partition_by("date"):
-                dt = date_df["date"][0]
-                ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
-                out = root / f"date={ds}" / f"part-{index}.parquet"
+            # Buffer one month per provider batch. Publishing still works a
+            # month at a time and each day lands as one canonical partition.
+            buffered = df.with_columns(pl.col("date").dt.strftime("%Y-%m").alias("_staging_month"))
+            for month_df in buffered.partition_by("_staging_month"):
+                month = month_df["_staging_month"][0]
+                out = root / f"month={month}" / f"part-{index:08d}.parquet"
                 out.parent.mkdir(parents=True, exist_ok=True)
-                date_df.write_parquet(out)
-                written += date_df.height
+                month_df.drop("_staging_month").write_parquet(out)
+                written += month_df.height
 
-        for date_dir in sorted(root.glob("date=*")):
-            files = sorted(date_dir.glob("*.parquet"))
+        for month_dir in sorted(root.glob("month=*")):
+            files = sorted(month_dir.glob("*.parquet"))
             if not files:
                 continue
-            target_dir = repo.store.data_dir / "kline_daily" / date_dir.name
-            target_dir.mkdir(parents=True, exist_ok=True)
-            existing = sorted(target_dir.glob("*.parquet"))
-            if not existing:
-                for index, staged in enumerate(files):
-                    replace_with_retry(staged, target_dir / f"part-stream-{index}.parquet")
-                continue
-            # 当天分区可能混有实时快照写的 quote_ts 列, 按存储 schema 读才不抛 SchemaError。
-            base = scan_daily_parquet(existing).collect(engine="streaming")
-            incoming = pl.scan_parquet(files).collect(engine="streaming")
-            merged = pl.concat([base, incoming], how="diagonal_relaxed").unique(
-                subset=["symbol", "date"], keep="last"
+            incoming_month = (
+                pl.concat([pl.scan_parquet(path) for path in files], how="diagonal_relaxed")
+                .collect(engine="streaming")
+                .sort("date", maintain_order=True)
             )
-            repo.append_daily(merged)
-            for part in target_dir.glob("part-stream-*.parquet"):
-                part.unlink(missing_ok=True)
+            for incoming in incoming_month.partition_by("date"):
+                dt = incoming["date"][0]
+                ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+                target_dir = repo.store.data_dir / "kline_daily" / f"date={ds}"
+                existing = sorted(target_dir.glob("*.parquet"))
+                if existing:
+                    # 当天分区可能混有实时快照的 quote_ts 列，按存储 schema 合并。
+                    base = scan_daily_parquet(existing).collect(engine="streaming")
+                    incoming = pl.concat([base, incoming], how="diagonal_relaxed")
+                merged = incoming.unique(subset=["symbol", "date"], keep="last")
+                repo.append_daily(merged)
+                for part in target_dir.glob("part-stream-*.parquet"):
+                    part.unlink(missing_ok=True)
     finally:
         shutil.rmtree(root, ignore_errors=True)
         with contextlib.suppress(OSError):

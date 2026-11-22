@@ -164,3 +164,28 @@ def test_cancel_resolves_all_py_bool_aliases(monkeypatch):
         assert resp.status_code == 200
         assert resp.json()["ok"] is True, alias
         assert job.cancel_event.is_set(), alias
+
+
+def test_hfq_task_key_is_distinct_and_cancel_uses_the_selected_basis(monkeypatch):
+    args = ("ma_cross", None, None, None, "open_t+1", None, None,
+            0.0002, 5.0, 10, 1.0, 1_000_000.0, "equal", None, None)
+    forward = bt._make_job_key(*args)
+    backward = bt._make_job_key(*args, price_basis="hfq")
+    assert forward == bt._make_job_key(*args, price_basis="qfq")
+    assert forward != backward
+    job = bt._BacktestJob(backward)
+    monkeypatch.setitem(bt._running_jobs, backward, job)
+
+    client = _client()
+    response = client.post("/api/backtest/strategy/cancel", json={"qs": "strategy_id=ma_cross"})
+    assert response.json()["ok"] is False
+    response = client.post("/api/backtest/strategy/cancel", json={"qs": "strategy_id=ma_cross&price_basis=hfq"})
+    assert response.json()["ok"] is True
+    assert job.cancel_event.is_set()
+
+
+def test_ordinary_strategy_rejects_research_provider_id_as_price_basis():
+    client = _client()
+    query = {"strategy_id": "ma_cross", "price_basis": "tivelo.pro.dynamic"}
+    assert client.get("/api/backtest/strategy/stream", params=query).status_code == 422
+    assert client.post("/api/backtest/strategy/run", json=query).status_code == 422

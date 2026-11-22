@@ -25,6 +25,7 @@ from datetime import timedelta as _timedelta
 from pathlib import Path
 
 import polars as pl
+from tivelo_data.legacy.frame import filter_halt_days
 
 from app.config import settings
 from app.enriched_generation import (
@@ -1038,23 +1039,6 @@ def compute_all(
         ])
 
     return df
-
-
-def filter_halt_days(df: pl.DataFrame) -> pl.DataFrame:
-    """过滤停牌日。
-
-    停牌日的 open/high 必然为 0 (无集合竞价)。注意 close 可能被数据源
-    填充为前收盘价而非 0, 因此不能用 "OHLC 全零" 判断, 否则会漏过这类
-    停牌记录 (如 *ST 撤销风险警示的停牌日), 污染 MA/ATR 等指标。旧版实时
-    落盘还会先把 open/high=0 填成 close, 对这类历史数据用零成交量和零成交额
-    作为兼容判据。
-    """
-    if df.is_empty() or "open" not in df.columns or "high" not in df.columns:
-        return df
-    halted = (pl.col("open") == 0) & (pl.col("high") == 0)
-    if "volume" in df.columns and "amount" in df.columns:
-        halted = halted | ((pl.col("volume") == 0) & (pl.col("amount") == 0))
-    return df.filter(~halted)
 
 
 # ================================================================

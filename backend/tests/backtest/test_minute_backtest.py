@@ -179,7 +179,7 @@ def _make_service(
             df = df.filter(pl.col("symbol").is_in(list(symbols)))
         keep = set(feature_plan.base_columns) | set(feature_plan.instrument_columns) | {"symbol", "date"}
         # 与生产 _LIMIT_BASE_COLUMNS 注入对齐: 面板始终保留原始价列
-        keep |= {"raw_close"} & set(df.columns)
+        keep |= {"raw_close", "_backtest_cum_factor"} & set(df.columns)
         return df.select(sorted(c for c in df.columns if c in keep))
 
     bt_engine.load_panel_for_backtest = _load_panel.__get__(bt_engine)
@@ -380,7 +380,8 @@ def test_adjusted_panel_entry_price_not_double_discounted(tmp_path):
     assert execution.get("buy_limit_up", 0) >= 1
 
 
-def test_ex_div_day_limit_up_uses_exchange_reference(tmp_path):
+@pytest.mark.parametrize("price_basis", ["qfq", "hfq"])
+def test_ex_div_day_limit_up_uses_exchange_reference(tmp_path, price_basis):
     """除权日涨停拒买必须按除权参考价 (与 matrix/pipeline 同口径)。
 
     事件: T 日除权 (f 0.64→0.80, ex_factor 1.25), 之后另有一次事件未入窗。
@@ -423,11 +424,29 @@ def test_ex_div_day_limit_up_uses_exchange_reference(tmp_path):
     }
     service = _make_service(tmp_path, panel, frames)
     # 终点延到 t_exit: t_next 的建仓需要后续交易日离场 (末日无出场机会不建仓)
-    result = service.run(_config(t_ex, t_exit))
+    if price_basis == "hfq":
+        from tivelo_backtest.research.matrix import LEGACY_PRICE_SCALE
+
+        # 把合成前复权价 / 前复权分钟回放夹具投影到对应的后复权日线 / 原始分钟。
+        factor = pl.when(pl.col("date") >= t_ex).then(1.25).otherwise(1.0)
+        panel = panel.with_columns(
+            pl.col("open", "high", "low", "close") / f_prev,
+            factor.alias(LEGACY_PRICE_SCALE),
+        )
+        raw_minutes = {
+            day: frame.with_columns(pl.col("open", "high", "low", "close", "amount") / f_today)
+            for day, frame in frames.items()
+        }
+        service = _make_service(tmp_path, panel, raw_minutes)
+        repo = service.engine.repo
+        repo.get_minute_for_backtest = repo.get_minute_by_dates
+    result = service.run(_config(t_ex, t_exit, price_basis=price_basis))
     assert not result.error, result.error
 
     entries = [t for t in result.trades if t["symbol"] == "000001.SZ"]
     assert len(entries) == 1, "除权日封板分钟应被拒买, 只剩 T+1 一笔"
     assert entries[0]["entry_date"][:10] == str(t_next)
+    if price_basis == "hfq":
+        assert entries[0]["entry_price"] == pytest.approx(7.45 / f_today, abs=0.01)
     execution = result.stats.get("execution", {})
     assert execution.get("buy_limit_up", 0) >= 1
