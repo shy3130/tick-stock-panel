@@ -65,7 +65,9 @@ class _Engine:
 
     def load_panel(self, symbols, start, end, *, columns, **kwargs):
         self.calls.append({"start": start, "columns": columns})
-        return self.panel.filter(pl.col("date").is_between(start, end)).select(columns)
+        return self.panel.filter(pl.col("date").is_between(start, end)).select(
+            name for name in columns if name in self.panel.columns
+        )
 
 
 @pytest.mark.parametrize("lang", ["dsl", "python"])
@@ -206,10 +208,13 @@ def test_nested_dependency_plan_tracks_child_formula_edits():
 
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("available", [False, True])
-def test_custom_financial_dependency_keeps_announcement_gate(tmp_path, compact, available):
+@pytest.mark.parametrize("has_raw_close", [False, True])
+def test_custom_financial_dependency_keeps_announcement_gate(tmp_path, compact, available, has_raw_close):
     from app.backtest.fundamentals import FUNDAMENTAL_FACTORS
 
     raw = _panel(5)
+    if has_raw_close:
+        raw = raw.with_columns((pl.col("close") * 2).alias("raw_close"))
     dates = sorted(raw["date"].unique())
     if available:
         root = tmp_path / "financials" / "metrics"
@@ -230,10 +235,12 @@ def test_custom_financial_dependency_keeps_announcement_gate(tmp_path, compact, 
         )
     else:
         result = service._load_factor_panel(config, config.factor_names)
+    assert "raw_close" in service.engine.calls[-1]["columns"]
     assert result.filter(pl.col("date") == dates[0])["uf_fin"].is_null().all()
     later = result.filter(pl.col("date") > dates[0])
     if available:
-        assert np.allclose(later["uf_fin"].to_numpy(), 2.0 / later["close"].to_numpy())
+        ratio = 1.0 if has_raw_close else 2.0
+        assert np.allclose(later["uf_fin"].to_numpy(), ratio / later["close"].to_numpy())
     else:
         assert later["uf_fin"].is_null().all()
 

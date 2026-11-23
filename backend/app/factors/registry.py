@@ -28,6 +28,7 @@ Stability = Literal["stable", "experimental", "deprecated"]
 
 _ALL_ASSETS = frozenset({"stock", "etf"})
 _STOCK_ONLY = frozenset({"stock"})
+RAW_CLOSE_FACTORS = frozenset({"pb_latest", "vwap_bias", "log_float_mv"})
 
 
 @dataclass(frozen=True)
@@ -416,10 +417,14 @@ def all_factors(
 
 def factor_dependencies(fids) -> frozenset[str]:
     """递归展开依赖到 enriched base 列; 未知 id 原样保留 (与 scoring_dependencies 历史语义一致)。"""
-    return frozenset(
-        fid for fid in factor_calculation_order(fids)
+    ordered = factor_calculation_order(fids)
+    dependencies = {
+        fid for fid in ordered
         if (spec := get_factor(fid)) is None or not spec.inputs
-    )
+    }
+    if RAW_CLOSE_FACTORS.intersection(ordered):
+        dependencies.add("raw_close")
+    return frozenset(dependencies)
 
 
 # 这些指标列在历史 parquet 中按需补算。把形成指标本身所需的窗口计入外层公式。
