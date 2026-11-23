@@ -24,7 +24,7 @@ from app.backtest.fundamentals import (
     attach_fundamental_factors,
     load_fundamental_snapshot,
 )
-from app.factors.registry import factor_calculation_order, factor_warmup_bars, get_factor
+from app.factors.registry import RAW_CLOSE_FACTORS, factor_calculation_order, factor_warmup_bars, get_factor
 from app.factors.registry import factor_columns_view as _factor_columns_view
 from app.strategy.scoring import (
     VIRTUAL_SCORING_DEPENDENCIES as DERIVED_FACTOR_DEPENDENCIES,
@@ -430,6 +430,8 @@ class FactorBacktestService:
         from app.indicators.pipeline import ENRICHED_STORAGE_COLS
 
         required = set(factor_calculation_order(factor_names))
+        if required & RAW_CLOSE_FACTORS:
+            required.add("raw_close")
         panel_columns.extend(sorted((required & set(ENRICHED_STORAGE_COLS)) - set(panel_columns)))
         load_start = self._factor_load_start(config, factor_names, warmup_bars=warmup_bars)
 

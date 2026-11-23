@@ -59,6 +59,7 @@ from app.enriched_generation import (
     enriched_publication_incomplete,
 )
 from app.factors.registry import (
+    RAW_CLOSE_FACTORS,
     factor_calculation_order,
     factor_columns_view,
     get_factor,
@@ -350,6 +351,8 @@ def _load_compact_factor_panel(
 
     ordered = factor_calculation_order(factor_names)
     required = set(ordered)
+    if required & RAW_CLOSE_FACTORS:
+        required.add("raw_close")
     panel_columns.extend(sorted((required & set(ENRICHED_STORAGE_COLS)) - set(panel_columns)))
     load_start = factor_service._factor_load_start(config, factor_names)
     raw = factor_service.engine.load_panel(

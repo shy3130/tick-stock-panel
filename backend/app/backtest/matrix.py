@@ -27,6 +27,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pads
 from tivelo_backtest.research.matrix import LEGACY_PRICE_SCALE
 from tivelo_backtest.research.matrix import MarketMatrix as MarketMatrix
+from tivelo_backtest.research.matrix_features import matrix_feature as research_matrix_feature
 
 from app.backtest.dynamic_daily import REPLAY_SCALE, current_replay
 from app.backtest.minute_trigger import build_minute_exit_reference
@@ -3901,6 +3902,13 @@ _MATRIX_COMPUTED_FEATURES = frozenset({
 def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
     if name in {"open", "high", "low", "close", "volume"} or name in market.fields:
         return market.field(name)
+    if name in {"vwap_bias", "log_float_mv"}:
+        quote = market.fields.get("raw_close", market.close)
+        flow = market.field("amount" if name == "vwap_bias" else "turnover_rate")
+        return _cached_matrix_operation(
+            "matrix_feature", (market.close, quote, market.volume, flow), {"name": name},
+            lambda: research_matrix_feature(market, name),
+        )
     from app.factors.registry import get_factor
 
     spec = get_factor(name)
@@ -4177,13 +4185,6 @@ def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
     if name == "vol_price_corr_20d":
         daily = matrix_feature(market, "change_pct")
         return _matrix_rolling_corr(daily, market.volume, close_valid, 20)
-    if name == "vwap_bias":
-        amount = market.field("amount")
-        shares = market.volume * np.float32(100.0)
-        valid = close_valid & np.isfinite(amount) & (market.volume > 0) & (amount > 0)
-        vwap = np.full(market.shape, np.nan, dtype=np.float32)
-        np.divide(amount, shares, out=vwap, where=valid)
-        return _matrix_relative(market.close, vwap)
     if name == "vol_trend_5_60":
         volume_valid = close_valid & np.isfinite(market.volume)
         fast = valid_rolling_mean(market.volume, volume_valid, 5)
@@ -4196,14 +4197,6 @@ def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
         hits = hits.astype(np.float32)
         return valid_rolling_sum(hits, close_valid, window)
     # --- 扩充批次 (2026-09-05): numpy 内核实现, 口径与 strategy/scoring.py 一致 ---
-    if name == "log_float_mv":
-        turnover = market.field("turnover_rate")
-        valid = close_valid & np.isfinite(turnover) & (turnover > 0) & (market.volume > 0)
-        out = np.full(market.shape, np.nan, dtype=np.float32)
-        np.multiply(market.close, market.volume, out=out, where=valid)
-        np.divide(out, turnover, out=out, where=valid)
-        np.log(out, out=out, where=valid)
-        return out
     if name == "mom_accel_20_60" or name == "kdj_kd_diff":
         left, right = (
             (matrix_feature(market, "momentum_20d"), matrix_feature(market, "momentum_60d"))

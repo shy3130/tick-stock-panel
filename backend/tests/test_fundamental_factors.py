@@ -179,6 +179,20 @@ def test_bps_nonpositive_gives_null_pb():
     assert attached["pb_latest"].null_count() == attached.height
 
 
+def test_pb_uses_raw_close_on_both_paths_after_announcement():
+    panel = _daily_panel(date(2026, 4, 1), 4, ("000001.SZ",)).with_columns(
+        pl.Series("raw_close", [10.0, 10.1, 10.2, None]),
+        (pl.col("close") * 0.5).alias("close"),
+    )
+    snapshot = _snapshot_frame([{"symbol": "000001.SZ", "announce": "2026-04-01", "bps": 4.0}])
+    actual = attach_fundamental_factors(panel, snapshot, ["pb_latest"])["pb_latest"]
+    market = build_market_data_matrix(panel, field_columns={"raw_close"})
+    matrix = build_fundamental_matrices(market, snapshot, ["pb_latest"])["pb_latest"][:, 0]
+
+    np.testing.assert_allclose(actual.to_numpy(), [np.nan, 2.525, 2.55, np.nan])
+    np.testing.assert_allclose(matrix, actual.to_numpy())
+
+
 def test_load_snapshot_from_missing_dir_returns_none(tmp_path: Path):
     assert load_fundamental_snapshot(tmp_path) is None
     assert load_fundamental_snapshot(None) is None

@@ -60,6 +60,7 @@ from app.backtest.minute_trigger import (
 )
 from app.backtest.price_basis import BacktestPriceBasis, BackwardAdjustment
 from app.config import settings
+from app.factors.registry import RAW_CLOSE_FACTORS, factor_dependencies
 from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
     INDICATOR_COLUMNS,
@@ -623,6 +624,8 @@ def _basic_filter_for_asset(basic_filter: dict, asset_type: str) -> dict:
 def _resolve_base_columns(features: set[str]) -> frozenset[str]:
     storage = set(ENRICHED_STORAGE_COLS)
     base = {"symbol", "date"} | (features & storage)
+    if quote_factors := features & RAW_CLOSE_FACTORS:
+        base.update(factor_dependencies(quote_factors))
     close_indicators = set(INDICATOR_COLUMNS) - {
         "atr_14", "amplitude", "kdj_k", "kdj_d", "kdj_j",
         "vol_ma5", "vol_ma10", "vol_ratio_5d",
