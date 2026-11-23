@@ -27,7 +27,7 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 # 财务因子名 -> (metrics 表列名, 是否需要除以收盘价)
-# pb_latest 单列声明为 bps 倒数口径: 因子值 = close / bps。
+# pb_latest 使用当日原始收盘价除以已公告的每股净资产。
 FUNDAMENTAL_FACTORS: dict[str, dict[str, Any]] = {
     "pb_latest": {"column": "bps", "price_ratio": True},
     "roe_latest": {"column": "roe", "price_ratio": False},
@@ -120,6 +120,7 @@ def attach_fundamental_factors(
         check_sortedness=False,  # 双侧均已按 (symbol, key) 排序, 免除逐组检查开销
     )
     announced = pl.col("_announce").is_not_null() & (pl.col("date") > pl.col("_announce"))
+    quote = pl.col("raw_close" if "raw_close" in panel.columns else "close")
     expressions = []
     for name in missing_columns:
         spec = FUNDAMENTAL_FACTORS[name]
@@ -127,7 +128,7 @@ def attach_fundamental_factors(
         if spec["price_ratio"]:
             value = (
                 pl.when(source > 0)
-                .then(pl.col("close") / source)
+                .then(quote / source)
                 .otherwise(None)
             )
         else:
@@ -146,7 +147,7 @@ def build_fundamental_matrices(
     """为 MarketDataMatrix 构建财务因子 TxN float32 字段。
 
     与 attach_fundamental_factors 同一口径: 公告日次一交易日起前向填充,
-    无数据为 NaN。pb 类因子在矩阵侧用 close / bps 现算。
+    无数据为 NaN。PB 使用原始收盘价，兼容没有原价列的历史输入。
     """
     requested = [str(name) for name in names if str(name) in FUNDAMENTAL_FACTOR_NAMES]
     if not requested:
@@ -191,8 +192,9 @@ def build_fundamental_matrices(
         spec = FUNDAMENTAL_FACTORS[name]
         source = raw_columns[spec["column"]]
         if spec["price_ratio"]:
+            quote = market.fields.get("raw_close", market.close)
             with np.errstate(divide="ignore", invalid="ignore"):
-                matrix = (market.close / source).astype(np.float32)
+                matrix = (quote / source).astype(np.float32)
             matrix[~(source > 0)] = np.nan
             matrix[np.isinf(matrix)] = np.nan
         else:
