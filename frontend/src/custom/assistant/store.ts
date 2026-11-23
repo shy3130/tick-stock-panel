@@ -16,6 +16,7 @@ import {
   type ChatHistoryMessage,
 } from './client'
 import { mergeSessions } from './sessionsMerge'
+import { hydrateUiPrefs, setUiPref } from '@/lib/uiPrefs'
 
 /**
  * running=执行中; awaiting=动作工具等待用户确认; approved/denied=用户已点
@@ -41,7 +42,7 @@ export interface ToolCallRecord {
 
 export type ChatMessage =
   | { id: string; role: 'user'; content: string; ts: number }
-  | { id: string; role: 'assistant'; content: string; ts: number; streaming: boolean }
+  | { id: string; role: 'assistant'; content: string; ts: number; streaming: boolean; reasoningContent?: string; reasoningContext?: string }
   | { id: string; role: 'footprint'; calls: ToolCallRecord[]; ts: number }
   | { id: string; role: 'error'; kind: string; message: string; hint?: string; ts: number }
   | { id: string; role: 'notice'; content: string; ts: number }
@@ -58,7 +59,7 @@ interface AssistantState {
   activeId: string
   open: boolean
   sending: boolean
-  /** 悬浮球是否显示 (纯 UI 偏好, 独立 localStorage, 不随会话持久化) */
+  /** 悬浮球是否显示 (纯 UI 偏好, 经 uiPrefs 双写持久化, 不随聊天会话同步) */
   fabVisible: boolean
 }
 
@@ -87,6 +88,16 @@ const listeners = new Set<() => void>()
 let abortController: AbortController | null = null
 let pageContext: AssistantContext = {}
 let serverSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+// 悬浮球显隐跨端口持久化: localStorage 只是同步读取的本地缓存, 后端 ui_prefs
+// 才是权威副本 (桌面版 _find_free_port 换端口即换 origin, 纯 localStorage 的
+// 偏好在换端口后读不到, 表现为「关了过一会又自己开启」)。hydrate 把后端值回填
+// localStorage 后刷新内存态 — hydrateUiPrefs 幂等且共享 Promise, 与 main.tsx
+// 的调用谁先谁后都等到同一次回填完成。
+void hydrateUiPrefs().then(() => {
+  const v = loadFabVisible()
+  if (v !== state.fabVisible) setState({ fabVisible: v }, false)
+})
 
 function emit() {
   for (const listener of listeners) listener()
@@ -189,6 +200,18 @@ function patchActiveSession(
   }, persist)
 }
 
+/** 定向修补指定会话 (不存在则忽略): 生成中途切换/删除会话后, 终态回落必须
+ * 落在发起生成的那一个会话里, 而不是追加到当前 activeId 指向的新会话。 */
+function patchSessionById(
+  sessionId: string,
+  patch: (session: AssistantSession) => AssistantSession,
+) {
+  if (!state.sessions.some(s => s.id === sessionId)) return
+  setState({
+    sessions: state.sessions.map(s => (s.id === sessionId ? patch(s) : s)),
+  })
+}
+
 function appendMessage(message: ChatMessage) {
   patchActiveSession(session => ({ ...session, messages: [...session.messages, message] }))
 }
@@ -205,16 +228,39 @@ function isTextMessage(m: ChatMessage): m is Extract<ChatMessage, { role: 'user'
 function buildHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
   return messages
     .filter(isTextMessage)
-    .map(m => ({ role: m.role, content: m.content }))
+    .map(m => {
+      const message: ChatHistoryMessage = { role: m.role, content: m.content }
+      if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+        message.reasoning_content = m.reasoningContent
+        message.reasoning_context = m.reasoningContext
+      }
+      return message
+    })
+}
+
+/** 一轮生成中的滚动游标: 当前正在写入的足迹卡与正文段。
+ *
+ * 工具调用发生在正文中间时, 就地把已生成的正文段"封口", 新开一张足迹卡 +
+ * 新正文段 —— 这样渲染出来的顺序与事件到达顺序一致 (工具卡显示在它被调用的
+ * 那个位置), 而不是整回合一张累积卡固定堆在正文上方。
+ */
+interface TurnCursor {
+  footprintId: string
+  assistantId: string
+  /** 发起生成的会话: append 型流事件 (error/notice) 必须钉在它上面, 防止
+   *  中途切换会话后错投到 activeId 指向的新会话。 */
+  sessionId: string
 }
 
 /** 一轮生成的完整编排: 建占位 → 流事件落库 → 终态收敛。 */
 async function runGeneration() {
   const history = buildHistory(activeMessages())
-  const assistantId = uid()
-  const footprintId = uid()
-  appendMessage({ id: footprintId, role: 'footprint', calls: [], ts: Date.now() })
-  appendMessage({ id: assistantId, role: 'assistant', content: '', ts: Date.now(), streaming: true })
+  // 生成的终态 (中断提示/流式收敛) 必须落在发起会话: 中途切换或删除会话时
+  // activeId 已变, 若按 activeId 追加会把"已中断"写进无关的新会话。
+  const generationSessionId = state.activeId
+  const cursor: TurnCursor = { footprintId: uid(), assistantId: uid(), sessionId: generationSessionId }
+  appendMessage({ id: cursor.footprintId, role: 'footprint', calls: [], ts: Date.now() })
+  appendMessage({ id: cursor.assistantId, role: 'assistant', content: '', ts: Date.now(), streaming: true })
   setState({ sending: true })
 
   abortController = new AbortController()
@@ -223,30 +269,73 @@ async function runGeneration() {
       { messages: history, context: pageContext },
       abortController.signal,
     )) {
-      applyEvent(event, footprintId, assistantId)
+      applyEvent(event, cursor)
     }
   } catch (error) {
     const aborted = abortController.signal.aborted
     const message: ChatMessage = aborted
       ? { id: uid(), role: 'notice', content: '已中断, 可点击重试继续。', ts: Date.now() }
       : { id: uid(), role: 'error', kind: 'network', message: error instanceof Error ? error.message : String(error), ts: Date.now() }
-    appendMessage(message)
+    patchSessionById(generationSessionId, session => ({
+      ...session,
+      messages: [...session.messages, message],
+    }))
   } finally {
     abortController = null
-    patchActiveSession(session => ({
+    patchSessionById(generationSessionId, session => ({
       ...session,
-      messages: session.messages.map(m => (m.id === assistantId ? { ...m, streaming: false } : m)),
+      messages: session.messages.map(m => (m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m)),
     }))
     setState({ sending: false })
   }
 }
 
-function applyEvent(event: AssistantEvent, footprintId: string, assistantId: string) {
+/**
+ * 正文段里已有内容时, 在调用工具前把它封口并新开一张足迹卡 + 正文段。
+ * 正文为空 (整轮还没输出文字, 例如连续调用工具) 时沿用当前足迹卡, 不产生空段。
+ */
+function rotateTurn(cursor: TurnCursor) {
+  const session = activeSession()
+  const current = session?.messages.find(
+    m => m.role === 'assistant' && m.id === cursor.assistantId,
+  )
+  const hasText = Boolean(current && current.role === 'assistant' && current.content.trim())
+  if (!hasText) return
+
+  const footprintId = uid()
+  const assistantId = uid()
+  patchActiveSession(s => ({
+    ...s,
+    messages: [
+      ...s.messages.map(m => (m.id === cursor.assistantId && m.role === 'assistant'
+        ? { ...m, streaming: false }
+        : m)),
+      { id: footprintId, role: 'footprint' as const, calls: [], ts: Date.now() },
+      { id: assistantId, role: 'assistant' as const, content: '', ts: Date.now(), streaming: true },
+    ],
+  }))
+  cursor.footprintId = footprintId
+  cursor.assistantId = assistantId
+}
+
+function applyEvent(event: AssistantEvent, cursor: TurnCursor) {
   switch (event.type) {
+    case 'assistant_context':
+      // Provider state belongs to the completed text segment, before a tool
+      // rotates it. It is persisted for follow-ups and never rendered as text.
+      patchSessionById(cursor.sessionId, session => ({
+        ...session,
+        messages: session.messages.map(m => m.id === cursor.assistantId && m.role === 'assistant'
+          ? { ...m, reasoningContent: event.reasoning_content, reasoningContext: event.reasoning_context }
+          : m),
+      }))
+      break
     case 'tool_call':
+      // 工具调用就地把之前的正文封口, 卡片插在它被调用的位置
+      rotateTurn(cursor)
       patchActiveSession(session => ({
         ...session,
-        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+        messages: session.messages.map(m => m.id === cursor.footprintId && m.role === 'footprint'
           ? {
               ...m,
               calls: [...m.calls, {
@@ -262,7 +351,7 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
     case 'tool_result':
       patchActiveSession(session => ({
         ...session,
-        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+        messages: session.messages.map(m => m.id === cursor.footprintId && m.role === 'footprint'
           ? {
               ...m,
               calls: m.calls.map(c => c.callId === event.call_id
@@ -281,7 +370,7 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
     case 'action_confirm':
       patchActiveSession(session => ({
         ...session,
-        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+        messages: session.messages.map(m => m.id === cursor.footprintId && m.role === 'footprint'
           ? {
               ...m,
               calls: m.calls.map(c => c.callId === event.call_id
@@ -299,7 +388,7 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
       // 轮次检查点: 以合成足迹记录承载「继续/停止」卡, 决策走同一端点。
       patchActiveSession(session => ({
         ...session,
-        messages: session.messages.map(m => m.id === footprintId && m.role === 'footprint'
+        messages: session.messages.map(m => m.id === cursor.footprintId && m.role === 'footprint'
           ? {
               ...m,
               calls: [...m.calls, {
@@ -320,16 +409,23 @@ function applyEvent(event: AssistantEvent, footprintId: string, assistantId: str
       // 逐字流式高频到达: 只更新内存态, 由生成结束时的 setState({sending:false}) 统一落盘。
       patchActiveSession(session => ({
         ...session,
-        messages: session.messages.map(m => (m.id === assistantId && m.role === 'assistant'
+        messages: session.messages.map(m => (m.id === cursor.assistantId && m.role === 'assistant'
           ? { ...m, content: m.content + event.content }
           : m)),
       }), { persist: false })
       break
     case 'error':
-      appendMessage({ id: uid(), role: 'error', kind: event.kind, message: event.message, hint: event.hint, ts: Date.now() })
+      // append 型事件钉在发起会话 (map 型分支落错会话时是 no-op, 安全)
+      patchSessionById(cursor.sessionId, session => ({
+        ...session,
+        messages: [...session.messages, { id: uid(), role: 'error', kind: event.kind, message: event.message, hint: event.hint, ts: Date.now() } as ChatMessage],
+      }))
       break
     case 'notice':
-      appendMessage({ id: uid(), role: 'notice', content: event.message, ts: Date.now() })
+      patchSessionById(cursor.sessionId, session => ({
+        ...session,
+        messages: [...session.messages, { id: uid(), role: 'notice', content: event.message, ts: Date.now() } as ChatMessage],
+      }))
       break
     case 'done':
       // 流结束: 仍处于 awaiting 的确认(后端超时未执行)收敛为已取消, 卡片不再悬挂。
@@ -381,9 +477,9 @@ export function closeAssistant() {
   setState({ open: false }, false)
 }
 
-/** 设置悬浮球可见性并持久化 (默认开启)。 */
+/** 设置悬浮球可见性并持久化 (localStorage 缓存 + 后端 ui_prefs 权威副本, 默认开启)。 */
 export function setFabVisible(visible: boolean) {
-  try { localStorage.setItem(FAB_STORAGE_KEY, visible ? '1' : '0') } catch { /* 存储不可用仅内存态 */ }
+  setUiPref(FAB_STORAGE_KEY, visible ? '1' : '0')
   setState({ fabVisible: visible }, false)
 }
 

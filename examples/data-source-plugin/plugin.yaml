@@ -1,0 +1,13 @@
+name: example_http
+version: 1.0.0
+plugin_api_version: 1
+display_name: HTTP 数据源模板
+author: 插件开发者
+runtime: none
+entry: provider:Provider
+requires_app: '>=0.3.24'
+requires_python: '>=3.11'
+platforms: [any]
+datasets: [realtime]
+api_key_env: EXAMPLE_HTTP_API_KEY
+description: 开发模板，请先在 client.py 配置真实接口并完成字段转换和测试。

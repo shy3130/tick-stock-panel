@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.data_providers.custom import loader
+from app.data_providers.custom.managed import ManagedProvider
 
 _OK_YAML = """\
 name: ok_source
@@ -183,6 +184,67 @@ def test_reload_returns_scan_directory_and_counts(
     assert [item["name"] for item in body["custom"]] == ["ok_source"]
 
 
+def test_yaml_scan_retains_external_handle_without_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_loader,
+) -> None:
+    external = Mock()
+    external.name = "external_source"
+    handle = ManagedProvider(external)
+    monkeypatch.setattr(loader, "_PROVIDERS", {external.name: handle})
+    monkeypatch.setattr(loader, "_PLUGIN_STATUS", {external.name: {"origin": "external"}})
+    discover = Mock()
+    monkeypatch.setattr(loader, "_load_builtin_plugins", discover)
+    (tmp_path / "ok.yaml").write_text(_OK_YAML, encoding="utf-8")
+
+    loader.load_all(tmp_path, include_plugins=False)
+
+    assert loader.get_provider(external.name) is handle
+    external.close.assert_not_called()
+    discover.assert_not_called()
+    sources, _, summary = loader.published_scan()
+    assert [item["name"] for item in sources] == ["ok_source"]
+    assert summary == {"config_dir": str(tmp_path), "found": 1, "loaded": 1, "skipped": 0}
+
+
+def test_yaml_reload_keeps_active_stream_alive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_loader,
+) -> None:
+    closed = []
+
+    class Source:
+        def __init__(self, config):
+            self.config = config
+            self.name = config.name
+
+        def validate(self):
+            return []
+
+        def iter_daily(self):
+            yield 1
+            yield 2
+
+        def close(self):
+            closed.append(self.name)
+
+    monkeypatch.setattr(loader, "GenericHTTPProvider", Source)
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "ok.yaml").write_text(_OK_YAML, encoding="utf-8")
+    loader.load_all(first, include_plugins=False)
+    stream = loader.get_provider("ok_source").iter_daily()
+
+    loader.load_all(tmp_path / "empty", include_plugins=False)
+
+    assert loader.list_sources() == []
+    assert closed == []
+    assert list(stream) == [1, 2]
+    assert closed == ["ok_source"]
+
+
 def test_plugin_registered_before_publish_is_closed_outside_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -190,6 +252,7 @@ def test_plugin_registered_before_publish_is_closed_outside_lock(
 ) -> None:
     (tmp_path / "ok.yaml").write_text(_OK_YAML, encoding="utf-8")
     plugin = Mock()
+    plugin.name = "late_plugin"
     close_observations = []
 
     def close() -> None:
@@ -206,7 +269,7 @@ def test_plugin_registered_before_publish_is_closed_outside_lock(
     def register_then_publish(*args):
         # 固定复现安装线程在扫描结束、发布加锁前完成注册的交错。
         loader._register_one_plugin({"name": "late_plugin", "entry": "test:plugin"})
-        assert loader._PROVIDERS["late_plugin"] is plugin
+        assert loader.get_provider("late_plugin").name == plugin.name
         return publish_scan(*args)
 
     monkeypatch.setattr(loader, "_publish_scan", register_then_publish)

@@ -15,6 +15,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tivelo-packages:
+    name: Independent engines (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      UV_MANAGED_PYTHON: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: '3.11'}
+          - {os: ubuntu-latest, python: '3.12'}
+          - {os: windows-latest, python: '3.12'}
+          - {os: macos-26, python: '3.12'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install managed Python
+        run: uv python install ${{ matrix.python }}
+      - name: Build contract and engines
+        run: |
+          uv build packages/tivelo-contracts --out-dir dist/tivelo-contracts
+          uv build packages/tivelo-data --out-dir dist/tivelo-data
+          uv build packages/tivelo-backtest --out-dir dist/tivelo-backtest
+      - name: Verify data engine independently
+        run: >-
+          uv run --no-project --python ${{ matrix.python }} python scripts/verify_tivelo_distribution.py
+          --package packages/tivelo-data --dist dist/tivelo-data
+          --with-wheel dist/tivelo-contracts --python ${{ matrix.python }}
+      - name: Verify backtest engine independently
+        run: >-
+          uv run --no-project --python ${{ matrix.python }} python scripts/verify_tivelo_distribution.py
+          --package packages/tivelo-backtest --dist dist/tivelo-backtest
+          --with-wheel dist/tivelo-contracts --python ${{ matrix.python }}
+
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -60,5 +98,36 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 前端测试
+        run: pnpm exec vitest run
+
       - name: 构建 (tsc + vite)
         run: pnpm build
+
+  windows-mining-lock:
+    name: Windows mining lock recovery
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: 设置 Python
+        run: uv python install 3.12
+      - name: 安装依赖
+        run: uv sync --extra dev --frozen
+      - name: 原生 Windows 锁、进程、接管和桌面启动回归
+        run: >-
+          uv run pytest tests/test_mining_process_lock.py
+          tests/test_mining_lock_admin.py tests/test_mining_lock_http.py
+          tests/test_main_mining_lifespan.py
+          tests/test_desktop_startup.py tests/test_spa_static_routes.py
+          tests/test_data_dir_upgrade.py tests/test_macos_data_dir.py
+          tests/test_windows_installer_contract.py tests/test_docker_data_dir.py
+          tests/test_enriched_generation.py -q

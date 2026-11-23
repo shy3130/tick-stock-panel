@@ -8,14 +8,26 @@ DLL 与运行时 ini 随 wheel 分发。两个实测约束决定本模块的形�
 """
 from __future__ import annotations
 
-import hashlib
 import logging
+import math
 import os
-import shutil
-import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+
+# Keep the module imports used by the TSP probe, plugins and their callers.
+from tivelo_data.legacy.tdx_runtime import (  # noqa: F401
+    LIB_DLL_NAME,
+    LIB_ENV,
+    TdxQuantAuthError,
+    TdxQuantError,
+    _raise_response_error,
+    historical_arguments,
+    materialize_lib,
+    package_lib_dir,
+    shutil,
+    write_token_ini,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,79 +44,6 @@ _RETRIES = 3
 _NONE_RETRIES = 2  # 空返回(可能是永久性坏代码)只补试一次
 _RETRY_SLEEP_S = 0.6
 _UNIVERSE_TTL_S = 12 * 3600.0
-
-_DLL_BY_PLATFORM = {"win32": "TdxAiData.dll", "darwin": "libTdxAiData.dylib"}
-LIB_DLL_NAME = _DLL_BY_PLATFORM.get(sys.platform, "libTdxAiData.so")
-LIB_ENV = "TDX_AI_DATA_LIB"  # tdxaidata 读取: 指向 DLL 文件路径
-
-
-class TdxQuantError(RuntimeError):
-    """tdxaidata 调用失败(网络/参数/协议)。"""
-
-
-def package_lib_dir() -> Path:
-    """tdxaidata 包自带的 lib 目录(平台 DLL + 运行时 ini)。"""
-    import tdxaidata
-
-    return Path(tdxaidata.__file__).resolve().parent / "lib"
-
-
-def write_token_ini(ini: Path, api_key: str) -> None:
-    """把 [Token] token=<key> 写入 ini, 保留其余配置行。"""
-    lines = (
-        ini.read_text(encoding="utf-8", errors="replace").splitlines()
-        if ini.exists()
-        else ["[Token]"]
-    )
-    out: list[str] = []
-    in_token = False
-    replaced = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.lower() == "[token]":
-            in_token = True
-            out.append(line)
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_token = False
-        if in_token and "=" in line and stripped.lower().split("=", 1)[0].strip() == "token":
-            if not replaced:
-                out.append(f"token={api_key}")
-                replaced = True
-            continue
-        out.append(line)
-    if "[Token]" not in {line.strip() for line in out}:
-        out.extend(["[Token]", f"token={api_key}"])
-    elif not replaced:
-        idx = next(i for i, line in enumerate(out) if line.strip().lower() == "[token]")
-        out.insert(idx + 1, f"token={api_key}")
-    ini.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-
-def materialize_lib(api_key: str, lib_root: Path, source: Path | None = None) -> Path:
-    """复制包内 lib 到私有目录并写入 token, 返回 DLL 路径。
-
-    marker 记 token 指纹 + DLL mtime/size, 未变化时直接复用(每轮 realtime
-    轮询都会走到这里, 不能反复复制几十 MB 的 DLL)。
-    """
-    src = source or package_lib_dir()
-    dll = src / LIB_DLL_NAME
-    if not dll.exists():
-        raise TdxQuantError(f"tdxaidata lib 缺少 {LIB_DLL_NAME}: {src}")
-    lib_root.mkdir(parents=True, exist_ok=True)
-    marker = lib_root / ".tdxquant_lib_marker"
-    stat = dll.stat()
-    want = f"{hashlib.sha256(api_key.encode()).hexdigest()}:{stat.st_mtime_ns}:{stat.st_size}"
-    copied = lib_root / LIB_DLL_NAME
-    if marker.exists() and marker.read_text(encoding="utf-8") == want and copied.exists():
-        return copied
-    for item in src.iterdir():
-        if item.is_file():
-            shutil.copy2(item, lib_root / item.name)
-    for ini_name in ("TdxAiData.ini", "user.ini"):
-        write_token_ini(lib_root / ini_name, api_key)
-    marker.write_text(want, encoding="utf-8")
-    return copied
 
 
 class TdxQuantClient:
@@ -156,12 +95,16 @@ class TdxQuantClient:
         last: Exception = TdxQuantError(f"{method} 未知失败")
         for attempt in range(_RETRIES):
             try:
-                out = self._tqs._clean(getattr(self._native_cls.get_instance(), method)(*args))
+                raw = getattr(self._native_cls.get_instance(), method)(*args)
+                _raise_response_error(raw, getattr(self, "api_key", ""))
+                out = self._tqs._clean(raw)
                 if out is not None:
                     return out
                 last = TdxQuantError(f"{method} 返回空数据(第 {attempt + 1} 次)")
                 if attempt + 1 >= _NONE_RETRIES:
                     break
+            except TdxQuantAuthError:
+                raise
             except Exception as exc:  # noqa: BLE001 — 原生 ctypes 层异常类型不可枚举
                 last = TdxQuantError(f"{method}: {exc}")
             time.sleep(_RETRY_SLEEP_S)
@@ -215,14 +158,21 @@ class TdxQuantClient:
         raise last
 
     # ---- K 线(count 模式, 原始列) ----
-    def his_dats(self, code: str, end_d: date, count: int, period: str = "1d") -> dict:
+    def his_dats(self, code: str, end_d: date | datetime, count: int, period: str = "1d") -> dict:
         """单标的 K 线原生 dict: Date 'YYYYMMDD' / Open / High / Low / Close /
         Volume(股) / Amount(万元) 等。count 模式下 start 恒空(服务端只用 end)。
+
+        传 datetime 时保留时刻 — 分钟周期把 end 截到 00:00:00 会整日丢当根
+        (#509); 传 date 时沿用日K惯例的当日零点。部分环境的原生返回会把
+        数据整体包在 "Value" 键里, 这里统一解包 (SDK get_market_data 同款)。
         """
         if count <= 0:
             return {}
-        end = f"{end_d:%Y-%m-%d} 00:00:00"
-        out = self._raw("get_his_dats", code, "", end, period, "none", int(count))
+        out = self._raw("get_his_dats", *historical_arguments(code, end_d, count, period))
+        if isinstance(out, dict):
+            inner = out.get("Value")
+            if isinstance(inner, dict):
+                out = inner
         return out if isinstance(out, dict) else {}
 
     # ---- 除权事件 ----
@@ -232,29 +182,41 @@ class TdxQuantClient:
         """单标的除权事件, 每行 {Date 'YYYYMMDD', Type, Bonus, ShareBonus,
         AllotPrice, Allotment} — 金额/比例均为**每 10 股**口径(Bonus=10派X元)。
         """
-        start = f"{start_d:%Y-%m-%d}" if start_d else ""
-        end = f"{end_d:%Y-%m-%d}" if end_d else ""
-        try:
-            out = self._tqs.get_divid_factors(code, start, end)
-        except Exception as exc:  # SDK 内部异常类型不可枚举
-            raise TdxQuantError(f"get_divid_factors({code}): {exc}") from exc
-        if isinstance(out, list):
-            return out
-        # 环境装有 pandas 时 SDK 返回 DataFrame, 归一为 list[dict]。
-        # 注意 Date 会成为 DataFrame 索引(同 get_market_data 的日期索引惯例),
-        # reset_index 后若列名漂移, 把首列恢复为 'Date'。
-        to_dict = getattr(out, "to_dict", None)
-        reset_index = getattr(out, "reset_index", None)
-        if callable(to_dict) and callable(reset_index):
+        start = f"{start_d:%Y-%m-%d} 00:00:00" if start_d else ""
+        end = f"{end_d:%Y-%m-%d} 00:00:00" if end_d else ""
+        # SDK get_divid_factors 会把 _clean 拒绝的服务端错误和正常无事件
+        # 都变成空 DataFrame。与日K共用原生重试/错误检查，避免丢失原因；
+        # 使用同一 get_cw_data 端点及 SDK 1.2.2 的四列顺序，单位不变。
+        out = self._raw("get_cw_data", str(code).strip(), start, end)
+        if not isinstance(out, dict):
+            raise TdxQuantError(f"get_cw_data({code}) 返回异常结构: {type(out)!r}")
+        if not out:
+            return []
+        dates, values, types = out.get("Date"), out.get("Value"), out.get("Type", [])
+        if (not all(isinstance(v, list) for v in (dates, values, types))
+                or len(dates) != len(values)):
+            raise TdxQuantError(f"get_cw_data({code}) Date/Value/Type 列结构异常")
+        records = []
+        fields = ("Bonus", "AllotPrice", "ShareBonus", "Allotment")
+        for i, item in enumerate(values):
+            date_key = "".join(c for c in str(dates[i]).strip() if c.isdigit())[:8]
             try:
-                records = reset_index().to_dict("records")
-                if isinstance(records, list) and records:
-                    if "Date" not in records[0]:
-                        first_key = next(iter(records[0]))
-                        if first_key not in ("Type", "Bonus", "AllotPrice", "ShareBonus", "Allotment"):
-                            for row in records:
-                                row["Date"] = row.pop(first_key)
-                    return records
-            except Exception:  # noqa: BLE001 — 转换失败按结构异常处理
-                pass
-        raise TdxQuantError(f"get_divid_factors({code}) 返回异常结构: {type(out)!r}")
+                event_date = datetime.strptime(date_key, "%Y%m%d").date() if len(date_key) == 8 else None
+            except ValueError:
+                event_date = None
+            if event_date is None or (start_d and event_date < start_d) or (end_d and event_date > end_d):
+                continue  # SDK 同样过滤无效日期及服务端未裁剪的窗口外事件。
+            if item is None:
+                item = []
+            if not isinstance(item, list):
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 结构异常")
+            padded = item + [0] * max(0, 4 - len(item))
+            try:
+                amounts = [float(v or 0) for v in padded[:4]]
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 含无效数值") from exc
+            if not all(math.isfinite(v) for v in amounts):
+                raise TdxQuantError(f"get_cw_data({code}) Value[{i}] 含非有限数值")
+            records.append({"Date": date_key, "Type": types[i] if i < len(types) else "",
+                            **dict(zip(fields, amounts, strict=True))})
+        return records

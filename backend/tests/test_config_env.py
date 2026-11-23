@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app import config
 from app.config import Settings, project_root_from_config_file
 
 
@@ -49,3 +50,28 @@ def test_relative_data_dir_resolves_against_project_root(
     monkeypatch.setattr("app.config._PROJECT_ROOT", tmp_path)
     configured = Settings(_env_file=None, data_dir=Path("./data"))
     assert configured.data_dir == (tmp_path / "data").resolve()
+
+
+def test_docker_root_resolution_preserves_legacy_data_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "container"
+    app = root / "app"
+    (app / "app").mkdir(parents=True)
+    legacy = root / "data"
+    legacy.mkdir()
+    saved = legacy / "keep.json"
+    saved.write_text("legacy-data", encoding="utf-8")
+    mounts = tmp_path / "mountinfo"
+    mounts.write_text(f"2 1 8:1 / {app / 'data'} rw - ext4 /dev/test rw\n")
+    monkeypatch.setattr(config, "__file__", str(app / "app" / "config.py"))
+    monkeypatch.setattr(config, "_IS_FROZEN", False)
+    monkeypatch.setattr(config, "_DOCKER_MOUNTINFO", mounts)
+    monkeypatch.setenv("TSP_DOCKER", "1")
+    monkeypatch.setattr(config, "_PROJECT_ROOT", config._project_root())
+
+    assert config._resource_root() == app
+    with pytest.raises(RuntimeError, match="先备份"):
+        Settings(_env_file=None, data_dir="./data")
+    assert saved.read_text(encoding="utf-8") == "legacy-data"

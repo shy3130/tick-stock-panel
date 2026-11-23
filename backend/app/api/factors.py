@@ -1,25 +1,48 @@
 """因子注册表 API — 因子库 (P1) + 公式校验/试算 (P2) + 自定义/复合因子 CRUD (P3)。"""
 from __future__ import annotations
 
-from datetime import date, timedelta
+import contextlib
+import json
+from collections.abc import Iterator
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.market_time import cn_today
-
 from app.factors import store
 from app.factors.dsl import FACTOR_COLUMN, compile_formula
-from app.factors.registry import all_factors, unregister_factor
+from app.factors.py_expr import compile_python_expression
+from app.factors.registry import (
+    all_factors,
+    factor_dependencies,
+    factor_warmup_bars,
+    get_factor,
+    unregister_factor,
+)
+from app.market_time import cn_today
 
 router = APIRouter(prefix="/api/factors", tags=["factors"])
 
 
 @router.get("")
-def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|etf)$")) -> dict:
-    """注册表因子列表; asset_type 过滤适用资产 (财务因子仅股票)。"""
+def list_factors(request: Request, asset_type: str | None = Query(default=None, pattern="^(stock|etf)$")) -> dict:
+    """注册表因子列表; asset_type 过滤适用资产 (财务因子仅股票)。
+
+    附带生命周期 status (draft/active/watch/retired, 仅盘上定义的自定义/复合
+    因子有): registry 的 stability 是 status 的二元投影 (active→stable, 其余
+    →experimental), 管理界面需要完整状态, 在此按 id 合并下发。
+    """
     specs = all_factors(asset_type=asset_type)
+    status_by_id: dict[str, str] = {}
+    archived_by_id: dict[str, bool] = {}
+    # 数据目录不可用时退化为不带 status — 内置因子列表不因此不可用
+    with contextlib.suppress(HTTPException):
+        disk = {
+            str(definition.get("id")): definition
+            for definition in store.load_all(_data_dir(request))
+        }
+        status_by_id = {fid: str(d.get("status", "draft")) for fid, d in disk.items()}
+        archived_by_id = {fid: d.get("archived") is True for fid, d in disk.items()}
     return {
         "factors": [
             {
@@ -31,12 +54,14 @@ def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|e
                 "formula": spec.formula_text,
                 "direction": spec.direction,
                 "unit": spec.unit,
-                "warmup_bars": spec.warmup_bars,
+                "warmup_bars": factor_warmup_bars([spec.id]),
                 "pit": spec.pit,
                 "asset_types": sorted(spec.asset_types),
                 "stability": spec.stability,
+                "status": status_by_id.get(spec.id),
+                "archived": archived_by_id.get(spec.id, False),
                 "scale_free": spec.scale_free,
-                "dependencies": sorted(spec.dependencies),
+                "dependencies": sorted(factor_dependencies([spec.id])) if spec.inputs else [],
             }
             for spec in specs
         ]
@@ -45,6 +70,7 @@ def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|e
 
 class FormulaValidateRequest(BaseModel):
     formula: str = Field(..., min_length=1, max_length=2000)
+    lang: str = Field(default="dsl", pattern="^(dsl|python)$")
 
 
 def _compiled_payload(compiled) -> dict:
@@ -60,7 +86,11 @@ def _compiled_payload(compiled) -> dict:
 
 @router.post("/validate")
 def validate_formula(req: FormulaValidateRequest) -> dict:
-    """公式校验: 语法/语义/窗口纪律/依赖推导, 编译期 fail-closed。"""
+    """公式校验: 语法/语义/窗口纪律/依赖推导, 编译期 fail-closed。
+
+    lang=dsl → 受限公式; lang=python → T2 表达式级 Python (P3)。"""
+    if req.lang == "python":
+        return _compiled_payload(compile_python_expression(req.formula))
     return _compiled_payload(compile_formula(req.formula))
 
 
@@ -69,36 +99,32 @@ class FormulaTrialRequest(FormulaValidateRequest):
     days: int = Field(default=40, ge=20, le=120)
 
 
+def _trial_panel(request: Request, compiled, asset_type: str, days: int) -> pl.DataFrame:
+    from app.api.backtest import _get_engine
+    from app.backtest.factor import FactorBacktestService, FactorBatchConfig
+
+    today = cn_today()
+    names = sorted(set(compiled.dependencies).union(compiled.referenced_factors))
+    config = FactorBatchConfig(
+        factor_names=names, symbols=None, start=today, end=today, asset_type=asset_type,
+    )
+    return FactorBacktestService(_get_engine(request))._load_factor_panel(
+        config, names, warmup_bars=compiled.warmup_bars + days,
+    )
+
+
 @router.post("/trial")
 def trial_formula(req: FormulaTrialRequest, request: Request) -> dict:
     """公式试算: 最近 N 个交易日截面 Rank IC 快照 (复用回测面板与虚拟因子物化路径)。"""
-    compiled = compile_formula(req.formula)
+    compiled = (
+        compile_python_expression(req.formula) if req.lang == "python" else compile_formula(req.formula)
+    )
     if not compiled.ok:
         raise HTTPException(status_code=400, detail={"errors": [error.to_dict() for error in compiled.errors]})
 
-    from app.api.backtest import _get_engine
-
-    # 交易日 → 自然日换算 (A股年均 243 交易日 ≈ 1.48 自然日/交易日), 留 buffer
-    calendar_days = int((compiled.warmup_bars + req.days) * 1.6) + 15
-    start = cn_today() - timedelta(days=calendar_days)
-    # 面板基础物理列 (load_panel 只返回 parquet 物理列, 因子列由补算路径生成)
-    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
-    if "consecutive_limit_ups" in compiled.dependencies:
-        base_columns.append("consecutive_limit_ups")
-    engine = _get_engine(request)
-    panel = engine.load_panel(None, start, cn_today(), columns=base_columns, asset_type=req.asset_type)
+    panel = _trial_panel(request, compiled, req.asset_type, req.days)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前数据目录无可用历史数据, 无法试算")
-
-    # 复用检验引擎同一条补算路径 (compute_indicators + 虚拟因子物化), 禁止第二套计算逻辑
-    from app.backtest.factor import FactorBacktestService
-
-    physical = set(panel.columns)
-    to_compute = set(compiled.referenced_factors) | {
-        dep for dep in compiled.dependencies if dep not in physical
-    }
-    if to_compute:
-        panel = FactorBacktestService._compute_missing_factors(panel, to_compute)
 
     if compiled.frame_transform is None:
         raise HTTPException(status_code=500, detail="编译产物缺少帧变换")
@@ -237,20 +263,13 @@ def _trial_nonempty(request: Request, formula: str, asset_type: str = "stock") -
     compiled = compile_formula(formula)
     if not compiled.ok:
         raise HTTPException(status_code=400, detail={"errors": [e.to_dict() for e in compiled.errors]})
-    from app.api.backtest import _get_engine
-    from app.backtest.factor import FactorBacktestService
-
-    calendar_days = int((compiled.warmup_bars + 40) * 1.6) + 15
-    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
-    engine = _get_engine(request)
-    panel = engine.load_panel(None, cn_today() - timedelta(days=calendar_days), cn_today(), columns=base_columns, asset_type=asset_type)
+    panel = _trial_panel(request, compiled, asset_type, 40)
     if panel.is_empty():
         raise HTTPException(status_code=400, detail="当前无历史数据, 无法完成保存前试算 (fail-closed)")
-    physical = set(panel.columns)
-    to_compute = set(compiled.referenced_factors) | {d for d in compiled.dependencies if d not in physical}
-    if to_compute:
-        panel = FactorBacktestService._compute_missing_factors(panel, to_compute)
     prepared = compiled.frame_transform(panel) if compiled.frame_transform else None
+    if prepared is not None:
+        recent = prepared["date"].unique().sort().tail(40)
+        prepared = prepared.filter(pl.col("date") >= recent.min())
     if prepared is None or prepared[FACTOR_COLUMN].is_not_null().sum() == 0:
         raise HTTPException(status_code=400, detail="公式在最近 40 个交易日输出全为空, 拒绝保存")
 
@@ -270,6 +289,7 @@ def create_custom_factor(req: CustomFactorCreateRequest, request: Request) -> di
         "description": req.description,
         "direction": req.direction,
         "status": "draft",
+        "archived": False,
         "created_at": store._now(),
         "updated_at": store._now(),
     }
@@ -301,6 +321,7 @@ def create_composite_factor(req: CompositeFactorCreateRequest, request: Request)
         "description": req.description,
         "direction": req.direction,
         "status": "draft",
+        "archived": False,
         "created_at": store._now(),
         "updated_at": store._now(),
     }
@@ -357,6 +378,33 @@ def update_custom_factor(factor_id: str, req: CustomFactorUpdateRequest, request
     return {"ok": True, "id": factor_id, "version": target["version"], "status": target["status"]}
 
 
+def _iter_json_strings(node) -> Iterator[str]:
+    """递归产出 JSON 树中的所有字符串键与值 (用于精确等值匹配)。"""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _iter_json_strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_json_strings(item)
+
+
+def _strategy_references_factor(text: str, factor_id: str) -> bool:
+    """策略 JSON 是否引用该因子 — 解析后对字符串键值精确等值匹配。
+
+    历史实现为子串包含 (`factor_id in text`), id 互为前缀时误报
+    (删 uf_a 被 uf_ab 的引用挡住), 把无害删除逼成危险的强删路径。
+    JSON 损坏时回退子串匹配 (fail-closed: 宁可误拒不可漏放)。
+    """
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return factor_id in text
+    return any(value == factor_id for value in _iter_json_strings(parsed))
+
+
 def _find_references(data_dir, factor_id: str) -> list[str]:
     """扫描策略与复合因子定义中的引用 (删除前 fail-closed 检查)。"""
     references: list[str] = []
@@ -365,15 +413,16 @@ def _find_references(data_dir, factor_id: str) -> list[str]:
         for file in strategies_dir.glob("*.json"):
             try:
                 text = file.read_text(encoding="utf-8")
-                if factor_id in text:
-                    references.append(f"strategies/{file.name}")
             except OSError:
                 continue
+            if _strategy_references_factor(text, factor_id):
+                references.append(f"strategies/{file.name}")
     for definition in store.load_all(data_dir):
         if str(definition.get("id")) == factor_id:
             continue
+        spec = get_factor(str(definition.get("id")))
         members = definition.get("members")
-        if isinstance(members, dict) and factor_id in members:
+        if (isinstance(members, dict) and factor_id in members) or (spec and factor_id in spec.inputs):
             references.append(f"custom_factors/{definition.get('id')}.json")
     return references
 
@@ -432,6 +481,36 @@ def update_factor_status(factor_id: str, req: FactorStatusRequest, request: Requ
 
 class FactorGroupRequest(BaseModel):
     group: str = Field(..., min_length=1, max_length=24)
+
+
+def _set_factor_archived(factor_id: str, archived: bool, request: Request) -> dict:
+    """归档/恢复自定义或复合因子 (可逆): 只改标记位, 不注销注册表 ——
+    已引用该因子的策略/信号/评分列照常计算, 归档只影响因子库与选择器可见性。"""
+    data_dir = _data_dir(request)
+    target = None
+    for definition in store.load_all(data_dir):
+        if str(definition.get("id")) == factor_id:
+            target = definition
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target["archived"] = archived
+    target["archived_at"] = store._now() if archived else None
+    target["updated_at"] = store._now()
+    store.save_one(data_dir, target)
+    return {"ok": True, "id": factor_id, "archived": archived}
+
+
+@router.post("/custom/{factor_id}/archive")
+def archive_factor(factor_id: str, request: Request) -> dict:
+    """归档因子: 移入档案库, 可随时恢复; 不删除定义文件。"""
+    return _set_factor_archived(factor_id, True, request)
+
+
+@router.post("/custom/{factor_id}/unarchive")
+def unarchive_factor(factor_id: str, request: Request) -> dict:
+    """恢复因子: 档案库移回因子库。"""
+    return _set_factor_archived(factor_id, False, request)
 
 
 @router.post("/custom/{factor_id}/group")

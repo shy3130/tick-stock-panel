@@ -1,7 +1,10 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import { X, Layers, Plus, Loader2, Search, Settings2 } from 'lucide-react'
 import { api, type ScreenerStrategy } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
+import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
 
@@ -41,21 +44,19 @@ export function CompositeStrategyDialog({ open, onClose, onSavedId, editStrategy
   const mouseDownOnBackdrop = useRef(false)
 
   // 拉取所有可用子策略(排除 composite 自身)
-  const [available, setAvailable] = useState<ScreenerStrategy[]>([])
-  const [loadingList, setLoadingList] = useState(false)
+  const availableQuery = useQuery({
+    queryKey: QK.screenerStrategies('all'),
+    queryFn: () => api.screenerStrategies(),
+    enabled: open,
+  })
+  const available = useMemo(() => (availableQuery.data?.presets ?? []).filter(s => s.source !== 'composite'), [availableQuery.data])
+  const loadingList = availableQuery.isLoading
   // 点击子策略名打开其配置编辑
   const [editingChildId, setEditingChildId] = useState<string | null>(null)
 
   const loadAvailable = useCallback(() => {
-    setLoadingList(true)
-    api.screenerStrategies()
-      .then(data => {
-        // 排除 composite 策略(不能嵌套)
-        setAvailable((data.presets ?? []).filter(s => s.source !== 'composite'))
-      })
-      .catch(() => setAvailable([]))
-      .finally(() => setLoadingList(false))
-  }, [])
+    void availableQuery.refetch()
+  }, [availableQuery.refetch])
 
   useEffect(() => {
     if (!open) return
@@ -93,10 +94,10 @@ export function CompositeStrategyDialog({ open, onClose, onSavedId, editStrategy
   const filteredAvailable = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     const selectedIds = new Set(children.map(c => c.strategy_id))
-    return available.filter(s => {
+    return selectableStrategies(available).filter(s => {
       if (selectedIds.has(s.id)) return false
       if (!keyword) return true
-      return s.name.toLowerCase().includes(keyword) || s.id.toLowerCase().includes(keyword)
+      return `${s.name} ${s.id} ${s.library?.group_name ?? ''}`.toLowerCase().includes(keyword)
     })
   }, [available, children, search])
 
@@ -288,7 +289,7 @@ export function CompositeStrategyDialog({ open, onClose, onSavedId, editStrategy
                           title="点击编辑该子策略的配置"
                           className="flex min-w-0 flex-1 items-center gap-1 text-left text-xs text-foreground transition-colors hover:text-accent cursor-pointer"
                         >
-                          <span className="truncate">{s?.name ?? c.strategy_id}</span>
+                          <span className="truncate">{s ? strategyOptionLabel(s) : c.strategy_id}</span>
                           <Settings2 className="h-3 w-3 shrink-0 text-muted/50" />
                         </button>
                         {s?.source && (

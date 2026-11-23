@@ -431,3 +431,41 @@ def test_quote_service_forwards_real_strategy_id(monkeypatch, tmp_path):
         service._evaluate_monitors(pl.DataFrame(), None)
 
     assert subscriber.pop()["alerts"][0]["strategy_id"] == "demo"
+
+
+def test_system_notifications_delivered_off_calling_thread(monkeypatch):
+    """系统通知投递必须离开行情轮询线程 (专用线程池)。
+
+    notify_adapter 底层是 subprocess (每条最长 5s 超时), 若在轮询线程上同步
+    逐条执行, 告警风暴会让一轮监控评估阻塞数十秒, 拖慢行情拉取与 SSE 推送。
+    """
+    import threading
+
+    from app.services import preferences, quote_service as qs_mod
+
+    monkeypatch.setattr(preferences, "get_system_notify_enabled", lambda: True)
+
+    delivered = threading.Event()
+    records: list[tuple[str, str, str]] = []
+
+    def fake_notify(title: str, body: str) -> bool:
+        records.append((threading.current_thread().name, title, body))
+        delivered.set()
+        return True
+
+    from app.services import notify_adapter
+
+    monkeypatch.setattr(notify_adapter, "notify", fake_notify)
+
+    svc = object.__new__(qs_mod.QuoteService)  # 只测该方法, 不跑完整 __init__
+    svc._maybe_send_system_notifications([{
+        "source": "price", "symbol": "000001.SZ", "name": "平安银行",
+        "message": "涨幅突破阈值", "close": 10.0, "change_pct": 0.0366,
+    }])
+
+    assert delivered.wait(2), "系统通知应在专用线程池内被投递"
+    thread_name, title, body = records[0]
+    assert thread_name.startswith("sys-notify")
+    assert thread_name != threading.current_thread().name
+    assert title == "TickFlow · 价格"
+    assert "000001.SZ" in body

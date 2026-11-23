@@ -1,7 +1,9 @@
 """全局配置 — 从环境变量 / .env 读取。"""
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -13,10 +15,80 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 此时:
 #   - 只读资源 (tiers.yaml / 前端 dist) 放在 _MEIPASS 内
 #   - 可写用户数据 (data_dir) 放在可执行文件旁的用户目录
-# 非 frozen 模式 (开发/Docker): 应用根由 project_root_from_config_file 推导。
-# 开发布局 <repo>/backend/app → 仓库根；镜像把包放在 /app/app → 应用根 /app。
-# 再固定向上一级会在容器里落到文件系统根 /，相对 DATA_DIR=./data 就变成 /data。
+# 源码模式按项目根解析；官方 Docker 镜像显式标记其扁平 /app 布局。
 _IS_FROZEN = getattr(sys, "frozen", False)
+_DOCKER_MOUNTINFO = Path("/proc/self/mountinfo")
+logger = logging.getLogger(__name__)
+
+
+def _docker_root() -> Path | None:
+    if not _IS_FROZEN and os.environ.get("TSP_DOCKER") == "1":
+        return Path(__file__).resolve().parent.parent
+    return None
+
+
+def _docker_data_mounts() -> list[tuple[Path, str]]:
+    # ismount() can miss bind mounts on the same filesystem; use Linux mountinfo.
+    try:
+        lines = _DOCKER_MOUNTINFO.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    mounts = []
+    for line in lines:
+        before, separator, after = line.partition(" - ")
+        fields, filesystem = before.split(), after.split()
+        if not separator or len(fields) < 5 or len(filesystem) < 3:
+            continue
+        point = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4]))
+        if point.is_absolute():
+            mounts.append((point, filesystem[0]))
+    return mounts
+
+
+def _resolve_data_dir(path: Path) -> Path:
+    docker_root = _docker_root()
+    if docker_root is None:
+        return path if path.is_absolute() else (_PROJECT_ROOT / path).resolve()
+
+    mounts = _docker_data_mounts()
+
+    def mounted(directory: Path) -> bool:
+        matches = [(point, fs) for point, fs in mounts if directory.resolve().is_relative_to(point)]
+        if not matches:
+            return False
+        # A nested tmpfs can hide a durable parent mount.
+        point, filesystem = max(matches, key=lambda item: len(item[0].parts))
+        return point != Path("/") and filesystem not in {"tmpfs", "ramfs"}
+
+    if not path.is_absolute():
+        legacy = (_PROJECT_ROOT / path).resolve()
+        target = (docker_root / path).resolve()
+        if legacy != target:
+            if mounted(legacy):
+                logger.warning("Docker 相对 DATA_DIR 沿用已有挂载目录 %s", legacy)
+                return legacy
+            try:
+                has_legacy_data = next(legacy.iterdir(), None) is not None
+            except FileNotFoundError:
+                has_legacy_data = False
+            except OSError as exc:
+                raise RuntimeError(f"无法检查 Docker 旧数据目录 {legacy}，未切换数据目录") from exc
+            if has_legacy_data:
+                # RuntimeError avoids Pydantic echoing settings (including keys).
+                raise RuntimeError(
+                    f"Docker 旧数据目录 {legacy} 中仍有文件，停止切换到 {target}。"
+                    "请先备份旧容器数据并迁入持久化目录；"
+                    f"如需沿用旧目录，请明确设置 DATA_DIR={legacy} 并挂载该目录。"
+                    "程序不会自动迁移或覆盖文件。"
+                )
+        path = target
+    if not mounted(path):
+        logger.warning(
+            "Docker 数据目录 %s 未检测到持久化挂载（或无法读取挂载信息）；"
+            "请将宿主机数据目录挂载到此路径，避免升级重建容器后丢失 Key 和数据。",
+            path,
+        )
+    return path
 
 
 def _user_data_root() -> Path:
@@ -30,10 +102,10 @@ def _user_data_root() -> Path:
            数据放包内 (≤0.3.6 的 exe 同级 data) 等于每次覆盖安装都被清空;
            App Support 是 mac 用户数据惯例位置, 替换 .app 永不触碰,
            也规避向 /Applications 包内写入的权限问题。包内旧数据由
-           KlineRepository._migrate_legacy_data_dir() 首次启动自动搬出。
+           recover_desktop_data() 在后端启动前恢复旧配置。
          - Windows/Linux: exe 同级的 data/ 子目录 (<安装目录>/data/)
            —— 与程序同处一个总目录 (用户选择的安装目录), 视觉直观, 便于备份/迁移。
-      3. 非 frozen (开发模式): 项目根 data/
+      3. 非 frozen: 源码使用项目根 data/；官方 Docker 使用应用目录下的 data/
 
     为什么 Windows 不用 platformdirs 默认 (%LOCALAPPDATA%) 作为主路径:
       - 落在 C 盘系统目录, 用户不易察觉, 占系统盘空间
@@ -43,7 +115,7 @@ def _user_data_root() -> Path:
       - 数据安全: Inno Setup 覆盖安装(升级)时只往 {app} 写新程序文件, 不会清空
         目录里不在安装清单上的运行时文件 (data/ 即此类), 故覆盖安装不丢数据。
         (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/tsp.iss 的 [UninstallDelete]。)
-    旧版本数据迁移: 见 KlineRepository._migrate_legacy_data_dir(), 老用户首次启动自动搬迁。
+    旧版本恢复由 app.services.data_dir_upgrade 处理，已有配置优先并保留原配置备份。
     """
     # 打包桌面版
     if _IS_FROZEN:
@@ -54,8 +126,7 @@ def _user_data_root() -> Path:
         exe_dir = Path(sys.executable).resolve().parent
         return exe_dir / "data"
 
-    # 开发模式: 项目根 data/
-    return _PROJECT_ROOT / "data"
+    return (_docker_root() or _PROJECT_ROOT) / "data"
 
 
 def project_root_from_config_file(config_file: Path) -> Path:
@@ -90,8 +161,9 @@ def _project_root() -> Path:
     """项目根目录。
 
     frozen 保持三级推导：打包后 __file__ 落在 _MEIPASS 内，不能套用 Docker 扁平规则。
+    官方 Docker 保留旧根用于 _resolve_data_dir 检查旧数据；实际数据根由 _docker_root 提供。
     """
-    if _IS_FROZEN:
+    if _IS_FROZEN or _docker_root() is not None:
         return Path(__file__).resolve().parent.parent.parent
     return project_root_from_config_file(Path(__file__))
 
@@ -182,7 +254,7 @@ class Settings(BaseSettings):
     # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
     auth_password: str = ""
 
-    # Data — frozen: exe 同级 data/ 子目录; 非 frozen: 项目根 data/
+    # Data — 桌面版按平台约定；源码使用项目根 data/；Docker 使用 /app/data。
     # (均可被环境变量 DATA_DIR 覆盖, pydantic-settings 自动注入)
     data_dir: Path = _user_data_root()
 
@@ -194,10 +266,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
-        """确保 data_dir 是绝对路径（环境变量传入的相对路径基于项目根目录解析）。"""
-        if not self.data_dir.is_absolute():
-            # 相对路径基于项目根目录解析，而非 CWD
-            self.data_dir = (_PROJECT_ROOT / self.data_dir).resolve()
+        """Docker 相对路径按应用目录解析；源码、桌面和绝对路径契约不变。"""
+        self.data_dir = _resolve_data_dir(self.data_dir)
         if self.backtest_matrix_cache_max_mb <= 0:
             raise ValueError("backtest_matrix_cache_max_mb must be positive")
         if self.backtest_matrix_cache_prewarm_years <= 0:

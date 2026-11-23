@@ -5,6 +5,7 @@ import { ChevronRight, CircleAlert, CircleCheck, FlaskConical, PenLine, Play, Sa
 import { toast } from '@/components/Toast'
 import { api, type FactorTrialResponse, type FactorValidateResponse } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { selectableDefinitions, definitionOptionLabel } from '@/lib/definitionOptions'
 
 const INPUT_CLS = 'w-full rounded-input border border-border bg-surface px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none'
 const CHIP_CLS = 'shrink-0 rounded-btn border border-border bg-base/60 px-1.5 py-0.5 font-mono text-[10px] text-secondary transition-colors hover:border-accent/40 hover:text-accent cursor-pointer'
@@ -107,9 +108,9 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
     queryFn: api.factorColumns,
     staleTime: 300_000,
   })
-  const customFactors = (library.data?.factors ?? []).filter(item => item.kind === 'custom')
+  const customFactors = selectableDefinitions((library.data?.factors ?? []).filter(item => item.kind === 'custom'), [editId ?? '', editing?.id ?? ''])
   const fieldGroups = useMemo(() => {
-    const cols = columns.data?.columns ?? []
+    const cols = selectableDefinitions(columns.data?.columns ?? [])
     const groups: Record<string, typeof cols> = {}
     for (const col of cols) (groups[col.group] ??= []).push(col)
     return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b, 'zh'))
@@ -247,7 +248,7 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
             >
               <option value="">编辑已有因子…</option>
               {customFactors.map(item => (
-                <option key={item.id} value={item.id}>{item.label} ({item.id} v{item.version})</option>
+                <option key={item.id} value={item.id}>{definitionOptionLabel(item)} ({item.id} v{item.version})</option>
               ))}
             </select>
           )}
@@ -347,8 +348,8 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
                         onClick={() => insertSnippet(col.id)}
                         className={CHIP_CLS}
                       >
-                        <span className="font-mono text-accent">{col.id}</span>
-                        <span className="ml-1 font-sans text-muted">{col.label}</span>
+                        <span className="font-sans text-secondary">{col.label}</span>
+                        <span className="ml-1 font-mono text-muted/70">{col.id}</span>
                       </button>
                     ))}
                   </div>
@@ -503,7 +504,7 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
                   </div>
                 </div>
                 <div className="text-[10px] leading-relaxed text-muted">
-                  试算仅为快照预览 (无成本/分层), 完整检验请到「检验」页运行。样本内表现不代表未来。
+                  试算仅为快照预览 (无成本/分层), 完整检验请到「发现」页运行。样本内表现不代表未来。
                 </div>
 
                 {/* 注册/更新区: 试算有非空输出才可保存 (服务端同样 fail-closed 校验) */}
@@ -559,7 +560,7 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
                       {savedId && !save.isPending && (
                         <button
                           type="button"
-                          onClick={() => navigate(`/factors?tab=inspect&focus=${savedId}`)}
+                          onClick={() => navigate(`/factors?tab=discover&focus=${savedId}`)}
                           className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-btn border border-accent/40 px-3 text-xs font-medium text-accent transition-colors hover:bg-accent/10"
                         >
                           去检验 {savedId}
@@ -569,7 +570,7 @@ export function FactorEditor({ editId = '' }: { editId?: string }) {
                     <div className="mt-1 text-[10px] text-muted">
                       {editing
                         ? '公式变化会保存为新版本并回草稿态 (需重新检验后激活); 仅改名称/分组保留当前状态。'
-                        : '保存后状态为 draft；到「检验」页跑完整检验确认有效后，在因子库中激活。'}
+                        : '保存后状态为 draft；到「发现」页跑完整检验确认有效后，在因子库中激活。'}
                     </div>
                     {savedId && savedVersion != null && (
                       <div className="mt-1 text-[10px] text-bull">已保存: {savedId} v{savedVersion}</div>

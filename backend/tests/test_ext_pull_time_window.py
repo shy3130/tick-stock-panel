@@ -66,7 +66,7 @@ async def test_default_landing_date_is_the_beijing_date(at_beijing, monkeypatch)
     at_beijing(datetime(2026, 3, 2, 0, 30, tzinfo=CN_TZ))
     seen: dict[str, date] = {}
 
-    async def fake_fetch(config, target_date):
+    async def fake_fetch(config, target_date, data_dir=None):
         seen["fetched"] = target_date
         return [{"symbol": "000001.SZ", "v": 1}]
 
@@ -90,7 +90,7 @@ async def test_an_explicit_target_date_still_wins(at_beijing, monkeypatch) -> No
     at_beijing(datetime(2026, 3, 2, 10, 0, tzinfo=CN_TZ))
     seen: dict[str, date] = {}
 
-    async def fake_fetch(config, target_date):
+    async def fake_fetch(config, target_date, data_dir=None):
         seen["fetched"] = target_date
         return [{"symbol": "000001.SZ", "v": 1}]
 

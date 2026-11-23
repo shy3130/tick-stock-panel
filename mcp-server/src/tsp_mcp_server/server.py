@@ -94,7 +94,7 @@ if _has("read:analysis"):
 
     @mcp.tool()
     def list_strategies() -> str:
-        """策略清单 (内置+自定义): id/名称/标签/描述 — run_backtest 的 strategy_id 从这里来。"""
+        """读取本机策略库的 ID、名称、标签和描述。run_backtest 使用这里返回的策略 ID。"""
         return _call("GET", "/api/strategies")
 
     @mcp.tool()
@@ -119,7 +119,7 @@ if _has("read:ext"):
 
     @mcp.tool()
     def query_ext_table(table: str, filter: str | None = None, limit: int = 20) -> str:
-        """查询扩展表行数据。filter 形如 "字段:值1|值2" (可重复传多个条件参数)。"""
+        """查询扩展表行数据。filter 接收一个条件，形如 "字段:值1|值2"。"""
         params: dict = {"limit": limit}
         if filter:
             params["filter"] = filter
@@ -139,7 +139,7 @@ if _has("run:backtest"):
 
     @mcp.tool()
     def run_backtest(strategy_id: str, symbols: list[str], days: int = 90) -> str:
-        """对指定标的跑策略回测 (纯 Polars 引擎), 返回指标/回合/净值。窗口别太大, 90~365 天为宜。"""
+        """使用 Tivelo 在默认前复权口径下运行普通策略回测，返回指标、成交与净值。请先确认本地行情覆盖所选区间。"""
         from datetime import date, timedelta
 
         end = date.today()

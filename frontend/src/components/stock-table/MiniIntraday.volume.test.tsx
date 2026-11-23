@@ -123,7 +123,7 @@ it('volume 开+rows 全部 volume=0: 不画空带 (无分隔线无量柱), 价�
   expect(Math.max(...priceYs(host))).toBeCloseTo(77, 5)
 })
 
-it('盘前 AuctionOnly + volume 开 + 无量字段: 整幅价格, 不画空带 (R6)', () => {
+it('盘前 AuctionOnly + volume 开 + 无量字段: 窄栏价格, 不画空带 (R6)', () => {
   const host = render({
     rows: [],
     prevClose: 10,
@@ -132,9 +132,10 @@ it('盘前 AuctionOnly + volume 开 + 无量字段: 整幅价格, 不画空带 (
     height: 80,
     auction: { price: [['09:15:00', 9.9], ['09:20:00', 10.05], ['09:25:00', 10.1]] },
   })
-  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价')
+  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价 (暂无分时)')
   expect(bandSeparator(host)).toHaveLength(0)
-  expect(host.querySelectorAll('rect')).toHaveLength(0)
+  // 唯一 rect 是窄栏底色 (无竞价量柱、无空量带)
+  expect(host.querySelectorAll('rect')).toHaveLength(1)
 })
 
 it('盘前 AuctionOnly + 竞价量数据 + volume 未传: 量带照画 (R2 渲染侧保障)', () => {
@@ -148,7 +149,7 @@ it('盘前 AuctionOnly + 竞价量数据 + volume 未传: 量带照画 (R2 渲�
       match: [['09:15:00', 100], ['09:25:00', 500]],
     },
   })
-  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价')
+  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价 (暂无分时)')
   expect(bandSeparator(host)).toHaveLength(1)
   expect(host.querySelectorAll(`rect[fill="${GOLD}"]`).length).toBeGreaterThanOrEqual(1)
 })

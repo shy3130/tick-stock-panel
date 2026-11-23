@@ -297,9 +297,12 @@ function RightValueInput({ cond, fields, groups, maxDays, hideDays, onChangeRigh
   onChangeRight: (v: string) => void
   onChangeDays: (v: number) => void
 }) {
-  const isField = cond.right.startsWith('field:')
-  const fieldValue = isField ? cond.right.slice(6) : ''
-  const numValue = isField ? '' : cond.right
+  // 右值可为字段引用或数字常量; 迁移的历史信号 (如残月) 常量是 number — 后端
+  // isinstance(int,float) 一直合法, 前端判断必须先排除非字符串再 startsWith
+  const right = cond.right
+  const isField = typeof right === 'string' && right.startsWith('field:')
+  const fieldValue = typeof right === 'string' ? right.slice(6) : ''
+  const numValue = typeof right === 'string' ? right : String(right)
 
   return (
     <div className="flex items-center gap-1 flex-1 min-w-0">

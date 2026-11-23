@@ -1,19 +1,25 @@
 """Load custom data source definitions from user data files."""
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import logging
 import math
 import re
 import shutil
 import subprocess
 import threading
+from dataclasses import asdict
+from multiprocessing import current_process
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
 from app import secrets_store
 from app.config import settings
+from app.data_providers.base import ProviderRequestError
 from app.data_providers.custom.config import (
     DEFAULT_TIMEOUT,
     MAX_TIMEOUT,
@@ -21,12 +27,18 @@ from app.data_providers.custom.config import (
     config_from_dict,
     load_config,
 )
-from app.data_providers.custom.provider import GenericHTTPProvider
+from app.data_providers.custom.managed import ManagedProvider
+from app.data_providers.custom.provider import (
+    RESEARCH_PROFILES,
+    GenericHTTPProvider,
+    _token_from_env,
+)
+from app.services.engine_jobs import ENGINE_NODE_PROCESS_NAME
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-_PROVIDERS: dict[str, GenericHTTPProvider] = {}
+_PROVIDERS: dict[str, ManagedProvider] = {}
 _LOAD_ERRORS: list[dict] = []
 # 最近一次 YAML 扫描。None 表示进程内尚未 load_all。
 _SCAN_SUMMARY: dict | None = None
@@ -88,20 +100,28 @@ def published_scan() -> tuple[list[dict], list[dict], dict]:
 
 
 def _publish_scan(
-    providers: dict[str, GenericHTTPProvider],
+    providers: dict[str, ManagedProvider],
     load_errors: list[dict],
     summary: dict,
-) -> list[GenericHTTPProvider]:
+) -> list[ManagedProvider]:
     global _PROVIDERS, _LOAD_ERRORS, _SCAN_SUMMARY
     with _PUBLISH_LOCK:
-        previous = list(_PROVIDERS.values())
-        _PROVIDERS = providers
+        # 外部插件使用稳定句柄，YAML 扫描不能关闭或丢弃正在服务的插件。
+        retained = {
+            name: provider for name, provider in _PROVIDERS.items()
+            if _PLUGIN_STATUS.get(name, {}).get("origin") == "external"
+        }
+        previous = [
+            provider for name, provider in _PROVIDERS.items()
+            if name not in retained or name in providers
+        ]
+        _PROVIDERS = {**retained, **providers}
         _LOAD_ERRORS = load_errors
         _SCAN_SUMMARY = summary
     return previous
 
 
-def _close_providers(providers: list[GenericHTTPProvider]) -> None:
+def _close_providers(providers: list[ManagedProvider]) -> None:
     """关闭已被替换的客户端。失败只记日志，不能把已经换上的新扫描丢掉。"""
     for provider in providers:
         try:
@@ -114,7 +134,7 @@ def _close_providers(providers: list[GenericHTTPProvider]) -> None:
             )
 
 
-def load_all(path: Path | None = None) -> None:
+def load_all(path: Path | None = None, *, include_plugins: bool = True) -> None:
     """Load all custom provider YAML files into process memory."""
     base = path or data_sources_dir()
     # 先扫完再替换。mkdir/glob 失败时保留上一轮已加载的源和计数，
@@ -123,7 +143,7 @@ def load_all(path: Path | None = None) -> None:
     files = sorted([*base.glob("*.yaml"), *base.glob("*.yml")])
     loaded = 0
     skipped = 0
-    new_providers: dict[str, GenericHTTPProvider] = {}
+    new_providers: dict[str, ManagedProvider] = {}
     new_errors: list[dict] = []
     for file in files:
         try:
@@ -153,7 +173,7 @@ def load_all(path: Path | None = None) -> None:
                 )
             else:
                 loaded += 1
-            new_providers[config.name] = provider
+            new_providers[config.name] = ManagedProvider(provider, builtin=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("custom data source load failed %s: %s", file, e)
             new_errors.append({"path": str(file), "errors": [str(e)]})
@@ -173,7 +193,8 @@ def load_all(path: Path | None = None) -> None:
         logger.info("custom data sources: no yaml in %s", base)
 
     # 内置可选插件 (plugins/ 目录)。与用户 YAML 源独立, 缺依赖只记状态不报错。
-    _load_builtin_plugins()
+    if include_plugins:
+        _load_builtin_plugins()
 
 
 def list_sources() -> list[dict]:
@@ -184,7 +205,7 @@ def list_sources() -> list[dict]:
 
 def list_plugins() -> list[dict]:
     """返回所有内置插件的状态 (含已装/未装), 供设置页独立分类显示。"""
-    return list(_PLUGIN_STATUS.values())
+    return [dict(item) for item in _PLUGIN_STATUS.values()]
 
 
 def _plugin_key_masked(name: str, api_key_env: str) -> str:
@@ -202,7 +223,13 @@ def _plugin_key_masked(name: str, api_key_env: str) -> str:
 
 def plugin_manifest(name: str) -> dict | None:
     """读取指定插件的 plugin.yaml 清单。"""
-    plugin_dir = plugins_dir() / (name or "")
+    if not _NAME_RE.fullmatch(name or ""):
+        return None
+    from . import packages
+    external = packages.manifest(name)
+    if external is not None:
+        return external
+    plugin_dir = plugins_dir() / name
     manifest_path = plugin_dir / "plugin.yaml"
     if not manifest_path.exists():
         return None
@@ -229,16 +256,24 @@ def probe_plugin_key(name: str, api_key: str) -> tuple[bool, str]:
     if ":" not in entry:
         return False, f"插件 '{name}' entry 非法"
     try:
-        module = importlib.import_module(entry.split(":", 1)[0])
-    except Exception as e:
-        return False, f"插件模块加载失败: {e}"
+        if _PLUGIN_STATUS.get(name, {}).get("origin") == "external":
+            from . import packages
+            if not packages.read_state(name).get("enabled", True):
+                return False, "请先启用插件"
+            module = packages.import_module(manifest, entry.split(":", 1)[0])
+        else:
+            module = importlib.import_module(entry.split(":", 1)[0])
+    except Exception:  # noqa: BLE001 — do not disclose plugin exception payloads
+        return False, "插件模块加载失败，请检查依赖与兼容范围"
     probe = getattr(module, "probe_api_key", None)
     if probe is None:
         return False, f"插件 '{name}' 未提供 Key 探测"
     try:
-        return probe(api_key)
-    except Exception as e:
-        return False, f"探测失败: {e}"
+        ok, reason = probe(api_key)
+        return bool(ok), (str(reason).replace(api_key, "[已隐藏]")
+                          if _PLUGIN_STATUS.get(name, {}).get("origin") == "external" else str(reason))
+    except Exception:  # noqa: BLE001 — plugin exceptions may contain credentials
+        return False, "Key 探测失败，请检查凭据、网络与接口权限"
 
 
 def install_plugin(name: str) -> tuple[bool, str]:
@@ -380,7 +415,8 @@ def uninstall_plugin(name: str) -> tuple[bool, str]:
 
 def is_builtin(name: str) -> bool:
     """判断 name 是否为内置插件 (不可被用户编辑/删除)。"""
-    return (name or "").lower() in _PLUGIN_STATUS
+    return ((name or "").lower() in _PLUGIN_STATUS
+            and _PLUGIN_STATUS[(name or "").lower()].get("origin") != "external")
 
 
 def names() -> set[str]:
@@ -391,11 +427,30 @@ def errors() -> list[dict]:
     return list(_LOAD_ERRORS)
 
 
-def get_provider(name: str) -> GenericHTTPProvider:
+def get_provider(name: str) -> ManagedProvider:
     provider = _PROVIDERS.get((name or "").lower())
     if provider is None:
         raise ValueError(f"Custom data source not found or invalid: {name}")
     return provider
+
+
+def minute_config_fingerprint(name: str) -> bytes:
+    """当前已加载分钟配置与生效凭据的摘要，供在途请求与缓存核对。"""
+    provider = _PROVIDERS.get(name)
+    if provider is None:
+        return b""
+    status = _PLUGIN_STATUS.get(name)
+    if status is not None:
+        env = status.get("api_key_env", "")
+        key = secrets_store.get_env_backed_secret(f"{name}_api_key", env) if env else ""
+        config = ("plugin", status.get("version"), status.get("available"), "minute" in status["datasets"], key)
+    else:
+        source = provider.config
+        minute = source.datasets.get("minute")
+        auth = source.auth
+        token = _token_from_env(auth.token_env) if auth.type != "none" else None
+        config = ("yaml", asdict(minute) if minute else None, asdict(auth), token)
+    return hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).digest()
 
 
 def create_provider(config: dict) -> GenericHTTPProvider:
@@ -426,7 +481,7 @@ def provider_has_dataset(name: str, dataset: str) -> bool:
 
 def get_config_dict(name: str) -> dict | None:
     """读取一个已加载 custom 源的原始配置 dict(用于前端编辑回填)。内置插件不可编辑。"""
-    if is_builtin(name):
+    if name in _PLUGIN_STATUS:
         return None
     provider = _PROVIDERS.get((name or "").lower())
     if provider is None:
@@ -465,13 +520,14 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
             **({"asset_type_param": ds.asset_type_param} if ds_name == "minute" and ds.asset_type_param else {}),
             **({"freq_param": ds.freq_param} if ds_name == "minute" and ds.freq_param else {}),
             **({"pct_unit": ds.pct_unit} if ds_name == "realtime" and ds.pct_unit else {}),
+            **({"research_profile": ds.research_profile} if ds.research_profile else {}),
         }
     return out
 
 
 def save_config(name: str, config: dict) -> Path:
     """把一份配置 dict 写成 data/data_sources/{name}.yaml, 返回写入路径。"""
-    if is_builtin(name):
+    if name in _PLUGIN_STATUS:
         raise ValueError(f"'{name}' 是内置插件, 不可编辑")
     if not _NAME_RE.match(name or ""):
         raise ValueError(f"invalid data source name: {name!r} (only lowercase a-z 0-9 _ allowed)")
@@ -481,13 +537,27 @@ def save_config(name: str, config: dict) -> Path:
     if not path.is_relative_to(base.resolve()):
         raise ValueError("invalid data source name: path escape detected")
     cleaned = _sanitize_for_yaml(config)
+    # Static request data can contain credentials and is not returned to the settings editor.
+    # A profile edit must preserve those values for the same endpoint and HTTP method.
+    if path.is_file():
+        try:
+            previous = load_config(path)
+        except (ValueError, TypeError, AttributeError, yaml.YAMLError):
+            previous = None
+        for dataset, current in cleaned.get("datasets", {}).items():
+            old = previous.datasets.get(dataset) if previous else None
+            if old and (old.url, old.method) == (current["url"], current["method"]):
+                if old.params:
+                    current["params"] = old.params
+                if old.body:
+                    current["body"] = old.body
     atomic_write_text(path, yaml.safe_dump(cleaned, allow_unicode=True, sort_keys=False))
     return path
 
 
 def delete_config(name: str) -> bool:
     """删除 data/data_sources/{name}.yaml。返回是否真的删除了。"""
-    if is_builtin(name):
+    if name in _PLUGIN_STATUS:
         raise ValueError(f"'{name}' 是内置插件, 不可删除")
     if not _NAME_RE.match(name or ""):
         raise ValueError(f"invalid data source name: {name!r}")
@@ -588,6 +658,11 @@ def _sanitize_dataset(ds_name: str, ds_cfg: dict) -> dict:
             out["start_param"] = start_param
         if end_param:
             out["end_param"] = end_param
+    profile = ds_cfg.get("research_profile")
+    if profile:
+        if profile not in RESEARCH_PROFILES.get(ds_name, ()):
+            raise ValueError(f"Unknown {ds_name} research profile")
+        out["research_profile"] = profile
     pct_unit = str(ds_cfg.get("pct_unit") or "").strip().lower()
     if pct_unit:
         if ds_name != "realtime":
@@ -632,21 +707,57 @@ def _load_builtin_plugins() -> None:
     每次调用重建 _PLUGIN_STATUS, 并把可用的插件注册进 _PROVIDERS。
     """
     global _PLUGIN_STATUS
-    _PLUGIN_STATUS = {}
+    _PLUGIN_STATUS = {name: info for name, info in _PLUGIN_STATUS.items()
+                      if info.get("origin") == "external"}
     pdir = plugins_dir()
-    if not pdir.exists():
+    for plugin_dir in sorted(pdir.iterdir()) if pdir.exists() else []:
+        if plugin_dir.is_dir():
+            load_bundled_manifest(plugin_dir.name)
+    from . import packages
+    packages.discover()
+
+
+def load_bundled_manifest(name: str) -> None:
+    """Register one shipped provider without importing or upgrading any external plugins."""
+    if not name or Path(name).name != name or name in (".", ".."):
         return
-    for plugin_dir in sorted(pdir.iterdir()):
-        if not plugin_dir.is_dir():
-            continue
-        manifest_path = plugin_dir / "plugin.yaml"
-        if not manifest_path.exists():
-            continue
+    path = plugins_dir() / name / "plugin.yaml"
+    if path.is_file():
         try:
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             _register_one_plugin(manifest)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("插件 %s 清单解析失败: %s", plugin_dir.name, e)
+        except Exception as exc:  # noqa: BLE001 — match normal discovery of optional manifests
+            logger.warning("插件 %s 清单解析失败: %s", name, exc)
+
+
+def _manifest_status(manifest, available, reason, origin="builtin"):
+    name = manifest["name"]
+    runtime = str(manifest.get("runtime", "none")).lower()
+    return {
+        "name": name,
+        "origin": origin,
+        "display_name": manifest.get("display_name", name),
+        "datasets": list(manifest.get("datasets", []) or []),
+        "runtime": runtime,
+        "available": available,
+        "status": reason,
+        "description": manifest.get("description", ""),
+        "install_hint": manifest.get("install_hint", ""),
+        "homepage": manifest.get("homepage", ""),
+        "homepage_label": manifest.get("homepage_label", ""),
+        "api_key_env": manifest.get("api_key_env", ""),
+        "api_key_masked": _plugin_key_masked(name, manifest.get("api_key_env", "")),
+        # 计费标识 (可选): 如 "points" → 设置页能力芯片/适配行标注「积分」
+        "billing": manifest.get("billing", ""),
+        # 计费提示 (可选): 积分消耗与轮询频率/拉取范围的关系, 设置页按警示样式展示
+        "billing_note": manifest.get("billing_note", ""),
+        # 使用要点 (可选): 各能力的规模/节奏说明, 设置页详情卡以列表展示
+        "usage_notes": list(manifest.get("usage_notes", []) or []),
+        # Key/账务管理页 (可选): 设置页插件详情展示入口
+        "key_manage_url": manifest.get("key_manage_url", ""),
+        "key_manage_label": manifest.get("key_manage_label", ""),
+        "register_url": manifest.get("register_url", ""),
+    }
 
 
 def _register_one_plugin(manifest: dict) -> None:
@@ -662,36 +773,28 @@ def _register_one_plugin(manifest: dict) -> None:
     runtime = str(manifest.get("runtime", "none")).lower()
     # 委托检测: 调用插件自己的 check 函数 (node 型/python 型各自实现)
     available, reason = _call_check(manifest.get("check"))
-    _PLUGIN_STATUS[name] = {
-        "name": name,
-        "display_name": manifest.get("display_name", name),
-        "datasets": list(manifest.get("datasets", []) or []),
-        "runtime": runtime,
-        "available": available,
-        "status": reason,
-        "description": manifest.get("description", ""),
-        "install_hint": manifest.get("install_hint", ""),
-        "homepage": manifest.get("homepage", ""),
-        "api_key_env": manifest.get("api_key_env", ""),
-        "api_key_masked": _plugin_key_masked(name, manifest.get("api_key_env", "")),
-        # 计费标识 (可选): 如 "points" → 设置页能力芯片/适配行标注「积分」
-        "billing": manifest.get("billing", ""),
-        # 计费提示 (可选): 积分消耗与轮询频率/拉取范围的关系, 设置页按警示样式展示
-        "billing_note": manifest.get("billing_note", ""),
-        # 使用要点 (可选): 各能力的规模/节奏说明, 设置页详情卡以列表展示
-        "usage_notes": list(manifest.get("usage_notes", []) or []),
-        # Key/账务管理页 (可选): 设置页 Key 配置区展示入口
-        "key_manage_url": manifest.get("key_manage_url", ""),
-    }
+    _PLUGIN_STATUS[name] = _manifest_status(manifest, available, reason)
     if not available:
-        return  # 依赖没装: 不注册, 但状态已记录供 UI 显示
+        with _PUBLISH_LOCK:
+            old = _PROVIDERS.pop(name, None)
+        if old is not None:
+            _close_providers([old])
+        return  # 不就绪时撤下旧实例，避免旧凭据继续生效
     # 可用 → 动态加载 provider 类并实例化
     try:
         provider_cls = _load_entry(manifest["entry"])
         provider = provider_cls() if isinstance(provider_cls, type) else provider_cls
         provider.builtin = True  # 标记为内置 (list_sources 过滤, 不可被用户编辑/删除)
         with _PUBLISH_LOCK:
-            _PROVIDERS[name] = provider
+            old = _PROVIDERS.get(name)
+            if not isinstance(old, ManagedProvider):
+                _PROVIDERS[name] = ManagedProvider(provider)
+        if isinstance(old, ManagedProvider):
+            old.replace(provider)
+            with _PUBLISH_LOCK:
+                displaced = _PROVIDERS.get(name) is not old
+            if displaced:
+                _close_providers([old])
         logger.info("内置插件 %s 已注册 (runtime=%s)", name, runtime)
     except Exception as e:  # noqa: BLE001
         # 声称可用但 import 失败 → 标记不可用, 避免启动崩溃
@@ -727,5 +830,108 @@ def _load_entry(entry_ref: str):
     return getattr(module, attr)
 
 
-# 模块导入时即扫描一次, 保证 names()/_allowed_data_providers() 在 startup 前可用。
-_load_builtin_plugins()
+class _UnavailableProvider:
+    """Keep installed identities so preferences cannot silently switch vendors."""
+
+    def __init__(self, doc, reason):
+        self.name = doc["name"]
+        self.config = SimpleNamespace(datasets=dict.fromkeys(doc.get("datasets", [])))
+        self.reason = reason
+
+    def close(self):
+        pass
+
+    def __getattr__(self, name):
+        if not name.startswith(("get_", "iter_")):
+            raise AttributeError(name)
+        def unavailable(*args, **kwargs):
+            raise ProviderRequestError(f"数据源 {self.name} 不可用：{self.reason}")
+        return unavailable
+
+
+def record_external_error(name):
+    if name in _PROVIDERS and _PLUGIN_STATUS.get(name, {}).get("origin") != "external":
+        logger.warning("external plugin name conflict: %s", name)
+        return
+    from .packages import DATASETS
+    doc = {"name": name, "datasets": sorted(DATASETS), "version": ""}
+    publish_external(doc, None, "插件加载失败，请检查清单与兼容范围", metadata=False)
+
+
+def publish_external(doc, provider, reason, *, metadata=True):
+    name = doc["name"]
+    available = provider is not None
+    value = provider if available else _UnavailableProvider(doc, reason)
+    status = {
+        **_manifest_status(doc, available, reason, origin="external"),
+        "version": doc.get("version", ""), "author": doc.get("author", ""),
+        "can_test": available and callable(getattr(provider, "test_dataset", None)),
+    }
+    with _PUBLISH_LOCK:
+        old = _PROVIDERS.get(name)
+        handle = old if isinstance(old, ManagedProvider) else ManagedProvider(value)
+        _PROVIDERS[name] = handle
+        _PLUGIN_STATUS[name] = status
+    if isinstance(old, ManagedProvider):
+        old.replace(value)
+        with _PUBLISH_LOCK:
+            displaced = _PROVIDERS.get(name) is not old
+        if displaced:
+            _close_providers([old])
+    if metadata:
+        handle._external_signature = _external_signature(doc)
+        refresh_external_metadata(name)
+
+
+def _external_signature(doc):
+    from . import packages
+    state = packages.read_state(doc["name"]) or {}
+    key = secrets_store.get_env_backed_secret(f"{doc['name']}_api_key", doc.get("api_key_env", ""))
+    return (doc.get("version"), state.get("enabled", True), hashlib.sha256(key.encode()).digest())
+
+
+def refresh_external_metadata(name):
+    from . import packages
+    state = packages.read_state(name)
+    if state and name in _PLUGIN_STATUS:
+        _PLUGIN_STATUS[name].update({
+            "pending_version": state.get("pending"), "previous_version": state.get("previous"),
+            "enabled": state.get("enabled", True), "pending_remove": state.get("remove", False),
+            "update_error": state.get("error"),
+        })
+
+
+def refresh_plugin(name, *, manifest_doc=None, strict=False):
+    """Refresh one plugin without closing other providers or in-flight requests."""
+    from . import packages
+    doc = manifest_doc or plugin_manifest(name)
+    if doc is None:
+        raise ValueError("插件不存在")
+    state = packages.read_state(name)
+    if state is None:
+        _register_one_plugin(doc)
+        return
+    if (manifest_doc is not None and name in _PROVIDERS
+            and _PLUGIN_STATUS.get(name, {}).get("origin") == "external"
+            and getattr(_PROVIDERS[name], "_external_signature", None) == _external_signature(doc)):
+        refresh_external_metadata(name)
+        return
+    if not state.get("enabled", True):
+        publish_external(doc, None, "待重启卸载" if state.get("remove") else "已停用")
+        return
+    try:
+        provider, reason = packages.build_provider(doc)
+        if strict and provider is None:
+            raise ValueError("插件配置未就绪")
+    except Exception:  # noqa: BLE001 — uploaded exceptions can contain credentials
+        if strict:
+            raise ValueError("插件初始化失败，原配置保持不变") from None
+        publish_external(doc, None, "插件加载失败，请检查依赖与 Provider 实现")
+        return
+    publish_external(doc, provider, reason)
+
+
+# TSP exposes providers before startup. A spawned research node only loads its
+# locked inputs. Discovering TSP plugins here would also apply pending upgrades.
+if current_process().name not in {ENGINE_NODE_PROCESS_NAME, "tivelo-native-probe", "tivelo-data-provider"}:
+    _load_builtin_plugins()

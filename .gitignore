@@ -60,8 +60,19 @@ backend/.env
 # ===== User-derived prompts =====
 backend/user_prompts/
 
-# ===== Browser automation =====
+# ===== Local verification artifacts =====
 .playwright-mcp/
+.playwright-cli/
+.impeccable/
+.v2c/
+/MagicMock/
+/backend/MagicMock/
+
+# ===== Tivelo Pro local installation material =====
+/tivelo-pro-dynamic/
+tivelo-pro-dynamic*.zip
+tivelo_pro_dynamic*.whl
+*.lic
 
 # ===== AI IDE =====
 .trae/
@@ -109,3 +120,6 @@ TickFlowStockPanel.app/
 TickFlowStockPanel-macos*.dmg
 TickFlowStockPanel-macos*.zip
 reports/cursor_tickflow_pro_rate_limit_p0.bundle
+
+# 协议变更工作文档 (含贡献者个人信息, 自述不入库 — CONTRIBUTING §8/§14.4)
+relicensing/

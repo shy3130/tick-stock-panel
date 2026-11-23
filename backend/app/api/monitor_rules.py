@@ -56,6 +56,11 @@ def _sync_engine(request: Request) -> None:
             for r in monitor_rules.load_all(_data_dir(request))
         ]
         engine.set_rules(rules)
+    # set_rules 全量覆盖会清掉模拟盘合成规则 → 每次必须重注入;
+    # 覆盖集变化 (新建/删除 strategy 规则) 也会改变去重结果。
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
 
 
 # ── Pydantic 模型 ───────────────────────────────────────

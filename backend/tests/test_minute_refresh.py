@@ -47,9 +47,12 @@ class _FakeAppState:
 
 class _FakeRepo:
     def __init__(self, symbols: list[str]):
+        import threading
         from pathlib import Path
         self._inst = pl.DataFrame({"symbol": symbols})
         self.store = type("S", (), {"data_dir": Path(".")})()
+        # 与真实仓库同契约: 分区读-改-写必须持仓库写锁
+        self._write_lock = threading.Lock()
 
     def get_instruments(self) -> pl.DataFrame:
         return self._inst

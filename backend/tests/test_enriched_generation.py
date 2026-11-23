@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import polars as pl
 import pytest
@@ -128,10 +129,8 @@ def test_recovery_replaces_stale_publication_but_not_active_owner(tmp_path) -> N
     assert pl.read_parquet(out)["close"].item() == pytest.approx(12.0)
 
 
-def test_recovery_takes_over_when_owner_pid_is_dead_on_windows(tmp_path, monkeypatch) -> None:
-    # 跨进程孤儿锁: 属主进程已死, 但 Windows 的 os.kill(pid, 0) 对不存在的 pid
-    # 抛 WinError 87 (ERROR_INVALID_PARAMETER) 而非 ProcessLookupError,
-    # 存活探测若把它当"存活", recover 将永远报 another publication is active。
+def test_recovery_takes_over_when_owner_process_has_exited(tmp_path, monkeypatch) -> None:
+    # Read-only process checks must still allow orphan recovery on every platform.
     stale = {
         "state": "publishing",
         "generation": "stale-generation",
@@ -143,12 +142,7 @@ def test_recovery_takes_over_when_owner_pid_is_dead_on_windows(tmp_path, monkeyp
         json.dumps(stale), encoding="utf-8"
     )
 
-    def probe(_pid: int, _sig: int) -> None:
-        error = OSError()
-        error.winerror = 87
-        raise error
-
-    monkeypatch.setattr("app.enriched_generation.os.kill", probe)
+    monkeypatch.setattr("app.enriched_generation.psutil.pid_exists", lambda _: False)
 
     out = tmp_path / "kline_daily_enriched" / "date=2026-08-14" / "part.parquet"
     recovered = EnrichedPublication(tmp_path, recover=True)
@@ -560,14 +554,30 @@ def test_fresh_heartbeat_still_blocks_takeover(tmp_path) -> None:
         )
 
 
+def test_live_publication_checks_do_not_signal_the_owner(tmp_path, monkeypatch) -> None:
+    from app import enriched_generation as generation
+
+    owner_pid = os.getppid()
+    _write_stale_marker(tmp_path, owner_pid=owner_pid, age_seconds=5.0)
+    marker = tmp_path / ".matrix_generation_stock.json"
+    original = marker.read_bytes()
+    send_signal = Mock()
+    monkeypatch.setattr(generation, "os", SimpleNamespace(**{**vars(os), "kill": send_signal}))
+
+    with pytest.raises(EnrichedGenerationUnavailableError, match="being published"):
+        get_enriched_generation(tmp_path)
+    assert recover_stale_publications(tmp_path) == []
+    with pytest.raises(EnrichedGenerationUnavailableError, match="active"):
+        EnrichedPublication(tmp_path, recover=True).begin()
+    assert marker.read_bytes() == original
+    send_signal.assert_not_called()
+
+
 def test_recover_stale_publications_restores_orphan_on_startup(tmp_path, monkeypatch) -> None:
     """启动自检: 上一个进程异常退出的 publishing 标记应直接恢复为 ready。"""
     _write_stale_marker(tmp_path, owner_pid=999_999, age_seconds=5.0)
 
-    def probe(_pid: int, _sig: int) -> None:
-        raise ProcessLookupError
-
-    monkeypatch.setattr("app.enriched_generation.os.kill", probe)
+    monkeypatch.setattr("app.enriched_generation.psutil.pid_exists", lambda _: False)
 
     assert recover_stale_publications(tmp_path) == ["stock"]
     marker = json.loads((tmp_path / ".matrix_generation_stock.json").read_text())

@@ -312,12 +312,30 @@ const ERROR_TITLES: Record<string, string> = {
   input_too_long: '对话过长',
   rounds: '本轮调用达到上限',
   model: 'AI 服务出错',
+  timeout: 'AI 生成超时',
   network: '网络错误',
 }
 
-export const NoticeMessage = memo(function NoticeMessage({ content }: { content: string }) {
+export const NoticeMessage = memo(function NoticeMessage({
+  content,
+  onRetry,
+}: {
+  content: string
+  onRetry?: () => void
+}) {
+  // 无 onRetry 的 notice (服务端通知等) 保持纯文本; 中断提示传 onRetry 时
+  // 渲染为可点按钮 —— 文案承诺"可点击重试", 渲染层必须兑现
+  if (!onRetry) {
+    return <div className="text-center text-xs text-muted">{content}</div>
+  }
   return (
-    <div className="text-center text-xs text-muted">{content}</div>
+    <button
+      type="button"
+      onClick={onRetry}
+      className="mx-auto block text-center text-xs text-muted hover:text-accent cursor-pointer transition-colors"
+    >
+      {content}
+    </button>
   )
 })
 
@@ -332,7 +350,7 @@ export function AssistantMessageView({ message, onRetry }: { message: ChatMessag
     case 'error':
       return <ErrorBubble kind={message.kind} message={message.message} hint={message.hint} onRetry={onRetry} />
     case 'notice':
-      return <NoticeMessage content={message.content} />
+      return <NoticeMessage content={message.content} onRetry={onRetry} />
     default:
       return null
   }

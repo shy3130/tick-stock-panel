@@ -357,7 +357,7 @@ export function RpsRotationDialog({ onClose, kind = 'concept' }: Props) {
               </div>
             ) : rowCount === 0 ? (
               <div className="flex items-center justify-center py-16 text-[11px] text-muted">
-                暂无{dimLabel}数据,请先在「{kind === 'industry' ? '行业分析' : '概念分析'}」页配置并获取{dimLabel}数据源
+                暂无{dimLabel}数据,请先在「{kind === 'industry' ? '行业板块' : '概念板块'}」页配置并获取{dimLabel}数据源
               </div>
             ) : (
               <div

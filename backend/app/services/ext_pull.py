@@ -20,6 +20,7 @@ from app.services.ext_data import (
     ExtConfigStore,
     PullConfig,
     rows_to_parquet,
+    run_ext_data_io,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,35 @@ def _with_date_param(url: str, date_param: str | None, day: date, date_format: s
     return f"{url}{sep}{date_param}={_format_date_value(day, date_format)}"
 
 
+def since_cursor(data_dir, config: ExtConfig, day: date) -> str | None:
+    """增量续传游标: 目标日本地分区 time_field 列的最大值 (字符串化)。
+
+    盘中多盘表 (配置 pull.since_param + time_field) 用它让源只返回新于本地的
+    盘次。缺口感知天然成立 —— 本地缺多少源补多少; 下列情况返回 None (不带
+    参数 = 整日全量), 全部是安全的回退方向:
+      - 未配置 since_param/time_field (PullConfig 构造时已归一联动)
+      - 本地无该日分区 (首拉/新交易日/分区被删修复)
+      - 分区缺 time_field 列 (schema 漂移) 或文件损坏、列为空
+    snapshot 模式无日期分区, 恒返回 None —— 增量仅对 timeseries 有意义。
+    """
+    pull = config.pull
+    if not pull or not pull.since_param or not pull.time_field or pull.fanout:
+        return None  # fanout 两级拉取 (目录→明细) 无整表游标语义
+    part = _day_partition(Path(data_dir), config.id, day)
+    if not part.exists():
+        return None
+    import polars as pl
+
+    try:
+        col = pl.read_parquet(part, columns=[pull.time_field])[pull.time_field]
+        value = col.max()
+    except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 全量, 不阻断拉取
+        return None
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
 # Hub 管理后台的会话 Cookie 名。它是有有效期的浏览器会话(默认 24h),
 # 换机器/换部署即失效, 不能当作定时拉取的长期凭据。
 _HUB_SESSION_COOKIES = frozenset({"tickflow_hub_access"})
@@ -252,6 +282,8 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
     服务端忽略日期参数返回当日数据时会静默把当日值写进历史分区,
     造成整个时序口径错乱 —— 此处 fail-closed 拒绝 (实测确实有忽略
     ?date= 的接口)。date 字段缺省的接口不做校验。
+
+    仅在 pull.date_param 已配置时调用 (见 _assert_rows_date_if_dated)。
     """
     want = day.isoformat()
     for r in rows[:20]:
@@ -265,6 +297,17 @@ def _assert_rows_date(rows: list[dict], day: date) -> None:
                 f"接口返回的日期 {str(raw)[:10]!r} 与请求日期 {want} 不一致 "
                 "(接口可能不支持日期参数), 已拒绝写入该分区"
             )
+
+
+def _assert_rows_date_if_dated(pull: PullConfig, rows: list[dict], day: date) -> None:
+    """仅对「按日查询」接口做响应日期一致性校验 (pull.date_param 已配置)。
+
+    未配置 date_param 的接口只有当日快照, 响应日期本就可能落后于请求日期
+    (周末/节假日/数据源 T+1), 校验会把正常快照误判成「接口忽略日期参数」
+    而整表拒写。该契约的目的是防历史分区被当日值污染, 对快照接口无意义。
+    """
+    if pull.date_param:
+        _assert_rows_date(rows, day)
 
 
 async def _request_json(
@@ -338,22 +381,27 @@ def _parse_rows_payload(config: ExtConfig, pull: PullConfig, data: Any) -> list[
     return _apply_field_map(rows, pull.field_map)
 
 
-async def fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+async def fetch_rows_for_date(config: ExtConfig, target_date: date, data_dir=None) -> list[dict]:
     async with _pull_client_scope():
-        return await _fetch_rows_for_date(config, target_date)
+        return await _fetch_rows_for_date(config, target_date, data_dir)
 
 
-async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dict]:
+async def _fetch_rows_for_date(config: ExtConfig, target_date: date, data_dir=None) -> list[dict]:
     """按日期请求外部 API 并解析为行 (不写盘)。空数据返回 []。
 
     与 fetch_and_ingest 共用同一解析链 (response_path/字段映射/关联字段校验),
     历史回补与当日拉取不产生第二套口径。
     配置了 pull.page_param 时按页循环拉取 (仅 GET), 空页/短页/达 max_pages 停。
     配置了 pull.fanout 时走两级拉取 (目录 → 逐条目明细), 见 ext_fanout。
+    传入 data_dir 且配置了 pull.since_param 时带增量游标 (?since=本地最大盘次);
+    历史回补不传 data_dir → 恒全量 (回补只拉缺失分区, 游标无意义)。
     """
     pull = config.pull
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
+
+    cursor = since_cursor(data_dir, config, target_date) if data_dir is not None else None
+    since_extra: dict[str, str] | None = {pull.since_param: cursor} if cursor else None
 
     if pull.fanout:
         from app.services.ext_fanout import fetch_fanout_rows
@@ -363,7 +411,8 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
         collected: list[dict] = []
         page = pull.page_start
         for _ in range(pull.max_pages):
-            extra: dict[str, str] = {pull.page_param: str(page)}
+            # since 是结果集过滤器, 与页码参数一起每页携带
+            extra: dict[str, str] = {**(since_extra or {}), pull.page_param: str(page)}
             if pull.page_size_param and pull.page_size > 0:
                 extra[pull.page_size_param] = str(pull.page_size)
             data = await _request_json(pull, config.id, day=target_date, extra_params=extra)
@@ -382,13 +431,13 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
             )
         rows = collected
     else:
-        data = await _request_json(pull, config.id, day=target_date)
+        data = await _request_json(pull, config.id, day=target_date, extra_params=since_extra)
         rows = _parse_rows_payload(config, pull, data)
 
     # 校验可关联标的的字段：直接 symbol/code，或配置里声明的映射源列。
     # 市场级表 (market_level, 行=全市场一条, 无标的列) 跳过该校验。
     if config.market_level:
-        _assert_rows_date(rows, target_date)
+        _assert_rows_date_if_dated(pull, rows, target_date)
         return rows
     row_keys = set(rows[0]) if rows else set()
     mapped_cols = {
@@ -399,7 +448,7 @@ async def _fetch_rows_for_date(config: ExtConfig, target_date: date) -> list[dic
     if rows and not ({"symbol", "code"} & row_keys or mapped_cols & row_keys):
         raise ValueError("数据行中缺少 symbol/code 字段，请配置字段映射或标的映射")
 
-    _assert_rows_date(rows, target_date)
+    _assert_rows_date_if_dated(pull, rows, target_date)
     return rows
 
 
@@ -419,11 +468,11 @@ async def fetch_and_ingest(
     """
     # 同上: 落盘分区按北京日期, 否则 UTC 容器在北京时间 08:00 之前写的是前一天。
     day = target_date or cn_today()
-    rows = await fetch_rows_for_date(config, day)
+    rows = await fetch_rows_for_date(config, day, data_dir)
     if not rows:
         raise ValueError("提取到的行数为 0")
-    n = rows_to_parquet(
-        rows, config, data_dir, snapshot_date=day,
+    n = await run_ext_data_io(
+        rows_to_parquet, rows, config, data_dir, snapshot_date=day,
         keep_strategy_cache=keep_strategy_cache,
     )
     return n, day.isoformat()
@@ -482,7 +531,7 @@ async def _backfill_history(
 
     from app.services.dragon_tiger import _local_trading_days
 
-    days = [d for d in _local_trading_days(data_dir) if start <= d <= end]
+    days = [d for d in await run_ext_data_io(_local_trading_days, data_dir) if start <= d <= end]
     if not days:
         raise ValueError("范围内无本地交易日 (需先同步日K以确定交易日历)")
 
@@ -501,7 +550,7 @@ async def _backfill_history(
             if not rows:
                 empty += 1  # 该日无数据 (服务端未归档), 不是错误
             else:
-                rows_written += rows_to_parquet(rows, config, data_dir, snapshot_date=d)
+                rows_written += await run_ext_data_io(rows_to_parquet, rows, config, data_dir, snapshot_date=d)
                 fetched += 1
         except httpx.HTTPStatusError as e:
             if _status_code(e) == 404:
@@ -526,7 +575,7 @@ async def _backfill_history(
                     if not rows:
                         empty += 1
                     else:
-                        rows_written += rows_to_parquet(rows, config, data_dir, snapshot_date=d)
+                        rows_written += await run_ext_data_io(rows_to_parquet, rows, config, data_dir, snapshot_date=d)
                         fetched += 1
                 except Exception as e2:
                     if _status_code(e2) == 404:  # 退避重试后无该日快照 → 同样视为无数据
@@ -555,6 +604,15 @@ async def _backfill_history(
 # 每日固定时刻模式的等待分片: 长睡到明天会让「中途改配置/停用」最长等一整天
 # 才生效, 分片轮询让变更在一分钟内被外层重读
 _DAILY_POLL_SECONDS = 60
+
+# 间隔制下限 (秒): 秒级拉取的边界, 防手改 config.json 写过小值打爆接口。
+# 同一配置的拉取循环串行执行 (拉完才睡), 下限只约束频率不涉及并发
+_MIN_INTERVAL_S = 10
+
+
+def _interval_seconds(pull: PullConfig) -> float:
+    """间隔制有效间隔 (秒): schedule_seconds 优先 (秒级), 回退 schedule_minutes*60。"""
+    return max(pull.schedule_seconds or pull.schedule_minutes * 60, _MIN_INTERVAL_S)
 
 
 def _today_target(now: datetime, hhmm: str) -> datetime:
@@ -710,15 +768,15 @@ class PullScheduler:
             fresh.pull.last_status = "success"
             fresh.pull.last_message = f"{n} rows @ {d}"
             fresh.pull.last_rows = n
-            store.upsert(fresh, keep_strategy_cache=True)
+            await run_ext_data_io(store.upsert, fresh, keep_strategy_cache=True)
             logger.info("PullScheduler: %s success, %d rows", fresh.id, n)
         except Exception as e:
-            fresh2 = store.get(fresh.id)
+            fresh2 = await run_ext_data_io(store.get, fresh.id)
             if fresh2 and fresh2.pull:
                 fresh2.pull.last_run = datetime.now(timezone.utc).isoformat()
                 fresh2.pull.last_status = "error"
                 fresh2.pull.last_message = str(e)[:200]
-                store.upsert(fresh2, keep_strategy_cache=True)
+                await run_ext_data_io(store.upsert, fresh2, keep_strategy_cache=True)
             logger.warning("PullScheduler: %s error: %s", fresh.id, e)
 
     async def _run_daily_at(self, config_id: str, store: ExtConfigStore, hhmm: str) -> None:
@@ -733,7 +791,7 @@ class PullScheduler:
         就是完整日程)。
         """
         while self._running:
-            fresh = store.get(config_id)
+            fresh = await run_ext_data_io(store.get, config_id)
             if (
                 not fresh or not fresh.pull or not fresh.pull.enabled
                 or fresh.pull.schedule_time != hhmm
@@ -750,10 +808,10 @@ class PullScheduler:
             nxt = _next_scheduled_target(now, hhmm, fresh.pull)
             # 预告下次运行时间 (UTC ISO, 与间隔制同口径), 供前端展示
             nxt_iso = nxt.astimezone(UTC).isoformat()
-            latest = store.get(config_id)
+            latest = await run_ext_data_io(store.get, config_id)
             if latest and latest.pull and latest.pull.next_run != nxt_iso:
                 latest.pull.next_run = nxt_iso
-                store.upsert(latest, keep_strategy_cache=True)
+                await run_ext_data_io(store.upsert, latest, keep_strategy_cache=True)
             await asyncio.sleep(
                 min(_DAILY_POLL_SECONDS, max((nxt - now).total_seconds(), 1.0))
             )
@@ -772,10 +830,10 @@ class PullScheduler:
             chunk = min(_DAILY_POLL_SECONDS, remaining)
             await asyncio.sleep(chunk)
             remaining -= chunk
-            fresh = store.get(config_id)
+            fresh = await run_ext_data_io(store.get, config_id)
             if not fresh or not fresh.pull or not fresh.pull.enabled:
                 return
-            if fresh.pull.schedule_time or max(fresh.pull.schedule_minutes * 60, 60) != interval:
+            if fresh.pull.schedule_time or _interval_seconds(fresh.pull) != interval:
                 return  # 调度形态或间隔变了 → 回外层重读并重新安排
 
     async def _run_loop(self, config: ExtConfig) -> None:
@@ -790,7 +848,7 @@ class PullScheduler:
             while self._running:
                 # 每轮重读最新配置 — 用户可能修改了 url / interval / enabled
                 store = ExtConfigStore(self._data_dir)
-                fresh = store.get(config.id)
+                fresh = await run_ext_data_io(store.get, config.id)
                 if not fresh or not fresh.pull or not fresh.pull.enabled:
                     break
                 pull = fresh.pull
@@ -804,9 +862,9 @@ class PullScheduler:
                     fresh.pull.last_run = datetime.now(timezone.utc).isoformat()
                     fresh.pull.last_status = "skipped"
                     fresh.pull.last_message = "不在拉取时间窗口内"
-                    store.upsert(fresh, keep_strategy_cache=True)
+                    await run_ext_data_io(store.upsert, fresh, keep_strategy_cache=True)
                     logger.info("PullScheduler: %s skipped (outside time window)", config.id)
-                    interval = max(pull.schedule_minutes * 60, 60)
+                    interval = _interval_seconds(pull)
                     await self._sleep_interval_reloading(config.id, store, interval)
                     continue
 
@@ -814,15 +872,15 @@ class PullScheduler:
                 await self._execute_pull(fresh, store)
 
                 # 间隔取自最新配置 (每次重新读取, 修复改间隔不生效)
-                interval = max(pull.schedule_minutes * 60, 60)  # 至少 60s
+                interval = _interval_seconds(pull)
                 # 预告下次运行时间, 供前端展示
                 next_dt = datetime.now(UTC).timestamp() + interval
-                latest = store.get(config.id)
+                latest = await run_ext_data_io(store.get, config.id)
                 if latest and latest.pull:
                     latest.pull.next_run = datetime.fromtimestamp(
                         next_dt, tz=UTC
                     ).isoformat()
-                    store.upsert(latest, keep_strategy_cache=True)
+                    await run_ext_data_io(store.upsert, latest, keep_strategy_cache=True)
 
                 await self._sleep_interval_reloading(config.id, store, interval)
                 if not self._running:

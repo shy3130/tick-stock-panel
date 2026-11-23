@@ -6,6 +6,7 @@ from typing import Any
 
 import polars as pl
 
+from app.factors.registry import factor_calculation_order, factor_warmup_bars
 from app.factors.registry import (
     factor_dependencies as _registry_factor_dependencies,
 )
@@ -50,19 +51,7 @@ def effective_scoring_directions(overrides: Mapping[str, Any] | None) -> dict[st
 
 
 def scoring_warmup_bars(scoring: Mapping[str, Any]) -> int:
-    warmups: list[int] = [
-        _ROLLING_SCORING_WARMUP.get(str(name), 1)
-        for name, weight in scoring.items()
-        if weight
-    ]
-    # composite/custom 因子的预热来自注册表 (P3)
-    for name, weight in scoring.items():
-        if not weight:
-            continue
-        spec = _registry_get_factor(str(name))
-        if spec is not None and spec.kind in ("custom", "composite"):
-            warmups.append(spec.warmup_bars)
-    return max(warmups, default=1)
+    return factor_warmup_bars(name for name, weight in scoring.items() if weight)
 
 
 def scoring_dependencies(scoring: Mapping[str, Any]) -> set[str]:
@@ -288,21 +277,75 @@ def materialize_scoring_columns(
     frame: pl.DataFrame,
     names: Collection[str],
 ) -> pl.DataFrame:
+    requested = set(names)
+    # 按依赖层批算, 同层仍共享批量缓存命中/列附着。中间列仅在本次求值中可见。
+    depths: dict[str, int] = {}
+    layers: dict[int, list[str]] = {}
+    for name in factor_calculation_order(requested - set(frame.columns)):
+        spec = _registry_get_factor(name)
+        if name in frame.columns or spec is None or spec.kind == "base":
+            continue
+        depth = 1 + max((depths.get(dep, 0) for dep in spec.inputs), default=0)
+        depths[name] = depth
+        layers.setdefault(depth, []).append(name)
+    for layer in layers.values():
+        frame = _materialize_scoring_layer(frame, layer)
+    return frame.drop(depths.keys() - requested, strict=False)
+
+
+def _materialize_scoring_layer(frame: pl.DataFrame, names: Collection[str]) -> pl.DataFrame:
     # custom (DSL) 因子先物化: frame_transform 可能需要多阶段临时列 (嵌套窗口规避),
     # 与单表达式路径不同, 必须整体走帧变换 —— 与检验/试算共用同一条计算路径 (P3)。
+    # P2b: 物化结果走内容寻址缓存 (键 = 定义 + 依赖列内容), 重复求值零成本;
+    # 缓存故障一律回退现算, 不影响正确性。
     from app.factors.dsl import FACTOR_COLUMN, compile_formula_cached
+    from app.factors.materialize_cache import cache_key, get_cached, put_cached
+    from app.factors.py_expr import compile_python_expression_cached
 
+    # 两段式: 命中列一次批量附着 (成本与因子数无关 — 每列一次 with_columns
+    # 会随 K 线性拷贝帧); 未命中的逐个现算 (帧变换有依赖顺序)。
+    pending: list[tuple[str, object, str | None]] = []
+    hits: dict[str, pl.Series] = {}
     for name in names:
         spec = _registry_get_factor(str(name))
         if spec is None or spec.kind != "custom" or name in frame.columns:
             continue
-        compiled = compile_formula_cached(spec.formula_text)
+        if getattr(spec, "lang", "dsl") == "python":
+            compiled = compile_python_expression_cached(spec.formula_text)
+        else:
+            compiled = compile_formula_cached(spec.formula_text)
+        if not getattr(compiled, "ok", True):
+            continue
         if compiled.frame_transform is None:
+            continue
+        key = cache_key(
+            str(name), spec.formula_text, spec.version, frame,
+            spec.inputs | ({"symbol", "date"} & set(frame.columns)),
+        )
+        if key is not None:
+            cached = get_cached(key, frame.height)
+            if cached is not None:
+                hits[str(name)] = cached
+                continue
+        pending.append((str(name), compiled, key))
+    if hits:
+        frame = frame.with_columns([series.alias(name) for name, series in hits.items()])
+    for name, compiled, key in pending:
+        if name in frame.columns:
             continue
         transformed = compiled.frame_transform(frame)
         if transformed is None:
             continue
-        frame = transformed.with_columns(pl.col(FACTOR_COLUMN).alias(str(name))).drop(FACTOR_COLUMN)
+        column = transformed.get_column(FACTOR_COLUMN).alias(name)
+        if key is not None:
+            put_cached(key, column)
+        # 丢弃 DSL 分阶段临时列 — 与缓存命中路径的列集合完全一致
+        # (临时列本就是变换内部工件, 不应泄漏进下游帧)。
+        staged_temps = [
+            c for c in transformed.columns
+            if c not in frame.columns and c != FACTOR_COLUMN
+        ]
+        frame = transformed.drop([FACTOR_COLUMN, *staged_temps]).with_columns(column)
     expressions = [
         expression.alias(name)
         for name in names

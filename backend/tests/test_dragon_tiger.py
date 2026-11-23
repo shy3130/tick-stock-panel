@@ -155,3 +155,91 @@ def test_build_recap_context_contains_summary(data_dir, monkeypatch):
 def test_build_recap_context_empty_without_source(data_dir, monkeypatch):
     monkeypatch.setattr(dt, "_provider", lambda: None)
     assert dt.build_recap_context(data_dir) == ""
+
+
+# ---- thscode 归一化 (2026-10-29 用户反馈: 退市整理期股/B股 thscode=null 进前端) ----
+
+def test_derive_thscode_market_suffix():
+    assert dt.derive_thscode("002731") == "002731.SZ"
+    assert dt.derive_thscode("300750") == "300750.SZ"
+    assert dt.derive_thscode("600519") == "600519.SH"
+    assert dt.derive_thscode("688111") == "688111.SH"
+    assert dt.derive_thscode("830799") == "830799.BJ"
+    assert dt.derive_thscode("900920") == "900920.SH"   # 沪B
+    assert dt.derive_thscode("200468") == "200468.SZ"   # 深B
+    assert dt.derive_thscode("600519.SH") == "600519.SH"  # 已带后缀原样返回
+    assert dt.derive_thscode(None) is None
+    assert dt.derive_thscode("ABCDEF") is None
+
+
+def test_normalize_stock_items_fills_null_thscode_from_ticker():
+    items = [
+        {"thscode": None, "ticker": "002731", "name": "萃华退", "net_value": -525558.3},
+        {"thscode": None, "ticker": "200468", "name": "宁通信B"},
+        {"thscode": "600519.SH", "ticker": "600519", "name": "贵州茅台"},
+    ]
+    out = dt.normalize_stock_items(items)
+    assert [i["thscode"] for i in out] == ["002731.SZ", "200468.SZ", "600519.SH"]
+    # 其它字段原样保留
+    assert out[0]["name"] == "萃华退" and out[0]["net_value"] == -525558.3
+
+
+def test_normalize_stock_items_drops_unidentifiable():
+    out = dt.normalize_stock_items([
+        {"thscode": None, "ticker": None, "name": "无代码"},
+        {"thscode": "  ", "ticker": "nope", "name": "坏ticker"},
+        "junk",
+    ])
+    assert out == []
+
+
+def test_boards_of_normalizes_nested_seat_rows():
+    class _NullProvider:
+        def dragon_tiger(self, board_type, date):
+            return {
+                "trade_date": date,
+                "stock_items": [{"thscode": None, "ticker": "900920", "name": "动力B股"}],
+                "hot_money_items": [{"name": "T王", "buying": 1.0,
+                                     "rows": [{"thscode": None, "ticker": "002731", "name": "萃华退"}]}],
+            }
+
+    got = dt._boards_of(_NullProvider(), "all", "2026-10-29")
+    assert got["stock_items"][0]["thscode"] == "900920.SH"
+    assert got["hot_money_items"][0]["rows"][0]["thscode"] == "002731.SZ"
+
+
+def test_load_cache_normalizes_legacy_null_thscode(tmp_path):
+    """旧版本写入的历史缓存含 null thscode → 读回即归一, 不把脏数据透给前端。"""
+    path = tmp_path / "date=2026-10-29.json"
+    path.write_text(json.dumps({
+        "state": "ok",
+        "trade_date": "2026-10-29",
+        "all": {"stock_items": [{"thscode": None, "ticker": "002731", "name": "萃华退"}]},
+        "org": {"stock_items": [{"thscode": "600519.SH"}]},
+        "hot_money": {"hot_money_items": [
+            {"name": "T王", "rows": [{"thscode": None, "ticker": "200468"}]},
+        ]},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    payload = dt._load_cache(path)
+    assert payload["all"]["stock_items"][0]["thscode"] == "002731.SZ"
+    assert payload["org"]["stock_items"][0]["thscode"] == "600519.SH"
+    assert payload["hot_money"]["hot_money_items"][0]["rows"][0]["thscode"] == "200468.SZ"
+
+
+def test_get_dragon_tiger_normalizes_provider_null_thscode(data_dir, monkeypatch):
+    class _NullProvider:
+        def dragon_tiger(self, board_type, date):
+            return {
+                "trade_date": "2026-08-28",
+                "count": 1,
+                "stock_count": 1,
+                "stock_items": [{"thscode": None, "ticker": "002731", "name": "萃华退",
+                                 "net_value": -525558.3}],
+                "hot_money_items": [],
+            }
+
+    _use_provider(monkeypatch, _NullProvider())
+    payload = dt.get_dragon_tiger(data_dir, date(2026, 8, 28))
+    assert payload["state"] == "ok"
+    assert payload["all"]["stock_items"][0]["thscode"] == "002731.SZ"

@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowUpRight, Check, Database, Gauge, GripVertical, Info, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type AlertEvent } from '@/lib/api'
+import { api, type AlertEvent, type DataStatus } from '@/lib/api'
+import { getFrontendExtensionRoutes } from '@/extensions/registry'
 import { QK } from '@/lib/queryKeys'
 import { DimensionMembersDialog, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
@@ -17,14 +18,25 @@ import { scoreColor, quoteAge } from '@/components/dashboard/shared'
 import { DashboardGrid } from '@/components/dashboard/DashboardGrid'
 import { AddWidgetPanel } from '@/components/dashboard/AddWidgetPanel'
 import { useDashboardLayout } from '@/components/dashboard/useDashboardLayout'
-import { DEFAULT_LAYOUT, widgetDef, type WidgetCtx } from '@/components/dashboard/registry'
+import { DEFAULT_LAYOUT, widgetDef, type DashboardPreviewSource, type WidgetCtx } from '@/components/dashboard/registry'
 import { cloneItems, GRID_COLS, type WidgetType } from '@/components/dashboard/layout'
 
-/** 打开个股预览的来源榜 (用于行高亮与切股导航列表) */
-type PreviewSource = 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
+/** 兼容旧后端的预热标志; 同步/自动修复也会使统计暂不可用。 */
+export function isDataStatusPending(ds?: DataStatus): boolean {
+  return ds?.stats_pending === true || ds?.indicators_ready === false
+}
+
+/** 无本地数据判定: enriched/daily 交易日均为 0 才算无数据。
+ *  预热/同步/修复期间的 null 是未知态, 必须等真实统计就绪再判。 */
+export function resolveHasNoData(ds?: DataStatus): boolean {
+  if (!ds) return false
+  if (isDataStatusPending(ds)) return false
+  return (ds.enriched?.trading_days ?? 0) === 0 && (ds.daily?.trading_days ?? 0) === 0
+}
 
 export function Dashboard() {
   const qc = useQueryClient()
+  const extensionPaths = useMemo(() => new Set<string>(getFrontendExtensionRoutes().map(route => route.path)), [])
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
   const [previewStock, setPreviewStock] = useState<{
@@ -32,7 +44,7 @@ export function Dashboard() {
     name?: string
     alert?: AlertEvent
     /** 打开来源榜: 仅高亮来源榜的行 */
-    source?: PreviewSource
+    source?: DashboardPreviewSource
     /** 切股导航列表 (来自来源榜) */
     navList?: NavItem[]
   } | null>(null)
@@ -59,7 +71,11 @@ export function Dashboard() {
   }, [dashItems, setDashItems])
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
-  const dataStatus = useDataStatus({ staleTime: 60_000 })
+  // 统计暂不可用时持续重查, 同步/自动修复结束后恢复真实统计并停止轮询。
+  const dataStatus = useDataStatus({
+    staleTime: 60_000,
+    refetchInterval: (q: any) => (isDataStatusPending(q.state.data) ? 5_000 : false),
+  })
   const overview = useQuery({
     queryKey: QK.overviewMarket(selectedDate),
     queryFn: () => api.overviewMarket(selectedDate),
@@ -89,11 +105,10 @@ export function Dashboard() {
   ].find(s => s.name === activeProvider)?.display_name
     ?.replace(/（.*?）|\(.*?\)/g, '').trim() || activeProvider
   // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
-  // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据
+  // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据;
+  // 统计暂不可用时不算无数据 (见 resolveHasNoData)
   const ds = dataStatus.data
-  const hasNoData = !!ds
-    && (ds.enriched?.trading_days ?? 0) === 0
-    && (ds.daily?.trading_days ?? 0) === 0
+  const hasNoData = resolveHasNoData(ds)
 
   // ===== 盘后管道触发(看板内一键获取数据) =====
   const [fetchJobId, setFetchJobId] = useState<string | null>(null)
@@ -195,9 +210,10 @@ export function Dashboard() {
     hasDepth,
     sealedReady,
     isSealedDegrade,
+    hasExtensionRoute: path => extensionPaths.has(path),
     activeSymbol: source => (previewStock?.source === source ? previewStock.symbol : undefined),
     openStock: (source, symbol, name, navList) =>
-      setPreviewStock({ symbol, name, navList, source: source as PreviewSource }),
+      setPreviewStock({ symbol, name, navList, source }),
     openDimension: setDimensionTarget,
     openAlert: (event, navList) => {
       if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event, source: 'alert', navList })
@@ -333,9 +349,9 @@ export function Dashboard() {
       <DimensionMembersDialog
         target={dimensionTarget}
         onClose={() => setDimensionTarget(null)}
-        onStockClick={(symbol, name) => {
+        onStockClick={(symbol, name, navList) => {
           setDimensionTarget(null)
-          setPreviewStock({ symbol, name })
+          setPreviewStock({ symbol, name, navList })
         }}
       />
     </div>

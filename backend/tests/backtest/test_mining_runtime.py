@@ -390,3 +390,229 @@ def test_validate_regime_availability_reports_coverage_gaps_in_fold_windows(
 
     with pytest.raises(ValueError, match="市场环境数据覆盖不完整"):
         _validate_regime_availability(panel, request, tmp_path)
+
+
+# ── P2a 稳健选冠 (mining-v3) ──────────────────────────────────────
+
+
+def _candidate(cid: str, factors: tuple[str, ...] = ("f1", "f2")) -> MiningCandidate:
+    return MiningCandidate(
+        candidate_id=cid,
+        kind="factor_rank",
+        factor_names=factors,
+        weights=(1.0,) * len(factors),
+        directions=(1,) * len(factors),
+    )
+
+
+def test_rank_prefers_robust_over_mean_champion() -> None:
+    """均值口径 A(1.67) > B(1.5); 稳健口径 A(1.0) < B(1.5) — v3 必须选 B。"""
+    rows = [
+        {"candidate_signature": "a", "sharpe": 5.0, "skipped": False},
+        {"candidate_signature": "a", "sharpe": 5.0, "skipped": False},
+        {"candidate_signature": "a", "sharpe": -5.0, "skipped": False},
+        {"candidate_signature": "b", "sharpe": 1.5, "skipped": False},
+        {"candidate_signature": "b", "sharpe": 1.5, "skipped": False},
+        {"candidate_signature": "b", "sharpe": 1.5, "skipped": False},
+    ]
+    ranked = _rank_artifact_candidates(
+        [_candidate("a"), _candidate("b")], rows, limit=2
+    )
+    assert [item.candidate_id for item in ranked] == ["b", "a"]
+
+
+def test_rank_skips_failed_folds_like_before() -> None:
+    rows = [
+        {"candidate_signature": "a", "sharpe": 2.0, "skipped": True},
+        {"candidate_signature": "a", "sharpe": 1.0, "skipped": False},
+        {"candidate_signature": "b", "sharpe": 0.5, "skipped": False},
+    ]
+    ranked = _rank_artifact_candidates(
+        [_candidate("a"), _candidate("b")], rows, limit=2
+    )
+    assert ranked[0].candidate_id == "a"
+
+
+# ── P2b 冠军权重精调 ──────────────────────────────────────────────
+
+
+class _RefineEvaluator:
+    """按 scoring 比率查表返回分数; 传入面板行数 == 全面板行数视为 stage2 全窗。"""
+
+    FULL_ROWS = 8
+
+    def __init__(self, fold_scores, full_scores) -> None:
+        self.fold_scores = fold_scores  # {ratios: [每折 sharpe]}
+        self.full_scores = full_scores  # {ratios: sharpe}
+        self.fold_cursor: dict[tuple[float, ...], int] = {}
+        self.backtest_count = 0
+        self.data_dir = None
+
+    def evaluate_test(self, test, definition, *, regime_state="overall"):
+        from app.backtest.mining import CandidateEvaluation
+
+        del regime_state
+        self.backtest_count += 1
+        names = list(definition["factor_names"])
+        base = definition["scoring"][names[0]]
+        ratios = tuple(round(definition["scoring"][n] / base, 6) for n in names)
+        if test.height >= self.FULL_ROWS:
+            sharpe = self.full_scores.get(ratios)
+        else:
+            scores = self.fold_scores.get(ratios) or []
+            index = self.fold_cursor.get(ratios, 0)
+            self.fold_cursor[ratios] = index + 1
+            sharpe = scores[index] if index < len(scores) else None
+        if sharpe is None:
+            return CandidateEvaluation(score=None, error="no scores for variant")
+        return CandidateEvaluation(
+            score=sharpe,
+            metrics={
+                "sharpe": sharpe,
+                "total_return": 0.1 * sharpe,
+                "max_drawdown": -0.05,
+                "n_trades": 50,
+            },
+        )
+
+
+class _Fold:
+    def __init__(self, labels) -> None:
+        self.outer = SimpleNamespace(test_labels=labels)
+
+
+def _refine_request(profile="balanced"):
+    from app.backtest.mining import MiningBudget, MiningRequest
+
+    budget = (
+        MiningBudget.balanced() if profile == "balanced" else MiningBudget.strict()
+    )
+    mining = MiningRequest(factor_names=("f1", "f2"), budget=budget, profile=profile)
+    return SimpleNamespace(
+        profile=profile,
+        mining_request=mining,
+        run_id="run",
+        max_finalists=8,
+        end=date(2026, 10, 23),
+    )
+
+
+def _run_refine(champion, evaluator, folds=3, trials_used=10, profile="balanced"):
+    from app.backtest.mining_runtime import _refine_champion_weights
+
+    dates = [f"2026-01-0{i}" for i in range(1, 9)]
+    panel = pl.DataFrame({"date": dates})
+    nested = tuple(
+        _Fold([dates[i], dates[i + 1]]) for i in range(0, folds * 2, 2)
+    )  # 每折两个标签, 与全窗 (8 行) 可区分
+    result = SimpleNamespace(trials_used=trials_used)
+    return _refine_champion_weights(
+        panel, _refine_request(profile), result, [champion], evaluator, nested, None
+    )
+
+
+def _two_factor_champion(weights=(1.0, 1.0)):
+    scoring = {"f1": weights[0], "f2": weights[1]}
+
+    class _C:
+        candidate_id = "sig-original"
+        kind = "factor_rank"
+        factor_names = ("f1", "f2")
+
+        @staticmethod
+        def definition():
+            return {
+                "kind": "factor_rank",
+                "factor_names": ["f1", "f2"],
+                "scoring": dict(scoring),
+                "directions": {"f1": "high", "f2": "high"},
+            }
+
+    instance = _C()
+    instance.weights = weights
+    instance.directions = (1, 1)
+    return instance
+
+
+def test_refine_produces_refined_row_when_variant_wins():
+    evaluator = _RefineEvaluator(
+        fold_scores={
+            (1.0, 1.0): [1.0, 1.0, 1.0],
+            (1.0, 2.0): [2.0, 2.0, 2.0],
+            (1.0, 0.5): [0.5, 0.5, 0.5],
+            (1.0, 1.5): [1.5, 1.5, 1.5],
+        },
+        full_scores={
+            (1.0, 1.0): 1.0,
+            (1.0, 2.0): 1.8,
+            (1.0, 0.5): 0.4,
+            (1.0, 1.5): 1.4,
+        },
+    )
+    rows, summary = _run_refine(_two_factor_champion(), evaluator)
+    assert summary is not None and summary["applied"] is True
+    assert summary["refined_weights"] == (1.0, 2.0)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"].endswith("· 权重精调")
+    assert row["score"] == 2.0            # 稳健分 = 各折一致 2.0
+    assert row["oos_worst_sharpe"] == 2.0
+    assert row["valid_folds"] == 3
+    import json as _json
+
+    definition = _json.loads(row["definition_json"])
+    assert definition["scoring"] == {"f1": 1.0, "f2": 2.0}
+    # 调用预算: 4 变体 (原权重 + 3 个非重复档位) × 3 折 + 2 全窗 = 14
+    assert evaluator.backtest_count == 14
+
+
+def test_refine_abandoned_on_full_window_degradation():
+    evaluator = _RefineEvaluator(
+        fold_scores={
+            (1.0, 1.0): [1.0, 1.0, 1.0],
+            (1.0, 2.0): [2.0, 2.0, 2.0],
+            (1.0, 0.5): [0.5, 0.5, 0.5],
+            (1.0, 1.5): [1.5, 1.5, 1.5],
+        },
+        full_scores={(1.0, 1.0): 2.0, (1.0, 2.0): 0.5, (1.0, 0.5): 0.4, (1.0, 1.5): 1.4},
+    )
+    rows, summary = _run_refine(_two_factor_champion(), evaluator)
+    assert rows == []
+    assert summary is not None and summary["applied"] is False
+    assert "退化" in summary["reason"]
+
+
+def test_refine_no_improvement_returns_nothing():
+    evaluator = _RefineEvaluator(
+        fold_scores={
+            (1.0, 1.0): [1.0, 1.0, 1.0],
+            (1.0, 2.0): [0.9, 1.0, 0.8],
+            (1.0, 0.5): [0.5, 0.5, 0.5],
+            (1.0, 1.5): [0.8, 0.7, 0.9],
+        },
+        full_scores={(1.0, 1.0): 1.0},
+    )
+    rows, summary = _run_refine(_two_factor_champion(), evaluator)
+    assert rows == [] and summary is None
+
+
+def test_refine_skips_single_factor_champion():
+    original = SimpleNamespace(
+        candidate_id="sig-1f", kind="factor_rank",
+        factor_names=("f1",), weights=(1.0,), directions=(1,),
+        definition=lambda: {},
+    )
+    rows, summary = _run_refine(original, _RefineEvaluator({}, {}))
+    assert rows == [] and summary is None
+
+
+def test_refine_skips_when_budget_remaining_insufficient():
+    original = SimpleNamespace(
+        candidate_id="sig-4f", kind="factor_rank",
+        factor_names=("f1", "f2", "f3", "f4"),
+        weights=(1.0, 1.0, 1.0, 1.0), directions=(1, 1, 1, 1),
+        definition=lambda: {},
+    )
+    # balanced 剩余额度 96-90=6 < 64 变体×3 折+2 → 跳过
+    rows, summary = _run_refine(original, _RefineEvaluator({}, {}), trials_used=90)
+    assert rows == [] and summary is None

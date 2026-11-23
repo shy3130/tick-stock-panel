@@ -12,9 +12,12 @@
   cd frontend && pnpm build                     # 先构建前端到 frontend/dist
   pyinstaller packaging/tsp.spec                # 产物在 dist/TSP/
 """
+import json
+import subprocess
 import sys
 from importlib.util import find_spec
 from pathlib import Path
+from PyInstaller.config import CONF
 
 from PyInstaller.utils.hooks import (
     collect_all,
@@ -151,9 +154,40 @@ for pkg in (
     "tickflow",  # tickflow/__version__.py 用 importlib.metadata 读版本
     "uvicorn", "polars", "duckdb", "pyarrow", "httpx", "numpy", "pandas",
     "openai", "platformdirs", "winotify", "plyer", "apscheduler",
-    "python-dotenv", "fastexcel",
+    "python-dotenv", "fastexcel", "tdxaidata",
+    "tivelo-contracts", "tivelo-data", "tivelo-market-cn", "tivelo-backtest", "tivelo-extensions", "tzdata",
 ):
     datas += _safe_metadata(pkg)
+
+# A frozen host cannot recover dependency metadata from the build machine.
+# Build the exact public wheels and include the entire active engine closure.
+release_dir = Path(CONF["workpath"]) / "tivelo-release"
+subprocess.run([sys.executable, str(ROOT / "packaging/build_tivelo_bundle.py"), str(release_dir)], check=True)
+lock_file = release_dir / "compatibility-lock.json"
+engine_lock = json.loads(lock_file.read_text(encoding="utf-8"))
+for pkg in engine_lock["dependencies"]:
+    datas += copy_metadata(pkg)
+datas += [(str(lock_file), "tivelo-release")]
+datas += [(str(release_dir / wheel["filename"]), "tivelo-release") for wheel in engine_lock["wheels"]]
+datas += [(str(ROOT / "packaging/tivelo-conformance.json"), "tivelo-release")]
+schema = Path(find_spec("tivelo_contracts").origin).parent / "wire" / "contracts-v2.schema.json"
+if not schema.is_file():  # Editable development builds keep the schema beside pyproject.toml.
+    schema = ROOT / "packages/tivelo-contracts/schemas/contracts-v2.schema.json"
+datas += [(str(schema), "tivelo_contracts/wire")]
+
+hiddenimports += collect_submodules("tivelo_contracts")
+hiddenimports += collect_submodules("tivelo_data")
+hiddenimports += collect_submodules("tivelo_market_cn")
+hiddenimports += collect_submodules("tivelo_backtest")
+hiddenimports += collect_submodules("tivelo_extensions")
+# Built-in supplier plans use the same source-byte identity in editable, wheel and frozen installs.
+datas += collect_data_files("tivelo_data", include_py_files=True, includes=[
+    "fuyao_daily.py", "tdx_daily.py", "_source_process.py",
+    "adapters/stock_history.py", "adapters/cn_daily.py", "adapters/cn_observation.py", "adapters/v1.py",
+    "legacy/fuyao_history.py", "legacy/tdx_runtime.py", "legacy/frame.py", "legacy/pacing.py",
+])
+datas += collect_data_files("tivelo_market_cn", includes=["calendar_presets/*.json", "quantity_presets/*.json", "fee_presets/*.json", "price_presets/*.json"])
+datas += collect_data_files("tzdata")
 
 # ── 随包资源 (只读, 放进 _MEIPASS) ────────────────────────────────────
 # 前端 dist → static/ (config.py frozen 模式读 _MEIPASS/static)
@@ -167,10 +201,11 @@ datas += [(str(ROOT / "frontend" / "package.json"), ".")]
 datas += [(RESEARCH_TEMPLATE, "app/strategy/research")]
 # 策略种子 → app/strategy/seeds/ (启动时按路径读取种入 custom, 不进 PYZ)
 datas += [(str(ROOT / "backend" / "app" / "strategy" / "seeds"), "app/strategy/seeds")]
+# AI 指南由 Path(__file__) 读取，必须作为数据文件落盘。
+datas += [(str(ROOT / "backend" / "app" / "strategy" / "prompts"), "app/strategy/prompts")]
 
-# ── 排除不需要的重型依赖 (主包不含 vectorbt 回测链) ──────────────────
+# ── 排除桌面运行不需要的分析与开发依赖 ──────────────────
 excludes = [
-    "vectorbt",
     "numba",
     "llvmlite",
     "matplotlib",
@@ -201,6 +236,12 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Installer bookkeeping can contain absolute paths to the release machine.
+a.datas = [entry for entry in a.datas if not (
+    ".dist-info/" in entry[0].replace("\\", "/") and
+    Path(entry[0]).name in {"direct_url.json", "uv_build.json", "uv_cache.json"}
+)]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

@@ -8,12 +8,13 @@ Starter+ 盘后可用 quotes.get(universes) 顺便补充 name。
 from __future__ import annotations
 
 import logging
-from datetime import date
 from pathlib import Path
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.services.fs_utils import atomic_write_parquet
+from app.tickflow import client as tf_client
 from app.tickflow.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
-def _flatten_instruments(items: list[dict]) -> list[dict]:
+def _flatten_instruments(items: list[dict], *, current_limits: bool = True) -> list[dict]:
     """把 SDK 返回的 Instrument 列表 flatten 成扁平行。"""
     rows = []
     for item in items:
@@ -38,8 +39,8 @@ def _flatten_instruments(items: list[dict]) -> list[dict]:
         row["total_shares"] = ext.get("total_shares")
         row["float_shares"] = ext.get("float_shares")
         row["tick_size"] = ext.get("tick_size")
-        row["limit_up"] = ext.get("limit_up")
-        row["limit_down"] = ext.get("limit_down")
+        row["limit_up"] = ext.get("limit_up") if current_limits else None
+        row["limit_down"] = ext.get("limit_down") if current_limits else None
         rows.append(row)
     return rows
 
@@ -81,12 +82,14 @@ def sync_instruments(data_dir: Path) -> int:
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
+        # 免费接口的限价来自历史行情，不能盖上同步日期当作当日权威价。
+        current_limits = tf_client.current_mode() == "api_key"
         all_rows = []
         for ex in _EXCHANGES:
             try:
                 items = tf.exchanges.get_instruments(ex, instrument_type="stock")
                 if items:
-                    all_rows.extend(_flatten_instruments(items))
+                    all_rows.extend(_flatten_instruments(items, current_limits=current_limits))
                     logger.info("instruments %s: %d stocks", ex, len(items))
             except Exception as e:
                 logger.warning("get_instruments(%s) failed: %s", ex, e)
@@ -95,8 +98,8 @@ def sync_instruments(data_dir: Path) -> int:
         return 0
 
     df = pl.DataFrame(all_rows)
-    df = _preserve_share_fields(df, data_dir)
-    df = df.with_columns(pl.lit(date.today()).alias("as_of"))
+    df = _preserve_instrument_fields(df, data_dir)
+    df = df.with_columns(pl.lit(cn_today()).alias("as_of"))
 
     out = data_dir / "instruments" / "instruments.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -106,22 +109,24 @@ def sync_instruments(data_dir: Path) -> int:
     return df.height
 
 
-# 股本与交易规则字段: 部分行情源的标的维表只有代码/名称/市场/类型。
-# 这些字段缺失会让 enriched 的 turnover_rate / 市值 / 涨跌停判定全空, 进而使
+# 股本与静态交易规则字段: 部分行情源的标的维表只有代码/名称/市场/类型。
+# 这些字段缺失会让 enriched 的 turnover_rate / 市值为空, 进而使
 # 依赖换手率与流通市值的策略筛不出任何标的 —— 因此绝不能用 null 覆盖已有值。
+# 涨跌停价随交易日变化，不从历史维表继承。
 _SHARE_FIELDS = (
     "listing_date", "total_shares", "float_shares", "tick_size",
-    "limit_up", "limit_down",
 )
 
 
-def _preserve_share_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
-    """用现有维表补全 provider 未提供的股本/交易规则字段 (按 symbol 左连接)。
+def _preserve_instrument_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
+    """用现有维表补全 provider 未提供的名称、股本和交易规则字段。
 
     新增标的仍保留 null (没有历史值可用, 不伪造); 只在同一 symbol 上把
     provider 的空值替换为既有值, 并在日志里给出补全规模。
     """
-    available = [c for c in _SHARE_FIELDS if c in df.columns]
+    if "name" in df.columns:
+        df = df.with_columns(pl.col("name").cast(pl.Utf8).str.strip_chars().replace("", None))
+    available = [c for c in ("name", *_SHARE_FIELDS) if c in df.columns]
     if not available:
         return df
     if all(df[c].null_count() == 0 for c in available):
@@ -130,8 +135,8 @@ def _preserve_share_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
     path = data_dir / "instruments" / "instruments.parquet"
     if not path.exists():
         logger.warning(
-            "instruments provider 未提供股本字段且无历史维表可补全: "
-            "enriched 换手率/市值将为 null, 依赖它们的策略会筛不出标的"
+            "instruments provider 缺少标的信息且无历史维表可补全: %s",
+            "/".join(c for c in available if df[c].null_count()),
         )
         return df
     try:

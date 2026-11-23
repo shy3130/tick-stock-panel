@@ -1,0 +1,337 @@
+{
+  "preset_format": "tivelo-cn-fee-preset-v1",
+  "version_id": "39cda44c3190849356ebf7602594d900d186399aee59cecbdd36038e2b828eae",
+  "contents": {
+    "schema_version": "1.0",
+    "preset_id": "cn.equity.auction-fees",
+    "preset_version": "2026.1.0",
+    "timezone": "Asia/Shanghai",
+    "scope": "domestic_common_stock_auction_rates",
+    "coverage_start": "2022-07-01",
+    "coverage_end": "2026-12-31",
+    "verified_on": "2026-11-18",
+    "sources": [
+      {
+        "source_id": "chinaclear-sse-fees-2026",
+        "title": "上海市场证券登记结算业务收费及代收税费一览表（2026年1月1日更新）",
+        "publisher": "中国证券登记结算有限责任公司",
+        "document_number": null,
+        "url": "https://www.chinaclear.cn/zdjs/fbzyls/202512/922adc26c2ff4865930c7fb77688bb8a/files/%E4%B8%8A%E6%B5%B7%E5%B8%82%E5%9C%BA%E8%AF%81%E5%88%B8%E7%99%BB%E8%AE%B0%E7%BB%93%E7%AE%97%E4%B8%9A%E5%8A%A1%E6%94%B6%E8%B4%B9%E5%8F%8A%E4%BB%A3%E6%94%B6%E7%A8%8E%E8%B4%B9%E4%B8%80%E8%A7%88%E8%A1%A8.pdf",
+        "sha256": "84a99e563cb8e84e264c88e3bea2df5f4ac50b1e95330417ec30e2b2566d862f",
+        "byte_size": 139671,
+        "published_on": "2025-12-31",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.136334Z"
+      },
+      {
+        "source_id": "chinaclear-szse-fees-2026",
+        "title": "深圳市场证券登记结算业务收费及代收税费一览表（2026年1月1日更新）",
+        "publisher": "中国证券登记结算有限责任公司",
+        "document_number": null,
+        "url": "https://www.chinaclear.cn/zdjs/fbzyls/202512/a59388fbfa714c5fa546784891a42e30/files/%E6%B7%B1%E5%9C%B3%E5%B8%82%E5%9C%BA%E8%AF%81%E5%88%B8%E7%99%BB%E8%AE%B0%E7%BB%93%E7%AE%97%E4%B8%9A%E5%8A%A1%E6%94%B6%E8%B4%B9%E5%8F%8A%E4%BB%A3%E6%94%B6%E7%A8%8E%E8%B4%B9%E4%B8%80%E8%A7%88%E8%A1%A8.pdf",
+        "sha256": "dff4a06ce20e180f4a85ddae138211dcf7dd3246fb84775453cfd21cbaec6573",
+        "byte_size": 114722,
+        "published_on": "2025-12-31",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.179440Z"
+      },
+      {
+        "source_id": "hkex-transfer-2022",
+        "title": "滬股通及深股通下股票交易過戶費調整",
+        "publisher": "香港聯合交易所有限公司",
+        "document_number": "CT/037/22",
+        "url": "https://www.hkex.com.hk/-/media/HKEX-Market/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2022/CT03722B.pdf",
+        "sha256": "36029892da8ebdd6fc35f03534b48f336db1fce0253b9e37fd1e5aabce43c70e",
+        "byte_size": 622620,
+        "published_on": "2022-04-28",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:06.385097Z"
+      },
+      {
+        "source_id": "sse-fees-2023",
+        "title": "上海证券交易所收费项目、收费标准一览表",
+        "publisher": "上海证券交易所",
+        "document_number": null,
+        "url": "https://www.sse.com.cn/services/tradingservice/charge/ssecharge/c/c_20230818_5725343.shtml",
+        "sha256": "59c72e3b09c4e2632b6f9fb4cba6a1184c8db51e198eba62c1786d32d90169d9",
+        "byte_size": 43067,
+        "published_on": "2023-08-18",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:04:09.082213Z"
+      },
+      {
+        "source_id": "sse-handling-2015",
+        "title": "关于上海证券交易所收费标准调整有关事项的通知",
+        "publisher": "上海证券交易所",
+        "document_number": "上证发〔2015〕67号",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/repeal/rules/c/c_20150803_10784953.shtml",
+        "sha256": "93b46aa50225279e2a616b91285a3a9ce36cc90ddf40a7373148240b5cdc919f",
+        "byte_size": 29695,
+        "published_on": "2015-07-31",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.502530Z"
+      },
+      {
+        "source_id": "sse-regulatory-2012",
+        "title": "关于调整上海证券市场证券交易监管费收费标准的通知",
+        "publisher": "上海证券交易所、中国结算上海分公司",
+        "document_number": null,
+        "url": "https://www.sse.com.cn/lawandrules/guide/other/c/c_20230116_5312163.shtml",
+        "sha256": "59e7d909fadde7037f9f24201959c06d634b01a79fa8d74238e0b0d1ebff8599",
+        "byte_size": 26843,
+        "published_on": "2012-08-30",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.186721Z"
+      },
+      {
+        "source_id": "stamp-cut-2023",
+        "title": "关于减半征收证券交易印花税的公告",
+        "publisher": "财政部、税务总局",
+        "document_number": "2023年第39号",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c102416/c5211343/content.html",
+        "sha256": "bdad8369ee854d205de9a1e355beecc4fa7841f7293e332997e6cadd2b923c35",
+        "byte_size": 36736,
+        "published_on": "2023-08-27",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:04:08.913739Z"
+      },
+      {
+        "source_id": "stamp-law-2021",
+        "title": "中华人民共和国印花税法",
+        "publisher": "国家税务总局上海市税务局",
+        "document_number": null,
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/yhs/202106/t458595.html",
+        "sha256": "d652677c4fe3bd554c1bd58c2752c9cad7d6d2fc19dd566f47e52ceae02edfb8",
+        "byte_size": 35232,
+        "published_on": "2021-06-16",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:04:09.172305Z"
+      },
+      {
+        "source_id": "stamp-table-2021-b",
+        "title": "中华人民共和国印花税法附表：印花税税目税率表（第二页）",
+        "publisher": "国家税务总局上海市税务局",
+        "document_number": null,
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/yhs/202106/W020210616333303263019.jpg",
+        "sha256": "7a8252fe595570fed7c52cd13c32b57ed02f4c23f255bd295576667a3b3597bc",
+        "byte_size": 134338,
+        "published_on": "2021-06-16",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:28:49.865047Z"
+      },
+      {
+        "source_id": "szse-fees-2023",
+        "title": "关于下调股票交易经手费收费标准的通知",
+        "publisher": "深圳证券交易所",
+        "document_number": "深证上〔2023〕768号",
+        "url": "https://www.szse.cn/disclosure/notice/t20230818_602805.html",
+        "sha256": "e281273a3bb3d06903831049ffbc0d38c5d735627e98a6dbf9f3d05cc6af56e0",
+        "byte_size": 19662,
+        "published_on": "2023-08-18",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:28:49.602192Z"
+      },
+      {
+        "source_id": "szse-handling-2015",
+        "title": "关于调整部分证券品种收费标准的通知",
+        "publisher": "深圳证券交易所",
+        "document_number": "深证会〔2015〕233号",
+        "url": "https://www.szse.cn/lawrules/rule/all/t20190326_565731.html",
+        "sha256": "cd7805e70115ae96d41329b86761da11415ad2ab5c8b6c1f7a2d70c02041f6ba",
+        "byte_size": 15660,
+        "published_on": "2015-07-29",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.291864Z"
+      },
+      {
+        "source_id": "szse-regulatory-2019",
+        "title": "“股市入门300问”系列之十“景点游览”指南",
+        "publisher": "深圳证券交易所",
+        "document_number": null,
+        "url": "https://investor.szse.cn/warning/activities/stockintroduction/t20190531_567540.html",
+        "sha256": "e9177f2d46bf96d1395cd609108de347a6a3081afffb271c7b152a13780c1758",
+        "byte_size": 68488,
+        "published_on": "2019-05-31",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T22:33:05.567354Z"
+      }
+    ],
+    "corroborating_source_ids": [
+      "chinaclear-sse-fees-2026",
+      "chinaclear-szse-fees-2026"
+    ],
+    "rates": [
+      {
+        "rate_id": "cn.stamp.2022",
+        "fee_id": "stamp",
+        "venue_ids": [
+          "XSHE",
+          "XSHG"
+        ],
+        "effective_from": "2022-07-01",
+        "date_basis": "official_effective_date",
+        "side": "sell",
+        "rate": "0.001",
+        "source_ids": [
+          "stamp-law-2021",
+          "stamp-table-2021-b"
+        ],
+        "clauses": [
+          "印花税法第三、五、二十条及税目税率表证券交易项"
+        ]
+      },
+      {
+        "rate_id": "cn.stamp.2023",
+        "fee_id": "stamp",
+        "venue_ids": [
+          "XSHE",
+          "XSHG"
+        ],
+        "effective_from": "2023-08-28",
+        "date_basis": "official_effective_date",
+        "side": "sell",
+        "rate": "0.0005",
+        "source_ids": [
+          "stamp-cut-2023",
+          "stamp-law-2021",
+          "stamp-table-2021-b"
+        ],
+        "clauses": [
+          "印花税法附表证券交易项；财政部税务总局公告2023年第39号"
+        ]
+      },
+      {
+        "rate_id": "cn.transfer.2022",
+        "fee_id": "transfer",
+        "venue_ids": [
+          "XSHE",
+          "XSHG"
+        ],
+        "effective_from": "2022-04-29",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.00001",
+        "source_ids": [
+          "hkex-transfer-2022"
+        ],
+        "clauses": [
+          "CT/037/22：沪深市场A股过户费及2022-04-29生效日"
+        ]
+      },
+      {
+        "rate_id": "sse.handling.2015",
+        "fee_id": "handling",
+        "venue_ids": [
+          "XSHG"
+        ],
+        "effective_from": "2015-08-01",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.0000487",
+        "source_ids": [
+          "sse-handling-2015"
+        ],
+        "clauses": [
+          "上证发〔2015〕67号第一项"
+        ]
+      },
+      {
+        "rate_id": "sse.handling.2023",
+        "fee_id": "handling",
+        "venue_ids": [
+          "XSHG"
+        ],
+        "effective_from": "2023-08-28",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.0000341",
+        "source_ids": [
+          "sse-fees-2023"
+        ],
+        "clauses": [
+          "人民币普通股票（A股）竞价交易经手费；2023-08-28调整说明"
+        ]
+      },
+      {
+        "rate_id": "sse.regulatory.2012",
+        "fee_id": "regulatory",
+        "venue_ids": [
+          "XSHG"
+        ],
+        "effective_from": "2012-09-01",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.00002",
+        "source_ids": [
+          "sse-regulatory-2012"
+        ],
+        "clauses": [
+          "上海市场清算费率参数自2012-09-01调整；不覆盖此前追溯清退"
+        ]
+      },
+      {
+        "rate_id": "szse.handling.2015",
+        "fee_id": "handling",
+        "venue_ids": [
+          "XSHE"
+        ],
+        "effective_from": "2015-08-01",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.0000487",
+        "source_ids": [
+          "szse-handling-2015"
+        ],
+        "clauses": [
+          "深证会〔2015〕233号第一项"
+        ]
+      },
+      {
+        "rate_id": "szse.handling.2023",
+        "fee_id": "handling",
+        "venue_ids": [
+          "XSHE"
+        ],
+        "effective_from": "2023-08-28",
+        "date_basis": "official_effective_date",
+        "side": "both",
+        "rate": "0.0000341",
+        "source_ids": [
+          "szse-fees-2023"
+        ],
+        "clauses": [
+          "深证上〔2023〕768号A股竞价交易费率"
+        ]
+      },
+      {
+        "rate_id": "szse.regulatory.observed-2019",
+        "fee_id": "regulatory",
+        "venue_ids": [
+          "XSHE"
+        ],
+        "effective_from": "2019-05-31",
+        "date_basis": "documented_in_force",
+        "side": "both",
+        "rate": "0.00002",
+        "source_ids": [
+          "szse-regulatory-2019"
+        ],
+        "clauses": [
+          "问题5收费表：A股证券交易监管费双边0.02‰"
+        ]
+      }
+    ]
+  }
+}

@@ -60,6 +60,17 @@ async function hoverCandle(index: number) {
   await act(async () => { chart.handlers.updateAxisPointer?.({ axesInfo: [{ value: index }] }) })
 }
 
+it('ETF 日K信息栏和价格轴保留三位, 切换股票后恢复两位', async () => {
+  const data = [{ date: '2026-11-05', open: 0.751, high: 0.828, low: 0.747, close: 0.827, ma5: 0.801 }]
+  await act(async () => root.render(<EChartsCandlestick data={data} assetType="etf" height={400} />))
+  expect(host.textContent).toContain('0.827')
+  expect(host.textContent).toContain('MA5:0.801')
+  expect(chart.setOption.mock.calls.at(-1)![0].yAxis[0].axisLabel.formatter(0.827)).toBe('0.827')
+  await act(async () => root.render(<EChartsCandlestick data={data} assetType="stock" height={400} />))
+  expect(host.textContent).toContain('0.83')
+  expect(chart.setOption.mock.calls.at(-1)![0].yAxis[0].axisLabel.formatter(0.827)).toBe('0.83')
+})
+
 it('切标的后响应 dataZoom 仍用当前标的的买卖标记, 不回退到上一只', async () => {
   const render = async (symbol: string, data: OHLC[], markerLabel: string, markerDate: string) => {
     await act(async () => root.render(

@@ -23,6 +23,35 @@ def _request(tmp_path, monitor_results=None, live=None, live_date=None):
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
+def test_cached_summary_cannot_complete_task_with_snapshot_read_before_publication(monkeypatch, tmp_path):
+    state = {"complete": False, "total": 1}
+
+    def task_status(task_id):
+        return {"id": task_id, "complete": state["complete"],
+                "pending": [] if state["complete"] else ["strategy_a"]}
+
+    def read_cache(_request):
+        cached = {"as_of": "2026-07-20", "results": {
+            "strategy_a": {"as_of": "2026-07-20", "total": state["total"]},
+        }}
+        # The writer commits just after this request captures the old cache.
+        state.update(complete=True, total=2)
+        return cached
+
+    monkeypatch.setattr(screener_api.strategy_run_queue, "MANAGER", SimpleNamespace(
+        task_status=task_status, minute_summaries=lambda **_kwargs: [],
+    ))
+    monkeypatch.setattr(screener_api, "_cached_with_realtime", read_cache)
+    monkeypatch.setattr(screener_api.screener_work, "hard_identity", lambda *_args: ())
+
+    first = screener_api.get_cached_summary(_request(tmp_path), task_id="new-task")
+    assert first["results"]["strategy_a"]["total"] == 1
+    assert first["task"]["complete"] is False
+    second = screener_api.get_cached_summary(_request(tmp_path), task_id="new-task")
+    assert second["task"]["complete"] is True
+    assert second["results"]["strategy_a"]["total"] == 2
+
+
 def test_cached_summary_omits_rows_and_counts_realtime_expirations(monkeypatch, tmp_path):
     cached = {
         "as_of": "2026-07-20",

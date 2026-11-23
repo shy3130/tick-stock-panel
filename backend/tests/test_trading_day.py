@@ -68,6 +68,59 @@ def test_all_probes_unknown_returns_none(monkeypatch):
     assert is_trading_day(monday) is None
 
 
+def test_concurrent_cold_oracle_requests_share_one_upstream_probe(monkeypatch):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    barrier = threading.Barrier(20)
+    calls = []
+    monday = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
+
+    def probe(now):
+        calls.append(1)
+        time.sleep(0.05)
+        return False
+
+    monkeypatch.setattr(trading_day, "_probe_fuyao", probe)
+    monkeypatch.setattr(trading_day, "_probe_tickflow", lambda now: None)
+
+    def request(_):
+        barrier.wait(3)
+        return is_trading_day(monday)
+
+    with ThreadPoolExecutor(20) as pool:
+        assert list(pool.map(request, range(20))) == [False] * 20
+    assert calls == [1]
+
+
+def test_slow_oracle_followers_degrade_to_unknown_without_duplicate_probes(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    monday = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
+
+    def probe(now):
+        calls.append(1)
+        entered.set()
+        assert release.wait(3)
+        return False
+
+    monkeypatch.setattr(trading_day, "_probe_fuyao", probe)
+    with ThreadPoolExecutor(1) as pool:
+        owner = pool.submit(is_trading_day, monday)
+        assert entered.wait(1)
+        try:
+            assert is_trading_day(monday) is None
+            assert calls == [1]
+        finally:
+            release.set()
+        assert owner.result(1) is False
+    assert is_trading_day(monday) is False
+
+
 # ---- tickflow 戳语义 ----
 
 def test_tickflow_stale_stamp_before_buffer_is_unknown(monkeypatch):

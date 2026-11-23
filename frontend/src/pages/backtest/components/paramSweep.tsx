@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { StrategyDetail, StrategyParamDef } from '@/lib/api'
 import { paramDisplayLabel, visibleParams } from '@/lib/strategyParams'
+import { StrategyOptions } from '@/components/StrategyOptions'
 
 /** 参数扫描配置的共享逻辑与 UI — 优化器与 walk-forward 复用。 */
 
@@ -20,6 +21,12 @@ export const OBJECTIVES: { id: string; label: string }[] = [
   { id: 'mc_maxdd_p95', label: '蒙卡回撤P95(越小越好)' },
   { id: 'avg_holding_days', label: '平均持仓天数' },
 ]
+
+// 稳健优化主目标白名单 (对齐后端 guards.PRIMARY_OBJECTIVES): 交易数少时会退化的
+// 指标 (胜率/持仓天数) 只作展示列, 不得作稳健排名主目标。
+export const PRIMARY_OBJECTIVES: { id: string; label: string }[] = OBJECTIVES.filter(
+  o => !['win_rate', 'avg_holding_days'].includes(o.id),
+)
 
 export const GRID_MAX_COMBINATIONS = 2000
 
@@ -134,9 +141,9 @@ export function StrategySelect({ strategies, value, onChange }: {
   onChange: (id: string) => void
 }) {
   return (
-    <select value={value} onChange={e => onChange(e.target.value)} className={INPUT_CLS}>
+    <select aria-label="选择策略" value={value} onChange={e => onChange(e.target.value)} className={INPUT_CLS}>
       <option value="">选择策略…</option>
-      {strategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      <StrategyOptions strategies={strategies} selected={[value]} />
     </select>
   )
 }

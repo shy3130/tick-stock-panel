@@ -7,13 +7,13 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 from app import config as config_mod
 from app.config import _user_data_root
 from app.tickflow.repository import DataStore
-
 
 # ── 路径解析 ─────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ def test_darwin_bundle_data_migrates_to_new_location(tmp_path, monkeypatch):
 
     assert (new_dir / "user_data" / "secrets.json").exists()
     assert (new_dir / "kline_daily_enriched" / "date=2026-10-10" / "part.parquet").exists()
-    assert not bundle_data.exists()  # 旧包内目录已清空
+    assert (bundle_data / "user_data" / "secrets.json").exists()  # 保留原配置供回退
 
 
 def test_migration_skips_when_new_location_has_data(tmp_path, monkeypatch):
@@ -113,7 +113,7 @@ def test_windows_sibling_legacy_still_migrates(tmp_path, monkeypatch):
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
 
     assert (new_dir / "user_data" / "secrets.json").exists()
-    assert not legacy.exists()
+    assert (legacy / "user_data" / "secrets.json").exists()
 
 
 def test_migration_same_path_guard(tmp_path, monkeypatch):
@@ -141,3 +141,105 @@ def test_dev_mode_never_migrates(tmp_path, monkeypatch):
     _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
     assert legacy.exists()
     assert list(new_dir.iterdir()) == []
+
+
+# ── 跳过整体迁移时单独捞回 secrets.json ───────────────────────────────
+
+def _setup_skip_migration(tmp_path):
+    """构造 has_new_data=True 场景: 新目录已有 parquet, 旧包数据还在。"""
+    new_dir = tmp_path / "newdata"
+    (new_dir / "kline_daily_enriched").mkdir(parents=True)
+    (new_dir / "kline_daily_enriched" / "part.parquet").write_bytes(b"x")
+    (new_dir / "user_data").mkdir()
+    bundle_data = tmp_path / "TSP.app" / "Contents" / "MacOS" / "data"
+    _make_real_data(bundle_data)
+    return new_dir, bundle_data
+
+
+def test_migration_rescues_secrets_when_new_has_data(tmp_path, monkeypatch):
+    """整体搬迁被跳过, 但新目录缺失的 secrets.json (密钥) 单独捞回。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text(
+        '{"ai_provider": "codex_cli", "ai_codex_model": "gpt-5.6-sol"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    rescued = new_dir / "user_data" / "secrets.json"
+    assert rescued.exists()
+    assert json.loads(rescued.read_text(encoding="utf-8"))["ai_provider"] == "codex_cli"
+    # 守卫语义不变: 旧目录整体保留, 新目录已有行情不被覆盖
+    assert (bundle_data / "user_data" / "secrets.json").exists()
+    assert (new_dir / "kline_daily_enriched" / "part.parquet").exists()
+
+
+def test_migration_keeps_existing_credential_file_as_one_configuration(tmp_path, monkeypatch):
+    """旧地址/账号不能与新 Key 拼接；已有凭据整份优先。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text('{"mine": 2, "legacy": 1}', encoding="utf-8")
+    (new_dir / "user_data" / "secrets.json").write_text('{"mine": 1}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert (new_dir / "user_data" / "secrets.json").read_text(encoding="utf-8") == '{"mine": 1}'
+
+
+def test_migration_rescue_skips_invalid_secrets(tmp_path, monkeypatch):
+    """旧 secrets.json 非法/为空 → 跳过捞回, 不制造坏文件。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "secrets.json").write_text("not-json{{", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert not (new_dir / "user_data" / "secrets.json").exists()
+
+
+def test_migration_rescues_preferences_when_new_has_data(tmp_path, monkeypatch):
+    """skip 分支也要捞回 preferences.json: 偏好丢失会让 onboarding_completed
+    回落默认 False, 升级后全屏引导重弹 (「同步过数据却被要求获取数据」)。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "preferences.json").write_text(
+        '{"onboarding_completed": true, "nav_hidden": ["a"]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    rescued = new_dir / "user_data" / "preferences.json"
+    assert rescued.exists()
+    prefs = json.loads(rescued.read_text(encoding="utf-8"))
+    assert prefs["onboarding_completed"] is True
+    # 守卫语义不变: 旧目录整体保留
+    assert (bundle_data / "user_data" / "preferences.json").exists()
+
+
+def test_migration_only_fills_missing_preference_fields(tmp_path, monkeypatch):
+    """新目录已有偏好优先，旧文件只补缺失字段。"""
+    new_dir, bundle_data = _setup_skip_migration(tmp_path)
+    (bundle_data / "user_data" / "preferences.json").write_text('{"mine": false, "legacy": true}', encoding="utf-8")
+    (new_dir / "user_data" / "preferences.json").write_text('{"mine": true}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(bundle_data.parent / "TSP"))
+
+    _repo_with_data_dir(new_dir)._migrate_legacy_data_dir()
+
+    assert json.loads((new_dir / "user_data" / "preferences.json").read_text(encoding="utf-8")) == {"mine": True, "legacy": True}

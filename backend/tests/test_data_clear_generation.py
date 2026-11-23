@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from app.enriched_generation import (
     EnrichedGenerationUnavailableError,
     get_enriched_generation,
 )
+from app.services.data_status_cache import DataStatusCache
 
 
 class _RepoStub:
@@ -43,6 +45,7 @@ def _write_parquet_placeholder(path: Path) -> None:
 def _stub_clear_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.api import overview
     from app.services import alert_store
+    from app.services import pipeline_jobs
     from app.services.pipeline_jobs import job_store
     from app.services.screener import ScreenerService
 
@@ -50,7 +53,9 @@ def _stub_clear_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(alert_store, "clear", lambda _data_dir: None)
     monkeypatch.setattr(ScreenerService, "clear_history_cache", lambda: None)
     monkeypatch.setattr(overview, "invalidate_overview_cache", lambda: None)
-    monkeypatch.setattr(data_api, "invalidate_data_cache", lambda _table=None: None)
+    monkeypatch.setattr(data_api, "invalidate_data_cache", lambda _table=None, **_kwargs: None)
+    # 重置重任务执行槽, 隔离其他测试可能残留的持有者
+    monkeypatch.setattr(pipeline_jobs, "_run_slot_owner", None)
 
 
 def test_clear_data_bumps_enriched_generations_and_invalidates_panel_cache(
@@ -185,3 +190,112 @@ def test_clear_data_recovers_stale_publishing_marker_from_dead_process(
     )
     assert marker["state"] == "ready"
     assert get_enriched_generation(tmp_path, "stock") == marker["generation"]
+
+
+def test_clear_data_rejected_while_data_task_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有数据任务运行时清空必须 fail-closed: 409 拒绝且不删除任何文件。
+
+    互斥缺失的旧风险: 一边删除一边由管道线程继续写入 parquet, 终态既非
+    "已清空"也非"完整同步"; 且 job_store.clear() 清掉取消标志后, 僵尸线程
+    失去协作式取消信号继续写盘。
+    """
+    from fastapi import HTTPException
+
+    from app.services import pipeline_jobs
+
+    _stub_clear_side_effects(monkeypatch)
+    repo = _RepoStub(tmp_path)
+    stock_file = tmp_path / "kline_daily_enriched" / "date=2026-08-14" / "part.parquet"
+    _write_parquet_placeholder(stock_file)
+
+    # 模拟一个运行中的数据任务持有重任务执行槽
+    monkeypatch.setattr(pipeline_jobs, "_run_slot_owner", "pipeline-job-1")
+    with pytest.raises(HTTPException) as exc_info:
+        data_api.clear_data(_request(repo))
+    assert exc_info.value.status_code == 409
+
+    # fail-closed: 文件原样保留, 槽位持有者不变
+    assert stock_file.exists()
+    assert pipeline_jobs._run_slot_owner == "pipeline-job-1"
+    assert repo.calls == []
+
+    # 槽释放后可正常清空, 且清空结束时槽位被释放 (不阻塞后续任务)
+    monkeypatch.setattr(pipeline_jobs, "_run_slot_owner", None)
+    result = data_api.clear_data(_request(repo))
+    assert result == {"deleted_files": 1}
+    assert not stock_file.exists()
+    assert pipeline_jobs._run_slot_owner is None
+
+
+def test_clear_data_pauses_and_restores_minute_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """清空期间必须暂停全量分钟增量线程 (独立写 kline_minute, 不占 run slot),
+    结束后按原运行状态恢复 — 否则"清完又被写回部分今日数据"。"""
+    from app.services import pipeline_jobs
+
+    _stub_clear_side_effects(monkeypatch)
+    repo = _RepoStub(tmp_path)
+    calls: list[str] = []
+
+    class _MrsStub:
+        def status(self):
+            return {"running": True}
+
+        def stop(self):
+            calls.append("stop")
+
+        def start(self):
+            calls.append("start")
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)))
+    request.app.state.minute_refresh = _MrsStub()
+    data_api.clear_data(request)
+    assert calls == ["stop", "start"]
+
+    # 原本未运行则不重启
+    calls.clear()
+
+    class _MrsIdle(_MrsStub):
+        def status(self):
+            return {"running": False}
+
+    request.app.state.minute_refresh = _MrsIdle()
+    data_api.clear_data(request)
+    assert calls == ["stop"]
+
+
+def test_clear_discards_status_snapshot_and_rejects_inflight_old_statistics(tmp_path, monkeypatch):
+    invalidate = data_api.invalidate_data_cache
+    _stub_clear_side_effects(monkeypatch)
+    monkeypatch.setattr(data_api, "invalidate_data_cache", invalidate)
+    cache = DataStatusCache({"daily": 30})
+    monkeypatch.setattr(data_api, "_status_cache", cache)
+    loaders = {"daily": lambda: {"rows": 42}}
+    cache.snapshot(loaders, is_busy=lambda: False)
+    if cache._thread is not None:
+        cache._thread.join(2)
+    cache.invalidate()
+    entered, release = threading.Event(), threading.Event()
+
+    def old_statistics():
+        entered.set()
+        assert release.wait(3)
+        return {"rows": 99}
+
+    try:
+        cache.snapshot({"daily": old_statistics}, is_busy=lambda: False)
+        assert entered.wait(1)
+        assert data_api.clear_data(_request(_RepoStub(tmp_path))) == {"deleted_files": 0}
+        assert cache.snapshot(loaders, is_busy=lambda: True)["daily"] is None
+    finally:
+        release.set()
+        thread = cache._thread
+        if thread is not None:
+            thread.join(2)
+            assert not thread.is_alive()
+    assert cache.snapshot(loaders, is_busy=lambda: True)["daily"] is None

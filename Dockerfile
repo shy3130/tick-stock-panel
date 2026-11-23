@@ -76,6 +76,12 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend deps
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
+# Keep the same ../packages relation as the source checkout.
+COPY packages/tivelo-contracts /packages/tivelo-contracts
+COPY packages/tivelo-extensions /packages/tivelo-extensions
+COPY packages/tivelo-data /packages/tivelo-data
+COPY packages/tivelo-market-cn /packages/tivelo-market-cn
+COPY packages/tivelo-backtest /packages/tivelo-backtest
 # uv 原生支持同时挂多个 index(主源 + 备用源),会自动在两源中查找,
 # 比逐个重试更稳健 —— 任一源缺包时另一源补位。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
@@ -88,14 +94,18 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     uv sync --frozen "$@" || uv sync "$@"
 
 # Backend code
-# config.py 在镜像里是 /app/app/config.py，应用根是 /app。相对 DATA_DIR
-# 按这个根解析，./data 即 /app/data。STATIC_DIR 仍须显式指定：非 frozen
-# 默认是 <root>/frontend/dist，镜像里的前端产物在 /app/static。
+# config.py 在镜像里是 /app/app/config.py，应用根为 /app。
+# TSP_DOCKER 让相对 DATA_DIR 按 /app 解析，并保留旧数据目录保护。
+# 显式指定数据、前端静态资源和套餐文件路径，以匹配镜像布局。
 COPY backend/app ./app
 COPY tiers.yaml /app/tiers.yaml
+# 版本号运行时兜底 (issue #513): 非冻结路径 _load_version() 读
+# /app/frontend/package.json, 缺文件会静默回退 _FALLBACK_VERSION 显示旧版本。
+COPY frontend/package.json /app/frontend/package.json
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data \
+    TSP_DOCKER=1 \
     TICKFLOW_ENV_FILE=/app/.env
 
 # Frontend 静态产物

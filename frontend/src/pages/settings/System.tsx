@@ -3,9 +3,9 @@
  *
  * 独立于实时监控, 放置影响整体应用行为的开关项。
  */
-import { useState, useCallback, useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload, MemoryStick } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import type { UpgradeGuardCategory } from '@/lib/api'
@@ -14,12 +14,23 @@ import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
-import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
+import { mergeSoundOptions, previewSound, CUSTOM_SOUND_PREFIX } from '@/lib/notificationSound'
+import { setUiPref } from '@/lib/uiPrefs'
+import { setKlineBatchLimits,
+  DAILY_BATCH_SYMBOLS_MIN,
+  DAILY_BATCH_SYMBOLS_MAX,
+  MINUTE_BATCH_SYMBOLS_MIN,
+  MINUTE_BATCH_SYMBOLS_MAX,
+} from '@/lib/klineBatchLimits'
 import {
   listZhVoices, previewVoice, activateVoice,
 } from '@/lib/voiceBroadcast'
 import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, getPageZoom, setPageZoom } from '@/lib/pageZoom'
+
+// 回测 worker RSS 内存上限 (GiB) 界面范围; 与后端 BacktestWorkerRssLimitIn 校验一致
+const BACKTEST_RSS_LIMIT_GIB_MIN = 0
+const BACKTEST_RSS_LIMIT_GIB_MAX = 64
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
@@ -67,6 +78,43 @@ export function SettingsSystemPanel() {
     } catch { return 1 }
   })
 
+  // ===== 自定义语音包 (上传提示音, 存后端 data/sound_packs, 跨设备可用) =====
+  const { data: packData } = useQuery({
+    queryKey: QK.soundPacks,
+    queryFn: api.listSoundPacks,
+    staleTime: 60_000,
+  })
+  const soundPacks = packData?.packs ?? []
+  const soundOptions = mergeSoundOptions(soundPacks.map(p => p.name))
+  const soundFileRef = useRef<HTMLInputElement>(null)
+
+  const uploadSoundPack = useMutation({
+    mutationFn: (file: File) => api.uploadSoundPack(file),
+    onSuccess: (r) => {
+      toast(`已上传 ${r.pack.name}`, 'success')
+      qc.invalidateQueries({ queryKey: QK.soundPacks })
+    },
+    onError: (e: Error) => toast(e.message || '上传失败', 'error'),
+  })
+  const deleteSoundPack = useMutation({
+    mutationFn: (name: string) => api.deleteSoundPack(name),
+    onSuccess: (_r, name) => {
+      toast(`已删除 ${name}`, 'success')
+      // 删掉的恰是当前选中音 → 回退默认, 避免悬空引用
+      if (soundType === CUSTOM_SOUND_PREFIX + name) {
+        setUiPref('alert_sound', 'ding')
+        setSoundType('ding')
+      }
+      qc.invalidateQueries({ queryKey: QK.soundPacks })
+    },
+    onError: (e: Error) => toast(e.message || '删除失败', 'error'),
+  })
+  const onSoundFilePicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f) uploadSoundPack.mutate(f)
+    e.target.value = ''  // 同名重选也能触发 onChange
+  }, [uploadSoundPack])
+
   // 语音包异步加载 (Google 云语音为 Chrome 联网注入, 比本地晚到), 监听刷新
   useEffect(() => {
     const h = () => {
@@ -91,6 +139,34 @@ export function SettingsSystemPanel() {
       setSaving(false)
     }
   }, [qc])
+
+  // 批量上限: 保存成功后把新值同步进分块助手, 并刷新偏好缓存。
+  // 已挂载页面的 query 不会立刻重跑, 但下一轮轮询/切换页面即用新分块。
+  const saveDailyBatch = useMutation({
+    mutationFn: (size: number) => api.updateDailyBatchSymbols(size),
+    onSuccess: ({ daily_batch_symbols }) => {
+      setKlineBatchLimits({ daily: daily_batch_symbols })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
+  const saveMinuteBatch = useMutation({
+    mutationFn: (size: number) => api.updateMinuteBatchSymbols(size),
+    onSuccess: ({ minute_batch_symbols }) => {
+      setKlineBatchLimits({ minute: minute_batch_symbols })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
+
+  // 回测内存上限: worker 每任务启动时从后端读取, 保存后下一个回测/优化任务即生效
+  const saveBacktestRssLimit = useMutation({
+    mutationFn: (gib: number) => api.updateBacktestWorkerRssLimit(gib),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  })
 
   // 刷新前端缓存: 清除 react-query 缓存 + 强制重载 (绕过浏览器缓存)
   // 不动 localStorage (用户列配置/策略池等偏好保留), 也不影响后端的本地股票数据
@@ -137,7 +213,7 @@ export function SettingsSystemPanel() {
           checked={toastEnabled}
           disabled={saving}
           onChange={(v) => {
-            localStorage.setItem('alert_toast_enabled', v ? '1' : '0')
+            setUiPref('alert_toast_enabled', v ? '1' : '0')
             setToastEnabled(v)
             refreshAlertToastConfig()
           }}
@@ -153,7 +229,7 @@ export function SettingsSystemPanel() {
             disabled={!toastEnabled}
             onChange={(e) => {
               const v = Number(e.target.value)
-              localStorage.setItem('alert_toast_max', String(v))
+              setUiPref('alert_toast_max', String(v))
               setToastMax(v)
               refreshAlertToastConfig()
             }}
@@ -169,7 +245,7 @@ export function SettingsSystemPanel() {
           checked={soundEnabled}
           disabled={!toastEnabled}
           onChange={(v) => {
-            localStorage.setItem('alert_sound_enabled', v ? '1' : '0')
+            setUiPref('alert_sound_enabled', v ? '1' : '0')
             setSoundEnabled(v)
             if (v) previewSound(soundType)
           }}
@@ -189,13 +265,13 @@ export function SettingsSystemPanel() {
               disabled={!toastEnabled || !soundEnabled}
               onChange={(e) => {
                 const v = e.target.value
-                localStorage.setItem('alert_sound', v)
+                setUiPref('alert_sound', v)
                 setSoundType(v)
                 if (v !== 'none') previewSound(v)
               }}
-              className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+              className="w-44 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
             >
-              {SOUND_OPTIONS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {soundOptions.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             <button
               onClick={() => previewSound(soundType)}
@@ -206,6 +282,58 @@ export function SettingsSystemPanel() {
             </button>
           </div>
         </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0 flex items-center gap-1.5">
+            <Upload className="h-3.5 w-3.5 text-muted" />
+            <div>
+              <div className="text-sm text-foreground">自定义语音包</div>
+              <div className="text-[11px] text-muted truncate">上传自己的提示音 (mp3/wav/ogg/m4a/flac/aac, ≤4MB), 同名重传替换</div>
+            </div>
+          </div>
+          <input
+            ref={soundFileRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac,.opus,.webm"
+            className="hidden"
+            onChange={onSoundFilePicked}
+          />
+          <button
+            onClick={() => soundFileRef.current?.click()}
+            disabled={uploadSoundPack.isPending}
+            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn text-xs bg-elevated text-secondary hover:text-foreground transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {uploadSoundPack.isPending ? '上传中…' : '上传'}
+          </button>
+        </div>
+        {soundPacks.length > 0 && (
+          <div className="mt-1 space-y-1">
+            {soundPacks.map(p => (
+              <div key={p.name} className="flex items-center justify-between gap-2 pl-5 pr-1.5 py-1 rounded-btn bg-base/60">
+                <span className="text-xs text-foreground truncate">
+                  {p.name}
+                  <span className="text-muted ml-1.5">{p.size >= 1024 * 1024 ? `${(p.size / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(p.size / 1024))}KB`}</span>
+                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => previewSound(CUSTOM_SOUND_PREFIX + p.name)}
+                    className="px-2 py-0.5 rounded-btn border border-border text-xs text-secondary hover:text-foreground hover:border-accent/30 transition-colors cursor-pointer"
+                  >
+                    试听
+                  </button>
+                  <button
+                    onClick={() => deleteSoundPack.mutate(p.name)}
+                    disabled={deleteSoundPack.isPending && deleteSoundPack.variables === p.name}
+                    className="px-2 py-0.5 rounded-btn border border-border text-xs text-secondary hover:text-foreground hover:border-accent/30 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {deleteSoundPack.isPending && deleteSoundPack.variables === p.name ? '删除中' : '删除'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
@@ -220,7 +348,7 @@ export function SettingsSystemPanel() {
           checked={voiceEnabled}
           disabled={!toastEnabled}
           onChange={(v) => {
-            localStorage.setItem('voice_broadcast_enabled', v ? '1' : '0')
+            setUiPref('voice_broadcast_enabled', v ? '1' : '0')
             setVoiceEnabled(v)
             if (v) { activateVoice(); previewVoice() }   // 开启即激活 + 试听一句
           }}
@@ -246,11 +374,11 @@ export function SettingsSystemPanel() {
                 const v = e.target.value
                 if (v) {
                   // 手选某一语音包
-                  localStorage.setItem('voice_broadcast_voice', v)
+                  setUiPref('voice_broadcast_voice', v)
                   setVoiceConfigured(v)
                 } else {
                   // 选"默认偏好"(固定空值): 清空手选, 走 Google 中国大陆偏好
-                  localStorage.removeItem('voice_broadcast_voice')
+                  setUiPref('voice_broadcast_voice', null)
                   setVoiceConfigured('')
                 }
               }}
@@ -282,7 +410,7 @@ export function SettingsSystemPanel() {
               disabled={!toastEnabled || !voiceEnabled}
               onChange={(e) => {
                 const v = parseFloat(e.target.value)
-                localStorage.setItem('voice_broadcast_rate', String(v))
+                setUiPref('voice_broadcast_rate', String(v))
                 setVoiceRate(v)
               }}
               className="w-32 disabled:opacity-50"
@@ -314,6 +442,68 @@ export function SettingsSystemPanel() {
             className="w-[26rem] max-w-[60%] h-8 px-2.5 rounded-btn border border-border bg-base text-xs font-mono text-foreground focus:border-accent/50 focus:outline-none"
           />
         </div>
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Layers className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">批量请求</h3>
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-muted mb-3">
+          自选 / 选股列表的 K 线按这里的数量分批请求，单批越大请求越少、速度越快，
+          但单次内存峰值也越高。改完立即生效，无需重启。
+        </p>
+
+        <BatchSymbolsRow
+          label="日K批量上限"
+          desc="每只约 12 根 K 线，成本较低"
+          min={DAILY_BATCH_SYMBOLS_MIN}
+          max={DAILY_BATCH_SYMBOLS_MAX}
+          value={prefs?.daily_batch_symbols ?? 400}
+          saving={saveDailyBatch.isPending}
+          onSave={(size) => saveDailyBatch.mutate(size)}
+          warnAt={2000}
+          warnText="超过 2000 只时，多标签页或分时同时刷新会叠加内存峰值，可能触发浏览器卡顿或后端内存告警。"
+        />
+        <div className="h-px bg-border/60 my-1" />
+        <BatchSymbolsRow
+          label="分时批量上限"
+          desc="每只约 240 根 K 线，内存约为日K的 20 倍"
+          min={MINUTE_BATCH_SYMBOLS_MIN}
+          max={MINUTE_BATCH_SYMBOLS_MAX}
+          value={prefs?.minute_batch_symbols ?? 400}
+          saving={saveMinuteBatch.isPending}
+          onSave={(size) => saveMinuteBatch.mutate(size)}
+          warnAt={800}
+          warnText="分时数据量是日K的 20 倍：超过 800 只时单次响应可达数十 MB，建议保持默认或更低。"
+        />
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <MemoryStick className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">性能与内存</h3>
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-muted mb-3">
+          回测 / 稳健优化 / 因子挖掘在独立进程运行，内存超过上限会被中止并提示
+          （避免把整机拖入卡顿）。保存后对新发起的任务生效，无需重启。
+        </p>
+
+        <BatchSymbolsRow
+          label="回测内存上限"
+          desc="默认 6 · 0 = 不限制"
+          min={BACKTEST_RSS_LIMIT_GIB_MIN}
+          max={BACKTEST_RSS_LIMIT_GIB_MAX}
+          value={prefs?.backtest_worker_rss_limit_gib ?? 6}
+          saving={saveBacktestRssLimit.isPending}
+          onSave={(gib) => saveBacktestRssLimit.mutate(gib)}
+          warnAt={16}
+          warnText="上限超过物理内存时会触发系统交换（swap），回测速度反而断崖式下降；内存不足时优先缩小回测时间范围/标的数量。"
+          unit="GiB"
+          rangeUnit="GiB"
+        />
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
@@ -584,6 +774,116 @@ function UpgradeGuardCard() {
 
 
 // ===== ToggleRow =====
+
+function BatchSymbolsRow({
+  label,
+  desc,
+  value,
+  min,
+  max,
+  saving,
+  onSave,
+  warnAt,
+  warnText,
+  unit = '只/批',
+  rangeUnit = '只',
+}: {
+  label: string
+  desc: string
+  value: number
+  min: number
+  max: number
+  saving: boolean
+  onSave: (size: number) => void
+  warnAt: number
+  warnText: string
+  /** 值药丸的单位后缀; 默认「只/批」, 回测内存等场景传 'GiB' */
+  unit?: string
+  /** 范围提示「可设 min–max …」的单位后缀 */
+  rangeUnit?: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(String(value))
+  const [hint, setHint] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!editing) setDraft(String(value))
+  }, [value, editing])
+
+  function commit() {
+    const raw = Number.parseInt(draft, 10)
+    if (!Number.isFinite(raw)) {
+      setHint(`请输入 ${min}–${max} 之间的整数`)
+      return
+    }
+    if (raw < min) { setHint(`已按最小值 ${min} 保存`); onSave(min); setEditing(false); return }
+    if (raw > max) { setHint(`已按上限 ${max} 保存`); onSave(max); setEditing(false); return }
+    setHint(null)
+    onSave(raw)
+    setEditing(false)
+  }
+
+  const overWarn = (Number.parseInt(draft, 10) || 0) >= warnAt
+
+  return (
+    <div className="py-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm text-foreground">{label}</div>
+          <div className="text-[11px] text-muted">{desc} · 可设 {min}–{max} {rangeUnit}</div>
+        </div>
+        {editing ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <input
+              type="number"
+              value={draft}
+              min={min}
+              max={max}
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commit()
+                if (e.key === 'Escape') { setEditing(false); setHint(null) }
+              }}
+              className="w-24 h-8 px-2 rounded-btn border border-border bg-base text-right font-mono text-xs
+                         text-foreground tabular-nums focus:border-accent/50 focus:outline-none"
+            />
+            <button
+              onClick={commit}
+              disabled={saving}
+              className="px-2.5 py-1.5 rounded-btn text-xs bg-accent/15 text-accent
+                         hover:bg-accent/25 transition-colors disabled:opacity-50"
+            >
+              {saving ? '…' : '保存'}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setHint(null) }}
+              className="px-2 py-1.5 rounded-btn text-xs bg-elevated text-muted hover:text-foreground transition-colors"
+            >
+              取消
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            className="shrink-0 px-2.5 py-1 rounded-btn border border-border bg-surface font-mono text-xs
+                       text-foreground tabular-nums hover:border-accent/50 transition-colors"
+            title="点击修改"
+          >
+            {value} {unit}
+          </button>
+        )}
+      </div>
+      {hint && <div className="mt-1.5 text-[10px] text-warning">{hint}</div>}
+      {overWarn && editing && (
+        <div className="mt-2 rounded-btn border border-warning/20 bg-warning/10 px-3 py-1.5">
+          <span className="text-[10px] leading-relaxed text-warning">{warnText}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 function ToggleRow({
   label,

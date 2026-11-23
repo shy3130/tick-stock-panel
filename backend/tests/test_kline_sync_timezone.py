@@ -108,7 +108,8 @@ def test_sync_and_persist_minute_extend_backward_window_is_beijing_wall_clock(mo
 
     assert start.utcoffset() == timedelta(hours=8)
     assert end.utcoffset() == timedelta(hours=8)
-    assert end - start == timedelta(days=7)  # 5 交易日 x 7/5
+    assert (start.hour, start.minute) == (9, 25)
+    assert end.date() - start.date() == timedelta(days=7)  # 5 交易日 x 7/5
     assert datetime.fromtimestamp(
         kline_sync._datetime_to_ms(end) / 1000, tz=CN_TZ
     ) == local_earliest.replace(tzinfo=CN_TZ)
@@ -143,7 +144,7 @@ def _capture_tickflow_minute_batch(monkeypatch) -> tuple[list[tuple[datetime, da
 
     monkeypatch.setattr(kline_sync, "_try_custom_minute", lambda *a, **kw: (None, True))
     monkeypatch.setattr(kline_sync, "get_client", lambda: _FakeClient())
-    monkeypatch.setattr(kline_sync, "_datetime_to_ms", _spy_to_ms)
+    monkeypatch.setattr("app.data_providers.tickflow_provider._datetime_to_ms", _spy_to_ms)
     return windows, offsets
 
 

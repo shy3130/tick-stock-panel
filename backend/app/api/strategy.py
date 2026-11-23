@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import logging
 import math
@@ -14,14 +15,20 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
+from app.services import strategy_pool
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.strategy import config as strategy_config
-from app.strategy.ai_generator import AIStrategyGenerator, find_meta_assignment
+from app.strategy.ai_generator import (
+    AIStrategyGenerator,
+    _strategy_execution_backend,
+    find_meta_assignment,
+)
 from app.strategy.engine import StrategyDef, StrategyEngine
 from app.strategy.monitor import StrategyMonitorService
 from app.strategy.prompt_builder import build_step1, build_step2
@@ -72,6 +79,10 @@ def _invalidate_strategy_runtime(request: Request) -> None:
     monitor_engine = getattr(request.app.state, "monitor_engine", None)
     if monitor_engine is not None:
         monitor_engine.invalidate_strategy_state()
+    # 策略删除/失效 → 清掉指向它的模拟盘合成评估规则
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
 
 
 def _missing_custom_signals(data_dir: Path, required_features) -> list[str]:
@@ -269,7 +280,7 @@ class AIIterateRequest(BaseModel):
     description: str = ""
     direction: str = "long"
     rules: str = ""
-    execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    execution_backend: Literal["polars_expr", "matrix_native", "minute_filter"] = "polars_expr"
     max_rounds: int = Field(default=4, ge=1, le=10)
 
 
@@ -328,6 +339,7 @@ def list_strategies(
     engine = _get_engine(request)
     data_dir = _data_dir(request)
     all_overrides = strategy_config.list_overrides(data_dir)
+    library = strategy_pool.library_metadata(data_dir)
 
     result = []
     # include_research=True 时返回 research_only 草稿(供前端「草稿」分区展示/发布)。
@@ -342,7 +354,7 @@ def list_strategies(
         sid = meta["id"]
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
-        result.append(_strategy_detail(s, overrides, engine))
+        result.append({**_strategy_detail(s, overrides, engine), "library": library.get(sid)})
     payload: dict = {"strategies": result, "load_errors": engine.load_errors()}
     # 去内置化一次性迁移摘要 (启动时执行过才有): 前端提示一次后本地记忆
     migration = getattr(request.app.state, "legacy_migration", None)
@@ -356,7 +368,8 @@ def get_strategy(strategy_id: str, request: Request):
     engine = _get_engine(request)
     s = _get_public_strategy(engine, strategy_id)
     overrides = strategy_config.load_override(_data_dir(request), strategy_id)
-    return _strategy_detail(s, overrides or None, engine)
+    library = strategy_pool.library_metadata(_data_dir(request))
+    return {**_strategy_detail(s, overrides or None, engine), "library": library.get(strategy_id)}
 
 
 # ── 执行策略 ─────────────────────────────────────────────────────────
@@ -604,7 +617,7 @@ class BuildRequest(BaseModel):
     direction: str = "long"
     rules: str = ""
     strategy_id: str = ""
-    execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    execution_backend: Literal["polars_expr", "matrix_native", "minute_filter"] = "polars_expr"
     # 用户「默认基础参数」(策略页设置): 生成代码的 META.basic_filter 优先采用
     basic_filter: dict[str, Any] | None = None
     # step2 字段
@@ -638,7 +651,14 @@ def _set_meta_string_field(block: str, field: str, value: str) -> str:
 
 
 def _insert_meta_field(block: str, field: str, value_repr: str) -> str:
-    """在 META 字典末尾(闭合 `}` 之前)插入一个字段。value_repr 已是 Python 源码。"""
+    """在 META 字典末尾(闭合 `}` 之前)插入一个字段。value_repr 已是 Python 源码。
+
+    闭合 `}` 有两种写法, 两种都要认:
+      - 独占一行 (`    }`): 直接插在它前面;
+      - 跟在最后一个键的行尾 (`"params": []}`): 必须先把这一行拆成
+        「内容,」+「新字段」+「}」, 否则新字段会落出字典之外, 生成非法代码
+        (AST 报 unexpected indent)。AI 生成的策略常写这种内联多行形式。
+    """
     lines = block.splitlines(keepends=True)
     key_indent = None
     for line in lines:
@@ -646,15 +666,34 @@ def _insert_meta_field(block: str, field: str, value_repr: str) -> str:
         if m:
             key_indent = m.group(1)
             break
+    # META = { 所在行的缩进: 拆出闭合 `}` 时用它对齐字典结束位置
+    stmt_indent = re.match(r"^(\s*)", lines[0] if lines else "")
+    stmt_prefix = stmt_indent.group(1) if stmt_indent else ""
     if key_indent is None:
-        first_indent = re.match(r"^(\s*)", lines[0] if lines else "")
-        key_indent = (first_indent.group(1) if first_indent else "") + "    "
+        key_indent = stmt_prefix + "    "
 
-    insert_at = len(lines)
+    # 定位最后一个非空行: 它要么是 `}`, 要么以 `}` 结尾
+    last = None
     for i in range(len(lines) - 1, -1, -1):
-        if lines[i].lstrip().startswith("}"):
-            insert_at = i
+        if lines[i].strip():
+            last = i
             break
+    insert_at = len(lines)
+    if last is not None:
+        body = lines[last].rstrip("\r\n")
+        if body.lstrip().startswith("}"):
+            insert_at = last
+        else:
+            brace = body.rfind("}")
+            if brace >= 0:
+                content = body[:brace].rstrip()
+                if content and not content.endswith((",", "{")):
+                    content += ","
+                lines[last] = content + "\n"
+                lines.insert(last + 1, f'{key_indent}"{field}": {value_repr},\n')
+                lines.insert(last + 2, f"{stmt_prefix}}}\n")
+                return "".join(lines)
+
     for i in range(insert_at - 1, -1, -1):
         if not lines[i].strip():
             continue
@@ -791,13 +830,31 @@ def _restore_strategy_file(path: Path, previous_code: str | None) -> None:
 
 
 def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legacy_ai_path: bool = False) -> dict:
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+    result = save_strategy_code_core(req, engine, data_dir, legacy_ai_path=legacy_ai_path)
+    _invalidate_strategy_runtime(request)
+    return result
+
+
+def save_strategy_code_core(
+    req: StrategyCodeSaveRequest,
+    engine: StrategyEngine,
+    data_dir: Path,
+    *,
+    legacy_ai_path: bool = False,
+) -> dict:
+    """策略落盘 + 校验的**唯一**实现 (API 端点与 AI 助手工具共用)。
+
+    校验链: ID 前缀 → 目标目录 → 安全校验与 META 语义 → 写盘 → engine.reload()
+    核对能加载且来源正确 → 引用的自定义信号必须已定义。任何一步失败都回滚文件,
+    不留下半截状态。调用方负责清缓存 (端点走 _invalidate_strategy_runtime)。
+    """
     sid = _validate_strategy_id(req.strategy_id)
     if legacy_ai_path:
         if not (sid.startswith("ai_") or sid.startswith("custom_")):
             raise ValueError("策略 ID 必须以 ai_ 或 custom_ 开头")
 
-    engine = _get_engine(request)
-    data_dir = _data_dir(request)
     existing: StrategyDef | None = None
     try:
         existing = engine.get(sid)
@@ -864,7 +921,9 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
         engine.reload()
         raise ValueError(f"策略保存失败: {e}") from e
 
-    _invalidate_strategy_runtime(request)
+    # 登记加入时间 (策略库「按加入时间排序」的依据; 幂等, 已登记不动)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
 
     return {
         "ok": True,
@@ -880,7 +939,12 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
 def ai_status(request: Request):
     """Check whether the selected AI provider is configured."""
     from app import secrets_store
-    from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        supports_ai_tools,
+    )
 
     has_key = bool(secrets_store.get_ai_key())
     model = current_ai_model()
@@ -890,6 +954,7 @@ def ai_status(request: Request):
         "has_key": has_key,
         "has_model": bool(model),
         "provider": provider,
+        "supports_tools": supports_ai_tools(provider),
     }
 
 
@@ -906,6 +971,72 @@ def get_strategy_source(strategy_id: str, request: Request):
         raise HTTPException(status_code=404, detail="策略源文件不存在")
 
     return {"code": path.read_text(encoding="utf-8"), "source": s.source}
+
+
+# ── 策略包 (bundle): 依赖感知的导出/检查/导入 ────────────────────────
+
+_BUNDLE_FILE = File(...)  # 模块级单例, 与 config_backup._UPLOAD_FILE 同模式
+
+
+def _bundle_service():
+    from app.services import strategy_bundle
+
+    return strategy_bundle
+
+
+@router.get("/{strategy_id}/bundle")
+def export_strategy_bundle(strategy_id: str, request: Request):
+    """导出策略包 ZIP: 策略 .py + 引用的信号/因子定义 + 用户调参 (依赖闭包)。"""
+    import io
+
+    engine = _get_engine(request)
+    _get_public_strategy(engine, strategy_id)  # research_only 404 口径与源码端点一致
+    from app.config import settings
+
+    try:
+        data, filename, _summary = _bundle_service().build_bundle(
+            settings.data_dir, engine, strategy_id
+        )
+    except _bundle_service().StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/bundle/inspect")
+async def inspect_strategy_bundle(file: UploadFile = _BUNDLE_FILE):
+    """导入预览: 条目清单 (create/conflict) + 缺失依赖预警, 不落盘。"""
+    data = await file.read()
+    try:
+        return await run_in_threadpool(_bundle_service().inspect_bundle, data)
+    except _bundle_service().StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/bundle/apply")
+async def apply_strategy_bundle(
+    request: Request, file: UploadFile = _BUNDLE_FILE, allow_overwrite: bool = Form(False)
+):
+    """导入策略包: 复用配置备份的校验/写盘/导入即冒烟/热重载管线。"""
+    data = await file.read()
+    return await run_in_threadpool(_apply_strategy_bundle, request, data, allow_overwrite)
+
+
+def _apply_strategy_bundle(request: Request, data: bytes, allow_overwrite: bool):
+    service = _bundle_service()
+    try:
+        result = service.apply_bundle(data, allow_overwrite=allow_overwrite)
+    except service.StrategyBundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    hints = result.get("reload_hints") or {}
+    if hints.get("strategies"):
+        engine = getattr(request.app.state, "strategy_engine", None)
+        if engine is not None:
+            engine.reload()
+    return result
 
 
 @router.post("/ai/test")
@@ -945,13 +1076,24 @@ def _build_prompt(req: BuildRequest) -> str:
     raise ValueError(f"无效步骤: {req.step}")
 
 
+def _build_execution_backend(req: BuildRequest) -> str:
+    # 旧客户端修改策略未传后端时，按已有代码保留分钟/矩阵契约。
+    if req.step == 2 and "execution_backend" not in req.model_fields_set:
+        try:
+            meta = AIStrategyGenerator._extract_meta(req.current_code)
+            return _strategy_execution_backend(ast.parse(req.current_code), meta)
+        except (SyntaxError, ValueError):
+            pass
+    return req.execution_backend
+
+
 @router.post("/build")
 async def build_strategy(req: BuildRequest, request: Request):
     """两步策略构建。
     step1: name + description + direction + rules → 完整策略
     step2: current_code + instruction → 修改任意部分
     """
-    gen = AIStrategyGenerator()
+    gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req), data_dir=_data_dir(request))
 
     try:
         prompt = _build_prompt(req)
@@ -975,7 +1117,7 @@ async def build_strategy_stream(req: BuildRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     async def event_generator():
-        gen = AIStrategyGenerator()
+        gen = AIStrategyGenerator(execution_backend=_build_execution_backend(req), data_dir=_data_dir(request))
         chunks: list[str] = []
         yield json.dumps({"type": "meta", "strategy_id": req.strategy_id, "step": req.step}, ensure_ascii=False)
         try:
@@ -1012,7 +1154,7 @@ async def build_strategy_stream(req: BuildRequest, request: Request):
 @router.post("/ai/generate")
 async def ai_generate(req: AIGenerateRequest, request: Request):
     try:
-        gen = AIStrategyGenerator()
+        gen = AIStrategyGenerator(data_dir=_data_dir(request))
         result = await gen.generate(req.prompt)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1024,14 +1166,13 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
 @router.post("/ai/iterate")
 async def ai_iterate(req: AIIterateRequest, request: Request):
     """生成→回测→诊断→修改 的有界闭环 (只读回测, 产物为 ai_ 草稿, 不自动上线)。"""
-    from app.services.ai_provider import is_codex_cli_provider
+    from app.services.ai_provider import AIToolProtocolError, supports_ai_tools
     from app.strategy.ai_iterator import AIStrategyIterator
 
-    # Codex CLI 无 tools= 协议, 迭代能力边界在入口 fail-closed (不静默降级为纯文本)。
-    if is_codex_cli_provider():
+    if not supports_ai_tools():
         raise HTTPException(
             status_code=400,
-            detail="当前 AI 供应商不支持工具调用迭代, 请改用 OpenAI 兼容模型",
+            detail="当前 AI 接入不支持工具调用，请选择支持工具调用的 AI 接入方式",
         )
 
     engine = _get_engine(request)
@@ -1042,8 +1183,11 @@ async def ai_iterate(req: AIIterateRequest, request: Request):
             strategy_id="", execution_backend=req.execution_backend,
         )
         iterator = AIStrategyIterator(max_rounds=req.max_rounds)
-        result = await iterator.iterate(prompt, engine=engine, data_dir=str(data_dir))
-    except ValueError as e:
+        result = await iterator.iterate(
+            prompt, engine=engine, data_dir=str(data_dir), execution_backend=req.execution_backend,
+            repo=request.app.state.repo,
+        )
+    except (ValueError, RuntimeError, AIToolProtocolError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception:
         # 内部异常详情只进日志, 不透给客户端 (§8)
@@ -1178,6 +1322,10 @@ def _save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request
 
     _invalidate_strategy_runtime(request)
 
+    # 登记加入时间 (同自定义策略保存路径; 幂等)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
+
     return {
         "ok": True,
         "strategy_id": sid,
@@ -1248,6 +1396,9 @@ def publish_ai_strategy(strategy_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"策略发布失败: {e}") from e
 
     _invalidate_strategy_runtime(request)
+    # 发布即进入公开库, 登记加入时间 (幂等)
+    with contextlib.suppress(Exception):
+        strategy_pool.register(sid)
     return {"ok": True, "strategy_id": sid}
 
 

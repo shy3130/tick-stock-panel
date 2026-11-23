@@ -16,7 +16,8 @@ from app.config import settings
 # (路径, 该端点的必填参数)
 STREAMS = [
     ("/api/backtest/strategy/stream", {"strategy_id": "ma_cross"}),
-    ("/api/backtest/optimize/stream", {"strategy_id": "ma_cross", "param_grid": '{"n": [5]}'}),
+    # 旧 /optimize/stream 单窗样本内路径已于 P4 移除, 由稳健优化接替
+    ("/api/backtest/optimize-robust/stream", {"strategy_id": "ma_cross", "param_grid": '{"n": [5]}'}),
     ("/api/backtest/walkforward/stream", {"strategy_id": "ma_cross", "param_grid": '{"n": [5]}'}),
 ]
 STREAM_IDS = [path.rsplit("/", 2)[1] for path, _ in STREAMS]

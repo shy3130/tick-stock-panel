@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { api, type FactorColumn, type ScoringDirection } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { definitionOptionLabel } from '@/lib/definitionOptions'
 
 interface Props {
   value: Record<string, number>
@@ -104,7 +105,7 @@ function ScoringRow({ name, label, weight, direction, editing, onWeightChange, o
           onClick={onRemove}
           className="flex h-7 w-7 items-center justify-center rounded-btn text-muted transition-colors hover:bg-danger/10 hover:text-danger"
           title={`移除${label}`}
-          aria-label={`移除评分因子${label}`}
+          aria-label={`移除因子${label}`}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -124,7 +125,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
     staleTime: 5 * 60_000,
   })
   const factorLabels = useMemo(() => Object.fromEntries(
-    (factors.data?.columns ?? []).map(item => [item.id, item.label]),
+    (factors.data?.columns ?? []).map(item => [item.id, definitionOptionLabel(item)]),
   ), [factors.data])
   const factorGroups = useMemo(() => {
     const groups: Record<string, FactorColumn[]> = {}
@@ -190,13 +191,13 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
             onChange={event => setFactorToAdd(event.target.value)}
             disabled={factors.isLoading || factors.isError}
             className="h-8 min-w-0 flex-1 rounded-input border border-border bg-base px-2 text-xs text-secondary focus:border-accent focus:outline-none disabled:opacity-50"
-            aria-label="选择要添加的评分因子"
+            aria-label="选择要添加的因子"
           >
             <option value="">
-              {factors.isLoading ? '加载因子目录…' : factors.isError ? '因子目录加载失败' : '选择评分因子'}
+              {factors.isLoading ? '加载因子目录…' : factors.isError ? '因子目录加载失败' : '选择因子'}
             </option>
             {Object.entries(factorGroups).map(([group, items]) => {
-              const available = items.filter(item => !(item.id in draft))
+              const available = items.filter(item => !item.archived && !(item.id in draft))
               return available.length > 0 ? (
                 <optgroup key={group} label={group}>
                   {available.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
@@ -209,8 +210,8 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
             onClick={addFactor}
             disabled={!factorToAdd}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-btn border border-accent/30 bg-accent/10 text-accent transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-40"
-            title="添加评分因子"
-            aria-label="添加评分因子"
+            title="添加因子"
+            aria-label="添加因子"
           >
             <Plus className="h-3.5 w-3.5" />
           </button>
@@ -235,7 +236,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
         </div>
       ) : (
         <div className="border-y border-border/40 py-5 text-center text-xs text-muted">
-          {editing ? '请选择评分因子' : '当前策略不使用因子评分'}
+          {editing ? '请选择因子' : '当前策略未配置因子权重'}
         </div>
       )}
 
@@ -252,7 +253,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
               onClick={cancelEditing}
               className="flex h-7 w-7 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title="取消编辑"
-              aria-label="取消编辑评分方案"
+              aria-label="取消编辑权重"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -263,7 +264,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
             className="inline-flex h-7 items-center gap-1.5 rounded-btn border border-amber-400/40 bg-amber-400/10 px-2.5 text-[11px] text-amber-400 transition-colors hover:bg-amber-400/15"
           >
             {editing ? <Save className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
-            {editing ? '保存方案' : '编辑方案'}
+            {editing ? '保存权重' : '编辑权重'}
           </button>
         </div>
       </div>

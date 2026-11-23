@@ -5,8 +5,10 @@ import { Activity, Loader2, Lock, RefreshCw } from 'lucide-react'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
-import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
-import { EChartsIntraday } from '@/components/EChartsIntraday'
+import type { OHLC } from '@/lib/chart-types'
+import { PageHeader } from '@/components/PageHeader'
+import { LightweightDaily } from '@/components/charts/LightweightDaily'
+import { LightweightIntraday } from '@/components/charts/LightweightIntraday'
 
 function defaultRange() {
   const now = new Date()
@@ -172,38 +174,37 @@ export function Indices() {
   }
 
   return (
-    <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">指数</h1>
-          <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票策略链路。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col bg-base">
+      <PageHeader
+        title="指数"
+        subtitle="核心指数行情 · 日K与分时"
+        className="shrink-0 max-md:pl-16"
+        right={
           <button
+            type="button"
             onClick={() => syncDaily.mutate()}
             disabled={syncDaily.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+            aria-busy={syncDaily.isPending}
+            className="inline-flex min-h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-btn bg-accent px-2.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 [@media(pointer:coarse)]:min-h-9"
           >
-            {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            {syncDaily.isPending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <RefreshCw aria-hidden="true" className="size-3.5" />}
             同步指数日K
           </button>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
+      <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-auto p-3 md:px-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
         <aside className="rounded-card border border-border bg-surface p-3">
           <div className="mb-2 px-1 text-[11px] uppercase tracking-wider text-muted">核心指数</div>
-          <div className="space-y-1">
+          <div className="grid grid-cols-2 gap-1 lg:block lg:space-y-1">
             {topRows.map(renderIndexItem)}
           </div>
         </aside>
 
-        <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <section aria-label="指数行情" className="min-w-0 rounded-card border border-border bg-surface p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <Activity className="h-4 w-4 text-accent" />
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {selectedInfo?.name || selectedSymbol || '未选择指数'}
@@ -216,19 +217,21 @@ export function Indices() {
                 实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex min-w-0 items-center gap-2 text-xs">
               <input
                 type="date"
+                aria-label="日K开始日期"
                 value={range.start}
                 onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
               <span className="text-muted">至</span>
               <input
                 type="date"
+                aria-label="日K结束日期"
                 value={range.end}
                 onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
             </div>
           </div>
@@ -241,14 +244,13 @@ export function Indices() {
             </div>
           )}
           {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
               <div className="min-w-0 flex-1">
-                <EChartsCandlestick
+                <LightweightDaily
                   data={chartRows}
                   height={620}
                   showMA={true}
                   showInfoBar={true}
-                  showMarkers={false}
                   symbol={selectedSymbol}
                   linkedPrice={linkedPrice}
                   onDateClick={(date) => {
@@ -259,7 +261,7 @@ export function Indices() {
                   activeIndicators={['vol', 'macd']}
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
+              <div className="min-w-0 lg:flex-1 lg:border-l lg:border-border lg:pl-3" style={{ height: 620 }}>
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />
@@ -275,8 +277,10 @@ export function Indices() {
                       </div>
                     )}
                     {minuteRows.length > 0 && (
-                      <EChartsIntraday
+                      <LightweightIntraday
                         key={`${selectedSymbol}:${selectedDate}`}
+                        symbol={selectedSymbol}
+                        assetType="index"
                         data={minuteRows}
                         height={620}
                         prevClose={prevClose}
@@ -291,7 +295,7 @@ export function Indices() {
               </div>
             </div>
           )}
-        </main>
+        </section>
       </div>
     </div>
   )

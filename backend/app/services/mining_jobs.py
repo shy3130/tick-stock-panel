@@ -48,6 +48,7 @@ MAX_EVENTS = 256
 MAX_EVENT_PAYLOAD_BYTES = 16 * 1024
 _SCHEMA_VERSION = 1
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_NAMESPACE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _STORE_LOCK = threading.RLock()
 
 _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -123,12 +124,16 @@ def compute_run_signature(request: Mapping[str, Any], data_fingerprint: Any) -> 
 class MiningRunStore:
     """Store one manifest, summary, artifact registry, and bounded event log per run."""
 
-    def __init__(self, data_dir: Path | str | None = None) -> None:
+    def __init__(self, data_dir: Path | str | None = None, *, namespace: str = "mining") -> None:
         if data_dir is None:
             from app.config import settings
 
             data_dir = settings.data_dir
-        self.runs_root = (Path(data_dir).resolve() / "research" / "mining" / "runs").resolve()
+        if not _NAMESPACE_PATTERN.fullmatch(namespace):
+            raise MiningRunValidationError(f"unsupported run store namespace: {namespace!r}")
+        self.runs_root = (
+            (Path(data_dir).resolve() / "research" / namespace / "runs").resolve()
+        )
         self.runs_root.mkdir(parents=True, exist_ok=True)
 
     def create(

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -212,6 +213,11 @@ class StrategyDef:
     # 仅 minute_filter: META["daily_history_bars"] 声明需要的日线历史窗口 (0=不需要;
     # >0 时 filter_minute_history 必须接受 daily 关键字, 引擎注入 context.daily_history)
     minute_daily_bars: int = 0
+    # 模块 SCORING 常量的因子键 (custom_factor_* 排名策略用; 策略包闭包消费)
+    scoring_columns: tuple[str, ...] = ()
+    # 模块 TAKE_PROFIT 常量（正收益比例, 如 0.10 = +10% 止盈）; 与 STOP_LOSS 对称,
+    # 供回测/实盘风控读取（此前遗漏, 模块常量不生效）
+    take_profit: float | None = None
 
 
 @dataclass
@@ -233,6 +239,43 @@ class _RealtimeMatrixEntry:
     buffer: Any
 
 
+def _resolve_required_features(meta: dict, mod, filter_history_fn, path: Path) -> frozenset[str]:
+    """显式声明 (META/module REQUIRED_FEATURES) 优先; 缺失且存在动态
+    filter_history 时, AST 推导列依赖兜底 — 推导不可证明则保持为空,
+    回测层继续走全量指标计算 (fail-closed)。
+
+    推导范围是整个策略文件 + 同目录 `_*.py` 依赖文件, 不只是 filter_history
+    函数体: 列引用在模块级辅助函数或依赖文件里硬编码时, 只看函数体会漏列,
+    回测帧缺列直接 ColumnNotFoundError。范围放宽只会多载列, 不会漏。"""
+    declared = frozenset(meta.get("required_features", []) or []) | frozenset(
+        getattr(mod, "REQUIRED_FEATURES", []) or []
+    )
+    if declared or filter_history_fn is None:
+        return declared
+    from app.strategy.feature_deps import infer_features_from_sources
+
+    family = [path, *sorted(p for p in path.parent.glob("_*.py") if p != path)]
+    try:
+        sources = [p.read_text(encoding="utf-8") for p in family]
+    except OSError as e:
+        logger.debug("strategy %s: 依赖源码读取失败, 保持全量兜底: %s", meta.get("id", "<unknown>"), e)
+        return declared
+    inferred = infer_features_from_sources(sources)
+    if inferred is None:
+        return declared
+    logger.info(
+        "strategy %s: 依赖源码 AST 推导出 %d 个依赖列, 免除回测全量兜底",
+        meta.get("id", "<unknown>"),
+        len(inferred),
+    )
+    return inferred
+
+
+@lru_cache(maxsize=32)
+def _validate_dependency_source(source, validate):
+    validate(source, extra_allowed_import_modules=frozenset({"collections.abc", "types", "typing"}))
+
+
 class StrategyEngine:
     """策略引擎 — 策略加载 + 执行 + 评分"""
 
@@ -245,6 +288,7 @@ class StrategyEngine:
         override_loader: Callable[[str], dict] | None = None,
     ):
         self._strategies: dict[str, StrategyDef] = {}
+        self.definition_revision = 0
         self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
         self._strategy_dirs = strategy_dirs or []
         self._realtime_matrices: dict[str, _RealtimeMatrixEntry] = {}
@@ -379,8 +423,8 @@ class StrategyEngine:
         return None
 
     @staticmethod
-    def _load_file(path: Path) -> StrategyDef:
-        """从 Python 文件加载策略定义"""
+    def _validate_file(path: Path) -> tuple[str, frozenset[str]]:
+        """校验策略及同目录依赖，返回源码和可导入的依赖名称。"""
         # 纵深防御: 执行前再跑一次 AST 安全校验, 防止策略文件被直接篡改
         # 绕过 API 校验后, 在 exec_module 时执行恶意代码。
         dependency_paths = [
@@ -397,13 +441,12 @@ class StrategyEngine:
                 extra_allowed_import_modules=dependency_names,
             )
             for dependency_path in dependency_paths:
-                AIStrategyGenerator._validate_safety(
+                # Local helpers can be shared by dozens of strategies. Read
+                # their actual content each time and cache only a successful
+                # check of that exact source.
+                _validate_dependency_source(
                     dependency_path.read_text(encoding="utf-8"),
-                    extra_allowed_import_modules=frozenset({
-                        "collections.abc",
-                        "types",
-                        "typing",
-                    }),
+                    AIStrategyGenerator._validate_safety,
                 )
         except ValueError:
             raise
@@ -413,6 +456,12 @@ class StrategyEngine:
             # fail-closed: 文件读不到/读不懂时不得放行到 exec_module,
             # 否则异常输入即可让校验静默跳过 (GH #475 同类逃逸)。
             raise ValueError(f"策略安全校验失败: {e}") from e
+        return code, dependency_names
+
+    @staticmethod
+    def _load_file(path: Path) -> StrategyDef:
+        """从 Python 文件加载策略定义"""
+        _, dependency_names = StrategyEngine._validate_file(path)
 
         spec = importlib.util.spec_from_file_location(path.stem, path)
         if spec is None or spec.loader is None:
@@ -507,6 +556,13 @@ class StrategyEngine:
             )
 
         matrix_strategy = getattr(mod, "MATRIX_STRATEGY", None)
+        # 因子排名类策略 (custom_factor_*) 把评分因子写在模块 SCORING 常量里交给
+        # MATRIX_STRATEGY 构造, 不进 META.scoring — 依赖闭包 (strategy_bundle) 需要
+        # 在加载期拿到它, 与 ENTRY_SIGNALS 等常量同一口径。
+        module_scoring = getattr(mod, "SCORING", None)
+        scoring_columns: tuple[str, ...] = ()
+        if isinstance(module_scoring, dict) and module_scoring:
+            scoring_columns = tuple(str(k) for k in module_scoring)
         composite_spec: CompositeSpec | None = None
         minute_daily_bars = 0
         if execution_backend == "matrix_native":
@@ -576,14 +632,14 @@ class StrategyEngine:
             entry_signals=getattr(mod, "ENTRY_SIGNALS", []),
             exit_signals=getattr(mod, "EXIT_SIGNALS", []),
             stop_loss=getattr(mod, "STOP_LOSS", None),
+            take_profit=getattr(mod, "TAKE_PROFIT", None),
             trailing_stop=getattr(mod, "TRAILING_STOP", None),
             trailing_take_profit_activate=getattr(mod, "TRAILING_TAKE_PROFIT_ACTIVATE", None),
             trailing_take_profit_drawdown=getattr(mod, "TRAILING_TAKE_PROFIT_DRAWDOWN", None),
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
-            required_features=frozenset(meta.get("required_features", []) or [])
-            | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or []),
+            required_features=_resolve_required_features(meta, mod, filter_history_fn, path),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
             source=source,
             file_path=path,
@@ -592,6 +648,7 @@ class StrategyEngine:
             composite=composite_spec,
             filter_minute_history_fn=filter_minute_history_fn,
             minute_daily_bars=minute_daily_bars,
+            scoring_columns=scoring_columns,
         )
 
     def reload(self) -> None:
@@ -604,6 +661,7 @@ class StrategyEngine:
         with self._realtime_matrix_lock:
             self._realtime_matrices.clear()
             self._shared_matrix_cache.clear()
+            self.definition_revision += 1
 
     # ================================================================
     # 查询
@@ -642,6 +700,7 @@ class StrategyEngine:
         strategies = dict(self._strategies)
         strategies.pop(strategy_id)
         self._strategies = strategies
+        self.definition_revision += 1
         with self._realtime_matrix_lock:
             self._realtime_matrices.clear()
             self._shared_matrix_cache.clear()
@@ -748,7 +807,7 @@ class StrategyEngine:
                 )
                 required = max(
                     required,
-                    int(strategy.matrix_strategy.required_warmup_bars(params)) + 1,
+                    self._matrix_history_bars(strategy, params),
                 )
             elif strategy.execution_backend == "composite":
                 # composite 预热 = 各子策略预热的 max。
@@ -811,7 +870,7 @@ class StrategyEngine:
             matrix_ids.append(strategy_id)
             max_warmup = max(
                 max_warmup,
-                int(strategy.matrix_strategy.required_warmup_bars(params)) + 1,
+                self._matrix_history_bars(strategy, params),
                 scoring_warmup_bars(
                     effective_scoring(
                         strategy.meta.get("scoring"),
@@ -838,6 +897,9 @@ class StrategyEngine:
             raise ValueError("realtime matrix timestamp cannot be converted to date")
         symbols = tuple(current["symbol"].cast(pl.Utf8).unique().sort().to_list())
         fingerprint = (
+            context.asset_type,
+            context.timeframe,
+            context.data_generation,
             tuple(sorted(field_columns)),
             max_warmup,
             symbols,
@@ -1355,6 +1417,14 @@ class StrategyEngine:
                 self._shared_matrix_cache.clear()
                 self._shared_matrix_cache[fingerprint] = matrix
         return matrix
+
+    @staticmethod
+    def _matrix_history_bars(strategy: StrategyDef, params: dict) -> int:
+        from app.factors.registry import factor_warmup_bars
+
+        required = int(strategy.matrix_strategy.required_warmup_bars(params)) + 1
+        fields = getattr(strategy.matrix_strategy, "required_fields_for_params", None)
+        return max(required, factor_warmup_bars(fields(params))) if callable(fields) else required
 
     @staticmethod
     def _matrix_field_columns(

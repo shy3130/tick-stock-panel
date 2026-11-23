@@ -8,11 +8,22 @@
  * 自包含说明: 页面插件产物自带 React/ReactDOM (由本模板的 vite 构建打入),
  * 与宿主不共享模块实例 —— 请勿 import 宿主内部模块, 只经由 ctx 取能力。
  */
+export interface OpenStockPreviewOptions {
+  symbol: string
+  name?: string | null
+  navList?: readonly { symbol: string; name?: string | null }[]
+}
+
 type Bridge = {
   api: any
   QK: any
   cn: (...inputs: any[]) => string
   format: any
+  /** 旧宿主可能没有此能力，调用前检测；不把宿主图表打进页面产物。 */
+  ui?: {
+    openStockPreview: (options: OpenStockPreviewOptions) => boolean
+    closeStockPreview: () => void
+  }
 }
 
 export const ctx = (window as unknown as { __TSP_EXT__: Bridge }).__TSP_EXT__

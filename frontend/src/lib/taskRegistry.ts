@@ -6,7 +6,7 @@
  * id = kind + 参数指纹 (djb2 of payload JSON): 任意设备对同一任务幂等更新。
  * 调用频率: 每个任务生命周期 2 次写 (running + 终态), 页面挂载 1 次读, 可忽略。
  */
-export type TaskRegistryKind = 'backtest' | 'mining' | 'optimizer' | 'walkforward'
+export type TaskRegistryKind = 'backtest' | 'mining' | 'walkforward' | 'robust_optimizer'
 export type TaskRegistryStatus = 'running' | 'done' | 'error'
 
 export interface RegistryTask {

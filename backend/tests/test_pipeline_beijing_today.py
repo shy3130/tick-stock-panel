@@ -30,7 +30,8 @@ def test_pipeline_daily_window_ends_on_beijing_today(monkeypatch, tmp_path) -> N
     """
     captured: list[date] = []
 
-    def fake_batch(universe, repo, capset, start_date=None, end_date=None, on_chunk_done=None):
+    def fake_batch(universe, repo, capset, start_date=None, end_date=None, on_chunk_done=None,
+                   failed_out=None):
         captured.append(end_date.date() if hasattr(end_date, "date") else end_date)
         raise _StopError()
 

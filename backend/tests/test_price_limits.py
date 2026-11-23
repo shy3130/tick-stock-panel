@@ -7,7 +7,12 @@ import polars as pl
 import pytest
 
 from app.api import kline
-from app.backtest.matrix import load_market_data_matrix_from_parquet
+from app.backtest.engine import BacktestEngine, MatcherConfig
+from app.backtest.matrix import (
+    build_market_matrix_from_signals,
+    load_market_data_matrix_from_parquet,
+    make_signal_matrix,
+)
 from app.indicators import pipeline
 from app.price_limits import (
     numpy_limit_price,
@@ -178,6 +183,34 @@ def test_minute_price_limit_prefers_authoritative_prices_only_today(monkeypatch)
     }
 
 
+@pytest.mark.parametrize(
+    ("quoted_date", "quoted_up", "expected"),
+    [
+        (date(2026, 7, 17), 10.65, (None, False, "rule")),
+        (date(2026, 7, 21), 10.65, (None, False, "rule")),
+        (None, 10.65, (None, False, "rule")),
+        (date(2026, 7, 20), 10.65, (10.65, False, "instrument")),
+        (date(2026, 7, 17), 100000.0, (None, False, "rule")),
+        (date(2026, 7, 20), 100000.0, (None, True, "instrument")),
+    ],
+)
+def test_minute_price_limit_uses_the_quoted_date(monkeypatch, quoted_date, quoted_up, expected):
+    today = date(2026, 7, 20)
+    monkeypatch.setattr(kline, "cn_today", lambda: today)
+
+    class Repo(_InstrumentRepo):
+        def get_instruments_asset(self, asset_type):
+            return super().get_instruments_asset(asset_type).with_columns(
+                pl.lit(quoted_date, dtype=pl.Date).alias("as_of"),
+                pl.lit(quoted_up).alias("limit_up"),
+            )
+
+    info = kline._get_price_limit_info(Repo(), "600001.SH", today, "stock", None)
+    assert (info["limit_up"], info["no_limit"], info["source"]) == expected
+    if expected[0] is None:
+        assert info["limit_down"] is None
+
+
 class _NewStockRepo:
     """listing_date 在无涨跌幅窗口内的注册制新股维表 (C沈鼓场景)。"""
 
@@ -226,6 +259,97 @@ def _daily_limit_rows(current_close: float) -> pl.DataFrame:
         "raw_close": [10.0, current_close],
         "raw_high": [10.0, current_close],
     })
+
+
+def _write_limit_partitions(root, panel):
+    for (day,), rows in panel.group_by("date"):
+        partition = root / f"date={day.isoformat()}"
+        partition.mkdir(parents=True, exist_ok=True)
+        rows.with_columns(pl.lit(1000.0).alias("volume")).write_parquet(partition / "part.parquet")
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_matrix_uses_only_valid_limits_for_the_matching_trading_date(tmp_path, cached):
+    root = tmp_path / "market"
+    later = date(2026, 7, 21)
+    older, day = date(2026, 7, 17), date(2026, 7, 20)
+    cases = [
+        # Current close, instrument as_of, quoted bounds, expected locks.
+        (10.05, day, 0.0, 0.0, (0, 0)),
+        (9.00, day, 0.0, 0.0, (0, 1)),
+        (10.05, older, 10.05, 9.10, (0, 0)),
+        (10.05, later, 10.05, 9.10, (0, 0)),
+        (10.05, None, 10.05, 9.10, (0, 0)),
+        (10.05, day, 10.05, 9.10, (1, 0)),
+        (12.00, day, 100000.0, 0.0, (0, 0)),
+    ]
+    symbols = [f"60000{i}.SH" for i in range(len(cases))]
+    panel = pl.concat([
+        _daily_limit_rows(close).with_columns(pl.lit(symbol).alias("symbol"))
+        for symbol, (close, *_rest) in zip(symbols, cases, strict=True)
+    ])
+    _write_limit_partitions(root, panel)
+    instruments = pl.DataFrame({
+        "symbol": symbols,
+        "as_of": [case[1] for case in cases],
+        "limit_up": [case[2] for case in cases],
+        "limit_down": [case[3] for case in cases],
+    })
+    cache = tmp_path / "cache" if cached else None
+    market = load_market_data_matrix_from_parquet(
+        root, older, day, instruments=instruments, field_columns={"raw_close"}, cache_root=cache,
+    )
+    actual = list(zip(market.limit_up_locked[-1], market.limit_down_locked[-1], strict=True))
+    assert actual == [case[-1] for case in cases]
+
+    # The dated quotes still govern the same session in a longer window.
+    _write_limit_partitions(root, panel.filter(pl.col("date") == day).with_columns(
+        pl.lit(later).alias("date"),
+    ))
+    longer = load_market_data_matrix_from_parquet(
+        root, older, later, instruments=instruments, field_columns={"raw_close"}, cache_root=cache,
+    )
+    np.testing.assert_array_equal(longer.limit_up_locked[1], market.limit_up_locked[-1])
+    np.testing.assert_array_equal(longer.limit_down_locked[1], market.limit_down_locked[-1])
+    entries = np.zeros(longer.shape, dtype=np.uint8)
+    entries[1, [0, 5, 6]] = 1
+    execution = build_market_matrix_from_signals(
+        longer, make_signal_matrix(longer.shape, entry=entries),
+    )
+    result = BacktestEngine(repo=None).simulate_independent_market_matrix(
+        execution, 3, MatcherConfig(matching="close_t", fees_pct=0, slippage_bps=0, max_hold_days=1),
+    )
+    assert {trade.symbol for trade in result.trades} == {symbols[0], symbols[6]}
+    assert all(trade.entry_date == day.isoformat() for trade in result.trades)
+
+
+@pytest.mark.parametrize("legacy_undated", [False, True])
+def test_matrix_cache_cannot_reuse_limits_after_the_quoted_date_changes(tmp_path, legacy_undated):
+    root = tmp_path / "market"
+    panel = _daily_limit_rows(10.05)
+    _write_limit_partitions(root, panel)
+    start, end = panel["date"].to_list()
+    instruments = pl.DataFrame({"symbol": ["600001.SH"], "limit_up": [10.05]})
+    if not legacy_undated:
+        instruments = instruments.with_columns(pl.lit(end).alias("as_of"))
+
+    def load(instrument_rows):
+        return load_market_data_matrix_from_parquet(
+            root, start, end, instruments=instrument_rows, field_columns={"raw_close"},
+            cache_root=tmp_path / "cache",
+        )
+
+    first = load(instruments)
+    assert first.limit_up_locked[-1, 0] == 1
+    if legacy_undated:
+        next_day = panel.tail(1).with_columns(pl.lit(date(2026, 7, 21)).alias("date"))
+        _write_limit_partitions(root, next_day)
+    else:
+        instruments = instruments.with_columns(pl.lit(date(2026, 7, 21)).alias("as_of"))
+    changed = load(instruments)
+    assert changed.limit_up_locked[-1, 0] == 0
+    assert changed.cache_path != first.cache_path
+    assert first.limit_up_locked[-1, 0] == 1
 
 
 @pytest.mark.parametrize(
@@ -388,6 +512,91 @@ def test_limit_down_recovery_uses_raw_low_under_later_ex_div():
     assert day2["signal_limit_down_recovery"][0] is False
     day3 = df.filter(pl.col("date") == date(2024, 1, 4))
     assert day3["signal_limit_down_recovery"][0] is True
+
+
+def test_matrix_limit_lock_uses_exchange_reference_on_ex_div_with_later_event(tmp_path):
+    """除权日涨跌停判定价必须用交易所除权参考价, 不能直接用前复权昨收。
+
+    事件: d3 除权 (ex_factor=1.25), d6 再除权 (ex_factor=1.25)。
+    d3 的交易所参考价 = raw昨收/ex_factor = 10/1.25 = 8.00, 涨停价 8.80;
+    前复权昨收 = 10/1.5625 = 6.40 (被 d6 事件额外缩放)。旧口径拿 6.40 当参考
+    → 限价 7.04, raw 8.79 被误标"涨停锁死"。
+    """
+    root = tmp_path / "market"
+    spec = [
+        # (date, raw_close, F(d) = 该日之后所有事件因子乘积)
+        (date(2024, 1, 2), 10.00, 1.5625),
+        (date(2024, 1, 3), 10.00, 1.5625),
+        (date(2024, 1, 4), 8.79, 1.25),   # ex1 除权日: 真涨停价 8.80, 未触及
+        (date(2024, 1, 5), 8.70, 1.25),
+        (date(2024, 1, 8), 8.70, 1.25),
+        (date(2024, 1, 9), 7.00, 1.0),    # ex2 除权日 (窗口末日)
+    ]
+    for trade_date, raw, f in spec:
+        partition = root / f"date={trade_date.isoformat()}"
+        partition.mkdir(parents=True)
+        pl.DataFrame({
+            "symbol": ["600001.SH"],
+            "date": [trade_date],
+            "open": [raw], "high": [raw], "low": [raw],
+            "close": [raw / f], "raw_close": [raw], "volume": [1000.0],
+        }).write_parquet(partition / "part.parquet")
+
+    market = load_market_data_matrix_from_parquet(
+        root, spec[0][0], spec[-1][0],
+        field_columns={"raw_close"},
+        instruments=pl.DataFrame({"symbol": ["600001.SH"], "name": ["普通股"]}),
+        cache_root=tmp_path / "cache",
+    )
+    # d3 除权日: 参考价 8.00 → 涨停 8.80 / 跌停 7.20, raw 8.79 均未触及
+    assert market.limit_up_locked[2, 0] == 0
+    assert market.limit_down_locked[2, 0] == 0
+    # d6 第二次除权日 (窗口末日, F=1): 参考价 8.70/1.25 = 6.96,
+    # 涨停 7.66 / 跌停 6.26, raw 7.00 未封板
+    assert market.limit_up_locked[5, 0] == 0
+    assert market.limit_down_locked[5, 0] == 0
+
+
+def test_limit_price_on_ex_div_with_later_event_uses_exchange_reference():
+    """enriched 路径同口径: 除权日 limit_up/down_price 用除权参考价, 不是前复权昨收。
+
+    事件: d3 除权 (f=1.25), d4 再除权 (f=1.25)。
+    d3 参考价 = 10/1.25 = 8.00 (前复权昨收 6.40 被事件额外缩放, 旧口径算出
+    涨停价 7.04 → raw 8.79 误判涨停); d4 参考价 = 8.79/1.25 = 7.032,
+    raw 7.74 恰为涨停价 → 正常检出 (防过度修正)。
+    """
+    raw = pl.DataFrame({
+        "symbol": ["600001.SH"] * 4,
+        "date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)],
+        "open": [10.00, 10.00, 8.79, 7.74],
+        "high": [10.00, 10.00, 8.79, 7.74],
+        "low": [10.00, 10.00, 8.79, 7.74],
+        "close": [10.00, 10.00, 8.79, 7.74],
+        "volume": [10000.0] * 4,
+        "amount": [1.0e7] * 4,
+    })
+    factors = pl.DataFrame({
+        "symbol": ["600001.SH"] * 2,
+        "trade_date": [date(2024, 1, 4), date(2024, 1, 5)],
+        "ex_factor": [1.25, 1.25],
+    })
+    instruments = pl.DataFrame({
+        "symbol": ["600001.SH"], "name": ["普通股"], "float_shares": [1.0e8],
+    })
+
+    df = pipeline.compute_enriched(raw, factors=factors, instruments=instruments)
+
+    d3 = df.filter(pl.col("date") == date(2024, 1, 4))
+    # 落库列为含容差的交易所生效价: 涨停 8.80-0.005 / 跌停 7.20+0.005
+    assert d3["limit_up_price"][0] == pytest.approx(8.795)
+    assert d3["limit_down_price"][0] == pytest.approx(7.205)
+    assert d3["signal_limit_up"][0] is False
+    assert d3["consecutive_limit_ups"][0] == 0
+
+    d4 = df.filter(pl.col("date") == date(2024, 1, 5))
+    assert d4["limit_up_price"][0] == pytest.approx(7.725)
+    assert d4["signal_limit_up"][0] is True
+    assert d4["consecutive_limit_ups"][0] == 1
 
 
 def test_chinext_302_codes_use_growth_board_rules():

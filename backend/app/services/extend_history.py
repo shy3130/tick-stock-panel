@@ -76,13 +76,7 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
     path = paths.get(name)
     if not path:
         return
-    try:
-        repo.db.execute(
-            f"CREATE OR REPLACE VIEW {name} AS "
-            f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
-        )
-    except Exception as e:
-        logger.warning("refresh view %s failed: %s", name, e)
+    repo.refresh_view(name, path)
 
 
 def compute_offset(value: int, unit: str) -> timedelta:

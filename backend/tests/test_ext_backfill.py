@@ -177,6 +177,49 @@ def test_assert_rows_date_contract():
         _assert_rows_date([_row("A", "2026-09-06")], d)                 # 接口忽略参数返回当日
 
 
+async def test_snapshot_api_without_date_param_accepts_previous_trading_day(fake_http):
+    """当日快照接口 (未配 date_param) 在周末返回上一交易日数据, 不得拒写。
+
+    回归: 资金流/人气类接口只有当日快照, 周末/节假日/数据源 T+1 时响应日期
+    落后于请求日期是正常现象。无 date_param 却做日期一致性校验会把整表拉取
+    全部拒掉 (报「接口可能不支持日期参数」)。
+    """
+    cfg = ExtConfig(
+        id="flow", label="资金流", mode="timeseries",
+        fields=[ExtField("symbol", "string"), ExtField("date", "string"),
+                ExtField("net", "float")],
+        pull=PullConfig(url="https://example.test/flow"),   # date_param 未配置
+    )
+    # 请求 2026-10-24 (周六), 接口返回 2026-10-23 (周五) 的快照
+    fake_http.responses["https://example.test/flow"] = [
+        {"symbol": "600000.SH", "date": "2026-10-23", "net": 1.0},
+    ]
+    rows = await fetch_rows_for_date(cfg, date(2026, 10, 24))
+    assert [r["symbol"] for r in rows] == ["600000.SH"]
+
+
+async def test_dated_api_still_rejects_mismatched_date(fake_http):
+    """配了 date_param 的接口保持 fail-closed: 历史分区防污染契约不能松。"""
+    fake_http.responses["https://example.test/rank?date=2026-01-05"] = [_row("A", "2026-09-06")]
+    with pytest.raises(ValueError, match="不一致"):
+        await fetch_rows_for_date(_cfg(), date(2026, 1, 5))
+
+
+async def test_market_level_snapshot_without_date_param_accepts_stale_date(fake_http):
+    """市场级表同样按 date_param 判定, 不因 market_level 分支绕开修复。"""
+    cfg = ExtConfig(
+        id="regime", label="情绪", mode="timeseries",
+        fields=[ExtField("date", "string"), ExtField("score", "float")],
+        pull=PullConfig(url="https://example.test/regime"),
+        market_level=True,
+    )
+    fake_http.responses["https://example.test/regime"] = [
+        {"date": "2026-10-23", "score": 55.0},
+    ]
+    rows = await fetch_rows_for_date(cfg, date(2026, 10, 24))
+    assert rows == [{"date": "2026-10-23", "score": 55.0}]
+
+
 def test_pull_config_date_param_roundtrip():
     p = PullConfig(url="u", date_param="date")
     assert p.to_dict()["date_param"] == "date"

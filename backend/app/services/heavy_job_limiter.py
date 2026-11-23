@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -9,7 +10,34 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import ClassVar, Literal
 
+from app.services.shared_work import WorkBusyError
+
 HeavyJobKind = Literal["normal", "mining", "exclusive"]
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(float(raw))
+    except ValueError:
+        return default
+
+
+# 内存准入 (issue #516): 可用内存低于阈值时重任务不进门, 挂起等待恢复,
+# 避免叠加任务把整机拖进 swap。0 = 关闭。等待者以 _MEMORY_POLL_S 周期重查
+# (内存恢复不会触发 condition notify, 必须轮询)。
+_HEAVY_MIN_AVAILABLE_BYTES = _env_int("TICK_HEAVY_MIN_AVAILABLE_BYTES", 1024**3)
+_MEMORY_POLL_S = 5.0
+
+
+def _memory_admission_ok() -> bool:
+    if _HEAVY_MIN_AVAILABLE_BYTES <= 0:
+        return True
+    from app.services.memory_budget import memory_budget
+
+    return memory_budget().available_bytes >= _HEAVY_MIN_AVAILABLE_BYTES
 
 
 class HeavyJobLimitTimeoutError(TimeoutError):
@@ -25,7 +53,8 @@ class HeavyJobLimiter:
 
     _WEIGHTS: ClassVar[dict[HeavyJobKind, int]] = {"normal": 1, "mining": 2}
 
-    def __init__(self, capacity: int = 2, *, cancel_poll_interval: float = 0.05) -> None:
+    def __init__(self, capacity: int = 2, *, cancel_poll_interval: float = 0.05,
+                 max_waiters: int = 32, queue_timeout_s: float = 120) -> None:
         if capacity <= 0:
             raise ValueError("capacity must be positive")
         if cancel_poll_interval <= 0:
@@ -37,6 +66,12 @@ class HeavyJobLimiter:
         self._condition = threading.Condition()
         self._waiters: deque[object] = deque()
         self._local = threading.local()
+        self._max_waiters, self._queue_timeout_s = max_waiters, queue_timeout_s
+
+    def snapshot(self) -> dict:
+        with self._condition:
+            return {"capacity": self.capacity, "in_use": self._used, "waiting": len(self._waiters),
+                    "max_waiters": self._max_waiters}
 
     @property
     def in_use(self) -> int:
@@ -62,15 +97,21 @@ class HeavyJobLimiter:
         if timeout is not None and timeout < 0:
             raise ValueError("timeout must be non-negative")
 
-        deadline = None if timeout is None else time.monotonic() + timeout
+        deadline = time.monotonic() + (self._queue_timeout_s if timeout is None else timeout)
         with self._condition:
+            if len(self._waiters) >= self._max_waiters:
+                raise WorkBusyError("重任务等待队列已满，请稍后重试")
             ticket = object()
             self._waiters.append(ticket)
             try:
                 while True:
                     if cancel_event is not None and cancel_event.is_set():
                         return False
-                    if self._waiters[0] is ticket and self._used + weight <= self.capacity:
+                    if (
+                        self._waiters[0] is ticket
+                        and self._used + weight <= self.capacity
+                        and _memory_admission_ok()
+                    ):
                         self._used += weight
                         self._acquired[kind] += 1
                         return True
@@ -83,6 +124,9 @@ class HeavyJobLimiter:
                         wait_for = self._cancel_poll_interval
                         if remaining is not None:
                             wait_for = min(wait_for, remaining)
+                    # 内存准入需要周期性重查 (内存恢复不触发 notify)
+                    if wait_for is None or wait_for > _MEMORY_POLL_S:
+                        wait_for = _MEMORY_POLL_S
                     self._condition.wait(wait_for)
             finally:
                 self._waiters.remove(ticket)

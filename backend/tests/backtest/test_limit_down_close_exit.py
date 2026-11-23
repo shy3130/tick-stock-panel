@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date, timedelta
 
 import polars as pl
@@ -118,3 +119,70 @@ def test_stuck_position_at_window_end_is_recorded():
     assert trade.exit_reason == "signal"
     assert trade.blocked_exit_days >= 1
     assert trade.exit_price == 9.27  # 末日(封板)收盘价
+
+
+def test_close_t_exit_deferred_past_sealed_limit_down_portfolio_mode():
+    """组合(position)模式同口径: 收盘封跌停当日的计划出场递延到下一可卖日。
+
+    _simulate_portfolio_matrix 的 _can_sell 此前只有一字板检查, 缺少独立/legacy
+    路径都有的 exit_fill=close_t 封板拦截 — 尾盘封死的跌停股按跌停价当日"成交",
+    亏损被系统性低估。
+    """
+    days = _normal_panel(8, sealed={3: {"o": 10.10, "h": 10.12, "l": 9.09, "c": 9.09}})
+    panel = _panel(days)
+    dates = [r["date"] for r in panel.select(["symbol", "date"]).iter_rows(named=True)]
+    entry_mask = pl.Series([(dt - START).days in {0} for dt in dates], dtype=pl.Boolean)
+    exit_mask = pl.Series([(dt - START).days in {3} for dt in dates], dtype=pl.Boolean)
+    cfg = MatcherConfig(matching="close_t", fees_pct=0, slippage_bps=0)
+    result = BacktestEngine(repo=None).simulate_portfolio(  # type: ignore[arg-type]
+        panel, entry_mask, exit_mask, cfg,
+    )
+    assert result.stats.get("n_trades") == 1
+    trade = result.trades[0]
+    assert trade.exit_date == "2024-01-05"  # 封板日次日, 而非封板日 01-04
+    assert trade.blocked_exit_days == 1
+
+
+def test_intraday_stop_loss_not_blocked_by_sealed_close_portfolio_mode():
+    """组合模式: 日内止损线(override 盘中价)不受收盘封板拦截影响。"""
+    days = _normal_panel(6, sealed={2: {"o": 9.70, "h": 9.72, "l": 9.30, "c": 9.00}})
+    panel = _panel(days)
+    dates = [r["date"] for r in panel.select(["symbol", "date"]).iter_rows(named=True)]
+    entry_mask = pl.Series([(dt - START).days in {0} for dt in dates], dtype=pl.Boolean)
+    exit_mask = pl.Series([False for _ in dates], dtype=pl.Boolean)
+    cfg = MatcherConfig(matching="close_t", fees_pct=0, slippage_bps=0, stop_loss_pct=0.05)
+    result = BacktestEngine(repo=None).simulate_portfolio(  # type: ignore[arg-type]
+        panel, entry_mask, exit_mask, cfg,
+    )
+    assert result.stats.get("n_trades") == 1
+    trade = result.trades[0]
+    assert trade.exit_date == "2024-01-03"  # 触发当日
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == 9.5  # 止损线价, 非跌停收盘价
+    assert trade.blocked_exit_days == 0
+
+
+def test_stuck_position_at_window_end_is_recorded_portfolio_mode():
+    """组合模式: 期末仍被封板递延的持仓同样强制落账 (与独立路径同口径),
+    不再只进 pending_exit_positions 而在交易记录里消失。"""
+    days = _normal_panel(8, sealed={7: {"o": 10.30, "h": 10.32, "l": 9.27, "c": 9.27}})
+    panel = _panel(days)
+    dates = [r["date"] for r in panel.select(["symbol", "date"]).iter_rows(named=True)]
+    entry_mask = pl.Series([(dt - START).days in {0} for dt in dates], dtype=pl.Boolean)
+    exit_mask = pl.Series([(dt - START).days in {7} for dt in dates], dtype=pl.Boolean)
+    cfg = MatcherConfig(matching="close_t", fees_pct=0, slippage_bps=0)
+    engine = BacktestEngine(repo=None)  # type: ignore[arg-type]
+
+    matrix_result = engine.simulate_portfolio(panel, entry_mask, exit_mask, cfg)
+    assert matrix_result.stats.get("n_trades") == 1
+    trade = matrix_result.trades[0]
+    assert trade.exit_date == "2024-01-08"  # 末日强制落账
+    assert trade.exit_reason == "signal"    # 递延原因保留
+    assert trade.blocked_exit_days >= 1
+    assert trade.exit_price == 9.27
+    assert matrix_result.stats.get("pending_exit_positions") == 1  # 观测信号保留
+
+    # legacy 组合路径 parity
+    legacy_result = engine.simulate_portfolio_legacy(panel, entry_mask, exit_mask, cfg)
+    assert [asdict(t) for t in legacy_result.trades] == [asdict(t) for t in matrix_result.trades]
+    assert legacy_result.stats["pending_exit_positions"] == 1

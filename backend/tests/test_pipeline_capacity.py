@@ -174,6 +174,8 @@ def test_in_process_backtests_share_capacity(capacity, monkeypatch, kind):
     ("/api/kline/rebuild_enriched", {}, "app.indicators.pipeline", "run_pipeline", 3),
     ("/api/kline/sync_minute", {"days": 1},
      "app.services.kline_sync", "sync_and_persist_minute", 3),
+    ("/api/kline/repair_minute_gaps", {"symbols": ["600000.SH"]},
+     "app.services.kline_sync", "sync_and_persist_minute", 3),
 ])
 def test_api_jobs_wait_before_computing(
     capacity, monkeypatch, tmp_path, endpoint, body, module_name, function_name, result,
@@ -202,8 +204,12 @@ def test_api_jobs_wait_before_computing(
     app.state.repo = SimpleNamespace(
         store=SimpleNamespace(data_dir=tmp_path),
         db=SimpleNamespace(execute=lambda *args: None),
+        clear_cache=lambda: None,
         refresh_cache=lambda: None,
         get_index_symbol_set=lambda: set(),
+        resolve_asset_type=lambda _: "stock",
+        # rebuild_enriched 收尾经 repo.refresh_view 重建视图 (不再直连 db.execute)
+        refresh_view=lambda *args, **kwargs: True,
     )
     app.state.capabilities = SimpleNamespace(has=lambda _: True)
     assert limiter.acquire("normal", timeout=0)
@@ -269,9 +275,9 @@ def test_manual_pipeline_holds_capacity_through_refresh_off_event_loop(capacity,
 
 
 @pytest.mark.parametrize("entry", ["scheduled", "integrity"])
-def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry):
+def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, tmp_path, entry):
     from app.jobs import daily_pipeline
-    from app.services import data_integrity, repair_daily
+    from app.services import data_integrity, integrity_check
 
     store, limiter = capacity
     called = threading.Event()
@@ -281,13 +287,17 @@ def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry
         called.set()
         return {}
 
-    monkeypatch.setattr(repair_daily, "run_repair_daily", compute)
+    def check(*args, **kwargs):
+        compute(*args, **kwargs)
+        return {"repairable_count": 0}
+    monkeypatch.setattr(integrity_check, "run_check", check)
     assert limiter.acquire("normal", timeout=0)
     with ThreadPoolExecutor(max_workers=1) as pool:
         if entry == "scheduled":
             future = pool.submit(daily_pipeline._run_tracked, compute, "test")
         else:
-            state = SimpleNamespace(repo=object(), capabilities=SimpleNamespace(has=lambda _: True))
+            state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+                                    capabilities=SimpleNamespace(has=lambda _: True))
             data_integrity.launch_integrity_repair(state, date(2026, 1, 1), "test")
             future = None
         try:
@@ -303,3 +313,43 @@ def test_background_pipeline_entries_share_capacity(capacity, monkeypatch, entry
             assert future.result(timeout=1)
     assert called.is_set()
     assert limiter.in_use == 0
+
+
+def test_rebuild_enriched_refreshes_repo_memory_cache(capacity, monkeypatch, tmp_path):
+    """rebuild_enriched 成功后必须失效内存 enriched 快照 (clear + refresh)。
+
+    get_enriched_latest 对非空缓存不校验 generation — 只刷 DuckDB 视图不重载
+    内存缓存的话, 重建结果对自选/筛选/监控等页面不可见, 直到进程重启。
+    """
+    import importlib
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import kline as kline_api
+    from app.api import pipeline as pipeline_api
+
+    store, _limiter = capacity
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        importlib.import_module("app.indicators.pipeline"), "run_pipeline", lambda *a, **k: 3
+    )
+    app = FastAPI()
+    app.include_router(pipeline_api.router)
+    app.include_router(kline_api.router)
+    app.state.repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        db=SimpleNamespace(execute=lambda *args: None),
+        clear_cache=lambda: calls.append("clear"),
+        refresh_cache=lambda: calls.append("refresh"),
+        refresh_view=lambda *args, **kwargs: True,
+    )
+    app.state.capabilities = SimpleNamespace(has=lambda _: True)
+    with TestClient(app) as client:
+        resp = client.post("/api/kline/rebuild_enriched", json={})
+        assert resp.status_code == 200, resp.text
+        jid = resp.json()["job_id"]
+        wait_for(lambda: store.get(jid)["status"] in ("succeeded", "failed"))
+        assert store.get(jid)["status"] == "succeeded", store.get(jid)
+    assert calls == ["clear", "refresh"]

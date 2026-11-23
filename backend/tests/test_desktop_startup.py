@@ -7,8 +7,13 @@
 """
 from __future__ import annotations
 
+import errno
+import os
+import socket
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +30,88 @@ from app.services.mining_process_lock import MiningProcessLock
 @pytest.fixture()
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
-    return tmp_path
+    yield tmp_path
+    desktop._release_single_instance()
+
+
+@pytest.fixture()
+def reserved_listener(monkeypatch):
+    listener = SimpleNamespace(getsockname=lambda: ("127.0.0.1", 59998), close=lambda: None)
+    monkeypatch.setattr(desktop, "_reserve_listener", lambda _: listener)
+    return listener
+
+
+def test_desktop_reserves_a_different_port_from_an_existing_wildcard_server():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as existing:
+        existing.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        existing.bind(("0.0.0.0", 0))
+        existing.listen(1)
+        occupied = existing.getsockname()[1]
+        with pytest.raises(OSError, match="未找到空闲端口"):
+            desktop._reserve_listener(occupied, count=1)
+        with desktop._reserve_listener(0, count=1) as reserved:
+            address = reserved.getsockname()
+            assert address[0] == "127.0.0.1" and address[1] != occupied
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competing, pytest.raises(OSError):
+                competing.bind(address)
+                competing.listen(1)
+
+
+def test_single_instance_ignores_unlocked_file_with_live_pid(data_dir):
+    """崩溃残留的 PID 被复用, 没有实际持锁者时仍须允许启动。"""
+    (data_dir / ".desktop.lock").write_text(str(os.getpid()), encoding="utf-8")
+    assert desktop._acquire_single_instance() is True
+
+
+@pytest.mark.parametrize("lock_error", [None, errno.EACCES, errno.EIO])
+def test_single_instance_windows_lock_errors(data_dir, monkeypatch, lock_error):
+    """锁冲突才作为已有实例处理, 磁盘/系统错误须交给启动错误提示。"""
+    opened = []
+
+    def lock(fd, mode, count):
+        assert os.get_inheritable(fd) is False
+        opened.append(fd)
+        if lock_error is not None:
+            raise OSError(lock_error, "locking failed")
+
+    monkeypatch.setattr(
+        desktop, "os", SimpleNamespace(name="nt", set_inheritable=os.set_inheritable)
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(LK_NBLCK=2, locking=lock))
+
+    if lock_error == errno.EIO:
+        with pytest.raises(OSError, match="locking failed"):
+            desktop._acquire_single_instance()
+    else:
+        assert desktop._acquire_single_instance() is (lock_error is None)
+    desktop._release_single_instance()
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])  # 成功、冲突、系统错误三条路径都必须关闭句柄。
+
+
+def test_single_instance_rejects_other_process_then_allows_after_release(data_dir):
+    import subprocess
+
+    script = (
+        "from app.desktop import _acquire_single_instance; "
+        "print(_acquire_single_instance())"
+    )
+
+    def acquire_in_child():
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            env={**os.environ, "DATA_DIR": str(data_dir)},
+            capture_output=True, text=True, timeout=15, check=True,
+        )
+        return result.stdout.strip()
+
+    assert desktop._acquire_single_instance() is True
+    assert acquire_in_child() == "False"
+    desktop._release_single_instance()
+    assert acquire_in_child() == "True"
+    # 子进程没有手动释放; 进程结束仍须自动解锁。
+    assert desktop._acquire_single_instance() is True
 
 
 # ---------- _failed_html ----------
@@ -72,6 +158,44 @@ def test_wait_for_server_times_out_when_alive_but_not_ready():
     assert time.monotonic() - start >= 0.5
 
 
+def test_main_timeout_records_stalled_backend_stack(data_dir, reserved_listener, monkeypatch, caplog):
+    """慢启动时记录真正阻塞的后端调用, 不能只有笼统的 60 秒超时。"""
+    entered = threading.Event()
+    release = threading.Event()
+    stopped = threading.Event()
+    opened = []
+
+    def _slow_backend_import(listener, done):
+        assert listener is reserved_listener
+        entered.set()
+        try:
+            release.wait(timeout=5)
+        finally:
+            done.set()
+            stopped.set()
+
+    def timeout(port, timeout, done_event):
+        assert entered.wait(timeout=1)
+        return False
+
+    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
+    monkeypatch.setattr(desktop, "_run_uvmicorn", _slow_backend_import)
+    monkeypatch.setattr(desktop, "_wait_for_server", timeout)
+    monkeypatch.setattr(desktop, "_open_static_window", opened.append)
+    try:
+        with caplog.at_level("ERROR", logger="app.desktop"):
+            assert desktop.main() == 1
+        assert len(opened) == 1
+        assert "启动超时" in opened[0]
+        assert "_slow_backend_import" in caplog.text
+    finally:
+        release.set()
+        assert stopped.wait(timeout=1)
+
+
 # ---------- _precheck_mining_lock ----------
 
 def test_precheck_mining_lock_passes_when_free(data_dir):
@@ -99,28 +223,140 @@ def test_precheck_mining_lock_detects_conflict(data_dir):
 
 # ---------- main() 预检冲突路径 ----------
 
-def test_main_releases_lock_when_failure_window_crashes(
-    tmp_path, monkeypatch, caplog
+def test_main_proceeds_when_mining_lock_precheck_conflicts(
+    tmp_path, reserved_listener, monkeypatch, caplog
 ):
-    """预检冲突 + 失败页窗口自身崩溃 (如缺 webview 依赖): 异常不得裸穿 main()。
+    """预检撞锁只降级: 留 WARNING 日志并继续启动, 不再提前退出失败页。
 
-    该路径在 main() 的 try/finally 之外, 不兜底会导致 console=False 闪退无反馈、
-    .desktop.lock 跳过释放。断言: 记录异常日志、单实例锁仍释放、退出码 1。
+    lifespan 会以降级模式起面板 (挖掘入口 409, 挖掘页提供强制释放),
+    桌面版必须照常开窗, 否则用户没有入口处理锁冲突。
     """
+    import logging
+
     monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
     monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
-    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: "冲突原因")
+    monkeypatch.setattr(
+        desktop, "_precheck_mining_lock", lambda: "另一个后端实例正在占用数据目录"
+    )
+    monkeypatch.setattr(
+        desktop, "_wait_for_server",
+        lambda port, timeout, done_event: True,
+    )
+    opened = []
+    monkeypatch.setattr(desktop, "_open_window", lambda url: opened.append(url))
 
-    def _boom(_html_text):
-        raise RuntimeError("webview unavailable")
+    def _fake_uvmicorn(listener, ready):
+        assert listener is reserved_listener
+        ready.set()
 
-    monkeypatch.setattr(desktop, "_open_static_window", _boom)
+    monkeypatch.setattr(desktop, "_run_uvmicorn", _fake_uvmicorn)
 
-    import logging
+    with caplog.at_level(logging.WARNING, logger="app.desktop"):
+        assert desktop.main() == 0
 
-    with caplog.at_level(logging.ERROR, logger="app.desktop"):
+    assert opened and opened[0].startswith("http://127.0.0.1:")
+    assert "启动预检" in caplog.text
+    assert desktop._acquire_single_instance() is True
+    desktop._release_single_instance()
+
+
+@pytest.mark.parametrize("stage", ["data_dir", "single_instance", "mining_precheck"])
+def test_main_reports_early_startup_errors(data_dir, monkeypatch, stage):
+    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
+    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
+    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
+    errors = []
+    monkeypatch.setattr(desktop, "_show_crash", lambda *args: errors.append(args))
+    target = {
+        "data_dir": "_ensure_data_dir_writable",
+        "single_instance": "_acquire_single_instance",
+        "mining_precheck": "_precheck_mining_lock",
+    }[stage]
+
+    def fail():
+        raise PermissionError(f"startup failed at {stage}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desktop, target, fail)
         assert desktop.main() == 1
+    assert len(errors) == 1
+    assert "TSP 启动失败" in errors[0][0]
+    assert f"startup failed at {stage}" in errors[0][1]
+    assert desktop._acquire_single_instance() is True
 
-    assert "启动失败页窗口打开失败" in caplog.text
-    assert not (tmp_path / ".desktop.lock").exists()
+
+# ---------- _open_window: pywebview 下载启用 ----------
+
+def test_open_window_enables_downloads_before_start(data_dir, monkeypatch):
+    """pywebview 5.0+ 默认取消所有文件下载 (Edge WebView2 / WKWebView 一致) —
+    必须在 webview.start() 前显式开启 ALLOW_DOWNLOADS, 否则配置备份导出、
+    回测 CSV 等 <a download> 直链在桌面版点击无反应 (2026-10-27 用户反馈)。"""
+    import types
+
+    calls: list[str] = []
+
+    class _RecordingSettings(dict):
+        def __setitem__(self, key, value):
+            calls.append(f"set:{key}={value}")
+            super().__setitem__(key, value)
+
+    fake = types.ModuleType("webview")
+    fake.settings = _RecordingSettings()
+    fake.create_window = lambda *a, **k: calls.append("create_window") or object()
+    fake.start = lambda *a, **k: calls.append("start")
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:1")
+
+    assert fake.settings.get("ALLOW_DOWNLOADS") is True
+    assert calls == ["set:ALLOW_DOWNLOADS=True", "create_window", "start"]
+
+
+def test_open_window_explicitly_shows_window_after_gui_start(data_dir, monkeypatch):
+    """Windows 继承 SW_HIDE 时, GUI 就绪后应显式显示主窗口。"""
+    shown = []
+    window = SimpleNamespace(show=lambda: shown.append(True))
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: window,
+        start=lambda func=None, **kwargs: func() if func else None,
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+    assert shown == [True]
+
+
+def test_open_window_preserves_browser_storage_across_restarts_and_ports(data_dir, monkeypatch):
+    starts = []
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: SimpleNamespace(show=lambda: None),
+        start=lambda *args, **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+    desktop._open_window("http://127.0.0.1:3019")
+
+    assert all(call.get("private_mode") is False for call in starts)
+    assert starts[0]["storage_path"] == starts[1]["storage_path"] == str(data_dir / "webview")
+    assert (data_dir / "webview").is_dir()
+
+
+def test_open_window_does_not_clear_existing_browser_profile(data_dir, monkeypatch):
+    profile = data_dir / "webview"
+    profile.mkdir()
+    marker = profile / "existing-profile-data"
+    marker.write_bytes(b"keep me")
+    fake = SimpleNamespace(
+        settings={},
+        create_window=lambda *args, **kwargs: SimpleNamespace(show=lambda: None),
+        start=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
+
+    desktop._open_window("http://127.0.0.1:3018")
+
+    assert marker.read_bytes() == b"keep me"

@@ -5,7 +5,9 @@
  * 行为不变; A 股语义色约定: 红涨(text-bull)绿跌(text-bear)。
  */
 import type { ReactNode } from 'react'
-import { Activity, Settings2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Activity, ArrowUpRight, Settings2 } from 'lucide-react'
+import { cn } from '@/lib/cn'
 
 export function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -58,23 +60,33 @@ export function compactCount(v: number | null | undefined) {
   return x.toFixed(0)
 }
 
-export function SectionTitle({ icon: Icon, title, hint, onConfig, configTitle }: {
+export function SectionTitle({ icon: Icon, title, hint, action, onConfig, configTitle }: {
   icon: typeof Activity
   title: string
   hint?: ReactNode
+  action?: { to: string; label: string }
   /** 传入即在标题行右侧加配置齿轮 (如情绪雷达的评分口径编辑) */
   onConfig?: () => void
   configTitle?: string
 }) {
   return (
-    <div className="mb-2 flex items-center justify-between gap-2">
-      <div className="flex items-center gap-1.5">
-        <span className="h-3 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent/30" />
-        <Icon className="h-3.5 w-3.5 text-accent" />
-        <h2 className="text-xs font-semibold text-foreground">{title}</h2>
+    <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="h-3 w-0.5 shrink-0 rounded-full bg-gradient-to-b from-accent to-accent/30" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-accent" />
+        <h2 className="truncate text-xs font-semibold text-foreground" title={title}>{title}</h2>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {hint && <span className="font-mono text-[10px] text-muted">{hint}</span>}
+      <div className="flex min-w-0 items-center gap-1.5">
+        {hint && <span className="min-w-0 truncate font-mono text-[10px] text-muted">{hint}</span>}
+        {action && (
+          <Link
+            to={action.to}
+            className="inline-flex min-h-6 shrink-0 items-center gap-0.5 whitespace-nowrap rounded px-1 text-[10px] text-secondary hover:bg-elevated hover:text-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+          >
+            {action.label}
+            <ArrowUpRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+          </Link>
+        )}
         {onConfig && (
           <button
             type="button"
@@ -91,6 +103,32 @@ export function SectionTitle({ icon: Icon, title, hint, onConfig, configTitle }:
   )
 }
 
+export function StockNameButton({ symbol, name, onClick, className }: {
+  symbol: string
+  name?: string | null
+  onClick?: (symbol: string, name?: string) => void
+  className?: string
+}) {
+  const stockName = name?.trim() || undefined
+  const label = stockName || symbol
+  if (!symbol || !onClick) return <span className={cn('truncate', className)}>{label || '—'}</span>
+  return (
+    <button
+      type="button"
+      aria-label={`查看 ${label} 行情`}
+      aria-haspopup="dialog"
+      title={symbol}
+      onClick={() => onClick(symbol, stockName)}
+      className={cn(
+        'min-w-0 truncate rounded-sm text-left underline decoration-current/30 underline-offset-2 hover:text-accent hover:decoration-current focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent',
+        className,
+      )}
+    >
+      {label}
+    </button>
+  )
+}
+
 export function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; value: string; cls?: string }) {
   return (
     <div className="rounded-md bg-elevated/45 px-2 py-1.5 border border-border/40">
@@ -100,11 +138,11 @@ export function MiniMetric({ label, value, cls = 'text-foreground' }: { label: s
   )
 }
 
-export function KpiCell({ label, value, sub, tone = 'neutral' }: { label: ReactNode; value: ReactNode; sub?: string; tone?: 'bull' | 'bear' | 'accent' | 'neutral' }) {
+export function KpiCell({ label, value, sub, tone = 'neutral' }: { label: ReactNode; value: ReactNode; sub?: ReactNode; tone?: 'bull' | 'bear' | 'accent' | 'neutral' }) {
   const isPlain = typeof value === 'string' || typeof value === 'number'
   const color = tone === 'bull' ? 'text-bull' : tone === 'bear' ? 'text-bear' : tone === 'accent' ? 'text-accent' : 'text-foreground'
   return (
-    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface/80 px-2 py-1 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-all hover:border-accent/30 hover:shadow-[0_2px_8px_hsl(var(--accent)/0.15)]">
+    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface/80 px-2 py-1 shadow-[0_1px_2px_hsl(var(--border)/0.4)]">
       <div className="flex items-center gap-1 text-[11px] text-muted">{label}</div>
       <div className={`mt-1 truncate font-mono text-lg font-semibold leading-none tabular-nums ${isPlain ? color : 'text-foreground'}`}>{value}</div>
       {sub && <div className="mt-1 truncate text-[10px] text-muted">{sub}</div>}

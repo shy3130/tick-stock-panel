@@ -25,13 +25,18 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pads
+from tivelo_backtest.research.matrix import LEGACY_PRICE_SCALE
+from tivelo_backtest.research.matrix import MarketMatrix as MarketMatrix
 
+from app.backtest.dynamic_daily import REPLAY_SCALE, current_replay
 from app.backtest.minute_trigger import build_minute_exit_reference
 from app.backtest.numba_runtime import run_numba_parallel
 from app.price_limits import (
-    MAIN_BOARD_ST_LIMIT_CHANGE_DATE,
+    numpy_gem_pre_registration_vector,
+    numpy_limit_pct_for_date,
     numpy_limit_pct_vectors,
     numpy_limit_price,
+    parse_listing_date,
     write_numpy_price_limit_matrix,
 )
 from app.strategy.scoring import SCORING_DIRECTION_LOW
@@ -51,7 +56,8 @@ except ImportError:
     prange = range
 
 _MATRIX_CACHE_VERSION = 1
-_DIRECT_MATRIX_LOADER_VERSION = 4
+# Price-limit rules are baked into the mmap fields and lock arrays.
+_DIRECT_MATRIX_LOADER_VERSION = 7
 _MATRIX_AXIS_INDEX_VERSION = 1
 _ARROW_BATCH_SIZE = 131_072
 _SCORE_ASSET_CHUNK_SIZE = 256
@@ -407,14 +413,10 @@ def _build_valid_bar_index(valid_mask: np.ndarray) -> ValidBarIndex:
     offsets = np.empty(valid.shape[1] + 1, dtype=np.int64)
     offsets[0] = 0
     np.cumsum(counts, out=offsets[1:])
-    rows = np.empty(int(offsets[-1]), dtype=np.int32)
-    for asset_id in range(valid.shape[1]):
-        start = int(offsets[asset_id])
-        stop = int(offsets[asset_id + 1])
-        rows[start:stop] = np.flatnonzero(valid[:, asset_id]).astype(
-            np.int32,
-            copy=False,
-        )
+    packed = np.flatnonzero(valid.T)
+    if packed.size:
+        packed %= valid.shape[0]
+    rows = packed.astype(np.int32, copy=False)
     offsets.flags.writeable = False
     rows.flags.writeable = False
     return ValidBarIndex(shape=valid.shape, offsets=offsets, rows=rows)
@@ -522,50 +524,6 @@ class SignalMatrix:
         ))
 
 
-@dataclass(frozen=True)
-class MarketMatrix:
-    """Execution matrix consumed by the Python matcher and future Numba kernel."""
-
-    timestamps: np.ndarray
-    timestamp_labels: tuple[str, ...]
-    session_ids: np.ndarray
-    symbols: tuple[str, ...]
-    names: tuple[str, ...]
-
-    open: np.ndarray
-    high: np.ndarray
-    low: np.ndarray
-    close: np.ndarray
-    volume: np.ndarray
-    score: np.ndarray
-    entry: np.ndarray
-    exit: np.ndarray
-    tradable: np.ndarray
-    limit_up_locked: np.ndarray
-    limit_down_locked: np.ndarray
-    reference_price: np.ndarray
-
-    entry_signal_time: np.ndarray
-    exit_signal_time: np.ndarray
-    entry_signal_code: np.ndarray
-    exit_signal_code: np.ndarray
-    entry_signal_ids: tuple[str, ...]
-    exit_signal_ids: tuple[str, ...]
-    # 逐格入场价覆盖 (time x asset, NaN=回退 open/close 惯例)。分钟策略回测用:
-    # 信号在盘中第 m 根触发, 入场价 = 触发分钟收盘价, 而非当日开盘/收盘。
-    entry_price: np.ndarray | None = None
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self.open.shape
-
-    @property
-    def nbytes(self) -> int:
-        return int(sum(
-            value.nbytes
-            for value in self.__dict__.values()
-            if isinstance(value, np.ndarray)
-        ))
 
 
 def build_market_data_matrix(
@@ -677,6 +635,24 @@ def build_market_data_matrix(
     )
 
 
+def load_market_data_matrix_from_daily_panel(
+    panel: pl.DataFrame,
+    start: date,
+    end: date,
+    *,
+    field_columns: set[str],
+    instruments: pl.DataFrame,
+    cancel_event: threading.Event | None = None,
+) -> MarketDataMatrix:
+    """Build with the same daily scanner, field projection and limit masks as Parquet."""
+    dataset = pads.dataset(panel.to_arrow())
+    _validate_matrix_dataset_schema(dataset)
+    return _build_market_data_matrix_from_dataset(
+        dataset, start, end, _normalize_matrix_cache_fields(field_columns), None, instruments,
+        batch_size=_ARROW_BATCH_SIZE, cache_status="none", cancel_event=cancel_event,
+    )
+
+
 def load_market_data_matrix_from_parquet(
     parquet_root: Path,
     start: date,
@@ -721,6 +697,14 @@ def load_market_data_matrix_from_parquet(
         | _normalize_matrix_cache_fields(cache_field_columns or field_columns)
     )
     normalized_symbols = _normalize_symbol_request(symbols)
+    # Older tables supplied only the latest snapshot. Pin that fallback to
+    # the source's latest date so a reused matrix cannot carry yesterday's quotes.
+    if (
+        instruments is not None
+        and "as_of" not in instruments.columns
+        and {"limit_up", "limit_down"}.intersection(instruments.columns)
+    ):
+        instruments = instruments.with_columns(pl.lit(available_end).alias("as_of"))
     instrument_fingerprint = _instrument_fingerprint(instruments).hex()
 
     partitioning = pads.partitioning(
@@ -737,7 +721,6 @@ def load_market_data_matrix_from_parquet(
     if cache_root is None:
         return _build_market_data_matrix_from_dataset(
             dataset,
-            root,
             effective_start,
             effective_end,
             requested_fields,
@@ -926,7 +909,6 @@ def _resolve_matrix_storage_fields(
 
 def _build_market_data_matrix_from_dataset(
     dataset: pads.Dataset,
-    root: Path,
     start: date,
     end: date,
     wanted_fields: frozenset[str],
@@ -1014,7 +996,6 @@ def _build_market_data_matrix_from_dataset(
         actual_symbols,
         names,
         latest_limits,
-        apply_latest_limits=actual_dates[-1] == _latest_partition_date(root),
     )
     timestamps, session_ids = _matrix_time_axes(actual_dates)
     _make_read_only(
@@ -1175,7 +1156,6 @@ def _build_market_data_matrix_cache_from_dataset(
             latest_limits,
             out_up=arrays["limit_up_locked"],
             out_down=arrays["limit_down_locked"],
-            apply_latest_limits=actual_dates[-1] == _latest_partition_date(root),
         )
         timing_ms["derived"] = round((time.perf_counter() - stage_started) * 1000, 1)
         _raise_if_matrix_cancelled(cancel_event)
@@ -1587,16 +1567,12 @@ def _partition_date_bounds(root: Path) -> tuple[date | None, date | None]:
     return earliest, latest
 
 
-def _latest_partition_date(root: Path) -> date | None:
-    return _partition_date_bounds(root)[1]
-
-
 def _instrument_fingerprint(instruments: pl.DataFrame | None) -> bytes:
     if instruments is None or instruments.is_empty() or "symbol" not in instruments.columns:
         return b"no-instruments"
     columns = [
         name
-        for name in ("symbol", "name", "total_shares", "float_shares", "limit_up", "limit_down")
+        for name in ("symbol", "name", "total_shares", "float_shares", "limit_up", "limit_down", "as_of")
         if name in instruments.columns
     ]
     payload = instruments.select(columns).sort("symbol").to_dicts()
@@ -2136,6 +2112,7 @@ def _instrument_axis_values(
     limits = {
         "limit_up": np.full(len(symbols), np.nan, dtype=np.float32),
         "limit_down": np.full(len(symbols), np.nan, dtype=np.float32),
+        "as_of": np.zeros(len(symbols), dtype=np.int32),
     }
     if instruments is None or instruments.is_empty() or "symbol" not in instruments.columns:
         return names, fields, limits
@@ -2162,10 +2139,13 @@ def _instrument_axis_values(
             value = row.get(name)
             if value is not None:
                 target[asset_id] = np.float32(value)
-        for name, target in limits.items():
-            value = row.get(name)
-            if value is not None:
-                target[asset_id] = np.float32(value)
+        quoted_date = parse_listing_date(row.get("as_of"))
+        if quoted_date is not None:
+            limits["as_of"][asset_id] = quoted_date.toordinal()
+            for name in ("limit_up", "limit_down"):
+                value = row.get(name)
+                if value is not None:
+                    limits[name][asset_id] = np.float32(value)
 
     shape = (1, len(symbols))
     fields.update({
@@ -2186,7 +2166,6 @@ def _limit_lock_matrices(
     *,
     out_up: np.ndarray | None = None,
     out_down: np.ndarray | None = None,
-    apply_latest_limits: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     shape = close.shape
     up_locked = out_up if out_up is not None else np.zeros(shape, dtype=np.uint8)
@@ -2198,15 +2177,18 @@ def _limit_lock_matrices(
     up_locked.fill(0)
     down_locked.fill(0)
     legacy_pct, current_pct = numpy_limit_pct_vectors(symbols, names)
+    pre_gem_pct = numpy_gem_pre_registration_vector(symbols, legacy_pct, names)
 
     previous_close = np.full(shape[1], np.nan, dtype=np.float64)
     previous_raw = np.full(shape[1], np.nan, dtype=np.float64)
     previous_adjustment = np.full(shape[1], np.nan, dtype=np.float64)
-    for time_id in range(shape[0]):
-        limit_pct = (
-            legacy_pct
-            if trading_dates[time_id] < MAIN_BOARD_ST_LIMIT_CHANGE_DATE
-            else current_pct
+    quoted_dates = latest_limits["as_of"]
+    quoted_days = set(quoted_dates.tolist())
+    latest_up = latest_limits["limit_up"]
+    latest_down = latest_limits["limit_down"]
+    for time_id, trading_date in enumerate(trading_dates):
+        limit_pct = numpy_limit_pct_for_date(
+            trading_date, pre_gem_pct, legacy_pct, current_pct,
         )
         present = seen[time_id]
         current_close = close[time_id].astype(np.float64, copy=False)
@@ -2223,7 +2205,17 @@ def _limit_lock_matrices(
             & np.isfinite(previous_adjustment)
             & (np.abs(current_adjustment - previous_adjustment) > 1e-6)
         )
-        reference = np.where(adjustment_changed, previous_close, previous_raw)
+        # 除权日交易所参考价 = 前复权昨收还原到当日口径 (prev_qfq / 当日复权比例)。
+        # prev_qfq = raw_prev / F(prev) × F(today) ⇒ 商 = raw_prev × F(today)/F(prev)
+        # = raw_prev / ex_factor, 即除权参考价。直接拿 prev_qfq 当参考价会把限价
+        # 压低 F(prev)/F(today) 倍 — 窗口后还有更晚除权事件时, 除权日被误标
+        # 涨停锁死、真封死跌停漏检。
+        safe_adjustment = np.where(
+            np.isfinite(current_adjustment) & (current_adjustment > 0),
+            current_adjustment,
+            1.0,
+        )
+        reference = np.where(adjustment_changed, previous_close / safe_adjustment, previous_raw)
         valid = (
             present
             & np.isfinite(reference)
@@ -2234,11 +2226,13 @@ def _limit_lock_matrices(
         if valid.any():
             up_price = numpy_limit_price(reference, limit_pct, up=True)
             down_price = numpy_limit_price(reference, limit_pct, up=False)
-            if apply_latest_limits and time_id == shape[0] - 1:
-                latest_up = latest_limits["limit_up"]
-                latest_down = latest_limits["limit_down"]
-                use_up = np.isfinite(latest_up) & (latest_up < 10_000.0)
-                use_down = np.isfinite(latest_down) & (latest_down < 10_000.0)
+            ordinal = trading_date.toordinal()
+            if ordinal in quoted_days:
+                matches = quoted_dates == ordinal
+                no_limit = np.isfinite(latest_up) & (latest_up >= 10_000.0)
+                valid &= ~(matches & no_limit)
+                use_up = matches & (latest_up > 0) & (latest_up < 10_000.0)
+                use_down = matches & (latest_down > 0) & (latest_down < 10_000.0)
                 up_price = np.where(use_up, latest_up, up_price)
                 down_price = np.where(use_down, latest_down, down_price)
             up_locked[time_id, valid] = (
@@ -2429,6 +2423,7 @@ def build_market_matrix_from_signals(
         exit_signal_code=exit_signal_code,
         entry_signal_ids=signals.entry_signal_ids,
         exit_signal_ids=signals.exit_signal_ids,
+        price_scale=market.fields.get(REPLAY_SCALE, market.fields.get(LEGACY_PRICE_SCALE)),
         entry_price=(
             np.array(entry_price_override, dtype=np.float32, copy=True)
             if entry_price_override is not None
@@ -2451,42 +2446,130 @@ def build_market_matrix(
     """Backward-compatible long-panel boundary used by legacy/Polars strategies."""
     if panel.is_empty():
         raise ValueError("cannot build MarketMatrix from an empty panel")
-    market = build_market_data_matrix(
+    encoding = encode_panel_matrix(
         panel,
-        field_columns={"score", "ma5", "ma10", "ma20"},
+        entry_signal_ids=entry_signal_ids,
+        exit_signal_ids=exit_signal_ids,
+    )
+    score = (
+        panel.get_column("score")
+        if "score" in panel.columns and panel["score"].dtype.is_numeric()
+        else None
+    )
+    return build_market_matrix_from_encoding(
+        encoding,
+        score=score,
+        entries=entries,
+        exits=exits,
+        entry_delay_bars=entry_delay_bars,
+        exit_delay_bars=exit_delay_bars,
+        minute_exit_trigger=minute_exit_trigger,
+    )
+
+
+@dataclass(frozen=True)
+class PanelMatrixEncoding:
+    """长面板 → 矩阵的参数无关编码, 供优化器跨参数组复用 (P2a-2)。
+
+    行情矩阵不带 score 场 — score 随参数组的 universe 掩码变化 (_apply_score
+    把非候选行置空), 由 build_market_matrix_from_encoding 逐组散布进信号
+    矩阵; 全部数组只读共享, 复用零拷贝。"""
+
+    market: MarketDataMatrix
+    time_id: np.ndarray
+    asset_id: np.ndarray
+    panel_rows: int
+    entry_signal_code: np.ndarray
+    entry_signal_ids: tuple[str, ...]
+    exit_signal_code: np.ndarray
+    exit_signal_ids: tuple[str, ...]
+    # 编码所用的列序; 调用方与当组 sim_columns 比对, 不一致回退整建
+    # (回退是优化放弃, 不是正确性闸门 — 整建结果总是正确)。
+    sim_columns: tuple[str, ...]
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.market.shape
+
+
+def encode_panel_matrix(
+    panel: pl.DataFrame,
+    *,
+    entry_signal_ids: list[str] | None = None,
+    exit_signal_ids: list[str] | None = None,
+) -> PanelMatrixEncoding:
+    """编码面板的参数无关半边: 行情矩阵 + 轴 id + 信号码矩阵。
+
+    score/entry/exit 掩码随参数组变化, 不在编码内 — 见
+    build_market_matrix_from_encoding。"""
+    market = build_market_data_matrix(
+        panel, field_columns={"ma5", "ma10", "ma20", LEGACY_PRICE_SCALE},
     )
     _, _, _, time_id, asset_id = _encode_axes(panel)
     shape = market.shape
-
-    raw_entry = _scatter_bool_series(entries, len(panel), shape, time_id, asset_id)
-    raw_exit = _scatter_bool_series(exits, len(panel), shape, time_id, asset_id)
     entry_codes, normalized_entry_ids = _signal_code_matrix(
-        panel,
-        entry_signal_ids,
-        shape,
-        time_id,
-        asset_id,
+        panel, entry_signal_ids, shape, time_id, asset_id,
     )
     exit_codes, normalized_exit_ids = _signal_code_matrix(
-        panel,
-        exit_signal_ids,
-        shape,
-        time_id,
-        asset_id,
+        panel, exit_signal_ids, shape, time_id, asset_id,
     )
-    score = market.fields.get("score")
+    return PanelMatrixEncoding(
+        market=market,
+        time_id=time_id,
+        asset_id=asset_id,
+        panel_rows=len(panel),
+        entry_signal_code=entry_codes,
+        entry_signal_ids=normalized_entry_ids,
+        exit_signal_code=exit_codes,
+        exit_signal_ids=normalized_exit_ids,
+        sim_columns=tuple(panel.columns),
+    )
+
+
+def build_market_matrix_from_encoding(
+    encoding: PanelMatrixEncoding,
+    *,
+    score: pl.Series | None,
+    entries: pl.Series | None,
+    exits: pl.Series | None,
+    entry_delay_bars: int = 0,
+    exit_delay_bars: int = 0,
+    minute_exit_trigger: bool = False,
+) -> MarketMatrix:
+    """共享编码 + 参数相关的 score/entry/exit → MarketMatrix (优化器试算路径)。
+
+    散布与合成和 build_market_matrix 走同一套件 (_scatter_bool_series /
+    make_signal_matrix / build_market_matrix_from_signals), score 的
+    非有限值→nan 语义与 _float_matrix 一致。"""
+    shape = encoding.shape
+    raw_entry = _scatter_bool_series(
+        entries, encoding.panel_rows, shape, encoding.time_id, encoding.asset_id,
+    )
+    raw_exit = _scatter_bool_series(
+        exits, encoding.panel_rows, shape, encoding.time_id, encoding.asset_id,
+    )
+    score_matrix = None
+    if score is not None and len(score) == encoding.panel_rows:
+        score_matrix = np.full(shape, np.nan, dtype=np.float32)
+        values = np.array(
+            score.cast(pl.Float32, strict=False).to_numpy(),
+            dtype=np.float32,
+            copy=True,
+        )
+        values[~np.isfinite(values)] = np.nan
+        score_matrix[encoding.time_id, encoding.asset_id] = values
     signals = make_signal_matrix(
         shape,
         entry=raw_entry,
         exit=raw_exit,
-        score=np.nan_to_num(score, nan=0.0) if score is not None else None,
-        entry_signal_code=entry_codes,
-        exit_signal_code=exit_codes,
-        entry_signal_ids=normalized_entry_ids,
-        exit_signal_ids=normalized_exit_ids,
+        score=np.nan_to_num(score_matrix, nan=0.0) if score_matrix is not None else None,
+        entry_signal_code=encoding.entry_signal_code,
+        exit_signal_code=encoding.exit_signal_code,
+        entry_signal_ids=encoding.entry_signal_ids,
+        exit_signal_ids=encoding.exit_signal_ids,
     )
     return build_market_matrix_from_signals(
-        market,
+        encoding.market,
         signals,
         entry_delay_bars=entry_delay_bars,
         exit_delay_bars=exit_delay_bars,
@@ -3554,7 +3637,9 @@ class MatrixStrategyPipeline:
         timing_ms: dict[str, float] | None,
     ) -> SignalMatrix:
         strategy_started = time.perf_counter()
-        signals = strategy.compute_signals(market, params)
+        dynamic = REPLAY_SCALE in market.fields
+        signals = (current_replay().dynamic_signals(strategy, market, params)
+                   if dynamic else strategy.compute_signals(market, params))
         validate_signal_matrix(signals, market.shape)
         if timing_ms is not None:
             timing_ms["strategy_signals"] = round(
@@ -3587,6 +3672,7 @@ class MatrixStrategyPipeline:
                 config.descending,
                 fallback=signals.score,
                 directions=config.scoring_directions,
+                resolve_feature=decision_feature if dynamic else matrix_feature,
             )
             entry_codes = np.where(entry != 0, signals.entry_signal_code, -1).astype(np.int16)
             exit_codes = np.where(signals.exit != 0, signals.exit_signal_code, -1).astype(np.int16)
@@ -3668,7 +3754,7 @@ def _build_basic_filter_mask_uncached(market: MarketDataMatrix, config: dict) ->
         return np.ones(market.shape, dtype=bool)
 
     mask = np.ones(market.shape, dtype=bool)
-    close = market.close
+    close = market.field("raw_close") if REPLAY_SCALE in market.fields else market.close
     if config.get("price_min") is not None:
         mask &= close >= float(config["price_min"])
     if config.get("price_max") is not None:
@@ -3707,7 +3793,9 @@ def build_matrix_score(
     *,
     fallback: np.ndarray,
     directions: Mapping[str, str] | None = None,
+    resolve_feature=None,
 ) -> np.ndarray:
+    resolve_feature = resolve_feature or matrix_feature
     weights = {name: float(weight) for name, weight in scoring.items() if float(weight) != 0.0}
     total_weight = sum(weights.values())
     if weights and total_weight > 0:
@@ -3719,7 +3807,7 @@ def build_matrix_score(
         work_mask = np.empty((row_count, chunk_size), dtype=bool)
         value_scratch = np.empty((row_count, chunk_size), dtype=np.float32)
         for name, weight in weights.items():
-            values = matrix_feature(market, name)
+            values = resolve_feature(market, name)
             row_min = np.full(row_count, np.inf, dtype=np.float32)
             row_max = np.full(row_count, -np.inf, dtype=np.float32)
             for start in range(0, asset_count, chunk_size):
@@ -3767,7 +3855,7 @@ def build_matrix_score(
         return score
 
     if order_by and order_by != "score":
-        values = matrix_feature(market, order_by)
+        values = resolve_feature(market, order_by)
         result = np.zeros(market.shape, dtype=np.float32)
         direction = np.float32(1.0 if descending else -1.0)
         for start in range(0, market.shape[1], _SCORE_ASSET_CHUNK_SIZE):
@@ -3813,6 +3901,11 @@ _MATRIX_COMPUTED_FEATURES = frozenset({
 def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
     if name in {"open", "high", "low", "close", "volume"} or name in market.fields:
         return market.field(name)
+    from app.factors.registry import get_factor
+
+    spec = get_factor(name)
+    if spec is not None and spec.kind in {"custom", "composite"}:
+        return _registered_matrix_feature(market, name)
     supported = (
         name in _MATRIX_COMPUTED_FEATURES
         or (name.startswith("ma") and name.endswith("_bias") and name[2:-5].isdigit())
@@ -3831,6 +3924,53 @@ def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             {"name": name},
             lambda: _compute_matrix_feature(market, name),
         )
+
+
+def decision_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
+    """Feature at each decision's price basis, before cross-stock ranking."""
+    if REPLAY_SCALE in market.fields:
+        return current_replay().decision_feature(market, name)
+    return matrix_feature(market, name)
+
+
+def _registered_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
+    from app.factors.registry import factor_calculation_order, get_factor
+    from app.strategy.scoring import materialize_scoring_columns
+
+    ordered = factor_calculation_order([name])
+    definitions = []
+    inputs = []
+    for fid in ordered:
+        spec = get_factor(fid)
+        if spec is not None and spec.kind in {"custom", "composite"}:
+            definitions.append((fid, spec.version, spec.lang, spec.formula_text, spec.components))
+        elif fid not in {"symbol", "date"}:
+            inputs.append(fid)
+    arrays = tuple(matrix_feature(market, fid) for fid in inputs)
+
+    def compute() -> np.ndarray:
+        # 只还原真实 K 线, 保持停牌期间时序窗口与 Polars 检验路径一致。
+        assets, times = np.nonzero(np.isfinite(market.close).T)
+        frame = pl.DataFrame({
+            "symbol": np.asarray(market.symbols)[assets],
+            "date": np.asarray(market.timestamp_labels, dtype="datetime64[D]")[times],
+            **{
+                fid: pl.Series(fid, values[times, assets], dtype=pl.Float64, nan_to_null=True)
+                for fid, values in zip(inputs, arrays, strict=True)
+            },
+        })
+        frame = materialize_scoring_columns(frame, [name])
+        if name not in frame.columns:
+            raise ValueError(f"factor {name} is missing required inputs")
+        result = np.full(market.shape, np.nan, dtype=np.float32)
+        result[times, assets] = frame[name].cast(pl.Float32).to_numpy()
+        return result
+
+    # 把全部依赖的定义与输入纳入键, 子因子改公式后父因子也必须重新计算。
+    return _cached_matrix_operation(
+        "registered_factor", (market.close, *arrays),
+        {"definitions": definitions, "inputs": inputs}, compute,
+    )
 
 
 def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:

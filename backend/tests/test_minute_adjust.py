@@ -248,3 +248,26 @@ def test_migration_anchor_out_of_sane_range_rejected(tmp_path):
     assert stats["marked"] is True  # 分区处理完成 (仅未换算), 仍可收敛
     stored = pl.read_parquet(tmp_path / "kline_minute" / f"date={day.isoformat()}" / "part.parquet")
     assert abs(stored["close"][0] - 10.0) < 1e-12
+
+
+def test_backtest_legacy_anchor_and_raw_partitions_use_exchange_prices(tmp_path):
+    import pytest
+
+    day = date(2026, 6, 30)
+    minute = _minute_frame(AA, day, 8.).with_columns(
+        pl.Series("datetime", [datetime(2026, 6, 30, 9, 31), datetime(2026, 6, 30, 14, 59),
+                               datetime(2026, 6, 30, 15, 0)]))
+    _write_minute_partition(tmp_path, day, minute)
+    _write_factor_table(tmp_path, [(AA, EX_DATE, EX_FACTOR)])
+    _write_daily_partition(tmp_path, day, {AA: 10.})
+    repo = KlineRepository(DataStore(tmp_path))
+    decoded = repo.get_minute_for_backtest([AA], [day])
+    assert decoded["close"].to_list() == [10.]*3
+    assert decoded["amount"].to_list() == minute["amount"].to_list()
+    _write_minute_partition(tmp_path, day, minute.head(1))
+    with pytest.raises(minute_adjust.MinutePriceBasisError, match="收盘锚点"):
+        repo.get_minute_for_backtest([AA], [day])
+    minute_adjust.mark_minute_basis_raw(tmp_path)
+    _write_minute_partition(tmp_path, day, decoded)
+    assert repo.get_minute_for_backtest([AA], [day])["close"].to_list() == [10.]*3
+    assert repo.get_minute_by_dates([AA], [day])["close"].to_list() == [8.]*3

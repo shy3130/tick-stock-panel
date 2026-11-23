@@ -26,11 +26,9 @@ GRID_MAX_COMBINATIONS = 2000
 _MINIMIZE_OBJECTIVES = {"avg_holding_days"}
 
 # 可选优化目标 (须为 stats 中存在且数值可比的字段)。
-VALID_OBJECTIVES = {
-    "total_return", "annual_return", "sharpe", "sortino", "calmar",
-    "win_rate", "profit_factor", "max_drawdown", "mc_maxdd_p50", "mc_maxdd_p95",
-    "avg_pnl", "median_pnl", "n_trades", "avg_holding_days",
-}
+# 主目标白名单 (P4 收敛): 与 guards.PRIMARY_OBJECTIVES 同源。退化目标 (胜率/
+# 持仓天数/交易数) 交易少时可被运气推到极端, 不得作排名主目标 —— 见 docs/robust-optimizer-plan.md。
+from app.backtest.guards import PRIMARY_OBJECTIVES as VALID_OBJECTIVES  # noqa: F401
 
 
 def _candidates_for(param_id: str, spec, pmeta: dict) -> list:
@@ -219,7 +217,11 @@ class StrategyOptimizer:
         rss_sampler: PhaseRssSampler | None = None,
         prepared_market_data=None,
     ) -> dict:
-        from app.backtest.strategy import BacktestResultPolicy, StrategyBacktestConfig
+        from app.backtest.strategy import (
+            BacktestResultPolicy,
+            StrategyBacktestConfig,
+            _panel_backend,
+        )
 
         t0 = time.perf_counter()
         if cfg.objective not in VALID_OBJECTIVES:
@@ -249,6 +251,7 @@ class StrategyOptimizer:
         ]
 
         prepared = None
+        prepared_panel = None
         prepare_ms = 0.0
         trials_ms = 0.0
         final_backtest_ms = 0.0
@@ -262,20 +265,13 @@ class StrategyOptimizer:
             if cancel_event is not None and cancel_event.is_set():
                 return None
             # 单组异常必须隔离: 一组失败不能丢弃全部已完成结果。
+            run_kwargs: dict = {"cancel_event": cancel_event, "result_policy": trial_policy}
+            if prepared is not None:
+                run_kwargs["prepared"] = prepared
+            elif prepared_panel is not None:
+                run_kwargs["prepared_panel"] = prepared_panel
             try:
-                if prepared is None:
-                    res = self.service.run(
-                        bt_cfg,
-                        cancel_event=cancel_event,
-                        result_policy=trial_policy,
-                    )
-                else:
-                    res = self.service.run(
-                        bt_cfg,
-                        cancel_event=cancel_event,
-                        prepared=prepared,
-                        result_policy=trial_policy,
-                    )
+                res = self.service.run(bt_cfg, **run_kwargs)
             except Exception as e:  # 隔离单组失败, 记录后继续, 不拖垮整批
                 logger.warning("参数组 %s 回测异常: %r", combo, e)
                 return {"params": combo, "error": repr(e), "objective_raw": None, "_sort": float("-inf")}
@@ -332,6 +328,24 @@ class StrategyOptimizer:
                         "shared_matrix_bytes": prepared.market_data.nbytes,
                         "elapsed_ms": prepare_ms,
                     })
+            elif (
+                _panel_backend(getattr(s, "execution_backend", "polars_expr"))
+                and not cancelled_before_prepare
+            ):
+                # P2a: 默认后端同样 prepare-once — 全组依赖计划取并集, 载一次
+                # 共享特征面板, 每组只跑过滤/评分/模拟。
+                prepare_started = time.perf_counter()
+                prepared_panel = self.service.prepare_panel_optimization(backtest_configs)
+                prepare_ms = round((time.perf_counter() - prepare_started) * 1000, 1)
+                if progress_cb is not None:
+                    progress_cb({
+                        "type": "optimizer_prepare",
+                        "done": 0,
+                        "total": n_total,
+                        "best_score": None,
+                        "shared_panel_bytes": prepared_panel.panel.estimated_size(),
+                        "elapsed_ms": prepare_ms,
+                    })
 
             trials_started = time.perf_counter()
             if rss_sampler is not None:
@@ -385,10 +399,14 @@ class StrategyOptimizer:
                 final_started = time.perf_counter()
                 if rss_sampler is not None:
                     rss_sampler.reset_phase()
+                final_run_kwargs: dict = {"cancel_event": cancel_event}
+                if prepared is not None:
+                    final_run_kwargs["prepared"] = prepared
+                elif prepared_panel is not None:
+                    final_run_kwargs["prepared_panel"] = prepared_panel
                 final_result = self.service.run(
                     best_config,
-                    cancel_event=cancel_event,
-                    prepared=prepared,
+                    **final_run_kwargs,
                 )
                 final_backtest_ms = round((time.perf_counter() - final_started) * 1000, 1)
                 if rss_sampler is not None:
@@ -413,6 +431,8 @@ class StrategyOptimizer:
                 "effective_workers": 1,
                 "shared_market_data": prepared is not None,
                 "shared_market_data_bytes": prepared.market_data.nbytes if prepared is not None else 0,
+                "shared_panel": prepared_panel is not None,
+                "shared_panel_bytes": prepared_panel.panel.estimated_size() if prepared_panel is not None else 0,
                 "prepare_ms": prepare_ms,
                 "timing_ms": {
                     "prepare": prepare_ms,

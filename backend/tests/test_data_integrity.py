@@ -381,6 +381,21 @@ def test_describe_and_issue_dataclass():
     assert "盘中快照" in describe_issues(issues)
 
 
+def test_describe_issues_identifies_assets_and_separates_missing_from_snapshot():
+    from app.services.data_integrity import describe_issues
+
+    issues = [
+        IntegrityIssue(day=FRIDAY, table="kline_daily", kind="snapshot"),
+        IntegrityIssue(day=FRIDAY, table="kline_etf_daily", kind="missing"),
+        IntegrityIssue(day=FRIDAY, table="kline_index_daily", kind="missing"),
+    ]
+    text = describe_issues(issues)
+    assert "股票日K" in text
+    assert "ETF日K" in text
+    assert "指数日K" in text
+    assert "缺失" in text and "盘中快照" in text
+
+
 # ── 开实时行情门禁 (钩子2) ──────────────────────────────────────────
 
 
@@ -446,7 +461,7 @@ def test_realtime_gate_blocks_on_snapshot_and_launches_repair(tmp_path, monkeypa
     launched = []
     monkeypatch.setattr(
         data_integrity, "launch_integrity_repair",
-        lambda state, day, reason: (launched.append((day, reason)) or ("job-x", True)),
+        lambda state, day, reason, symbols=None: (launched.append((day, reason)) or ("job-x", True)),
     )
     saved = {}
     monkeypatch.setattr(
@@ -551,7 +566,7 @@ def test_boot_check_launches_repair_within_window(tmp_path, monkeypatch):
     launched = []
     monkeypatch.setattr(
         data_integrity, "launch_integrity_repair",
-        lambda state, day, reason: (launched.append(day) or ("job-x", True)),
+        lambda state, day, reason, symbols=None: (launched.append(day) or ("job-x", True)),
     )
 
     real_today = datetime.now(CN_TZ).date()

@@ -194,19 +194,10 @@ def _iter_custom_daily_frames(provider, symbols, asset_type, start_time, end_tim
 
     asset_type 按内部契约传 "index"/"etf"; 只服务股票的源 (fuyao/tdxquant/amber
     对 asset_type≠stock 一律空手而归) 由此自然表达「不支持」, 由调用方回退。"""
-    iter_daily = getattr(provider, "iter_daily", None)
-    if callable(iter_daily):
-        yield from iter_daily(
-            symbols, start_time=start_time, end_time=end_time,
-            asset_type=asset_type, on_chunk_done=on_chunk_done,
-        )
-        return
-    df = provider.get_daily(
-        symbols, start_time=start_time, end_time=end_time,
-        asset_type=asset_type, on_chunk_done=on_chunk_done,
+    yield from kline_sync.iter_custom_daily_frames(
+        provider, symbols, asset_type=asset_type, start_time=start_time,
+        end_time=end_time, on_chunk_done=on_chunk_done,
     )
-    if not df.is_empty():
-        yield df
 
 
 def _sync_custom_daily(

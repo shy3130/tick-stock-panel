@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import polars as pl
 
@@ -35,20 +35,22 @@ def _synthetic_enriched(n_days: int) -> pl.DataFrame:
     )
 
 
-def test_load_panel_warms_up_indicators(monkeypatch) -> None:
+def test_load_panel_warms_up_indicators(monkeypatch, tmp_path) -> None:
     df = _synthetic_enriched(250)
     monkeypatch.setattr(
         "app.services.backtest.scan_enriched_parquet", lambda glob: df.lazy()
     )
-    svc = BacktestService(repo=MagicMock())
+    svc = BacktestService(repo=SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path), get_instruments_asset=lambda _: pl.DataFrame(),
+    ))
 
     start = df["date"][-30]
     end = df["date"][-1]
     panel = svc._load_panel(["600000.SH"], start, end)
 
-    # warmup 行不进入结果面板 (pandas datetime64 与 date 直接比较会类型不符)
-    assert str(panel["date"].min())[:10] == start.isoformat()
-    assert str(panel["date"].max())[:10] == end.isoformat()
+    # warmup 行不进入结果面板。
+    assert panel["date"].min() == start
+    assert panel["date"].max() == end
 
     # 数值复现: 区间头部的指标必须与「全历史计算后裁剪」的基准一致。
     # 只断言非 NaN 区分不了新旧代码 —— ewm 类指标 (RSI/MACD) 从首个值
@@ -56,19 +58,21 @@ def test_load_panel_warms_up_indicators(monkeypatch) -> None:
     from app.indicators.pipeline import compute_all
     reference = compute_all(df).filter(pl.col("date") >= start)
     ref_rsi = float(reference["rsi_14"][0])
-    first = panel.iloc[0]
-    assert abs(first["rsi_14"] - ref_rsi) < 1.0, (
-        f"rsi_14 without warmup: {first['rsi_14']} vs reference {ref_rsi}"
+    first_rsi = panel["rsi_14"][0]
+    assert abs(first_rsi - ref_rsi) < 1.0, (
+        f"rsi_14 without warmup: {first_rsi} vs reference {ref_rsi}"
     )
 
 
-def test_load_panel_insufficient_history_degrades_gracefully(monkeypatch) -> None:
+def test_load_panel_insufficient_history_degrades_gracefully(monkeypatch, tmp_path) -> None:
     # 数据起点晚于 warmup 起点时自然退化: 有多少算多少, 不抛异常
     df = _synthetic_enriched(20)
     monkeypatch.setattr(
         "app.services.backtest.scan_enriched_parquet", lambda glob: df.lazy()
     )
-    svc = BacktestService(repo=MagicMock())
+    svc = BacktestService(repo=SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path), get_instruments_asset=lambda _: pl.DataFrame(),
+    ))
 
     panel = svc._load_panel(["600000.SH"], df["date"][0], df["date"][-1])
     assert len(panel) == 20

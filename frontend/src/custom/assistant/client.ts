@@ -48,6 +48,7 @@ export type AssistantEvent =
   | { type: 'action_confirm'; call_id: string; name: string; label: string; risk: string; expires_in: number }
   | { type: 'rounds_confirm'; call_id: string; reached: number; expires_in: number }
   | { type: 'delta'; content: string }
+  | { type: 'assistant_context'; reasoning_content: string; reasoning_context: string }
   | { type: 'error'; kind: string; message: string; hint?: string }
   | { type: 'done' }
   | { type: 'ping' }
@@ -55,6 +56,8 @@ export type AssistantEvent =
 export interface ChatHistoryMessage {
   role: 'user' | 'assistant'
   content: string
+  reasoning_content?: string
+  reasoning_context?: string
 }
 
 export interface AssistantContext {

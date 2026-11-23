@@ -5,11 +5,12 @@
  * (DOM 锚定); ③ 从页面右缘滑入的非模态面板。
  * 另负责全局快捷键 ⌘K/Ctrl+K 与 Esc、按当前路由上报页面上下文。
  */
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import type { FrontendSlotContextMap } from '@/extensions/types'
 import { closeAssistant, setPageContext, toggleAssistant, useAssistantStore } from './store'
 import { AssistantFloatingButton } from './ui/AssistantFloatingButton'
-import { AssistantDrawer } from './ui/AssistantDrawer'
+
+const AssistantDrawer = lazy(() => import('./ui/AssistantDrawer').then(m => ({ default: m.AssistantDrawer })))
 
 // 插槽注册表把组件 props 定为所有插槽上下文的联合类型(保守契约);
 // 本组件只在 layout.navigation.extra 渲染, 在此收窄到该插槽的上下文。
@@ -25,9 +26,9 @@ const PAGE_LABELS: Record<string, string> = {
   '/backtest': '回测',
   '/stock-analysis': '个股分析',
   '/limit-ladder': '连板梯队',
-  '/concept-analysis': '概念分析',
-  '/industry-analysis': '行业分析',
-  '/financials': '财务分析',
+  '/concept-analysis': '概念板块',
+  '/industry-analysis': '行业板块',
+  '/financials': '财务概况',
   '/monitor': '监控中心',
   '/regime': '市场环境',
   '/abnormal': '异动监控',
@@ -42,6 +43,11 @@ const PAGE_LABELS: Record<string, string> = {
 export function AssistantLauncher(props: AnySlotContext) {
   const { pathname } = props as NavigationContext
   const { open } = useAssistantStore()
+  const [drawerLoaded, setDrawerLoaded] = useState(open)
+
+  useEffect(() => {
+    if (open) setDrawerLoaded(true)
+  }, [open])
 
   useEffect(() => {
     setPageContext({ page: PAGE_LABELS[pathname] ?? '' })
@@ -63,7 +69,8 @@ export function AssistantLauncher(props: AnySlotContext) {
   return (
     <>
       <AssistantFloatingButton />
-      <AssistantDrawer />
+      {/* Keep the drawer mounted after first use to preserve its exit animation. */}
+      {(open || drawerLoaded) && <Suspense fallback={null}><AssistantDrawer /></Suspense>}
     </>
   )
 }

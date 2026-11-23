@@ -1,21 +1,57 @@
 """扩展数据服务 — 配置管理 + 文件解析 + Parquet 存储。"""
 from __future__ import annotations
 
+import asyncio
 import codecs
 import copy
 import json
 import logging
 import re
+import threading
+from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
+import anyio
 import polars as pl
 
-from app.market_time import cn_today
+from app.db_safe import is_valid_ext_ident
+from app.market_time import cn_now, cn_today
 from app.services.fs_utils import atomic_write_parquet, atomic_write_text
 
 logger = logging.getLogger(__name__)
+
+# Preserve the serial read/merge/write order previously provided by the event
+# loop, without blocking it or multiplying peak memory for simultaneous imports.
+_EXT_IO_LIMITER = anyio.CapacityLimiter(1)
+_EXT_IO_TASKS: set[asyncio.Task] = set()
+
+
+def _ext_io_done(task: asyncio.Task) -> None:
+    _EXT_IO_TASKS.discard(task)
+    if not task.cancelled():
+        task.exception()  # A disconnected request may no longer await its result.
+
+
+async def run_ext_data_io(func, *args, **kwargs):
+    cancelled = threading.Event()
+
+    def run():
+        if not cancelled.is_set():
+            return func(*args, **kwargs)
+
+    # Raw asyncio cancellation otherwise releases AnyIO's limiter while its
+    # worker is still writing. Keep the limiter owned until the worker finishes;
+    # queued cancelled requests skip their work, running imports clean up in situ.
+    task = asyncio.create_task(anyio.to_thread.run_sync(run, limiter=_EXT_IO_LIMITER))
+    _EXT_IO_TASKS.add(task)
+    task.add_done_callback(_ext_io_done)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled.set()
+        raise
 
 # ---------------------------------------------------------------------------
 # 配置模型
@@ -49,6 +85,16 @@ SCHEDULE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 # 多盘扩展列选盘时刻 (ext_columns 的 "@HH:MM[:SS]" 后缀) 的合法格式
 EXT_SNAPSHOT_AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$")
 
+# time_field 保留名: 源数据没有时间列时 (人气榜/资金流等每日快照表), 配置它
+# 让写入路径注入拉取时刻, 快照表同样获得日内多盘能力 (去重键 [symbol, 拉取时刻])。
+# 注入值是北京时间 ISO 串, 与 collapse_ext_rows_at 的时刻切片口径兼容。
+PLATE_TS_FIELD = "__pull_ts__"
+
+
+def _pull_ts_value() -> str:
+    """注入用拉取时刻 (北京时间 ISO 串); 测试 monkeypatch 本函数固定时刻。"""
+    return cn_now().isoformat()
+
 
 def norm_ext_snapshot_at(raw: str) -> str:
     """选盘时刻归一为 "HH:MM:SS" ("09:20" → "09:20:00"); 非法值抛 ValueError。"""
@@ -56,6 +102,40 @@ def norm_ext_snapshot_at(raw: str) -> str:
     if not m:
         raise ValueError(f"非法选盘时刻 {raw!r} (应为 HH:MM 或 HH:MM:SS)")
     return f"{raw}:00" if len(raw) == 5 else raw
+
+
+def parse_ext_columns(ext_columns: str) -> list[tuple[str, str, str | None]]:
+    """解析扩展列并按输出列名保序去重，非法项沿用跳过语义。
+
+    输出列名不含选盘时刻，同一输出指定不同时刻或不同字段时拒绝整个请求，
+    避免 JOIN 重名、静默覆盖或把一个时刻的值显示成另一个时刻。
+    """
+    columns: dict[str, tuple[str, str, str | None]] = {}
+    for part in ext_columns.split(","):
+        part = part.strip()
+        if "." not in part:
+            continue
+        config_id, field_name = part.split(".", 1)
+        at: str | None = None
+        if "@" in field_name:
+            field_name, at_raw = field_name.rsplit("@", 1)
+            try:
+                at = norm_ext_snapshot_at(at_raw)
+            except ValueError:
+                continue
+        config_id = config_id.strip()
+        field_name = field_name.strip()
+        if not config_id or not field_name or not is_valid_ext_ident(config_id) or "\x00" in field_name:
+            continue
+        spec = (config_id, field_name, at)
+        output = f"{config_id}__{field_name}"
+        previous = columns.get(output)
+        if previous is not None and previous != spec:
+            if previous[:2] == spec[:2]:
+                raise ValueError(f"扩展字段 {config_id}.{field_name} 不能同时指定不同选盘时刻")
+            raise ValueError(f"扩展字段输出列名冲突：{output}")
+        columns[output] = spec
+    return list(columns.values())
 
 
 def collapse_ext_rows_at(
@@ -97,13 +177,13 @@ class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
         "url", "method", "headers", "body", "response_path",
-        "field_map", "schedule_minutes", "enabled",
+        "field_map", "schedule_minutes", "schedule_seconds", "enabled",
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
         "date_format", "time_field", "auth", "timeout_seconds",
         "page_param", "page_size_param", "page_size", "page_start", "max_pages",
         "fanout", "schedule_time", "schedule_period", "schedule_day",
-        "schedule_trading_only",
+        "schedule_trading_only", "since_param", "granularity",
     )
 
     def __init__(
@@ -115,6 +195,7 @@ class PullConfig:
         response_path: str = "",
         field_map: dict[str, str] | None = None,
         schedule_minutes: int = 1440,
+        schedule_seconds: int | None = None,
         enabled: bool = False,
         last_run: str | None = None,
         last_status: str | None = None,
@@ -138,6 +219,8 @@ class PullConfig:
         schedule_period: str | None = None,
         schedule_day: int | None = None,
         schedule_trading_only: bool = False,
+        since_param: str | None = None,
+        granularity: str = "auto",
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -147,6 +230,13 @@ class PullConfig:
         self.response_path = response_path  # dot-path to rows array, e.g. "data.list"
         self.field_map = field_map or {}    # external_name → config_field_name
         self.schedule_minutes = schedule_minutes
+        # 间隔秒数: 配置后优先于 schedule_minutes 生效 (秒级拉取, 如集合竞价
+        # 30s 快照)。config.json 手改写入非法值时归一 None (fail-closed, 回退
+        # 分钟制); 调度侧另有下限钳制兜底。
+        self.schedule_seconds = (
+            int(schedule_seconds) if isinstance(schedule_seconds, (int, float))
+            and 10 <= schedule_seconds <= 2_592_000 else None
+        )
         self.enabled = enabled
         self.last_run = last_run
         self.last_status = last_status      # "success" | "error"
@@ -164,6 +254,14 @@ class PullConfig:
         # symbol 允许多行 (按 [symbol, time_field] 去重), 用于集合竞价等日内多盘
         # 数据; None = 每日快照表 (按 symbol 去重, 默认)
         self.time_field = (time_field or "").strip() or None
+        # 增量续传参数名 (如 "since"): 配置后每次拉取自动带上本地目标日分区
+        # time_field 列的最大值, 源只返回该值之后的数据 —— 盘中多盘表免全量重拉
+        # (缺口感知: 本地缺多少源补多少; 无本地数据时不带参数=全量, 见 ext_pull)。
+        # 依赖 time_field (游标值取自该列), 未配置 time_field 时归一 None (失效);
+        # PLATE_TS_FIELD 是本地注入的拉取时刻, 源无法按它过滤, 同样失效。
+        self.since_param = (
+            (since_param or "").strip() or None
+        ) if self.time_field and self.time_field != PLATE_TS_FIELD else None
         # 拉取接口鉴权方式 {"type": "none|bearer|header|query", "header": ..., "param": ...},
         # 与自定义行情源 AuthConfig 同口径; Key 本体存 secrets_store, 不落 config.json
         self.auth = auth
@@ -216,6 +314,10 @@ class PullConfig:
         # 仅交易日: 跳过周六日。法定节假日无法离线判定, 仍会按期尝试 —
         # 拉取幂等且失败仅记 last_status, 不影响后续调度
         self.schedule_trading_only = bool(schedule_trading_only)
+        # 序列粒度声明: auto=按数据形态自动判断 (api 层 _granularity_effective) |
+        # intraday=日内多盘 (当日逐盘序列) | daily=日级别 (近 N 日每日一值)。
+        # 决定 series 端点口径与列表迷你图形态; 手改非法值归一 auto (fail-closed)。
+        self.granularity = granularity if granularity in ("auto", "intraday", "daily") else "auto"
 
     def to_dict(self) -> dict:
         return {
@@ -226,6 +328,7 @@ class PullConfig:
             "response_path": self.response_path,
             "field_map": self.field_map,
             "schedule_minutes": self.schedule_minutes,
+            "schedule_seconds": self.schedule_seconds,
             "enabled": self.enabled,
             "last_run": self.last_run,
             "last_status": self.last_status,
@@ -237,6 +340,8 @@ class PullConfig:
             "date_param": self.date_param,
             "date_format": self.date_format,
             "time_field": self.time_field,
+            "since_param": self.since_param,
+            "granularity": self.granularity,
             "auth": self.auth,
             "timeout_seconds": self.timeout_seconds,
             "page_param": self.page_param,
@@ -263,6 +368,7 @@ class PullConfig:
             response_path=d.get("response_path", ""),
             field_map=d.get("field_map"),
             schedule_minutes=d.get("schedule_minutes", 1440),
+            schedule_seconds=d.get("schedule_seconds"),
             enabled=d.get("enabled", False),
             last_run=d.get("last_run"),
             last_status=d.get("last_status"),
@@ -274,6 +380,8 @@ class PullConfig:
             date_param=d.get("date_param"),
             date_format=d.get("date_format", "iso"),
             time_field=d.get("time_field"),
+            since_param=d.get("since_param"),
+            granularity=d.get("granularity", "auto"),
             auth=d.get("auth"),
             timeout_seconds=d.get("timeout_seconds", 30),
             page_param=d.get("page_param"),
@@ -455,6 +563,24 @@ class ExtConfigStore:
             return ExtConfig.from_dict(raw)
         except Exception:
             return None
+
+    def create(self, config: ExtConfig) -> None:
+        """Reserve a new table directory before publication; never replace data."""
+        directory = self._config_path(config.id).parent
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(exist_ok=False)
+        try:
+            self.upsert(config)
+        except BaseException:
+            # Clean up our unpublished temporary file so a failed import can be
+            # retried, while retaining any committed configuration or data.
+            path = self._config_path(config.id)
+            if not path.exists():
+                with suppress(OSError):
+                    path.with_suffix(path.suffix + ".tmp").unlink(missing_ok=True)
+                with suppress(OSError):
+                    directory.rmdir()
+            raise
 
     def upsert(self, config: ExtConfig, *, keep_strategy_cache: bool = False) -> None:
         config.updated_at = datetime.now().isoformat()
@@ -733,9 +859,13 @@ def cast_df_to_schema(df: pl.DataFrame, fields: list[ExtField]) -> pl.DataFrame:
     """
     schema = df.schema
     for f in fields:
-        if f.name not in df.columns:
-            continue
         target = _POLARS_DTYPE_MAP.get(f.dtype, pl.Utf8)
+        if f.name not in df.columns:
+            # Optional observations may not exist yet (for example the first
+            # auction snapshot). Keep their declared type without inventing a value.
+            df = df.with_columns(pl.lit(None, dtype=target).alias(f.name))
+            schema[f.name] = target
+            continue
         src = schema[f.name]
         if isinstance(src, pl.List) and target == pl.Utf8:
             df = df.with_columns(
@@ -768,6 +898,9 @@ def write_ext_parquet(
     Returns:
         写入行数。
     """
+    if df.is_empty():
+        return 0
+
     # 缺省分区日期按北京日期, 与定时拉取 (ext_pull.fetch_and_ingest) 同口径
     snap = snapshot_date or cn_today()
     cfg_dir = _config_dir(config.id, data_dir)
@@ -781,47 +914,54 @@ def write_ext_parquet(
         # 快照: 与 config.json 同级，直接覆盖
         cfg_dir.mkdir(parents=True, exist_ok=True)
         out_path = cfg_dir / "part.parquet"
-
-        # 如果已有文件，合并去重后覆盖
-        if out_path.exists():
-            try:
-                existing = pl.read_parquet(out_path)
-                key = "symbol" if "symbol" in df.columns else df.columns[0]
-                df = pl.concat([existing, df]).unique(subset=[key], keep="last")
-            except Exception as e:
-                # schema 不一致 (列不同) 时 concat 失败 → 直接用新 df 覆盖。
-                # 记日志而非静默吞掉, 便于排查"数据结构错乱"类问题。
-                logger.warning("扩展表 %s 合并去重失败, 将覆盖写入: %s", config.id, e)
     else:
         # 时序: timeseries/ 下按日期分区
         out_dir = cfg_dir / "timeseries" / f"date={snap}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "part.parquet"
 
-        # 如果已有文件，合并去重
-        if out_path.exists():
-            try:
-                existing = pl.read_parquet(out_path)
-                key: str | list[str] = "symbol" if "symbol" in df.columns else df.columns[0]
-                # 日内序列表 (配置 time_field): 同 symbol 同时刻去重, 不同盘并存
-                tf = config.pull.time_field if config.pull else None
-                if tf and tf in df.columns:
-                    key = [key, tf]
-                df = pl.concat([existing, df]).unique(
-                    subset=[key] if isinstance(key, str) else key, keep="last"
-                )
-            except Exception as e:
-                logger.warning("扩展表 %s 合并去重失败, 将覆盖写入: %s", config.id, e)
+        # time_field 配置为保留名: 注入拉取时刻, 盘中每次拉取各存一盘
+        # (同批一次注入 → 批内仍按 symbol 收敛; 不同批次不同盘)。
+        tf = config.pull.time_field if config.pull else None
+        if tf == PLATE_TS_FIELD and PLATE_TS_FIELD not in df.columns:
+            df = df.with_columns(pl.lit(_pull_ts_value()).alias(PLATE_TS_FIELD))
 
+    tf = config.pull.time_field if config.pull and config.mode != "snapshot" else None
+    if tf and (tf not in df.columns or df[tf].null_count()):
+        raise ValueError(f"扩展数据时间字段 '{tf}' 缺失或为空, 原数据保持不变")
+
+    # Normalize configured types before merging: an initially empty float column
+    # and a later integer/float observation still belong to the same field.
     df = cast_df_to_schema(df, config.fields)
+    key = ["symbol" if "symbol" in df.columns else df.columns[0]]
+    if tf and tf in df.columns and tf not in key:
+        key.append(tf)
+
+    if out_path.exists():
+        existing = cast_df_to_schema(pl.read_parquet(out_path), config.fields)
+        old_schema, new_schema = existing.schema, df.schema
+        for name in old_schema.keys() & new_schema.keys():
+            old_type, new_type = old_schema[name], new_schema[name]
+            if (
+                old_type != new_type and old_type != pl.Null and new_type != pl.Null
+                and not (old_type.is_numeric() and new_type.is_numeric())
+            ):
+                raise ValueError(
+                    f"扩展字段 '{name}' 类型不兼容 ({old_type} / {new_type}), 原数据保持不变"
+                )
+        # Union optional columns by name; incompatible schemas must fail before
+        # atomic replacement, never fall back to discarding the existing rows.
+        df = pl.concat([existing, df], how="diagonal_relaxed")
+
+    df = df.unique(subset=key, keep="last", maintain_order=True)
     if config.mode != "snapshot":
         # 日内序列表: 分区内按 [symbol, 时间列] 升序落盘。读侧 (screener._load_ext_value_maps、
         # ext_factors 因子帧、板块资金流) 按 symbol unique(keep="last") 收敛到一行, 只认行序;
-        # 上面的合并去重不保序, 上游返回顺序也不保证时间序, 不排序时取到的是随机一盘
+        # 上游及不同批次不保证时间序, 不排序时可能把更早的盘次当作末盘
         tf = config.pull.time_field if config.pull else None
         if tf and tf in df.columns:
             df = df.sort(["symbol", tf] if "symbol" in df.columns else [tf], maintain_order=True)
-    # 原子写: 中断时半截文件会让下一次写入走「合并去重失败, 将覆盖写入」, 静默丢掉已有行
+    # 中断时保留旧分区, 避免读侧看到半截文件。
     atomic_write_parquet(df, out_path)
     logger.info("扩展表写入: %s → %s (%d 行)", config.id, out_path, len(df))
     # 扩展列已接入 enriched 帧/因子注册表: 写入后必须失效相关缓存
@@ -925,7 +1065,9 @@ def rows_to_parquet(
     Returns:
         写入行数。
     """
-    df = pl.DataFrame(rows)
+    # Sparse fields can first appear in later snapshots, beyond Polars' default
+    # 100-row inference window. Infer across this response so those keys survive.
+    df = pl.DataFrame(rows, infer_schema_length=None)
     df = apply_config_mapping(df, config, data_dir)
     if "symbol" in df.columns:
         df = df.with_columns(pl.col("symbol").cast(pl.Utf8))

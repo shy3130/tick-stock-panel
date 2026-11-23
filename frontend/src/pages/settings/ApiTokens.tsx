@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, KeyRound, Plus } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type ApiTokenRecord } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
+import { Modal } from '@/components/Modal'
 
 /** 对外开放 scope 清单 (与后端 api_tokens.SCOPES 同步) */
 const SCOPES: { key: string; label: string; desc: string; default: boolean }[] = [
@@ -24,6 +25,7 @@ export function SettingsApiTokensPanel() {
   const [plaintext, setPlaintext] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
+  const [revokeTarget, setRevokeTarget] = useState<ApiTokenRecord | null>(null)
 
   const createM = useMutation({
     mutationFn: () => api.apiTokenCreate(name, scopes),
@@ -40,8 +42,17 @@ export function SettingsApiTokensPanel() {
 
   const revokeM = useMutation({
     mutationFn: (id: string) => api.apiTokenRevoke(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.apiTokens }),
+    onSuccess: () => {
+      setRevokeTarget(null)
+      return qc.invalidateQueries({ queryKey: QK.apiTokens })
+    },
   })
+
+  const closeRevoke = () => {
+    if (revokeM.isPending) return
+    setRevokeTarget(null)
+    revokeM.reset()
+  }
 
   const tokens = (tokensQ.data?.tokens ?? []).filter(t => !t.revoked)
 
@@ -153,7 +164,7 @@ export function SettingsApiTokensPanel() {
                     </div>
                   </div>
                   <button
-                    onClick={() => revokeM.mutate(t.id)}
+                    onClick={() => { revokeM.reset(); setRevokeTarget(t) }}
                     disabled={revokeM.isPending}
                     className={cn('shrink-0 rounded-btn border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-danger/40 hover:text-danger')}
                   >
@@ -165,6 +176,41 @@ export function SettingsApiTokensPanel() {
           )}
         </div>
       </div>
+
+      {revokeTarget && (
+        <Modal
+          onClose={closeRevoke}
+          labelledBy="api-token-revoke-title"
+          closeOnBackdrop={!revokeM.isPending}
+          panelClassName="w-[92vw] max-w-sm rounded-card border border-border bg-surface p-5 shadow-xl"
+        >
+          <h3 id="api-token-revoke-title" className="text-sm font-medium text-foreground">吊销 API Token</h3>
+          <p className="mt-3 break-words text-sm text-foreground">确定要吊销「{revokeTarget.name}」吗？</p>
+          <p className="mt-1 break-all font-mono text-xs text-muted">{revokeTarget.id}</p>
+          <p className="mt-3 text-xs leading-relaxed text-secondary">
+            吊销后立即失效，使用它的外部程序将无法继续访问接口。此操作无法撤销。
+          </p>
+          {revokeM.isError && (
+            <p role="alert" className="mt-3 text-xs text-danger">吊销失败：{revokeM.error.message}</p>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={closeRevoke}
+              disabled={revokeM.isPending}
+              className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => { if (!revokeM.isPending) revokeM.mutate(revokeTarget.id) }}
+              disabled={revokeM.isPending}
+              className="rounded-btn bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+            >
+              {revokeM.isPending ? '吊销中…' : '确认吊销'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

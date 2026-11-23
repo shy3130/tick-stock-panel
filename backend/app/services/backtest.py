@@ -1,7 +1,4 @@
-"""回测服务(§6.7)。
-
-包 vectorbt — 全项目唯一一处出现 pandas。
-"""
+"""旧信号回测 API 的行情和结果适配。成交由 Tivelo 回测引擎执行。"""
 from __future__ import annotations
 
 import logging
@@ -12,8 +9,14 @@ from datetime import date, timedelta
 from typing import Literal
 
 import numpy as np
-import pandas as pd
 import polars as pl
+from tivelo_backtest.legacy.simulator import (
+    LegacySimulator,
+    MatcherConfig,
+    SimulationOptions,
+    TradeRecord,
+)
+from tivelo_backtest.research.matrix import build_market_matrix
 
 from app.config import settings
 from app.parquet import scan_enriched_parquet
@@ -24,55 +27,7 @@ logger = logging.getLogger(__name__)
 # 旧信号回测的指标 warmup 日历窗口 (#201): 与 backtest.factor.FACTOR_WARMUP_DAYS
 # 同源 (120 交易日 → 保守取日历日), 覆盖 MA60/MACD/BOLL 等最长回看
 _WARMUP_CALENDAR_DAYS = 120 * 1.6
-
-# vectorbt 是 optional extras(见 pyproject.toml).未装时只有 backtest 不可用,其他功能正常.
-_vbt = None
-_vbt_unavailable_reason: str | None = None
-
-
-class VectorbtUnavailable(RuntimeError):
-    """vectorbt 未安装 — 提示用户 `uv sync --extra backtest`."""
-
-
-def _get_vbt():
-    global _vbt, _vbt_unavailable_reason
-    if _vbt is not None:
-        return _vbt
-    if _vbt_unavailable_reason is not None:
-        raise VectorbtUnavailable(_vbt_unavailable_reason)
-    try:
-        import vectorbt as vbt
-        _vbt = vbt
-        return _vbt
-    except ImportError as e:
-        _vbt_unavailable_reason = (
-            "vectorbt 未安装 — 它是回测的可选依赖.macOS Intel 用户先 `brew install cmake` "
-            "然后 `uv sync --extra backtest`"
-        )
-        logger.warning("vectorbt unavailable: %s", e)
-        raise VectorbtUnavailable(_vbt_unavailable_reason) from e
-
-
-def is_available() -> bool:
-    """供 API 层快速检测."""
-    try:
-        _get_vbt()
-        return True
-    except VectorbtUnavailable:
-        return False
-
-
-SignalKind = Literal[
-    "macd_golden", "macd_dead",
-    "ma_golden_5_20", "ma_dead_5_20",
-    "ma_golden_20_60",
-    "ma20_breakout", "ma20_breakdown",
-    "n_day_high", "n_day_low",
-    "boll_breakout_upper", "boll_breakdown_lower",
-    "volume_surge",
-    "rsi_oversold", "rsi_overbought",
-    "stop_loss", "trailing_stop", "max_hold",
-]
+_EQUITY_BASE = 100.0
 
 
 @dataclass
@@ -107,7 +62,7 @@ class BacktestResult:
 
 
 # enriched 表里的信号列名映射
-_SIGNAL_COLS: dict[SignalKind, str] = {
+_SIGNAL_COLS = {
     "macd_golden": "signal_macd_golden",
     "macd_dead": "signal_macd_dead",
     "ma_golden_5_20": "signal_ma_golden_5_20",
@@ -123,31 +78,6 @@ _SIGNAL_COLS: dict[SignalKind, str] = {
 }
 
 
-def _build_max_hold_exits(entries: pd.DataFrame, max_hold_days: int) -> pd.DataFrame:
-    """为每个入场信号在 max_hold_days 个交易日后生成一个强制退出信号。
-
-    返回与 entries 同形状的布尔矩阵, 仅在「入场位之后第 max_hold_days 个交易日」置
-    True(不含入场位本身), 供调用方与用户 exits 做 OR。
-
-    两处易错点(见 #198):
-    - 必须从全 False 起步。若用 `entries.copy()` 起步会把入场位当成退出位,
-      导致入场当日即被强制平仓。
-    - 用单步定位写入 `iloc[row, col_loc]`。链式 `iloc[row][col] = True` 写入的是
-      临时行副本, 在 pandas Copy-on-Write 语义下不会落到原矩阵(pandas 3.x 直接报错),
-      强制退出信号会静默丢失。
-    """
-    out = pd.DataFrame(False, index=entries.index, columns=entries.columns)
-    n = len(entries)
-    for col in entries.columns:
-        col_loc = out.columns.get_loc(col)
-        entry_rows = np.where(entries[col].to_numpy())[0]
-        for i in entry_rows:
-            end_i = min(int(i) + max_hold_days, n - 1)
-            if end_i > i:
-                out.iloc[end_i, col_loc] = True
-    return out
-
-
 class BacktestService:
     def __init__(self, repo: KlineRepository) -> None:
         self.repo = repo
@@ -158,12 +88,8 @@ class BacktestService:
         start: date,
         end: date,
         asset_type: str = "stock",
-    ) -> pd.DataFrame:
-        """加载 [date × symbol] 价格面板 — Polars scan_parquet + 即时计算指标。
-
-        **全项目唯一从 Polars 转 pandas 的边界**(§7.4 / ADR-19)。
-        asset_type='etf' 时读 ETF enriched。
-        """
+    ) -> pl.DataFrame:
+        """读取指定资产的日 K，预热指标后裁回请求区间。"""
         try:
             from app.tickflow.repository import enriched_dirname
             enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
@@ -185,61 +111,47 @@ class BacktestService:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("backtest load failed: %s", e)
-            return pd.DataFrame()
+            return pl.DataFrame()
 
         if df.is_empty():
-            return pd.DataFrame()
+            return df
 
         # 即时计算指标 + 信号
-        from app.indicators.pipeline import compute_all
+        from app.indicators.pipeline import compute_all, compute_limit_signals
+
         df = compute_all(df)
+        if asset_type in {"stock", "etf"}:
+            if "raw_close" not in df.columns:
+                df = df.with_columns(pl.col("close").alias("raw_close"))
+            instruments = self.repo.get_instruments_asset(asset_type)
+            if instruments.is_empty():
+                instruments = df.select("symbol").unique()
+            df = compute_limit_signals(
+                df, instruments, needed={"limit_up_price", "limit_down_price"},
+            ).with_columns(
+                (pl.col("raw_close") >= pl.col("limit_up_price")).alias("signal_limit_up"),
+                (pl.col("raw_close") <= pl.col("limit_down_price")).alias("signal_limit_down"),
+            )
         df = df.filter(pl.col("date") >= start)
 
-        # 选择需要的列
-        needed_cols = [
+        needed_cols = (
             "date", "symbol", "open", "high", "low", "close", "volume",
-            "rsi_14", "signal_macd_golden", "signal_macd_dead",
-            "signal_ma_golden_5_20", "signal_ma_dead_5_20",
-            "signal_ma_golden_20_60",
-            "signal_ma20_breakout", "signal_ma20_breakdown",
-            "signal_n_day_high", "signal_n_day_low",
-            "signal_boll_breakout_upper", "signal_boll_breakdown_lower",
-            "signal_volume_surge",
-        ]
-        existing = [c for c in needed_cols if c in df.columns]
-        df = df.select(existing)
+            "signal_limit_up", "signal_limit_down", "rsi_14", *_SIGNAL_COLS.values(),
+        )
+        return df.select(c for c in needed_cols if c in df.columns).sort("symbol", "date")
 
-        # to_pandas 边界
-        return df.to_pandas(use_pyarrow_extension_array=False)
-
-    def _build_signal_matrix(
-        self,
-        panel: pd.DataFrame,
-        kinds: list[str],
-        config: BacktestConfig,
-    ) -> pd.DataFrame:
-        """从面板构造 [date × symbol] 的布尔信号矩阵。"""
-        if not kinds or panel.empty:
-            return pd.DataFrame()
-
-        # pivot 成 [date × symbol] 形式
-        result = None
+    @staticmethod
+    def _signal_expr(panel: pl.DataFrame, kinds: list[str], config: BacktestConfig) -> pl.Expr:
+        conditions = [pl.lit(False)]
         for kind in kinds:
-            mat = None
-            if kind in _SIGNAL_COLS:
-                col = _SIGNAL_COLS[kind]
-                mat = panel.pivot(index="date", columns="symbol", values=col).fillna(False).astype(bool)
-            elif kind == "rsi_oversold":
-                mat = (panel.pivot(index="date", columns="symbol", values="rsi_14")
-                       < config.rsi_oversold_threshold)
-            elif kind == "rsi_overbought":
-                mat = (panel.pivot(index="date", columns="symbol", values="rsi_14")
-                       > config.rsi_overbought_threshold)
-            # stop_loss / trailing / max_hold 通过 vectorbt 参数处理,不参与信号矩阵
-
-            if mat is not None:
-                result = mat if result is None else (result | mat)
-        return result if result is not None else pd.DataFrame()
+            column = _SIGNAL_COLS.get(kind)
+            if column is not None and column in panel.columns:
+                conditions.append(pl.col(column))
+            elif kind == "rsi_oversold" and "rsi_14" in panel.columns:
+                conditions.append(pl.col("rsi_14") < config.rsi_oversold_threshold)
+            elif kind == "rsi_overbought" and "rsi_14" in panel.columns:
+                conditions.append(pl.col("rsi_14") > config.rsi_overbought_threshold)
+        return pl.any_horizontal(conditions).fill_null(False)
 
     def run(self, config: BacktestConfig) -> BacktestResult:
         from app.services.heavy_job_limiter import shared_heavy_job_limiter
@@ -248,147 +160,85 @@ class BacktestService:
             return self._run(config)
 
     def _run(self, config: BacktestConfig) -> BacktestResult:
-        vbt = _get_vbt()
-        run_id = uuid.uuid4().hex[:10]
+        result = BacktestResult(uuid.uuid4().hex[:10], _config_to_dict(config), {}, [], [], [])
 
         panel = self._load_panel(config.symbols, config.start, config.end, config.asset_type)
-        if panel.empty:
-            return BacktestResult(
-                run_id=run_id,
-                config=_config_to_dict(config),
-                stats={"error": "no data"},
-                equity_curve=[],
-                trades=[],
-                per_symbol_stats=[],
-            )
+        if panel.is_empty():
+            result.stats = {"error": "no data"}
+            return result
 
-        # 价格面板
-        close = panel.pivot(index="date", columns="symbol", values="close")
+        panel = panel.with_columns(
+            self._signal_expr(panel, config.entries, config).alias("_entry"),
+            self._signal_expr(panel, config.exits, config).alias("_exit"),
+        )
+        if not panel["_entry"].any():
+            result.stats = {"error": "no buy signals"}
+            return result
 
-        # 信号矩阵
-        entries = self._build_signal_matrix(panel, config.entries, config)
-        exits = self._build_signal_matrix(panel, config.exits, config)
-
-        # 对齐 index/columns
-        if not entries.empty:
-            entries = entries.reindex_like(close).fillna(False).astype(bool)
-        else:
-            entries = pd.DataFrame(False, index=close.index, columns=close.columns)
-        if not exits.empty:
-            exits = exits.reindex_like(close).fillna(False).astype(bool)
-        else:
-            exits = pd.DataFrame(False, index=close.index, columns=close.columns)
-
-        if not entries.any().any():
-            return BacktestResult(
-                run_id=run_id,
-                config=_config_to_dict(config),
-                stats={"error": "no buy signals"},
-                equity_curve=[],
-                trades=[],
-                per_symbol_stats=[],
-            )
-
-        # T+1 适配:vectorbt 默认信号当根 K 撮合
-        # close_t 撮合:维持默认
-        # open_t+1 撮合:shift 信号 1 根 + 用 open 作为价
-        if config.matching == "open_t+1":
-            entries = entries.shift(1).fillna(False).astype(bool)
-            exits = exits.shift(1).fillna(False).astype(bool)
-            price = panel.pivot(index="date", columns="symbol", values="open")
-        else:
-            price = close
-
-        # 跑回测
-        try:
-            pf_kwargs = dict(
-                close=close,
-                entries=entries,
-                exits=exits,
-                price=price,
-                fees=config.fees_pct,
-                slippage=config.slippage_bps / 10000.0,
-                freq="1D",
-            )
-            if config.stop_loss_pct is not None:
-                pf_kwargs["sl_stop"] = abs(config.stop_loss_pct)
-            if config.max_hold_days is not None:
-                # vectorbt 没有内置 max-hold;用时间退出近似:入场后第 max_hold_days
-                # 个交易日强制 exit, 与用户 exits 做 OR(保留原有信号退出)。
-                forced_exits = _build_max_hold_exits(entries, config.max_hold_days)
-                pf_kwargs["exits"] = (exits | forced_exits).astype(bool)
-
-            pf = vbt.Portfolio.from_signals(**pf_kwargs)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("vectorbt backtest failed")
-            return BacktestResult(
-                run_id=run_id,
-                config=_config_to_dict(config),
-                stats={"error": str(e)},
-                equity_curve=[],
-                trades=[],
-                per_symbol_stats=[],
-            )
-
-        # 提取结果
-        try:
-            stats_series = pf.stats(silence_warnings=True)
-            if isinstance(stats_series, pd.DataFrame):
-                # 多列时取 agg
-                stats_dict = stats_series.mean(numeric_only=True).to_dict()
-            else:
-                stats_dict = stats_series.to_dict()
-        except Exception:  # noqa: BLE001
-            stats_dict = {}
-
-        # 净值曲线(组合平均)
-        equity = pf.value().mean(axis=1) if isinstance(pf.value(), pd.DataFrame) else pf.value()
-        equity_curve = [
-            {"date": str(idx.date() if hasattr(idx, "date") else idx), "value": float(v)}
-            for idx, v in equity.items() if pd.notna(v)
-        ]
-
-        # 交易记录
-        try:
-            trades_df = pf.trades.records_readable
-            trades = trades_df.to_dict(orient="records") if not trades_df.empty else []
-            # 字段名美化
-            trades = [
-                {
-                    "symbol": t.get("Column", t.get("Symbol", "")),
-                    "entry_date": str(t.get("Entry Timestamp", t.get("Entry Date", ""))),
-                    "exit_date": str(t.get("Exit Timestamp", t.get("Exit Date", ""))),
-                    "entry_price": float(t.get("Avg Entry Price", t.get("Avg. Entry Price", 0))),
-                    "exit_price": float(t.get("Avg Exit Price", t.get("Avg. Exit Price", 0))),
-                    "pnl_pct": float(t.get("Return", t.get("PnL %", 0))),
-                    "duration": str(t.get("Duration", "")),
-                }
-                for t in trades
-            ]
-        except Exception:  # noqa: BLE001
-            trades = []
-
-        # 每标的统计
+        # 同根 K 的两侧信号冲突时忽略，保留旧信号接口的处理方式。
+        panel = panel.with_columns(
+            (pl.col("_entry") & ~pl.col("_exit")).alias("_entry"),
+            (pl.col("_exit") & ~pl.col("_entry")).alias("_exit"),
+        )
+        matcher = MatcherConfig(
+            matching=config.matching,
+            fees_pct=config.fees_pct,
+            slippage_bps=config.slippage_bps,
+            stop_loss_pct=config.stop_loss_pct,
+            max_hold_days=config.max_hold_days,
+            max_positions=1,
+            initial_capital=1_000_000.0,
+            asset_type=config.asset_type,
+        )
+        options = SimulationOptions(include_monte_carlo=False, include_per_symbol_stats=False)
+        simulator = LegacySimulator()
+        delay = int(config.matching == "open_t+1")
+        days = panel["date"].unique().sort().cast(pl.String).to_list()
+        day_indices = {day: index for index, day in enumerate(days)}
+        equity_changes = np.zeros(len(days))
+        trades: list[TradeRecord] = []
         per_symbol = []
         try:
-            total_ret = pf.total_return()
-            if isinstance(total_ret, pd.Series):
-                for sym, ret in total_ret.items():
-                    if pd.notna(ret):
-                        per_symbol.append({"symbol": sym, "total_return": float(ret)})
-        except Exception:  # noqa: BLE001
-            pass
+            # 旧信号接口每个标的各自使用同额资金，汇总时取等权净值。
+            for bars in panel.partition_by("symbol"):
+                total_return = 0.0
+                if bars["_entry"].any():
+                    matrix = build_market_matrix(
+                        bars, bars["_entry"], bars["_exit"],
+                        entry_delay_bars=delay, exit_delay_bars=delay,
+                    )
+                    if matrix.entry.any():
+                        sim = simulator.simulate_market_matrix(matrix, matcher, options=options)
+                        trades.extend(sim.trades)
+                        values = np.array([point["value"] for point in sim.equity_curve])
+                        indices = [day_indices[point["date"]] for point in sim.equity_curve]
+                        # 涨跌额落在真实行情日，缺失日自然沿用上一个净值。
+                        equity_changes[indices] += np.diff(values, prepend=matcher.initial_capital)
+                        total_return = float(values[-1] / matcher.initial_capital - 1)
+                per_symbol.append({"symbol": bars["symbol"][0], "total_return": total_return})
+        except Exception as exc:
+            logger.exception("Tivelo signal backtest failed")
+            result.stats = {"error": str(exc)}
+            return result
 
-        result = BacktestResult(
-            run_id=run_id,
-            config=_config_to_dict(config),
-            stats={k: _json_safe(v) for k, v in stats_dict.items()},
-            equity_curve=equity_curve,
-            trades=trades,
-            per_symbol_stats=per_symbol,
-        )
-
-        # 落盘
+        equity = _EQUITY_BASE * (1 + equity_changes.cumsum() / (matcher.initial_capital * len(per_symbol)))
+        result.stats = _signal_stats(days, equity, trades)
+        result.equity_curve = [
+            {"date": day, "value": float(value)} for day, value in zip(days, equity, strict=True)
+        ]
+        result.trades = [
+            {
+                "symbol": trade.symbol,
+                "entry_date": f"{trade.entry_date} 00:00:00",
+                "exit_date": f"{trade.exit_date} 00:00:00",
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "pnl_pct": trade.pnl_pct,
+                "duration": str(trade.duration),
+            }
+            for trade in trades
+        ]
+        result.per_symbol_stats = per_symbol
         self._persist(result)
         return result
 
@@ -409,6 +259,32 @@ class BacktestService:
         return None
 
 
+def _signal_stats(days: list[str], equity: np.ndarray, trades: list[TradeRecord]) -> dict:
+    summary = LegacySimulator._calc_portfolio_stats_from_values(
+        equity.tolist(), [], trades, _EQUITY_BASE, include_monte_carlo=False,
+    )
+    gross_profit = sum(trade.pnl_amount for trade in trades if trade.pnl_amount > 0)
+    gross_loss = -sum(trade.pnl_amount for trade in trades if trade.pnl_amount < 0)
+    stats = {
+        "Start": f"{days[0]}T00:00:00",
+        "End": f"{days[-1]}T00:00:00",
+        "Period": f"P{len(days)}DT0H0M0S",
+        "Start Value": _EQUITY_BASE,
+        "End Value": equity[-1],
+        "Total Return [%]": (equity[-1] / _EQUITY_BASE - 1) * 100,
+        "Max Drawdown [%]": -summary["max_drawdown"] * 100,
+        "Total Trades": summary["n_trades"],
+        "Win Rate [%]": summary["win_rate"] * 100 if trades else None,
+        "Best Trade [%]": summary["best"] * 100 if trades else None,
+        "Worst Trade [%]": summary["worst"] * 100 if trades else None,
+        "Profit Factor": gross_profit / gross_loss if gross_loss else None,
+        "Sharpe Ratio": summary["sharpe"],
+        "Calmar Ratio": summary["calmar"],
+        "Sortino Ratio": summary["sortino"],
+    }
+    return {key: _json_safe(value) for key, value in stats.items()}
+
+
 def _config_to_dict(c: BacktestConfig) -> dict:
     return {
         "symbols": c.symbols,
@@ -425,10 +301,7 @@ def _config_to_dict(c: BacktestConfig) -> dict:
 
 
 def _json_safe(v):
-    # 非有限浮点 (inf / NaN) 必须先于原生标量分支拦下: Starlette 的 JSONResponse 用
-    # json.dumps(allow_nan=False) 渲染, 漏一个就是整个响应 500。pf.stats() 经
-    # pandas Series.to_dict() 出来时 numpy 标量已被装箱成原生 float (全胜时
-    # Profit Factor = inf, 零波动时 Sharpe = NaN), 两条分支都要覆盖。
+    # JSONResponse 不接受非有限浮点，原生 float 和 NumPy 标量都需要拦下。
     if isinstance(v, (float, np.floating)) and not math.isfinite(float(v)):
         return None
     if isinstance(v, (int, float, str, bool)) or v is None:

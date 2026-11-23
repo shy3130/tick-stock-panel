@@ -1,10 +1,19 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import type { PluginDataSourceItem } from '@/lib/api'
 import type { BrandIconProps } from '@/components/BrandIcons'
 
 export const FRONTEND_EXTENSION_API_VERSION = 1 as const
 
 export interface FrontendSlotContextMap {
+  'settings.data-sources.toolbar': {
+    refresh: () => void
+    selectSource: (name: string) => void
+  }
+  'settings.data-sources.detail-actions': {
+    plugin: PluginDataSourceItem
+    refresh: () => void
+  }
   'layout.navigation.extra': {
     collapsed: boolean
     pathname: string
@@ -13,6 +22,11 @@ export interface FrontendSlotContextMap {
   'layout.header.quick': Record<string, never>
   /** 设置→系统「界面」区尾部 — 扩展注册系统级开关行 (样式与核心 ToggleRow 同款) */
   'settings.system.section': Record<string, never>
+  /** 个股详情顶部标签，选中时在主内容区挂载组件 */
+  'stock-preview.tabs': {
+    symbol: string
+    name: string | null
+  }
   /** 个股详情对话框底部扩展区 (日K/分时图表下方) */
   'stock-preview.footer': {
     symbol: string
@@ -32,12 +46,12 @@ export interface FrontendSlotContextMap {
 
 export type FrontendSlotName = keyof FrontendSlotContextMap
 
-export type FrontendSlotRegistration<K extends FrontendSlotName = FrontendSlotName> = {
+export type FrontendSlotRegistration<K extends FrontendSlotName = FrontendSlotName> = K extends FrontendSlotName ? {
   name: K
   id: string
   order?: number
   component: ComponentType<FrontendSlotContextMap[K]>
-}
+} & (K extends 'stock-preview.tabs' ? { label: string } : unknown) : never
 
 export interface FrontendExtensionRoute {
   id: string

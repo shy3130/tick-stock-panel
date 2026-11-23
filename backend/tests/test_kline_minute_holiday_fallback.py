@@ -10,6 +10,7 @@ False = 确定休市才回退, None = 未知维持原判据。这里对齐同一
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -83,12 +84,12 @@ def test_minute_batch_on_weekday_holiday_falls_back_to_last_session(market) -> N
     set_verdict(False)
     request = _batch_request()
 
-    payload = kline_api.get_minute_batch(request, {"symbols": [SYMBOL]})
+    payload = json.loads(kline_api.get_minute_batch(request, {"symbols": [SYMBOL]}).body)
 
     assert set(payload["data"]) == {SYMBOL}
     rows = payload["data"][SYMBOL]
     assert len(rows) == 240
-    assert rows[0]["datetime"].date() == LAST_SESSION
+    assert rows[0]["datetime"][:10] == LAST_SESSION.isoformat()
     assert request.app.state.repo.get_minute_batch.call_args.args[1] == LAST_SESSION
     sync.assert_not_called()  # 不再对休市当天发起补拉
 

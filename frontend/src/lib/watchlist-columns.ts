@@ -166,8 +166,8 @@ function mergeColumns(saved: ColumnConfig[], defaults: ColumnConfig[]): ColumnCo
 }
 
 /** 从列配置中提取 ext 列参数，用于后端 enriched 接口 */
-export function buildExtColumnsParam(columns: ColumnConfig[]): string {
-  return buildExtColumnsParamBase(columns)
+export function buildExtColumnsParam(columns: ColumnConfig[], extTables?: readonly ExtTableSchemaInfo[]): string {
+  return buildExtColumnsParamBase(columns, extTables)
 }
 
 /** 根据 ext schema 数据创建 ext 列配置 */

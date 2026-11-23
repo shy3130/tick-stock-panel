@@ -13,10 +13,45 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
+
+
+class QuoteSubscription(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=64)
+
+
+@router.put("/subscriptions/{client_id}")
+def subscribe_quotes(
+    request: Request,
+    body: QuoteSubscription,
+    client_id: str = Path(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+):
+    """Renew a detail lease. The shared worker performs all upstream fetching."""
+    from app.services.quote_demand import LEASE_SECONDS
+
+    qs = _get_quote_service(request)
+    if qs is None:
+        raise HTTPException(503, "行情服务暂不可用，请稍后重试")
+    try:
+        qs.subscribe_quotes(client_id, body.symbols)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"lease_seconds": LEASE_SECONDS}
+
+
+@router.delete("/subscriptions/{client_id}")
+def unsubscribe_quotes(
+    request: Request,
+    client_id: str = Path(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+):
+    qs = _get_quote_service(request)
+    if qs is not None:
+        qs.unsubscribe_quotes(client_id)
+    return {"status": "ok"}
 
 
 def _get_quote_service(request: Request):
@@ -138,7 +173,7 @@ async def quote_stream(request: Request):
         try:
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
-                await asyncio.to_thread(sub.wait, 5.0)
+                await sub.wait_async(5.0)
                 data = sub.pop()
 
                 # 告警 (分片推送, 避免单条 SSE 过大)
@@ -168,14 +203,23 @@ async def quote_stream(request: Request):
                         "data": json.dumps({
                             "ts": int(time.time() * 1000),
                             "symbol_count": qs._symbol_count,
+                            "revision": qs.stream_versions()["quote"],
                         }),
                     }
 
                 # 策略监控完成后, 结果已写入内存缓存; 独立通知只刷新策略个股列表。
+                if "daily_integrity_updated" in data:
+                    yield {
+                        "event": "daily_integrity_updated",
+                        "data": json.dumps({"data_changed": data["daily_integrity_updated"]}),
+                    }
+                if data.get("data_updated"):
+                    yield {"event": "data_updated", "data": json.dumps({"versions": qs.data_versions()})}
                 if data["strategy_results_updated"]:
                     yield {
                         "event": "strategy_results_updated",
-                        "data": json.dumps({"ts": int(time.time() * 1000)}),
+                        "data": json.dumps({"ts": int(time.time() * 1000),
+                                            "revision": qs.stream_versions()["strategy"]}),
                     }
 
                 # 五档修正完成 — 前端刷新连板梯队封单数据
@@ -190,6 +234,13 @@ async def quote_stream(request: Request):
             qs.unsubscribe(sub)
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/data-versions")
+def data_versions(request: Request):
+    """补齐数据版本的只读出口，供重连/漏事件校准，不创建取数任务。"""
+    qs = _get_quote_service(request)
+    return {"versions": qs.data_versions() if qs else {}}
 
 
 @router.post("/refresh")

@@ -5,16 +5,14 @@
  * ?tab=menus/ext-pages/page-packs 链接重写为 ?tab=pages&section=<旧值>, 历史
  * 链接与 router 内的 /analysis 重定向均不失效。
  */
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/cn'
 import { SettingsMenuSettingsPanel } from './MenuSettings'
 import { SettingsExtPagesPanel } from './ExtPages'
-import { SettingsPagePacksPanel } from './PagePacks'
 
 const SECTIONS = [
   { key: 'menus', label: '菜单与页面' },
   { key: 'ext-pages', label: '扩展页面' },
-  { key: 'page-packs', label: '页面插件' },
 ] as const
 
 type SectionKey = (typeof SECTIONS)[number]['key']
@@ -48,11 +46,11 @@ export function SettingsPageAdminPanel() {
             {s.label}
           </button>
         ))}
+        <Link to="/settings?tab=import" className="ml-auto rounded-lg border border-border px-3 py-1.5 text-sm text-secondary hover:bg-elevated">导入或管理页面插件</Link>
       </div>
 
       {section === 'menus' && <SettingsMenuSettingsPanel />}
       {section === 'ext-pages' && <SettingsExtPagesPanel />}
-      {section === 'page-packs' && <SettingsPagePacksPanel />}
     </div>
   )
 }

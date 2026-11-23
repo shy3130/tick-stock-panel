@@ -20,7 +20,7 @@ from app.backtest.mining import (
     evaluate_candidate_gate,
 )
 from app.enriched_generation import EnrichedGenerationUnavailableError
-from app.factors.registry import factor_columns_view
+from app.factors.registry import missing_factor_ids
 from app.services import preferences
 from app.services.mining_jobs import (
     RUN_STATUSES,
@@ -41,9 +41,6 @@ from app.services.mining_schedule import (
 )
 
 router = APIRouter(prefix="/api/backtest/mining", tags=["backtest"])
-# 校验时动态读取 (含运行期注册的自定义/复合因子)
-def _known_factor_ids() -> frozenset[str]:
-    return frozenset(str(item["id"]) for item in factor_columns_view())
 _MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 _SSE_POLL_SECONDS = 0.5
 _SSE_HEARTBEAT_SECONDS = 15.0
@@ -90,7 +87,7 @@ class MiningStartRequest(BaseModel):
     @field_validator("factor_names")
     @classmethod
     def _known_factors(cls, values: list[str]) -> list[str]:
-        unknown = sorted(set(values) - _known_factor_ids())
+        unknown = missing_factor_ids(values)
         if unknown:
             raise ValueError(f"unknown mining factors: {unknown}")
         return values
@@ -154,6 +151,65 @@ class MiningAutoStartRequest(BaseModel):
         return self
 
 
+def _require_mining_lock(request: Request) -> None:
+    """降级模式 (撞锁启动) 下拒绝一切挖掘启动入口, 指引到挖掘页锁状态卡。"""
+    from app.services.mining_lock_admin import MiningLockAdminError, ensure_mining_lock
+
+    try:
+        available = ensure_mining_lock(request.app.state)
+    except MiningLockAdminError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not available:
+        raise HTTPException(
+            status_code=409,
+            detail="挖掘锁被其他进程占用, 当前后端以降级模式运行 — "
+            "请在挖掘页点击“检查并恢复挖掘”",
+        )
+
+
+@router.get("/lock")
+def get_lock_status(request: Request) -> dict[str, Any]:
+    """挖掘锁诊断: 持有者线索 + 是否允许强制释放 (fail-closed 判定)。"""
+    from app.services.mining_lock_admin import lock_status
+
+    return lock_status(
+        request.app.state.repo.store.data_dir,
+        lock=getattr(request.app.state, "mining_process_lock", None),
+    )
+
+
+@router.post("/lock/recover")
+def recover_lock(request: Request) -> dict[str, Any]:
+    from app.services.mining_lock_admin import MiningLockAdminError, check_and_recover
+
+    try:
+        return check_and_recover(request.app.state)
+    except MiningLockAdminError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class MiningForceReleaseRequest(BaseModel):
+    expected_pid: int | None = Field(default=None, gt=0)
+
+
+@router.post("/lock/force-release")
+def force_release_lock(
+    request: Request, payload: MiningForceReleaseRequest | None = None,
+) -> dict[str, Any]:
+    """终止陈旧锁持有者并由当前后端接管; 不满足陈旧判定时返回拒绝原因。"""
+    from app.services.mining_lock_admin import (
+        MiningLockAdminError,
+        force_release_for_app,
+    )
+
+    try:
+        return force_release_for_app(
+            request.app.state, expected_pid=payload.expected_pid if payload else None,
+        )
+    except MiningLockAdminError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/availability")
 def get_availability(
     request: Request,
@@ -200,6 +256,7 @@ def list_runs(
 
 @router.post("/runs")
 def start_run(payload: MiningStartRequest, request: Request) -> dict[str, Any]:
+    _require_mining_lock(request)
     manager = _manager(request)
     worker_request = payload.model_dump(mode="json", exclude={"force"})
     try:
@@ -263,6 +320,7 @@ def get_run(run_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str, request: Request) -> dict[str, Any]:
+    _require_mining_lock(request)
     manager = _manager(request)
     try:
         return _project_run(manager.store, manager.cancel(run_id))
@@ -279,6 +337,7 @@ def start_auto_run(payload: MiningAutoStartRequest, request: Request) -> dict[st
     筛选结果随请求持久化 (request.auto_screening), 供结果页展示达标因子清单与
     失败原因分布; 无达标因子时返回 started=false 而不是报错。
     """
+    _require_mining_lock(request)
     from app.services.auto_mining import screen_all_factors
 
     manager = _manager(request)

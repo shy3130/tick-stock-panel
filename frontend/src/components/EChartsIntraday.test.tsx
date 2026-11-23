@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { EChartsIntraday } from './EChartsIntraday'
+import { EChartsMultiDayIntraday } from './EChartsMultiDayIntraday'
 
 const chart = vi.hoisted(() => ({
   handlers: {} as Record<string, (event?: any) => void>,
@@ -16,8 +17,39 @@ const rows = [
   { datetime: '2026-09-09 11:20:00', open: 118.25, high: 118.28, low: 118.24, close: 118.25, volume: 55, amount: 650375 },
 ]
 const daily = { date: '2026-09-09', open: 119.77, high: 119.77, low: 118.16, close: 118.25 }
+const etfRows = [
+  { datetime: '2026-11-05 09:30:00', open: 0.751, high: 0.755, low: 0.747, close: 0.752, volume: 100, amount: 7520 },
+  { datetime: '2026-11-05 15:00:00', open: 0.825, high: 0.827, low: 0.824, close: 0.827, volume: 100, amount: 8270 },
+]
 let cleanup = async () => {}
 afterEach(async () => { await cleanup(); vi.unstubAllGlobals() })
+
+it('ETF 单日分时读数、轴及涨跌停兜底保留千分位', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(<EChartsIntraday assetType="etf" data={etfRows} prevClose={0.752} />))
+  expect(host.textContent).toContain('0.827')
+  const axis = lastYAxis()
+  expect(axis.axisLabel.formatter(0.827)).toBe('0.827')
+  expect(axis.axisPointer.label.formatter({ value: 0.827 })).toBe('0.827')
+  expect(axis.max).toBeCloseTo(0.827, 6)
+})
+
+it('ETF 多日分时读数和轴保持三位', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  await act(async () => root.render(<EChartsMultiDayIntraday assetType="etf" sessions={[
+    { date: '2026-11-05', prev_close: 0.752, rows: etfRows },
+  ]} />))
+  expect(host.textContent).toContain('0.827')
+  expect(lastYAxis().axisLabel.formatter(0.827)).toBe('0.827')
+})
 
 it('shows daily OHLC by default, labels hovered minute, restores on exit and date switch', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -71,6 +103,38 @@ function lastYAxis(): any {
   return call?.[0]?.yAxis?.[0]
 }
 
+it('single and multi-day index charts ignore stock VWAP and limit metadata when switching assets', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  cleanup = async () => { await act(async () => root.unmount()) }
+  const indexRows = [{ datetime: '2026-11-06 09:30:00', open: 5059.65, high: 5160.75, low: 5059.65,
+    close: 5128.90, volume: 567329187, amount: 906563120224 }]
+  for (const multi of [false, true]) {
+    const render = async (assetType: 'stock' | 'index') => act(async () => root.render(multi
+      ? <EChartsMultiDayIntraday assetType={assetType} sessions={[{ date: '2026-11-06', prev_close: 5211.79, rows: indexRows }]} />
+      : <EChartsIntraday assetType={assetType} data={indexRows} date="2026-11-06" prevClose={5211.79}
+        priceLimit={{ rate: 0.1, limit_up: 5732.97, limit_down: 4690.61, source: 'rule' }} />))
+    await render('stock')
+    await render('index')
+    expect(host.textContent).not.toContain('15.98')
+    expect(host.textContent).not.toContain('均价')
+    expect(host.textContent).not.toContain('涨跌停')
+    const option = chart.setOption.mock.calls.at(-1)![0]
+    expect(option.series.some((series: any) => series.name?.includes('均价'))).toBe(false)
+    if (multi) {
+      expect(option.yAxis[0].min).toBeGreaterThan(5050)
+      expect(option.yAxis[0].max).toBeLessThan(5170)
+    } else {
+      expect(option.yAxis[0].min).toBeLessThanOrEqual(5059.65)
+      expect(option.yAxis[0].max).toBeGreaterThan(5211.79)
+      expect((option.yAxis[0].min + option.yAxis[0].max) / 2).toBeCloseTo(5211.79)
+    }
+    if (!multi) expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual([5211.79])
+  }
+})
+
 it('no_limit day: adaptive y-axis covers data far beyond the ±10% band', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -91,7 +155,7 @@ it('no_limit day: adaptive y-axis covers data far beyond the ±10% band', async 
   expect(axis.max).toBeGreaterThanOrEqual(57.77)
 })
 
-it('regular stock: adaptive y-axis still clamps to the limit band', async () => {
+it('regular stock: adaptive centers yesterday close and limit mode retains the full limit band', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   const host = document.createElement('div')
@@ -111,6 +175,9 @@ it('regular stock: adaptive y-axis still clamps to the limit band', async () => 
   const axis = lastYAxis()
   expect(axis.min).toBeCloseTo(18, 6)
   expect(axis.max).toBeCloseTo(22, 6)
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === '涨跌停')!.click())
+  expect(lastYAxis().min).toBeCloseTo(18, 6)
+  expect(lastYAxis().max).toBeCloseTo(22, 6)
 })
 
 it('listing day without prevClose anchors y-axis with scale, not zero', async () => {
@@ -123,7 +190,8 @@ it('listing day without prevClose anchors y-axis with scale, not zero', async ()
     <EChartsIntraday data={wideRows('2026-09-17')} date="2026-09-17" />,
   ))
   const axis = lastYAxis()
-  expect(axis.min).toBeUndefined()
-  expect(axis.max).toBeUndefined()
+  expect(axis.min).toBeGreaterThan(0)
+  expect(axis.min).toBeLessThan(15)
+  expect(axis.max).toBeGreaterThan(57.8)
   expect(axis.scale).toBe(true)
 })

@@ -82,7 +82,10 @@ async def upload_page_pack(
 
 @router.get("")
 def list_page_packs(request: Request) -> list[PagePackMeta]:
-    return _store(request).list()
+    from app.extensions.packages import ExtensionPackageStore
+    return _store(request).list() + ExtensionPackageStore(request.app.state.repo.store.data_dir).runtime_pages(
+        getattr(request.app.state, "managed_extension_versions", {}),
+    )
 
 
 # ── 源码导入: .tsx 编译为标准页面插件 (仅源码/桌面部署可发起) ──
@@ -166,6 +169,17 @@ def import_source_from_project(request: Request, body: ImportFromProjectBody) ->
 def get_page_pack_bundle(pack_id: str, request: Request) -> FileResponse:
     """分发产物。no-store + ETag(sha256): 热更新产物后浏览器立即取新, 未变时可用缓存协商。"""
     store = _store(request)
+    if pack_id.startswith("package:"):
+        from app.extensions.packages import ExtensionPackageStore
+        try:
+            bundle = ExtensionPackageStore(request.app.state.repo.store.data_dir).runtime_bundle(
+                pack_id, getattr(request.app.state, "managed_extension_versions", {}),
+            )
+        except (ValueError, OSError, KeyError, TypeError):
+            bundle = None
+        if bundle is None:
+            raise HTTPException(404, "配套后端尚未就绪，页面未启用")
+        return FileResponse(bundle, media_type="text/javascript", headers={"Cache-Control": "no-store"})
     try:
         meta = store.get(pack_id)
     except ValueError as e:

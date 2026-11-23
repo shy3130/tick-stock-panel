@@ -14,18 +14,14 @@
 """
 from __future__ import annotations
 
-import json
-import logging
 import math
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from app.services.fs_utils import atomic_write_text
+from app.definitions import JsonDefinitionStore
 from app.strategy.custom_signals import ALLOWED_FIELDS
 from app.strategy.intraday_signals import uses_intraday_signals
-
-logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
@@ -65,51 +61,25 @@ _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
-def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "monitor_rules"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _path(data_dir: Path, rule_id: str) -> Path:
-    return _dir(data_dir) / f"{rule_id}.json"
+# ── 持久化 (统一契约 Store, 收口见 app/definitions.py) ────
+# _RULE_STORE 在 normalize 定义之后构造 (见下), 此处函数体按调用期解析。
 
 
 def load_all(data_dir: Path) -> list[dict]:
     """读取全部监控规则。损坏的文件被跳过。"""
-    d = _dir(data_dir)
-    out: list[dict] = []
-    for f in sorted(d.glob("*.json")):
-        try:
-            out.append(normalize(json.loads(f.read_text(encoding="utf-8"))))
-        except Exception as e:
-            logger.warning("monitor rule load failed %s: %s", f.name, e)
-    return out
+    return _RULE_STORE.load_all(data_dir)
 
 
 def load_one(data_dir: Path, rule_id: str) -> dict | None:
-    p = _path(data_dir, rule_id)
-    if not p.exists():
-        return None
-    try:
-        return normalize(json.loads(p.read_text(encoding="utf-8")))
-    except Exception as e:
-        logger.warning("monitor rule load failed %s: %s", rule_id, e)
-        return None
+    return _RULE_STORE.load_one(data_dir, rule_id)
 
 
 def save_one(data_dir: Path, rule: dict) -> None:
-    p = _path(data_dir, rule["id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(p, json.dumps(rule, ensure_ascii=False, indent=2))
+    _RULE_STORE.save_one(data_dir, rule)
 
 
 def delete_one(data_dir: Path, rule_id: str) -> bool:
-    p = _path(data_dir, rule_id)
-    if p.exists():
-        p.unlink()
-        return True
-    return False
+    return _RULE_STORE.delete_one(data_dir, rule_id)
 
 
 # ── 校验 ────────────────────────────────────────────────
@@ -407,6 +377,12 @@ def normalize(rule: dict) -> dict:
         ]
     r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     return r
+
+
+# normalize 定义之后才能作为读取归一器引用 (P1b 统一契约 Store)
+_RULE_STORE = JsonDefinitionStore(
+    "user_data/monitor_rules", label="monitor rule", normalize=normalize
+)
 
 
 # 策略监控自动迁移的规则 id 前缀 (固定, 保证幂等)

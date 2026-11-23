@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -8,7 +9,6 @@ import {
   Check,
   CheckCircle2,
   Database,
-  ExternalLink,
   Eye,
   EyeOff,
   FileWarning,
@@ -43,6 +43,7 @@ import { AnchorWrap } from '@/lib/useCardFlash'
 import { CAP_LABELS, TIER_RANK, tierRank, tierStyle, TierTag } from '@/lib/capability-labels'
 import { DEFAULT_ROUTING, buildProviderRouting } from '@/lib/provider-routing'
 import { toast } from '@/components/Toast'
+import { PluginMetadata } from '@/components/data/PluginMetadata'
 import { DataSourceEditor } from './DataSourceEditor'
 import { TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from './Keys'
 
@@ -372,7 +373,7 @@ function CapabilityRoutingSection() {
 
 /** 插件 API Key 配置区块 (嵌入插件详情卡, 不再独立成卡)。
  *  先探后存: 后端用候选 Key 实探一次, 无效不落盘; secrets.json 优先于 .env。 */
-function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
+export function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
   const qc = useQueryClient()
   const [keyInput, setKeyInput] = useState('')
   const [revealing, setRevealing] = useState(false)
@@ -416,35 +417,18 @@ function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <KeyRound className="h-3.5 w-3.5 text-secondary" />
-        <h3 className="text-xs font-medium text-foreground">API Key</h3>
-        <span className="text-[10px] text-muted/50 uppercase tracking-wider">{plugin.api_key_env}</span>
+        <h4 className="text-xs font-medium text-foreground">API Key</h4>
+        <span className="break-all font-mono text-[11px] text-secondary">{plugin.api_key_env}</span>
       </div>
 
-      {/* 申请说明 + 官网链接 (对齐 TickFlow Key 区话术) */}
       <p className="text-xs text-secondary leading-relaxed mb-4">
-        {plugin.homepage ? (
-          <>
-            在{' '}
-            <a
-              href={plugin.homepage}
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent hover:underline inline-flex items-baseline gap-0.5"
-            >
-              {plugin.display_name} 官网
-              <ExternalLink className="h-3 w-3 self-center" />
-            </a>
-            {' '}申请获取。
-          </>
-        ) : (
-          <>向该数据源官方申请 API Key。</>
-        )}
-        Key 仅存本地 (secrets.json 优先, 环境变量 {plugin.api_key_env} 兜底),不会上传任何第三方,请妥善保管。
+        向该数据源官方申请 API Key。
+        Key 保存在本地，验证和取数时发送给该数据源用于认证。环境变量可作为后备配置。
       </p>
 
-      {/* 积分计费警示框 + Key/积分管理入口 (manifest billing/billing_note/key_manage_url 声明) */}
+      {/* 积分计费警示框 (manifest billing/billing_note 声明) */}
       {plugin.billing === 'points' && (
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/35 bg-warning/[0.07] px-3 py-2.5">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
@@ -455,18 +439,6 @@ function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
           </div>
         </div>
       )}
-      {plugin.key_manage_url && (
-        <a
-          href={plugin.key_manage_url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-accent hover:underline mb-4"
-        >
-          管理 Key / 查看积分明细 (通达信商城)
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      )}
-
       {/* 当前状态 */}
       <div className="flex items-center justify-between mb-4">
         <div className="min-w-0">
@@ -511,6 +483,7 @@ function PluginKeyConfig({ plugin }: { plugin: PluginDataSourceItem }) {
       >
         <div className="relative">
           <input
+            aria-label={`${plugin.display_name} API Key`}
             type={revealing ? 'text' : 'password'}
             placeholder={plugin.available ? '粘贴新 Key 替换当前' : `粘贴 ${plugin.display_name} API Key`}
             value={keyInput}
@@ -742,10 +715,10 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
       {/* ===== 下区: 数据源 (源为主视图, 配置/接入) ===== */}
       <AnchorWrap highlight={highlight} anchor="data-sources">
       <section className="rounded-card border border-border bg-surface p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <Database className="h-4 w-4 text-secondary shrink-0" />
-            <h2 className="text-sm font-medium text-foreground">数据源</h2>
+            <h2 className="shrink-0 text-sm font-medium text-foreground">数据源</h2>
             <span
               className="text-[10px] text-muted/40 font-mono truncate hidden lg:inline max-w-[480px]"
               title={
@@ -760,20 +733,24 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
                 : ''}
             </span>
           </div>
-          <button
-            onClick={() => reload.mutate()}
-            disabled={reload.isPending}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn text-xs text-muted hover:text-foreground hover:bg-elevated transition-colors disabled:opacity-50 shrink-0"
-          >
-            <RefreshCw className={`h-3 w-3 ${reload.isPending ? 'animate-spin' : ''}`} />
-            重新加载
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <ExtensionSlot name="settings.data-sources.toolbar" context={{ refresh: invalidateSources, selectSource: setSelected }} compact />
+            <button
+              type="button"
+              onClick={() => reload.mutate()}
+              disabled={reload.isPending}
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn border border-border/70 bg-surface px-3 text-xs font-medium text-secondary transition-colors hover:border-border hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:pointer-events-none disabled:opacity-50"
+            >
+              <RefreshCw aria-hidden="true" className={`h-3.5 w-3.5 ${reload.isPending ? 'animate-spin' : ''}`} />
+              重新加载
+            </button>
+          </div>
         </div>
 
-        {/* 插件化说明 (置顶黄色提示条): 接入自有行情 → 把文档交给 AI */}
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5">
-          <Puzzle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-          <div className="text-[11px] leading-relaxed text-muted">
+        {/* 开发说明是辅助信息, 警告色留给需要处理的异常状态。 */}
+        <div className="mb-4 flex items-start gap-2 rounded-btn bg-elevated/40 px-3 py-2.5">
+          <Puzzle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+          <div className="min-w-0 break-words text-[11px] leading-relaxed text-secondary">
             <span className="text-secondary">数据源已插件化</span>
             ,接入自有行情?把文档发给 AI 即可自动接入:
             <span className="mx-0.5 rounded bg-elevated/70 px-1 py-px font-mono text-[10px] text-secondary">docs/custom-data-source.md</span>
@@ -809,8 +786,8 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
               <div
                 key={item.name}
                 onClick={() => {
-                  // 未就绪插件仅当支持界面配 Key 时可点开(进详情配置); 其余不可选
-                  if (pluginUnavailable && !plugin?.api_key_env) return
+                  // 外部插件始终可打开管理详情；内置插件沿用 Key 配置入口。
+                  if (pluginUnavailable && !plugin?.api_key_env && plugin?.origin !== 'external') return
                   setSelected(item.name)
                   // 只有用户自定义源 (YAML) 才进编辑器; tickflow 和插件不可编辑
                   if (customNames.has(item.name)) {
@@ -818,7 +795,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
                   }
                 }}
                 className={`relative text-left rounded-lg border px-3.5 py-3 transition-all ${
-                  pluginUnavailable && !plugin?.api_key_env
+                  pluginUnavailable && !plugin?.api_key_env && plugin?.origin !== 'external'
                     ? 'border-border/40 bg-elevated/10 opacity-70'
                     : isSelected
                       ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20 cursor-pointer'
@@ -863,7 +840,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
                     {pluginUnavailable ? (
                       // 安装/卸载按钮只对"纯依赖型"插件(runtime≠none 且无 api_key_env)显示;
                       // 带 Key 配置的插件不可用时, 卡片本身可点击进详情配 Key(如 TdxQuant 依赖已内置)。
-                      plugin?.runtime !== 'none' && !plugin?.api_key_env && (
+                      plugin?.origin !== 'external' && plugin?.runtime !== 'none' && !plugin?.api_key_env && (
                         installing ? (
                           <span className="inline-flex items-center gap-1 text-[10px] text-accent">
                             <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 安装中...
@@ -887,7 +864,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
                         >
                           套用
                         </button>
-                        {plugin && plugin?.runtime !== 'none' && !plugin?.api_key_env && (
+                        {plugin && plugin?.origin !== 'external' && plugin?.runtime !== 'none' && !plugin?.api_key_env && (
                           uninstalling ? (
                             <RefreshCw className="h-2.5 w-2.5 animate-spin text-muted" />
                           ) : (
@@ -992,6 +969,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
               isActive={servingDatasets(selected).length > 0}
               matrixCaps={matrixCaps}
               servingSet={servingSetOf(selected)}
+              refresh={invalidateSources}
             />
           ) : null}
         </motion.div>
@@ -1032,7 +1010,8 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
 }
 
 /** 插件详情: 介绍 + 适配能力 + Key 配置合并为单一卡片 */
-function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
+function PluginDetail({ plugin, isActive, matrixCaps, servingSet, refresh }: {
+  refresh: () => void
   plugin: PluginDataSourceItem
   isActive: boolean
   matrixCaps: CapabilityRoute[]
@@ -1057,18 +1036,7 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
               </span>
             )}
           </div>
-          {plugin.description && <p className="text-xs text-secondary leading-relaxed">{plugin.description}</p>}
-          {/* 使用要点 (manifest usage_notes): 各能力的规模/节奏, 供容量与耗时预期 */}
-          {plugin.usage_notes && plugin.usage_notes.length > 0 && (
-            <ul className="mt-2 space-y-1">
-              {plugin.usage_notes.map((note, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted">
-                  <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-muted/50" />
-                  <span className="min-w-0">{note}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <PluginMetadata plugin={plugin} />
           <div className="mt-2">
             <CapabilityChips
               caps={matrixCaps.filter(c => declared.has(c.id))}
@@ -1079,6 +1047,8 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
           </div>
         </div>
       </div>
+
+      <ExtensionSlot name="settings.data-sources.detail-actions" context={{ plugin, refresh }} />
 
       {/* 主体: 操作 + Key 配置 (左) | 能力适配表 (右), 布局对齐 TickFlow 详情 */}
       <div className="mt-5 pt-5 border-t border-border grid grid-cols-1 lg:grid-cols-[1fr_1.15fr] gap-6 items-start">
@@ -1091,7 +1061,7 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
           )}
 
           {/* API Key 配置 (声明了 api_key_env 的插件) */}
-          {plugin.api_key_env && (
+          {plugin.api_key_env && plugin.enabled !== false && (
             <div className={plugin.available ? 'mt-4' : ''}>
               <PluginKeyConfig plugin={plugin} />
             </div>

@@ -183,7 +183,7 @@ it('盘前无分钟K但已有竞价序列: 仍渲染竞价图', () => {
     height: 80,
     auction: { price: [['09:15:00', 9.9], ['09:20:00', 10.05], ['09:25:00', 10.1]] },
   })
-  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价')
+  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价 (暂无分时)')
   expect(polylines(host)).toHaveLength(1)
 })
 
@@ -292,7 +292,7 @@ it('固定轴按墙钟布点: 09:16:00 落在 15% 处而非 3 点中点 (50%)', 
   expect(xs[1]).toBeGreaterThan(2)
 })
 
-it('盘前 AuctionOnly: 价格点吸附桶中心, 前密后疏第二点 x<W×20% (旧序号=50%)', () => {
+it('盘前 AuctionOnly: 竞价占左侧窄栏不铺满, 右侧留「暂无分时」, 价格点吸附桶中心', () => {
   const host = render({
     rows: [],
     prevClose: 10,
@@ -303,16 +303,22 @@ it('盘前 AuctionOnly: 价格点吸附桶中心, 前密后疏第二点 x<W×20%
       match: [['09:15:50', 300]],
     },
   })
-  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价')
+  expect(host.querySelector('svg')?.getAttribute('aria-label')).toBe('集合竞价 (暂无分时)')
+  // 竞价只占窄栏 (standard 30%), 右侧空白区有提示文字
+  const auctionW = Math.round((146 - 4) * 0.3)
+  expect(host.textContent).toContain('暂无分时')
   const line = polylines(host)[0]
   const xs = lineXs(line)
-  // W=146 → B=49: b(09:15:50)=floor(50/600×49)=4 → x=(4.5/49)×146≈13.41≈9.2% (旧序号中点=73)
-  expect(xs[1]).toBeLessThan(146 * 0.2)
-  expect(xs[1]).toBeGreaterThan(5)
+  // 价格点全部落在窄栏内 (不再铺满整幅)
+  for (const x of xs) expect(x).toBeLessThanOrEqual(auctionW + 0.01)
+  // 桶中心映射: B=clamp(round(auctionW/3),8,60)
+  const B = Math.max(8, Math.min(60, Math.round(auctionW / 3)))
+  expect(xs[1]).toBeGreaterThan(0)
+  expect(xs[1]).toBeLessThan(auctionW * 0.5)
   // 末点 09:25:00 → 末桶 clamp, 末点 circle 同映射
   const cx = Number(host.querySelector('circle')?.getAttribute('cx'))
-  expect(cx).toBeCloseTo(((49 - 0.5) / 49) * 146, 6)
-  // 与量柱对称: 同桶价格点 x = 柱 x
+  expect(cx).toBeCloseTo(((B - 0.5) / B) * auctionW, 6)
+  // 与量柱对称: 同桶价格点 x = 柱中心
   const gold = barsByFill(host, [GOLD])
   expect(gold).toHaveLength(1)
   expectNear(rectCenterX(gold[0]), xs[1])

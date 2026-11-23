@@ -1,4 +1,14 @@
 <svg width="240" height="56" viewBox="0 0 240 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="赞助支持 Sponsor">
-  <rect x="0" y="4" width="240" height="48" rx="24" fill="#0c1105" stroke="#2c3a13"/>
-  <text x="22" y="34" font-family="'PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="19" font-weight="700" fill="#f2f5ec">赞助支持 <tspan fill="#CCFF00" font-size="14">· SPONSOR</tspan></text>
+  <style>
+    .background { fill: #fff; stroke: #d1d9e0; }
+    .heading { fill: #1f2328; }
+    .subtitle { fill: #59636e; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0d1117; stroke: #30363d; }
+      .heading { fill: #e6edf3; }
+      .subtitle { fill: #b1bac4; }
+    }
+  </style>
+  <rect class="background" x=".5" y="4.5" width="239" height="47" rx="23.5"/>
+  <text class="heading" x="120" y="34" text-anchor="middle" font-family="'PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="19" font-weight="700">赞助支持 <tspan class="subtitle" font-size="14">· SPONSOR</tspan></text>
 </svg>

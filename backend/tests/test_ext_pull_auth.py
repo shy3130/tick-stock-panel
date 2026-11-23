@@ -275,6 +275,31 @@ def test_configure_pull_omitted_auth_preserves_existing(monkeypatch, tmp_path) -
     assert store.get("demo").pull.auth == {"type": "none", "header": "Authorization", "param": "token"}
 
 
+def test_configure_pull_persists_pagination_fields(monkeypatch, tmp_path) -> None:
+    """PUT /pull 必须保存分页设置 (回归: PullConfigReq 缺 page_* 字段时静默丢弃)。
+
+    前端「拉取设置」会提交 page_param/page_size_param/page_size/page_start/
+    max_pages; 请求模型漏声明这些键时 Pydantic 直接忽略, 保存后回读退化成
+    单次请求且不报错。
+    """
+    monkeypatch.setattr("app.api.ext_data.pull_scheduler.refresh", lambda *a, **k: None)
+    store = _make_config(tmp_path)
+    req = _request(tmp_path)
+
+    configure_pull(req, "demo", PullConfigReq(
+        url="https://x.test/d",
+        page_param="page",
+        page_size_param="size",
+        page_size=100,
+        page_start=0,
+        max_pages=7,
+    ))
+
+    pull = store.get("demo").pull
+    assert (pull.page_param, pull.page_size_param, pull.page_size) == ("page", "size", 100)
+    assert (pull.page_start, pull.max_pages) == (0, 7)
+
+
 def test_delete_config_clears_residual_key(monkeypatch, tmp_path) -> None:
     from app.api.ext_data import delete_config
 

@@ -10,7 +10,7 @@ check: app.plugins.tdxquant.provider:availability
 datasets: [realtime, depth5, daily, adj_factor, minute, full_minute]
 api_key_env: TDXQUANT_API_KEY   # 声明后设置页提供 Key 输入框(先探后存, secrets.json 优先)
 billing: points   # 积分计费标识: 设置页每个能力芯片/适配行标注「积分」, 消耗以商城积分明细为准
-key_manage_url: "https://vip.tdx.com.cn/site/app/pc-mall/main.html#/aiKey"   # Key/积分管理页(通达信商城), 设置页 Key 区提供入口
+register_url: "https://agent.tdx.com.cn/tdx-mcp/register.html?invite_source=tsp&tdxid=R25041209173811517829QSDIYT"
 description: "通达信 TdxAiData 数据服务(原生 TCP 协议, 依赖已内置): 全市场实时快照、五档盘口、日K、除权因子、分钟K、全量分钟六项能力; 按积分计费, 未接入财务, 自动回退 TickFlow。"
 billing_note: "积分消耗与轮询频率、拉取范围直接相关: 间隔越短、范围越大消耗越高。建议实时轮询间隔 ≥60 秒, 全量分钟按需启用; 具体扣减以商城「积分明细」为准。"
 usage_notes:

@@ -1,19 +1,20 @@
 # 前端扩展目录
 
-每个子目录一个 `extension.tsx`，**单文件即完整扩展**（页面组件 + 路由 + 导航注册在同一个文件里），构建时自动发现挂载，无需修改核心路由和导航文件：
+每个子目录一个 `extension.tsx` 注册清单，构建时自动发现挂载，无需修改核心路由和导航文件。清单保持轻量：路由与导航同步注册，页面实现放在同目录的 `Page.tsx`，使用 `React.lazy` 按访问加载：
 
 ```text
 frontend/src/custom/<namespace>/extension.tsx
+frontend/src/custom/<namespace>/Page.tsx
 ```
 
-- **摘除**：删除目录即整体卸载该页面；**导入**：把目录复制进来重新构建即可。
+- 源码扩展随前端构建。迁移时复制清单和其依赖，再重新构建并检查路由、插槽及菜单配置。源码部署支持在「页面管理 → 菜单与页面」删除可管理的源码页面，服务端会先生成备份。
 - 冲突（路由/ID 撞车）由扩展注册表在启动时检测，冲突的扩展整体拒绝（原因输出在浏览器控制台），不影响核心页面。
 
 ## 目录现状
 
-官方扩展页面全部以单文件扩展形式落在本目录（id 前缀 `official.`）：
+官方扩展的实际清单位于本目录，ID 通常以 `official.` 开头。目录内也有按插槽接入的扩展。复制源码前请检查清单引用的依赖与目标宿主提供的契约。
 
-| 目录 | 页面 |
+| 目录 | 页面或入口 |
 | --- | --- |
 | `stock-analysis` | 个股分析 |
 | `limit-ladder` | 连板梯队 |
@@ -27,8 +28,11 @@ frontend/src/custom/<namespace>/extension.tsx
 | `signals` | 信号库 |
 | `review` | 复盘 |
 | `assistant` | AI 对话助手（扩展机制参考实现） |
+| `market-regime` | 市场环境 |
+| `tivelo` | 引擎研究 |
+| `source-packages` | 数据源页的安装与管理入口 |
 
-**新装用户默认隐藏这些页面**，在 设置 → 菜单设置 一键开启；老用户升级自动保持原有菜单位置与排序。
+页面显示和排序在「设置 → 页面管理 → 菜单与页面」配置。已有导航布局随偏好加载。
 
 ## 开发新的源码级扩展
 
@@ -36,4 +40,4 @@ frontend/src/custom/<namespace>/extension.tsx
 
 ## 不想重建宿主？用页面插件
 
-若目标是把页面打包成产物、在运行中的面板上直接上传使用（本地 / Docker / 桌面端一致），走**页面插件**：用 [`frontend/page-pack-template`](../../page-pack-template) 打包单文件 ES 模块，在 设置 → 页面插件 上传，刷新生效。契约与边界见 [`docs/page-sdk.md`](../../../docs/page-sdk.md)。
+若目标是把页面打包成产物、在运行中的面板上直接上传使用（本地 / Docker / 桌面端一致），走**页面插件**：用 [`frontend/page-pack-template`](../../page-pack-template) 打包单文件 ES 模块，在「设置 → 导入与备份」上传，刷新生效。契约与边界见 [`docs/page-sdk.md`](../../../docs/page-sdk.md)。

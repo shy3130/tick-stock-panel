@@ -278,3 +278,59 @@ def test_legacy_single_group_id_migration(monkeypatch, tmp_path):
     assert (tmp_path / "user_data" / "watchlist.parquet.bak").exists()
     df = pl.read_parquet(path)
     assert "group_ids" in df.columns and "group_id" not in df.columns
+
+
+def test_bulk_transfer_updates_membership_once_and_keeps_metadata(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    source, dest, other = [watchlist.create_group(n)[1]["id"] for n in ["关注", "观察", "持仓"]]
+    watchlist.add_batch(["a", "b", "c"], note="保留备注", group_ids=[source, other])
+    watchlist.add_to_group("b", dest)
+    original = watchlist.list_symbols()
+    rev = watchlist.revision()
+
+    rows, changed = watchlist.transfer_members(source, dest, ["a", "b", "a"], "copy")
+    assert changed == 1 and watchlist.revision() == rev + 1
+    assert watchlist.transfer_members(source, dest, ["a", "b"], "copy") == (rows, 0)
+    assert watchlist.revision() == rev + 1
+    rows, changed = watchlist.transfer_members(source, dest, ["a", "b"], "move")
+    assert changed == 2 and watchlist.revision() == rev + 2
+    assert rows == [
+        {**row, "group_ids": [other, dest]} if row["symbol"] in {"a", "b"} else row
+        for row in original
+    ]
+    assert watchlist.list_symbols() == rows
+
+
+def test_transfer_api_checks_whole_selection_and_virtual_groups(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    app = FastAPI()
+    app.include_router(watchlist_api.router)
+    app.state.repo = _request().app.state.repo
+    src, dst = [watchlist.create_group(n)[1]["id"] for n in ["一", "二"]]
+    watchlist.add("a", group_id=src)
+    watchlist.add("b")
+    with TestClient(app) as client:
+        def post(group, target, symbols, action):
+            return client.post(f"/api/watchlist/groups/{group}/transfer", json={
+                "target_group_id": target, "symbols": symbols, "action": action,
+            })
+
+        before = watchlist.list_symbols()
+        revision = watchlist.revision()
+        for args in [
+            (src, dst, ["a", "b"], "move"), (src, dst, ["a", "missing"], "copy"),
+            (src, src, ["a"], "move"), (src, "missing", ["a"], "copy"),
+            ("missing", dst, ["a"], "move"), ("all", dst, ["a"], "move"),
+            ("ungrouped", dst, ["b", "a"], "move"), (src, dst, [], "copy"),
+            (src, dst, ["a"], "invalid"),
+        ]:
+            assert 400 <= post(*args).status_code < 500
+        assert watchlist.list_symbols() == before and watchlist.revision() == revision
+        result = post("ungrouped", dst, ["b"], "move")
+        assert result.status_code == 200 and result.json()["changed"] == 1
+        result = post("all", dst, ["a", "b"], "copy")
+        assert result.status_code == 200 and result.json()["changed"] == 1
+        assert {r["symbol"]: r["group_ids"] for r in result.json()["symbols"]} == {"a": [src, dst], "b": [dst]}

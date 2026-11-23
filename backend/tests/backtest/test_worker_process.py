@@ -103,6 +103,7 @@ def _write_mining_market_data(
     *,
     days: int = 219,
     assets: int = 4,
+    liquidity_scale: float = 1.0,
 ) -> None:
     symbols = [f"60000{asset}.SH" for asset in range(assets)]
     for offset in range(days):
@@ -117,8 +118,8 @@ def _write_mining_market_data(
                 "high": close * 1.01,
                 "low": close * 0.99,
                 "close": close,
-                "volume": 1000.0 + asset_id * 100.0,
-                "amount": close * (100000.0 + asset_id * 1000.0),
+                "volume": (1000.0 + asset_id * 100.0) * liquidity_scale,
+                "amount": close * (100000.0 + asset_id * 1000.0) * liquidity_scale,
                 "raw_close": close,
                 "raw_high": close * 1.01,
                 "raw_low": close * 0.99,
@@ -138,6 +139,232 @@ def _write_mining_market_data(
         "total_shares": [1_000_000_000.0] * assets,
         "float_shares": [1_000_000_000.0] * assets,
     }).write_parquet(instruments_dir / "part.parquet")
+
+
+def test_strategy_stream_reuses_published_daily_snapshot_after_source_updates(tmp_path, monkeypatch):
+    import json
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import backtest, engine_jobs
+    from app.config import settings
+    from app.services import heavy_job_limiter
+    from app.services.engine_jobs.manager import EngineJobManager
+    from app.tickflow.repository import DataStore, KlineRepository
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(heavy_job_limiter, "_memory_admission_ok", lambda: True)
+    monkeypatch.setattr(backtest, "_daily_data_revisions", lambda: {"stock": "before"})
+    _write_worker_strategy(tmp_path)
+    days = [date(2025, 7, day) for day in range(1, 5)]
+    closes = [10.0, 5.2, 5.4, 5.6]
+    raw = pl.DataFrame({
+        "symbol": ["600000.SH"] * len(days),
+        "date": days,
+        **dict.fromkeys(("open", "high", "low", "close"), closes),
+        "volume": [1000.0] * len(days),
+        "amount": [500000.0] * len(days),
+    })
+    repo = KlineRepository(DataStore(tmp_path))
+    try:
+        repo.append_daily(raw)
+        factor_file = tmp_path / "adj_factor" / "all.parquet"
+        factor_file.parent.mkdir(exist_ok=True)
+        factors = pl.DataFrame({
+            "symbol": ["600000.SH"], "trade_date": [days[1]], "ex_factor": [2.0],
+        })
+        factors.write_parquet(factor_file)
+
+        scope = {
+            "market_id": "cn.equity", "asset_class": "equity",
+            "instrument_ids": ["cn-stock-600000.sh"],
+            "start": "2025-07-01T00:00:00+08:00", "end": "2025-07-05T00:00:00+08:00",
+        }
+        source = {
+            "expected_provider": "local_archive",
+            "symbols": [{
+                "symbol": "600000.SH", "instrument_id": "cn-stock-600000.sh", "venue_id": "XSHG",
+            }],
+        }
+        plan = {
+            "idempotency_key": "daily-snapshot-backtest",
+            "nodes": [{"node_id": "prices", "capture": {"datasets": [
+                {
+                    **source, "kind": "tsp_repository_daily", "layout": "daily_raw_v1",
+                    "request": {
+                        **scope, "dataset_id": "daily-raw", "record_type": "bar",
+                        "price_basis": "raw", "timeframe": "1d",
+                    },
+                },
+                {
+                    **source, "kind": "tsp_repository_factors", "layout": "event_factors_v1",
+                    "representation": "cumulative_forward", "baseline_date": days[0].isoformat(),
+                    "request": {**scope, "dataset_id": "factors", "record_type": "adjustment_factor"},
+                },
+            ]}}],
+        }
+        manager = EngineJobManager(tmp_path, autostart=False)
+        app = FastAPI()
+        app.state.engine_job_manager = manager
+        app.include_router(engine_jobs.router)
+        app.include_router(backtest.router)
+        try:
+            with TestClient(app) as api:
+                endpoint = "/api/engine-jobs"
+                preview = api.post(endpoint + "/preview", json=plan)
+                assert preview.status_code == 200, preview.text
+                job = api.post(endpoint, params={"expected_plan_id": preview.json()["plan_id"]}, json=plan)
+                assert job.status_code == 200, job.text
+                job_id = job.json()["job_id"]
+                for _ in range(6):
+                    manager.run_once()
+                state = api.get(f"{endpoint}/{job_id}").json()
+                assert state["status"] == "succeeded", state
+                snapshot = api.get(f"{endpoint}/{job_id}/snapshots/prices").json()
+                assert snapshot["backtest"] == {
+                    "symbols": ["600000.SH"], "start": "2025-07-01", "end": "2025-07-04",
+                }
+                ref = {"job_id": job_id, "node_id": "prices", "snapshot_id": snapshot["snapshot_id"]}
+                stream_params = {
+                    "strategy_id": "worker_always_entry",
+                    "start": "2025-07-01", "end": "2025-07-04",
+                    "snapshot": json.dumps(ref), "force": "1",
+                    "matching": "close_t", "overrides": '{"basic_filter":{"enabled":false}}',
+                    "commission_pct": 0, "stamp_tax_pct": 0, "slippage_bps": 0,
+                }
+
+                def run(**overrides):
+                    response = api.get("/api/backtest/strategy/stream", params={**stream_params, **overrides})
+                    assert response.status_code == 200, response.text
+                    last_event = response.text.strip().split("\n\n")[-1].splitlines()
+                    return last_event[0], json.loads(last_event[1].removeprefix("data: "))
+
+                event, first = run()
+                assert event == "event: done", first
+                assert first["trades"] and first["trades"][0]["entry_price"] == 5.0
+                assert first["config"]["snapshot"] == ref
+                assert first["daily_data_revisions"] == {}
+
+                repo.append_daily(raw.with_columns(pl.col("close", "open", "high", "low") * 2))
+                factors.with_columns(ex_factor=pl.lit(4.0)).write_parquet(factor_file)
+                monkeypatch.setattr(backtest, "_daily_data_revisions", lambda: {"stock": "after"})
+                event, second = run()
+                assert event == "event: done", second
+                assert second["run_id"] != first["run_id"]
+                assert second["trades"] == first["trades"]
+                assert second["equity_curve"] == first["equity_curve"]
+
+                event, error = run(end="2025-07-05")
+                assert event == "event: error" and "日期必须在快照范围内" in error["message"]
+                event, error = run(snapshot=json.dumps({**ref, "snapshot_id": "0" * 64}))
+                assert event == "event: error" and "快照标识已改变" in error["message"]
+        finally:
+            assert manager.shutdown()
+    finally:
+        repo.db.close()
+
+
+def test_extension_entry_filters_use_market_predecessor_and_replay_locked_inputs(tmp_path, monkeypatch):
+    import json
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import backtest
+    from app.config import settings
+    from app.services import heavy_job_limiter
+    from app.services.ext_data import ExtConfig, ExtConfigStore, ExtField, write_ext_parquet
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(heavy_job_limiter, "_memory_admission_ok", lambda: True)
+    start = date(2025, 7, 7)  # Monday.
+    _write_worker_strategy(tmp_path)
+    _write_market_data(tmp_path, start, days=5)
+    markets = ExtConfig(
+        "sentiment", "外部环境", "timeseries",
+        [ExtField("session", "string"), ExtField("score", "float"), ExtField("available_at", "string")],
+        market_level=True,
+    )
+    stocks = ExtConfig(
+        "labels", "历史分类", "timeseries",
+        [ExtField("industry", "string"), ExtField("concept", "string")],
+    )
+    store = ExtConfigStore(tmp_path)
+    for table in (markets, stocks):
+        store.create(table)
+
+    def market(day, score, available_at=None):
+        write_ext_parquet(pl.DataFrame({
+            "session": [day.isoformat()], "score": [score],
+            "available_at": [available_at or f"{day.isoformat()}T16:00:00+08:00"],
+        }), markets, tmp_path, day)
+
+    def stock(day, industry, concept):
+        write_ext_parquet(pl.DataFrame({
+            "symbol": ["600000.SH"], "industry": [industry], "concept": [concept],
+        }), stocks, tmp_path, day)
+
+    friday = date(2025, 7, 4)
+    market(friday, 80.0)
+    for offset, score in enumerate([30.0, 30.0, 80.0, 30.0]):
+        market(start + timedelta(days=offset), score)
+    for offset in range(5):
+        stock(start + timedelta(days=offset), "通信", "卫星导航;北斗" if offset != 3 else "芯片")
+
+    app = FastAPI()
+    app.include_router(backtest.router)
+    stream = {
+        "strategy_id": "worker_always_entry", "symbols": "600000.SH",
+        "start": start.isoformat(), "end": (start + timedelta(days=4)).isoformat(),
+        "entry_fill": "close_t", "exit_fill": "close_t",
+        "overrides": '{"basic_filter":{"enabled":false}}',
+        "entry_filters": json.dumps({
+            "market": [{"table_id": "sentiment", "field": "score", "op": ">=", "value": "65"}],
+            "stocks": [
+                {"table_id": "labels", "field": "industry", "op": "==", "value": "通信"},
+                {"table_id": "labels", "field": "concept", "op": "contains", "value": "卫星导航"},
+            ],
+        }),
+    }
+    with TestClient(app) as client:
+        def run(request_id, **params):
+            response = client.get("/api/backtest/strategy/stream", params={
+                **stream, "request_id": request_id, **params,
+            })
+            assert response.status_code == 200, response.text
+            event, payload = response.text.strip().split("\n\n")[-1].splitlines()
+            return event, json.loads(payload.removeprefix("data: "))
+
+        event, first = run("first")
+        assert event == "event: done", first
+        assert [trade["entry_date"][:10] for trade in first["trades"]] == [start.isoformat()]
+        version = first["config"]["filter_data_version"]
+        assert len(version) == 64
+        assert first["evidence"]["config"]["filter_data_version"] == version
+        assert {source["id"] for source in first["config"]["filter_data_sources"]} == {
+            "ext:sentiment", "ext:labels",
+        }
+
+        market(friday, 20.0)
+        stock(date(2025, 7, 10), "通信", "卫星导航;北斗")
+        event, replay = run("replay", filter_data_version=version, force=1)
+        assert event == "event: done", replay
+        assert replay["config"]["filter_data_version"] == version
+        assert replay["trades"] == first["trades"]
+        assert replay["equity_curve"] == first["equity_curve"]
+
+        event, latest = run("latest")
+        assert event == "event: done", latest
+        assert [trade["entry_date"][:10] for trade in latest["trades"]] == ["2025-07-10"]
+        assert latest["config"]["filter_data_version"] != version
+
+        market(friday, 80.0, "2025-07-07T16:00:00+08:00")
+        event, failure = run("late-data")
+        assert event == "event: error"
+        assert "2025-07-04 在 2025-07-07 入场前可用" in failure["message"]
 
 
 def test_spawn_worker_returns_compact_result_and_memory_metrics(tmp_path):
@@ -161,49 +388,15 @@ def test_spawn_worker_returns_compact_result_and_memory_metrics(tmp_path):
 
     assert result["error"] is None
     assert result["stats"]["execution_backend"] == "matrix_native"
+    from app.backtest.evidence import load_evidence
+
+    assert result["evidence"]["lookahead"]["status"] == "passed"
+    assert load_evidence(data_dir, result["run_id"]) == result["evidence"]
     worker = result["stats"]["worker"]
     assert worker["peak_rss_bytes"] > 0
     assert worker["serialized_result_bytes"] > 0
     assert worker["worker_exitcode"] == 0
     assert worker["parent_rss_after_worker_exit_bytes"] > 0
-
-
-def test_spawn_optimizer_reuses_one_matrix_and_exits(tmp_path):
-    start = date(2024, 1, 1)
-    data_dir = tmp_path / "data"
-    _write_worker_strategy(data_dir)
-    _write_market_data(data_dir, start)
-    config = OptimizeConfig(
-        strategy_id="worker_always_entry",
-        symbols=["600000.SH"],
-        start=start,
-        end=start + timedelta(days=2),
-        param_grid={"gate": [1, 2]},
-        objective="total_return",
-        max_workers=4,
-        overrides={"basic_filter": {"enabled": False}},
-        backtest_kwargs={
-            "matching": "close_t",
-            "fees_pct": 0,
-            "slippage_bps": 0,
-            "max_positions": 1,
-        },
-    )
-
-    result = run_worker_task(make_worker_task("optimize", data_dir, config))
-
-    assert result["n_completed"] == 2
-    assert result["effective_workers"] == 1
-    assert result["shared_market_data"] is True
-    assert result["shared_market_data_bytes"] > 0
-    assert result["best_backtest"]["equity_curve"]
-    assert result["best_backtest"]["trades"]
-    assert "mc_maxdd_p50" in result["best_backtest"]["stats"]
-    assert result["matrix_compute_cache"]["released"] is True
-    assert result["performance"]["trial_peak_rss_bytes"] > 0
-    assert result["performance"]["best_backtest_peak_rss_bytes"] > 0
-    assert result["performance"]["trials_per_second"] > 0
-    assert result["worker"]["worker_exitcode"] == 0
 
 
 def test_spawn_walkforward_reuses_shared_matrix_across_folds(tmp_path):
@@ -221,6 +414,8 @@ def test_spawn_walkforward_reuses_shared_matrix_across_folds(tmp_path):
         train_days=2,
         test_days=1,
         step_days=2,
+        # 1 天 OOS 段只产生 ~1 笔交易: 本测试验证矩阵复用, 显式关闭交易数门槛
+        min_trades_oos=0,
         overrides={"basic_filter": {"enabled": False}},
         backtest_kwargs={
             "matching": "close_t",
@@ -292,6 +487,56 @@ def test_spawn_mining_writes_four_artifacts_and_returns_compact_summary(tmp_path
         if name == "folds":
             assert "n_dates" in frame.columns
             assert frame.filter(pl.col("regime_state") == "overall")["n_dates"].min() > 0
+
+def test_spawn_custom_factor_mining_and_promote_candidate(tmp_path):
+    from app.backtest.candidates import CandidateStore
+    from app.factors.registry import isolated_registry
+    from app.factors.store import load_into_registry, save_one
+    from app.services.mining_candidates import MiningCandidateService
+    from app.services.mining_schedule import mining_factor_snapshot
+    from app.strategy.engine import StrategyEngine
+
+    start = date(2023, 1, 2)
+    data_dir = tmp_path / "data"
+    _write_mining_market_data(data_dir, start, days=439, liquidity_scale=100.0)
+    # 父定义排在子定义前, worker 必须从磁盘按依赖加载。
+    save_one(data_dir, {"id": "uf_a_worker", "kind": "custom", "label": "嵌套因子",
+                        "formula": "uf_z_history + ma20_bias"})
+    save_one(data_dir, {"id": "uf_z_history", "kind": "custom", "label": "长窗口",
+                        "formula": "ts_mean(turnover_rate, 200)"})
+    with isolated_registry():
+        load_into_registry(data_dir)
+        snapshot = mining_factor_snapshot(["uf_a_worker"])
+    store = MiningRunStore(data_dir)
+    manifest = store.create({
+        "factor_names": ["uf_a_worker"], "strategy_ids": [], "symbols": None,
+        "asset_type": "stock", "start": (start + timedelta(days=220)).isoformat(),
+        "end": (start + timedelta(days=438)).isoformat(), "budget_profile": "exploratory",
+        "forward_horizon": 1, "commission_pct": 0.0, "stamp_tax_pct": 0.0,
+        "slippage_bps": 0.0, "max_combination_factors": 1, "beam_width": 2,
+        "max_finalists": 2, "require_regime": False,
+    }, {"generation": get_enriched_generation(data_dir, "stock"), "factors": snapshot}, run_id="custom_mining")
+    store.transition_status(manifest["run_id"], "running")
+    result = run_worker_task(make_worker_task("mining", data_dir, {
+        "run_id": manifest["run_id"], "request": manifest["request"],
+        "data_fingerprint": manifest["data_fingerprint"], "source": "manual",
+    }))
+    assert result["status"] in {"succeeded", "succeeded_with_budget_exhausted"}
+    assert result["worker"]["worker_exitcode"] == 0
+    assert result["selected_factor_count"] == 1
+    assert result["candidate_count"] > 0
+    # 与 manager 的完成回调一致, 将 worker 返回的真实摘要落盘。
+    store.write_summary(manifest["run_id"], result)
+    store.transition_status(manifest["run_id"], result["status"])
+    candidates = pl.read_parquet(store.artifact_path(manifest["run_id"], "candidates"))
+    with isolated_registry():
+        assert set(load_into_registry(data_dir)) == {"uf_a_worker", "uf_z_history"}
+        service = MiningCandidateService(data_dir, store, CandidateStore(data_dir),
+            StrategyEngine(strategy_dirs=[]), strategy_cache_invalidator=lambda _root: None)
+        candidate = service.promote(manifest["run_id"], candidates["signature"][0])
+        assert candidate["config"]["factor_names"] == ["uf_a_worker"]
+        assert candidate["status"] == "pending"
+
 
 def test_spawn_mining_benchmarks_strategy_on_every_outer_fold(tmp_path):
     start = date(2023, 1, 2)
@@ -527,6 +772,7 @@ def test_spawn_walkforward_skips_folds_before_available_matrix_data(tmp_path):
         train_days=2,
         test_days=1,
         step_days=2,
+        min_trades_oos=0,  # 同上: 1 天 OOS 段交易数天然不足, 本测试关注数据缺口跳折
         overrides={"basic_filter": {"enabled": False}},
         backtest_kwargs={
             "matching": "close_t",
@@ -666,3 +912,84 @@ def test_mining_fails_with_guidance_when_generation_keeps_drifting(
             progress_cb=None,
             cancel_check=None,
         )
+
+
+def test_spawn_robust_optimize_runs_k_segments_in_worker(tmp_path):
+    """robust_optimize 任务类型端到端: 编解码 (date→ISO→date) + K 段回测 + 矩阵复用。"""
+    from app.backtest.robust_optimizer import RobustOptimizeConfig
+
+    start = date(2024, 1, 1)
+    data_dir = tmp_path / "data"
+    _write_worker_strategy(data_dir)
+    _write_market_data(data_dir, start, days=32)  # 32 天切 2 段 (每段 ≥14 天)
+    config = RobustOptimizeConfig(
+        strategy_id="worker_always_entry",
+        symbols=["600000.SH"],
+        start=start,
+        end=start + timedelta(days=31),
+        param_grid={"gate": [1, 2]},
+        objective="total_return",
+        k_segments=2,
+        min_trades_total=2,
+        overrides={"basic_filter": {"enabled": False}},
+        backtest_kwargs={
+            "matching": "close_t",
+            "fees_pct": 0,
+            "slippage_bps": 0,
+            "max_positions": 1,
+        },
+    )
+
+    result = run_worker_task(make_worker_task("robust_optimize", data_dir, config))
+
+    assert result["n_combinations"] == 2
+    assert result["n_completed"] == 2
+    assert result["k_segments"] == 2
+    assert len(result["windows"]) == 2
+    assert result["windows"][0]["start"] == "2024-01-01"
+    assert result["windows"][-1]["end"] == "2024-02-01"
+    assert result["best_params"] in ({"gate": 1}, {"gate": 2})
+    # 每组带 2 段明细与稳健分组成
+    top = result["results"][0]
+    assert top["rank"] == 1
+    assert len(top["segments"]) == 2
+    assert top["score"] is not None and top["median"] is not None
+    # 冠军收敛诊断随结果返回
+    assert result["convergence"]["k"] == 2
+    assert result["convergence"]["label"] in ("unanimous", "majority", "scattered")
+    # 阶段二全窗 IS 细化: 合格组 (2) 各跑一次全窗, 带退化字段; 高原判据随结果返回
+    assert result["stage2"]["top_n"] == 20
+    assert result["stage2"]["evaluated"] == 2
+    qualified = [r for r in result["results"] if not r.get("error") and not r.get("disqualified")]
+    assert all("is_full" in r for r in qualified)
+    assert result["plateau"] is not None
+    assert result["plateau"]["label"] in ("plateau", "slope", "peak", "isolated")
+    assert result["worker"]["worker_exitcode"] == 0
+
+
+def test_backtest_repository_defers_duckdb_until_sql(tmp_path, monkeypatch):
+    from app.tickflow.repository import DataStore, KlineRepository
+
+    init_database = DataStore._open_database
+    opens = []
+
+    def record(store):
+        opens.append(store.data_dir)
+        return init_database(store)
+
+    monkeypatch.setattr(DataStore, "_open_database", record)
+    unused = DataStore(tmp_path / "unused", defer_database=True)
+    KlineRepository(unused)
+    unused.close()
+    assert opens == []
+
+    store = DataStore(tmp_path / "query", defer_database=True)
+    try:
+        repo = KlineRepository(store)
+        pl.DataFrame({"symbol": ["600000.SH"]}).write_parquet(store.data_dir / "instruments/part.parquet")
+        assert opens == []
+        assert repo.execute_one("SELECT symbol FROM instruments") == ("600000.SH",)
+        assert repo.execute_one("SELECT count(*) FROM instruments") == (1,)
+        assert opens == [store.data_dir]
+    finally:
+        store.close()

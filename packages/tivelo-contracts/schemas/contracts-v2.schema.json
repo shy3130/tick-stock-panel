@@ -1,0 +1,5041 @@
+{
+  "$defs": {
+    "AdjustmentFactor": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "baseline_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Baseline Id",
+          "type": "string"
+        },
+        "cancelled": {
+          "default": false,
+          "title": "Cancelled",
+          "type": "boolean"
+        },
+        "definition_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Definition Id",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "factor_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Factor Id",
+          "type": "string"
+        },
+        "factor_kind": {
+          "enum": [
+            "event_ratio",
+            "cumulative_forward"
+          ],
+          "title": "Factor Kind",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "value": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "factor_id",
+        "instrument_id",
+        "effective_at",
+        "available_at",
+        "value",
+        "definition_id",
+        "factor_kind",
+        "baseline_id",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "AdjustmentFactor",
+      "type": "object"
+    },
+    "ArchiveContents": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/ArchiveFile"
+          },
+          "maxItems": 8192,
+          "minItems": 1,
+          "title": "Files",
+          "type": "array"
+        },
+        "lock_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lock Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lock_id",
+        "files"
+      ],
+      "title": "ArchiveContents",
+      "type": "object"
+    },
+    "ArchiveFile": {
+      "additionalProperties": false,
+      "description": "Portable relative filename with a content digest; row count for tables only.",
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Path",
+          "type": "string"
+        },
+        "row_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Count"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "ArchiveFile",
+      "type": "object"
+    },
+    "Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Path",
+          "type": "string"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes",
+        "row_count"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "BacktestResult": {
+      "additionalProperties": false,
+      "properties": {
+        "accounting_model": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Accounting Model",
+          "type": "string"
+        },
+        "diagnostic_events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExecutionDiagnostic"
+          },
+          "title": "Diagnostic Events",
+          "type": "array"
+        },
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "equity": {
+          "items": {
+            "$ref": "#/$defs/EquityPoint"
+          },
+          "title": "Equity",
+          "type": "array"
+        },
+        "final_portfolio": {
+          "$ref": "#/$defs/Portfolio"
+        },
+        "ledger": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LedgerEntry"
+          },
+          "title": "Ledger",
+          "type": "array"
+        },
+        "lock_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "orders": {
+          "items": {
+            "$ref": "#/$defs/OrderEvent"
+          },
+          "title": "Orders",
+          "type": "array"
+        },
+        "result_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Result Version",
+          "type": "string"
+        },
+        "semantics_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Semantics Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lock_id",
+        "semantics_version",
+        "accounting_model",
+        "orders",
+        "equity",
+        "final_portfolio"
+      ],
+      "title": "BacktestResult",
+      "type": "object"
+    },
+    "BacktestSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "account_profile": {
+          "$ref": "#/$defs/DefinitionReference"
+        },
+        "accounting_model": {
+          "enum": [
+            "legacy_adjusted_curve",
+            "event_ledger"
+          ],
+          "title": "Accounting Model",
+          "type": "string"
+        },
+        "base_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Base Currency",
+          "type": "string"
+        },
+        "dependencies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DefinitionReference"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "end": {
+          "format": "date",
+          "title": "End",
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionModel"
+        },
+        "extension_fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtensionFieldRef"
+          },
+          "maxItems": 64,
+          "title": "Extension Fields",
+          "type": "array"
+        },
+        "initial_capital": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Initial Capital",
+          "type": "string"
+        },
+        "knowledge_requirement": {
+          "enum": [
+            "historical_versions",
+            "latest_reconstruction"
+          ],
+          "title": "Knowledge Requirement",
+          "type": "string"
+        },
+        "market_profile": {
+          "$ref": "#/$defs/DefinitionReference"
+        },
+        "price_view": {
+          "$ref": "#/$defs/PriceViewSpec"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "semantics_version": {
+          "enum": [
+            "strict.daily.v1",
+            "legacy.tsp.v1",
+            "strict.continuous.v1"
+          ],
+          "title": "Semantics Version",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "spec_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Spec Version",
+          "type": "string"
+        },
+        "start": {
+          "format": "date",
+          "title": "Start",
+          "type": "string"
+        },
+        "strategy": {
+          "$ref": "#/$defs/DefinitionReference"
+        },
+        "universe": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Universe",
+          "type": "array"
+        },
+        "warmup_start": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmup Start"
+        }
+      },
+      "required": [
+        "semantics_version",
+        "snapshot_id",
+        "universe",
+        "start",
+        "end",
+        "strategy",
+        "market_profile",
+        "account_profile",
+        "price_view",
+        "execution",
+        "accounting_model",
+        "knowledge_requirement",
+        "initial_capital",
+        "base_currency"
+      ],
+      "title": "BacktestSpec",
+      "type": "object"
+    },
+    "Bar": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "bar_end": {
+          "format": "date-time",
+          "title": "Bar End",
+          "type": "string"
+        },
+        "bar_start": {
+          "format": "date-time",
+          "title": "Bar Start",
+          "type": "string"
+        },
+        "close": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Close",
+          "type": "string"
+        },
+        "high": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "High",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "is_final": {
+          "default": true,
+          "title": "Is Final",
+          "type": "boolean"
+        },
+        "low": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Low",
+          "type": "string"
+        },
+        "open": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Open",
+          "type": "string"
+        },
+        "price_basis": {
+          "enum": [
+            "raw",
+            "qfq",
+            "hfq"
+          ],
+          "title": "Price Basis",
+          "type": "string"
+        },
+        "quantity_unit": {
+          "enum": [
+            "share",
+            "contract",
+            "unit"
+          ],
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "timeframe": {
+          "pattern": "^(1d|[1-9][0-9]*[smh])$",
+          "title": "Timeframe",
+          "type": "string"
+        },
+        "trade_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trade Count"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        },
+        "turnover": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turnover"
+        },
+        "volume": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Volume",
+          "type": "string"
+        },
+        "vwap": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vwap"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "timeframe",
+        "bar_start",
+        "bar_end",
+        "trading_date",
+        "session_id",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quantity_unit",
+        "quote_currency",
+        "price_basis",
+        "available_at",
+        "ingested_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "Bar",
+      "type": "object"
+    },
+    "BarQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "price_basis": {
+          "default": "raw",
+          "enum": [
+            "raw",
+            "qfq",
+            "hfq"
+          ],
+          "title": "Price Basis",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timeframe": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Timeframe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_ids",
+        "timeframe",
+        "start",
+        "end",
+        "as_of"
+      ],
+      "title": "BarQuery",
+      "type": "object"
+    },
+    "Capability": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Feature Id",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "not_installed",
+            "disabled",
+            "incompatible",
+            "needs_configuration",
+            "needs_license",
+            "license_expired",
+            "missing_data",
+            "unsupported_market",
+            "pending_restart",
+            "load_failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "feature_id",
+        "status",
+        "reasons"
+      ],
+      "title": "Capability",
+      "type": "object"
+    },
+    "CapabilityFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "compatible": {
+          "title": "Compatible",
+          "type": "boolean"
+        },
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "data_ready": {
+          "title": "Data Ready",
+          "type": "boolean"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "feature_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Feature Id",
+          "type": "string"
+        },
+        "installed": {
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "license_expired": {
+          "title": "License Expired",
+          "type": "boolean"
+        },
+        "licensed": {
+          "title": "Licensed",
+          "type": "boolean"
+        },
+        "load_failed": {
+          "title": "Load Failed",
+          "type": "boolean"
+        },
+        "pending_restart": {
+          "title": "Pending Restart",
+          "type": "boolean"
+        },
+        "supports_market": {
+          "title": "Supports Market",
+          "type": "boolean"
+        },
+        "trusted": {
+          "title": "Trusted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "feature_id",
+        "installed",
+        "trusted",
+        "compatible",
+        "enabled",
+        "configured",
+        "licensed",
+        "license_expired",
+        "supports_market",
+        "data_ready",
+        "pending_restart",
+        "load_failed"
+      ],
+      "title": "CapabilityFacts",
+      "type": "object"
+    },
+    "CashBalance": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Available",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "payable": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Payable",
+          "type": "string"
+        },
+        "receivable": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Receivable",
+          "type": "string"
+        },
+        "total": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Total",
+          "type": "string"
+        }
+      },
+      "required": [
+        "currency",
+        "total",
+        "available"
+      ],
+      "title": "CashBalance",
+      "type": "object"
+    },
+    "ContinuousExecution": {
+      "additionalProperties": false,
+      "properties": {
+        "book_dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Book Dataset Id",
+          "type": "string"
+        },
+        "decide_at": {
+          "items": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Decide At",
+          "type": "array"
+        },
+        "observe_at": {
+          "default": [],
+          "items": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": "Observe At",
+          "type": "array"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/TradeSessionIndex"
+          },
+          "minItems": 1,
+          "title": "Sessions",
+          "type": "array"
+        },
+        "trade_dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Trade Dataset Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "book_dataset_id",
+        "trade_dataset_id",
+        "sessions",
+        "decide_at"
+      ],
+      "title": "ContinuousExecution",
+      "type": "object"
+    },
+    "CorporateAction": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_type": {
+          "enum": [
+            "split",
+            "cash_dividend",
+            "rights",
+            "other"
+          ],
+          "title": "Action Type",
+          "type": "string"
+        },
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "cancelled": {
+          "default": false,
+          "title": "Cancelled",
+          "type": "boolean"
+        },
+        "cash_per_unit": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cash Per Unit"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "payment_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Payment At"
+        },
+        "quantity_ratio": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantity Ratio"
+        },
+        "record_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record At"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "instrument_id",
+        "action_type",
+        "effective_at",
+        "available_at",
+        "revision_id",
+        "source_id"
+      ],
+      "title": "CorporateAction",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_units": {
+          "minimum": 0,
+          "title": "Completed Units",
+          "type": "integer"
+        },
+        "issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CoverageIssue"
+          },
+          "title": "Issues",
+          "type": "array"
+        },
+        "requested_units": {
+          "minimum": 1,
+          "title": "Requested Units",
+          "type": "integer"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "empty",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "requested_units",
+        "completed_units",
+        "row_count"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "CoverageIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "instrument_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument Id"
+        },
+        "reason": {
+          "enum": [
+            "missing",
+            "suspended",
+            "no_trades",
+            "not_listed",
+            "delisted",
+            "not_published",
+            "source_error",
+            "cancelled",
+            "unsupported",
+            "no_events"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "detail"
+      ],
+      "title": "CoverageIssue",
+      "type": "object"
+    },
+    "DatasetContents": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "hash_encoding": {
+          "const": "tivelo-json-v1",
+          "default": "tivelo-json-v1",
+          "title": "Hash Encoding",
+          "type": "string"
+        },
+        "knowledge_basis": {
+          "enum": [
+            "historical_versions",
+            "latest_reconstruction",
+            "unknown"
+          ],
+          "title": "Knowledge Basis",
+          "type": "string"
+        },
+        "normalization_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Normalization Version",
+          "type": "string"
+        },
+        "price_basis": {
+          "anyOf": [
+            {
+              "enum": [
+                "raw",
+                "qfq",
+                "hfq"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Basis"
+        },
+        "record_type": {
+          "enum": [
+            "instrument",
+            "symbol_mapping",
+            "bar",
+            "corporate_action",
+            "adjustment_factor",
+            "opening_observation",
+            "extension_value",
+            "order_book_observation",
+            "trade_print"
+          ],
+          "title": "Record Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatasetScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "source_selection_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Selection Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "record_type",
+        "knowledge_basis",
+        "source_ids",
+        "artifacts",
+        "coverage",
+        "normalization_version",
+        "source_selection_digest"
+      ],
+      "title": "DatasetContents",
+      "type": "object"
+    },
+    "DatasetReference": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version_id"
+      ],
+      "title": "DatasetReference",
+      "type": "object"
+    },
+    "DatasetScope": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_class": {
+          "enum": [
+            "equity",
+            "fund",
+            "index",
+            "future"
+          ],
+          "title": "Asset Class",
+          "type": "string"
+        },
+        "bar_convention_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bar Convention Id"
+        },
+        "coverage_basis": {
+          "default": "source_response",
+          "enum": [
+            "source_response",
+            "validated_market_sessions"
+          ],
+          "title": "Coverage Basis",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "extension_field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtensionField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "market_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Market Id",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timeframes": {
+          "default": [],
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Timeframes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "market_id",
+        "asset_class",
+        "instrument_ids",
+        "start",
+        "end"
+      ],
+      "title": "DatasetScope",
+      "type": "object"
+    },
+    "DatasetVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "contents": {
+          "$ref": "#/$defs/DatasetContents"
+        },
+        "version_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version_id",
+        "contents"
+      ],
+      "title": "DatasetVersion",
+      "type": "object"
+    },
+    "DefinitionBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "contents": {
+          "$ref": "#/$defs/DefinitionContents"
+        },
+        "format": {
+          "const": "tivelo-research-definition",
+          "default": "tivelo-research-definition",
+          "title": "Format",
+          "type": "string"
+        },
+        "format_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Format Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "contents"
+      ],
+      "title": "DefinitionBundle",
+      "type": "object"
+    },
+    "DefinitionContents": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Definition Id",
+          "type": "string"
+        },
+        "dependencies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DefinitionReference"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "entrypoint": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Entrypoint",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/DefinitionFile"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Files",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "strategy",
+            "factor",
+            "signal",
+            "indicator"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "language": {
+          "default": "trusted_python",
+          "enum": [
+            "trusted_python",
+            "controlled_daily_v1"
+          ],
+          "title": "Language",
+          "type": "string"
+        },
+        "requirements": {
+          "default": [],
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Requirements",
+          "type": "array"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "definition_id",
+        "version",
+        "kind",
+        "entrypoint",
+        "files"
+      ],
+      "title": "DefinitionContents",
+      "type": "object"
+    },
+    "DefinitionFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "DefinitionFile",
+      "type": "object"
+    },
+    "DefinitionReference": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Definition Id",
+          "type": "string"
+        },
+        "parameters_json": {
+          "default": "{}",
+          "title": "Parameters Json",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "definition_id",
+        "version",
+        "sha256"
+      ],
+      "title": "DefinitionReference",
+      "type": "object"
+    },
+    "EquityPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "equity": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Equity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "equity",
+        "currency"
+      ],
+      "title": "EquityPoint",
+      "type": "object"
+    },
+    "EventQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_ids",
+        "start",
+        "end",
+        "as_of"
+      ],
+      "title": "EventQuery",
+      "type": "object"
+    },
+    "ExecutionDiagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "code": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Code",
+          "type": "string"
+        },
+        "instrument_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument Id"
+        }
+      },
+      "required": [
+        "code",
+        "at"
+      ],
+      "title": "ExecutionDiagnostic",
+      "type": "object"
+    },
+    "ExecutionModel": {
+      "additionalProperties": false,
+      "properties": {
+        "continuous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContinuousExecution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "decision_delay_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Decision Delay Seconds",
+          "type": "integer"
+        },
+        "end_policy": {
+          "default": "mark_to_market",
+          "enum": [
+            "mark_to_market",
+            "attempt_liquidation"
+          ],
+          "title": "End Policy",
+          "type": "string"
+        },
+        "fill_at": {
+          "default": "next_open",
+          "enum": [
+            "next_open",
+            "legacy_same_close",
+            "witnessed_trade"
+          ],
+          "title": "Fill At",
+          "type": "string"
+        },
+        "intrabar_priority": {
+          "default": "stop_first",
+          "enum": [
+            "stop_first",
+            "take_first"
+          ],
+          "title": "Intrabar Priority",
+          "type": "string"
+        },
+        "missing_data": {
+          "default": "reject",
+          "enum": [
+            "reject",
+            "hold_last_valuation"
+          ],
+          "title": "Missing Data",
+          "type": "string"
+        },
+        "order_expiry": {
+          "default": "next_session",
+          "enum": [
+            "next_session",
+            "good_till_cancelled",
+            "confirmed_end_of_day"
+          ],
+          "title": "Order Expiry",
+          "type": "string"
+        },
+        "position_policy_failure": {
+          "default": "reject",
+          "enum": [
+            "reject",
+            "equal_weight_with_diagnostic"
+          ],
+          "title": "Position Policy Failure",
+          "type": "string"
+        },
+        "signal_at": {
+          "default": "bar_close",
+          "enum": [
+            "bar_close",
+            "scheduled"
+          ],
+          "title": "Signal At",
+          "type": "string"
+        },
+        "slippage_bps": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Slippage Bps",
+          "type": "string"
+        },
+        "timeframe": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Timeframe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timeframe"
+      ],
+      "title": "ExecutionModel",
+      "type": "object"
+    },
+    "ExtensionField": {
+      "additionalProperties": false,
+      "properties": {
+        "field_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Field Id",
+          "type": "string"
+        },
+        "field_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Field Version",
+          "type": "string"
+        },
+        "granularity": {
+          "enum": [
+            "instrument",
+            "market"
+          ],
+          "title": "Granularity",
+          "type": "string"
+        },
+        "table_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Table Id",
+          "type": "string"
+        },
+        "table_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Table Version",
+          "type": "string"
+        },
+        "time_basis": {
+          "default": "source_effective_at",
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Time Basis",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Unit",
+          "type": "string"
+        },
+        "value_type": {
+          "enum": [
+            "int",
+            "float",
+            "bool",
+            "string"
+          ],
+          "title": "Value Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table_id",
+        "table_version",
+        "field_id",
+        "field_version",
+        "value_type",
+        "unit",
+        "granularity"
+      ],
+      "title": "ExtensionField",
+      "type": "object"
+    },
+    "ExtensionFieldRef": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "field_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Field Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "field_sha256"
+      ],
+      "title": "ExtensionFieldRef",
+      "type": "object"
+    },
+    "ExtensionPin": {
+      "additionalProperties": false,
+      "description": "Identity of a verified native capability used by this run.",
+      "properties": {
+        "api_version": {
+          "minimum": 1,
+          "title": "Api Version",
+          "type": "integer"
+        },
+        "archive_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Archive Sha256",
+          "type": "string"
+        },
+        "capability_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "extension_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Extension Id",
+          "type": "string"
+        },
+        "feature_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Feature Id"
+        },
+        "kind": {
+          "enum": [
+            "price_view",
+            "dataset_provider"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "runtime_generation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Runtime Generation",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "extension_id",
+        "version",
+        "kind",
+        "capability_id",
+        "archive_sha256",
+        "entry_sha256",
+        "api_version",
+        "runtime_generation"
+      ],
+      "title": "ExtensionPin",
+      "type": "object"
+    },
+    "ExtensionQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "field_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Field Sha256",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "title": "Instrument Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "field_sha256",
+        "instrument_ids",
+        "effective_at",
+        "as_of"
+      ],
+      "title": "ExtensionQuery",
+      "type": "object"
+    },
+    "ExtensionValue": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "bool_value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bool Value"
+        },
+        "decimal_value": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decimal Value"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "field_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Field Sha256",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Instrument Id"
+        },
+        "int_value": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 9223372036854775808,
+              "minimum": -9223372036854775808,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Int Value"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "text_value": {
+          "anyOf": [
+            {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Value"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid Until"
+        }
+      },
+      "required": [
+        "field_sha256",
+        "instrument_id",
+        "effective_at",
+        "available_at",
+        "ingested_at",
+        "revision_id",
+        "source_id"
+      ],
+      "title": "ExtensionValue",
+      "type": "object"
+    },
+    "FeeComponent": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Amount",
+          "type": "string"
+        },
+        "fee_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Fee Id",
+          "type": "string"
+        },
+        "minimum_applied": {
+          "title": "Minimum Applied",
+          "type": "boolean"
+        },
+        "rate": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Rate",
+          "type": "string"
+        },
+        "rule_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Rule Revision",
+          "type": "string"
+        },
+        "source_reference": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Reference",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fee_id",
+        "amount",
+        "rate",
+        "minimum_applied",
+        "rule_revision",
+        "source_reference"
+      ],
+      "title": "FeeComponent",
+      "type": "object"
+    },
+    "FeeQuote": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/FeeComponent"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "notional": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Notional",
+          "type": "string"
+        },
+        "total": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Total",
+          "type": "string"
+        }
+      },
+      "required": [
+        "currency",
+        "notional",
+        "components",
+        "total"
+      ],
+      "title": "FeeQuote",
+      "type": "object"
+    },
+    "FormulaField": {
+      "additionalProperties": false,
+      "description": "A sealed formula input from an immutable, typed snapshot field.",
+      "properties": {
+        "alias": {
+          "pattern": "^ext_[a-z][a-z0-9_]{0,59}$",
+          "title": "Alias",
+          "type": "string"
+        },
+        "dataset_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "equals_text": {
+          "anyOf": [
+            {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Equals Text"
+        },
+        "field_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Field Sha256",
+          "type": "string"
+        },
+        "value_type": {
+          "enum": [
+            "int",
+            "float",
+            "bool",
+            "string"
+          ],
+          "title": "Value Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "field_sha256",
+        "alias",
+        "value_type"
+      ],
+      "title": "FormulaField",
+      "type": "object"
+    },
+    "HistoryQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "instrument_ids",
+        "effective_at",
+        "as_of"
+      ],
+      "title": "HistoryQuery",
+      "type": "object"
+    },
+    "Instrument": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_class": {
+          "enum": [
+            "equity",
+            "fund",
+            "index",
+            "future"
+          ],
+          "title": "Asset Class",
+          "type": "string"
+        },
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "calendar_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Calendar Id",
+          "type": "string"
+        },
+        "delisting_date": {
+          "$ref": "#/$defs/KnownDate"
+        },
+        "display_symbol": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Display Symbol",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "instrument_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Type",
+          "type": "string"
+        },
+        "listing_date": {
+          "$ref": "#/$defs/KnownDate"
+        },
+        "market_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Market Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "settlement_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Settlement Currency",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "spec_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Spec Revision",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "tradable": {
+          "title": "Tradable",
+          "type": "boolean"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid To"
+        },
+        "venue_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Venue Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "available_at",
+        "revision_id",
+        "source_id",
+        "instrument_id",
+        "venue_id",
+        "market_id",
+        "asset_class",
+        "instrument_type",
+        "display_symbol",
+        "name",
+        "quote_currency",
+        "settlement_currency",
+        "calendar_id",
+        "timezone",
+        "listing_date",
+        "delisting_date",
+        "tradable",
+        "spec_revision"
+      ],
+      "title": "Instrument",
+      "type": "object"
+    },
+    "KnownDate": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "known",
+            "unknown",
+            "not_yet"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "KnownDate",
+      "type": "object"
+    },
+    "LedgerEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "cash_delta": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Cash Delta",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "entry_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Entry Id",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "buy",
+            "sell",
+            "split",
+            "dividend_accrual",
+            "dividend_payment"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "quantity_delta": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Quantity Delta",
+          "type": "string"
+        },
+        "receivable_delta": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Receivable Delta",
+          "type": "string"
+        },
+        "reference_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Reference Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "at",
+        "kind",
+        "reference_id",
+        "instrument_id",
+        "currency",
+        "cash_delta",
+        "quantity_delta"
+      ],
+      "title": "LedgerEntry",
+      "type": "object"
+    },
+    "MarketAdapterSpec": {
+      "additionalProperties": false,
+      "description": "An explicitly selected installed entry point and its immutable configuration.",
+      "properties": {
+        "adapter_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "configuration_json": {
+          "default": "{}",
+          "title": "Configuration Json",
+          "type": "string"
+        },
+        "distribution": {
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
+          "title": "Distribution",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "distribution"
+      ],
+      "title": "MarketAdapterSpec",
+      "type": "object"
+    },
+    "OpeningObservation": {
+      "additionalProperties": false,
+      "description": "A separately sourced opening fact, never an early copy of a final daily bar.\n\nevent_at names the calendar's execution opening. An auction may establish the\nprice earlier; later publication remains later and is unavailable at the open.",
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "event_at": {
+          "format": "date-time",
+          "title": "Event At",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "is_final": {
+          "default": true,
+          "title": "Is Final",
+          "type": "boolean"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "raw_open": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Open"
+        },
+        "reference_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "previous_close",
+                "exchange_ex_rights",
+                "exchange_special"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Kind"
+        },
+        "reference_price": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Price"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "tradable",
+            "suspended",
+            "no_trades",
+            "not_listed",
+            "delisted"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "event_at",
+        "trading_date",
+        "session_id",
+        "state",
+        "quote_currency",
+        "available_at",
+        "ingested_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "OpeningObservation",
+      "type": "object"
+    },
+    "OrderBookObservation": {
+      "additionalProperties": false,
+      "description": "Displayed best prices at an explicit witness instant. Null means confirmed absent.",
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "best_ask": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Best Ask"
+        },
+        "best_bid": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Best Bid"
+        },
+        "event_at": {
+          "format": "date-time",
+          "title": "Event At",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "last_trade": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Trade"
+        },
+        "last_trade_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Trade At"
+        },
+        "price_basis": {
+          "const": "raw",
+          "title": "Price Basis",
+          "type": "string"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "continuous",
+            "halted"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "event_at",
+        "trading_date",
+        "session_id",
+        "price_basis",
+        "quote_currency",
+        "state",
+        "best_bid",
+        "best_ask",
+        "last_trade",
+        "available_at",
+        "ingested_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "OrderBookObservation",
+      "type": "object"
+    },
+    "OrderBookQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_ids",
+        "start",
+        "end",
+        "as_of",
+        "dataset"
+      ],
+      "title": "OrderBookQuery",
+      "type": "object"
+    },
+    "OrderEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "decision_at": {
+          "format": "date-time",
+          "title": "Decision At",
+          "type": "string"
+        },
+        "eligible_at": {
+          "format": "date-time",
+          "title": "Eligible At",
+          "type": "string"
+        },
+        "event_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event At"
+        },
+        "fee": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Fee",
+          "type": "string"
+        },
+        "fee_components": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FeeComponent"
+          },
+          "title": "Fee Components",
+          "type": "array"
+        },
+        "filled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filled At"
+        },
+        "filled_quantity": {
+          "default": "0",
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Filled Quantity",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "order_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Order Id",
+          "type": "string"
+        },
+        "order_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "market",
+                "limit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Order Type"
+        },
+        "raw_fill_price": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Fill Price"
+        },
+        "raw_limit_price": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Limit Price"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "requested_quantity": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Requested Quantity",
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "buy",
+            "sell"
+          ],
+          "title": "Side",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "created",
+            "accepted",
+            "partially_filled",
+            "filled",
+            "rejected",
+            "cancelled",
+            "expired"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "instrument_id",
+        "side",
+        "status",
+        "decision_at",
+        "submitted_at",
+        "eligible_at",
+        "requested_quantity",
+        "currency"
+      ],
+      "title": "OrderEvent",
+      "type": "object"
+    },
+    "OrderQuantityTerms": {
+      "additionalProperties": false,
+      "description": "Quantity rules for one explicitly supported order type, in quoted units.",
+      "properties": {
+        "buy_increment": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Increment",
+          "type": "string"
+        },
+        "buy_maximum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Maximum",
+          "type": "string"
+        },
+        "buy_minimum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Minimum",
+          "type": "string"
+        },
+        "odd_lot_policy": {
+          "enum": [
+            "all_remaining",
+            "none",
+            "remainder_once"
+          ],
+          "title": "Odd Lot Policy",
+          "type": "string"
+        },
+        "order_type": {
+          "enum": [
+            "market",
+            "limit"
+          ],
+          "title": "Order Type",
+          "type": "string"
+        },
+        "sell_increment": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Increment",
+          "type": "string"
+        },
+        "sell_maximum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Maximum",
+          "type": "string"
+        },
+        "sell_minimum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Minimum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_type",
+        "buy_minimum",
+        "buy_increment",
+        "buy_maximum",
+        "sell_minimum",
+        "sell_increment",
+        "sell_maximum",
+        "odd_lot_policy"
+      ],
+      "title": "OrderQuantityTerms",
+      "type": "object"
+    },
+    "PackageReference": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_kind": {
+          "default": "wheel",
+          "enum": [
+            "wheel",
+            "installed_tree_v1",
+            "source_tree_v1",
+            "frozen_image_v1"
+          ],
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "sha256"
+      ],
+      "title": "PackageReference",
+      "type": "object"
+    },
+    "Portfolio": {
+      "additionalProperties": false,
+      "properties": {
+        "cash": {
+          "items": {
+            "$ref": "#/$defs/CashBalance"
+          },
+          "title": "Cash",
+          "type": "array"
+        },
+        "positions": {
+          "items": {
+            "$ref": "#/$defs/Position"
+          },
+          "title": "Positions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "cash",
+        "positions"
+      ],
+      "title": "Portfolio",
+      "type": "object"
+    },
+    "Position": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Cost",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "quantity": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Quantity",
+          "type": "string"
+        },
+        "sellable_quantity": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sellable Quantity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "quantity",
+        "sellable_quantity",
+        "cost",
+        "currency"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "PriceBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "lower": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lower"
+        },
+        "reference_revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Revision"
+        },
+        "rule_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Rule Revision",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "limited",
+            "unlimited"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upper"
+        }
+      },
+      "required": [
+        "state",
+        "rule_revision"
+      ],
+      "title": "PriceBounds",
+      "type": "object"
+    },
+    "PriceScale": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anchor At"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "decision_at": {
+          "format": "date-time",
+          "title": "Decision At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "mode": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Mode",
+          "type": "string"
+        },
+        "provider_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Provider Id",
+          "type": "string"
+        },
+        "raw_multiplier": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Raw Multiplier",
+          "type": "string"
+        },
+        "run_lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Lock Id"
+        }
+      },
+      "required": [
+        "provider_id",
+        "mode",
+        "anchor_at",
+        "decision_at",
+        "instrument_id",
+        "currency",
+        "raw_multiplier"
+      ],
+      "title": "PriceScale",
+      "type": "object"
+    },
+    "PriceValue": {
+      "additionalProperties": false,
+      "properties": {
+        "scale": {
+          "$ref": "#/$defs/PriceScale"
+        },
+        "value": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "scale"
+      ],
+      "title": "PriceValue",
+      "type": "object"
+    },
+    "PriceViewSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Anchor At"
+        },
+        "factor_baseline_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Factor Baseline Id"
+        },
+        "factor_definition_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^\\S(?:.*\\S)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Factor Definition Id"
+        },
+        "mode": {
+          "enum": [
+            "raw",
+            "qfq",
+            "hfq",
+            "extension"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "provider_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Provider Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_id",
+        "mode"
+      ],
+      "title": "PriceViewSpec",
+      "type": "object"
+    },
+    "ProjectedBar": {
+      "additionalProperties": false,
+      "description": "A strategy-only view emitted by an extension. Never a snapshot market fact.",
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "bar_end": {
+          "format": "date-time",
+          "title": "Bar End",
+          "type": "string"
+        },
+        "bar_start": {
+          "format": "date-time",
+          "title": "Bar Start",
+          "type": "string"
+        },
+        "close": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Close",
+          "type": "string"
+        },
+        "high": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "High",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "is_final": {
+          "default": true,
+          "title": "Is Final",
+          "type": "boolean"
+        },
+        "low": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Low",
+          "type": "string"
+        },
+        "open": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Open",
+          "type": "string"
+        },
+        "price_basis": {
+          "const": "extension",
+          "title": "Price Basis",
+          "type": "string"
+        },
+        "quantity_unit": {
+          "enum": [
+            "share",
+            "contract",
+            "unit"
+          ],
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "timeframe": {
+          "pattern": "^(1d|[1-9][0-9]*[smh])$",
+          "title": "Timeframe",
+          "type": "string"
+        },
+        "trade_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trade Count"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        },
+        "turnover": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turnover"
+        },
+        "volume": {
+          "format": "decimal128-38-12",
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Volume",
+          "type": "string"
+        },
+        "vwap": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vwap"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "timeframe",
+        "bar_start",
+        "bar_end",
+        "trading_date",
+        "session_id",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quantity_unit",
+        "quote_currency",
+        "price_basis",
+        "available_at",
+        "ingested_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "ProjectedBar",
+      "type": "object"
+    },
+    "ReferencePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "previous_close",
+            "exchange_ex_rights",
+            "exchange_special"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        },
+        "value": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "trading_date",
+        "value",
+        "kind",
+        "available_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "ReferencePrice",
+      "type": "object"
+    },
+    "ResultArchive": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Archive Id",
+          "type": "string"
+        },
+        "contents": {
+          "$ref": "#/$defs/ArchiveContents"
+        },
+        "encoding": {
+          "default": "parquet-v1",
+          "enum": [
+            "parquet-v1",
+            "parquet-v2"
+          ],
+          "title": "Encoding",
+          "type": "string"
+        },
+        "format": {
+          "const": "tivelo-result-archive",
+          "default": "tivelo-result-archive",
+          "title": "Format",
+          "type": "string"
+        },
+        "format_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Format Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "archive_id",
+        "contents"
+      ],
+      "title": "ResultArchive",
+      "type": "object"
+    },
+    "RunArchive": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Archive Id",
+          "type": "string"
+        },
+        "contents": {
+          "$ref": "#/$defs/ArchiveContents"
+        },
+        "format": {
+          "const": "tivelo-run-archive",
+          "default": "tivelo-run-archive",
+          "title": "Format",
+          "type": "string"
+        },
+        "format_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Format Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "archive_id",
+        "contents"
+      ],
+      "title": "RunArchive",
+      "type": "object"
+    },
+    "RunLock": {
+      "additionalProperties": false,
+      "properties": {
+        "contents": {
+          "$ref": "#/$defs/RunLockContents"
+        },
+        "lock_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lock Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lock_id",
+        "contents"
+      ],
+      "title": "RunLock",
+      "type": "object"
+    },
+    "RunLockContents": {
+      "additionalProperties": false,
+      "properties": {
+        "extension_requirements": {
+          "default": [],
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Extension Requirements",
+          "type": "array"
+        },
+        "extensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtensionPin"
+          },
+          "title": "Extensions",
+          "type": "array"
+        },
+        "hash_encoding": {
+          "const": "tivelo-json-v1",
+          "default": "tivelo-json-v1",
+          "title": "Hash Encoding",
+          "type": "string"
+        },
+        "lock_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Lock Version",
+          "type": "string"
+        },
+        "market_adapter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MarketAdapterSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/PackageReference"
+          },
+          "minItems": 1,
+          "title": "Packages",
+          "type": "array"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeReference"
+        },
+        "scale_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScaleProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotManifest"
+        },
+        "spec": {
+          "$ref": "#/$defs/BacktestSpec"
+        },
+        "verifier_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "spec",
+        "snapshot",
+        "packages",
+        "runtime",
+        "verifier_version"
+      ],
+      "title": "RunLockContents",
+      "type": "object"
+    },
+    "RuntimeReference": {
+      "additionalProperties": false,
+      "properties": {
+        "dependency_lock_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Dependency Lock Sha256",
+          "type": "string"
+        },
+        "platform_tag": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Platform Tag",
+          "type": "string"
+        },
+        "python_abi": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Python Abi",
+          "type": "string"
+        },
+        "python_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Sha256"
+        },
+        "python_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Python Version",
+          "type": "string"
+        },
+        "stdlib_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stdlib Sha256"
+        }
+      },
+      "required": [
+        "python_version",
+        "python_abi",
+        "platform_tag",
+        "dependency_lock_sha256"
+      ],
+      "title": "RuntimeReference",
+      "type": "object"
+    },
+    "ScaleProof": {
+      "additionalProperties": false,
+      "description": "Core-verified bounded program; never an arbitrary Python self-attestation.",
+      "properties": {
+        "field_operands": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FormulaField"
+          },
+          "maxItems": 64,
+          "title": "Field Operands",
+          "type": "array"
+        },
+        "numeric_semantics": {
+          "default": "anchor_cancelled_float64_v1",
+          "enum": [
+            "anchor_cancelled_float64_v1",
+            "projected_prices_float64_v1"
+          ],
+          "title": "Numeric Semantics",
+          "type": "string"
+        },
+        "program_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Program Sha256",
+          "type": "string"
+        },
+        "scope": {
+          "const": "entry_exit_score_selection_fixed_weight_no_price_outputs",
+          "default": "entry_exit_score_selection_fixed_weight_no_price_outputs",
+          "title": "Scope",
+          "type": "string"
+        },
+        "strategy": {
+          "$ref": "#/$defs/DefinitionReference"
+        },
+        "verifier_version": {
+          "default": "tivelo.scale.controlled.v1",
+          "enum": [
+            "tivelo.scale.controlled.v1",
+            "tivelo.scale.controlled.v1.1"
+          ],
+          "title": "Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "strategy",
+        "program_sha256"
+      ],
+      "title": "ScaleProof",
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_at": {
+          "format": "date-time",
+          "title": "Decision At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "limit_price": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PriceValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit_quantity": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit Quantity"
+        },
+        "score": {
+          "format": "decimal128-38-12",
+          "pattern": "^-?(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Score",
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "buy",
+            "sell"
+          ],
+          "title": "Side",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_weight": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "pattern": "^(?:0(?:\\.[0-9]{1,12})?|1(?:\\.0{1,12})?)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Weight"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "decision_at",
+        "side",
+        "score",
+        "source_id"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "SignalBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_at": {
+          "format": "date-time",
+          "title": "Decision At",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/Signal"
+          },
+          "title": "Signals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision_at",
+        "signals"
+      ],
+      "title": "SignalBatch",
+      "type": "object"
+    },
+    "SnapshotBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "datasets": {
+          "items": {
+            "$ref": "#/$defs/DatasetVersion"
+          },
+          "title": "Datasets",
+          "type": "array"
+        },
+        "encoding": {
+          "const": "parquet-v2",
+          "default": "parquet-v2",
+          "title": "Encoding",
+          "type": "string"
+        },
+        "format": {
+          "const": "tivelo-snapshot-bundle",
+          "default": "tivelo-snapshot-bundle",
+          "title": "Format",
+          "type": "string"
+        },
+        "format_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Format Version",
+          "type": "string"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotManifest"
+        }
+      },
+      "required": [
+        "snapshot",
+        "datasets"
+      ],
+      "title": "SnapshotBundle",
+      "type": "object"
+    },
+    "SnapshotContents": {
+      "additionalProperties": false,
+      "properties": {
+        "datasets": {
+          "items": {
+            "$ref": "#/$defs/DatasetReference"
+          },
+          "minItems": 1,
+          "title": "Datasets",
+          "type": "array"
+        },
+        "hash_encoding": {
+          "const": "tivelo-json-v1",
+          "default": "tivelo-json-v1",
+          "title": "Hash Encoding",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datasets"
+      ],
+      "title": "SnapshotContents",
+      "type": "object"
+    },
+    "SnapshotManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "contents": {
+          "$ref": "#/$defs/SnapshotContents"
+        },
+        "snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "contents"
+      ],
+      "title": "SnapshotManifest",
+      "type": "object"
+    },
+    "StrategyContext": {
+      "additionalProperties": false,
+      "properties": {
+        "extension_values": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtensionValue"
+          },
+          "title": "Extension Values",
+          "type": "array"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Bar"
+              },
+              {
+                "$ref": "#/$defs/ProjectedBar"
+              }
+            ]
+          },
+          "title": "History",
+          "type": "array"
+        },
+        "instruments": {
+          "items": {
+            "$ref": "#/$defs/Instrument"
+          },
+          "title": "Instruments",
+          "type": "array"
+        },
+        "now": {
+          "format": "date-time",
+          "title": "Now",
+          "type": "string"
+        },
+        "openings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/OpeningObservation"
+          },
+          "title": "Openings",
+          "type": "array"
+        },
+        "parameters_json": {
+          "title": "Parameters Json",
+          "type": "string"
+        },
+        "portfolio": {
+          "$ref": "#/$defs/Portfolio"
+        },
+        "price_scales": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PriceScale"
+          },
+          "title": "Price Scales",
+          "type": "array"
+        }
+      },
+      "required": [
+        "now",
+        "history",
+        "instruments",
+        "portfolio",
+        "parameters_json"
+      ],
+      "title": "StrategyContext",
+      "type": "object"
+    },
+    "SymbolMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "symbol": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid To"
+        },
+        "venue_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Venue Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "available_at",
+        "revision_id",
+        "source_id",
+        "instrument_id",
+        "venue_id",
+        "symbol"
+      ],
+      "title": "SymbolMapping",
+      "type": "object"
+    },
+    "TradePrint": {
+      "additionalProperties": false,
+      "description": "One execution, ordered by the source's exchange sequence for this security and day.",
+      "properties": {
+        "aggressor_side": {
+          "enum": [
+            "buy",
+            "sell",
+            "unknown"
+          ],
+          "title": "Aggressor Side",
+          "type": "string"
+        },
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "event_at": {
+          "format": "date-time",
+          "title": "Event At",
+          "type": "string"
+        },
+        "ingested_at": {
+          "format": "date-time",
+          "title": "Ingested At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "price_basis": {
+          "const": "raw",
+          "title": "Price Basis",
+          "type": "string"
+        },
+        "quantity": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Quantity",
+          "type": "string"
+        },
+        "quantity_unit": {
+          "enum": [
+            "share",
+            "contract",
+            "unit"
+          ],
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "quote_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "raw_price": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Raw Price",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sequence": {
+          "exclusiveMaximum": 9223372036854775808,
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "trading_date",
+        "sequence",
+        "event_at",
+        "session_id",
+        "price_basis",
+        "quote_currency",
+        "raw_price",
+        "quantity",
+        "quantity_unit",
+        "aggressor_side",
+        "available_at",
+        "ingested_at",
+        "source_id",
+        "revision_id"
+      ],
+      "title": "TradePrint",
+      "type": "object"
+    },
+    "TradePrintQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "sequence": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 9223372036854775808,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequence"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_ids",
+        "start",
+        "end",
+        "as_of",
+        "dataset",
+        "trading_date"
+      ],
+      "title": "TradePrintQuery",
+      "type": "object"
+    },
+    "TradeSessionIndex": {
+      "additionalProperties": false,
+      "properties": {
+        "confirmed_through_at": {
+          "format": "date-time",
+          "title": "Confirmed Through At",
+          "type": "string"
+        },
+        "instrument_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "sequences": {
+          "items": {
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Sequences",
+          "type": "array"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "trading_date",
+        "sequences",
+        "confirmed_through_at"
+      ],
+      "title": "TradeSessionIndex",
+      "type": "object"
+    },
+    "TradingDay": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "bar_convention_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Bar Convention Id",
+          "type": "string"
+        },
+        "calendar_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Calendar Id",
+          "type": "string"
+        },
+        "close_at": {
+          "format": "date-time",
+          "title": "Close At",
+          "type": "string"
+        },
+        "open_at": {
+          "format": "date-time",
+          "title": "Open At",
+          "type": "string"
+        },
+        "trading_date": {
+          "format": "date",
+          "title": "Trading Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "calendar_id",
+        "trading_date",
+        "open_at",
+        "close_at",
+        "bar_convention_id",
+        "available_at"
+      ],
+      "title": "TradingDay",
+      "type": "object"
+    },
+    "TradingTerms": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_class": {
+          "enum": [
+            "equity",
+            "fund",
+            "index",
+            "future"
+          ],
+          "title": "Asset Class",
+          "type": "string"
+        },
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "buy_increment": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Increment",
+          "type": "string"
+        },
+        "buy_maximum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Maximum",
+          "type": "string"
+        },
+        "buy_minimum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Buy Minimum",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "instrument_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Instrument Type",
+          "type": "string"
+        },
+        "limit_down_ratio": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit Down Ratio"
+        },
+        "limit_up_ratio": {
+          "anyOf": [
+            {
+              "format": "decimal128-38-12",
+              "not": {
+                "pattern": "^0(?:\\.0+)?$"
+              },
+              "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit Up Ratio"
+        },
+        "market_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Market Id",
+          "type": "string"
+        },
+        "odd_lot_policy": {
+          "enum": [
+            "all_remaining",
+            "none",
+            "remainder_once"
+          ],
+          "title": "Odd Lot Policy",
+          "type": "string"
+        },
+        "order_quantity_rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/OrderQuantityTerms"
+          },
+          "title": "Order Quantity Rules",
+          "type": "array"
+        },
+        "price_limit_mode": {
+          "enum": [
+            "relative_reference",
+            "unlimited",
+            "unknown"
+          ],
+          "title": "Price Limit Mode",
+          "type": "string"
+        },
+        "price_tick": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Price Tick",
+          "type": "string"
+        },
+        "quantity_unit": {
+          "enum": [
+            "share",
+            "contract",
+            "unit"
+          ],
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "sell_increment": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Increment",
+          "type": "string"
+        },
+        "sell_lag_sessions": {
+          "minimum": 0,
+          "title": "Sell Lag Sessions",
+          "type": "integer"
+        },
+        "sell_maximum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Maximum",
+          "type": "string"
+        },
+        "sell_minimum": {
+          "format": "decimal128-38-12",
+          "not": {
+            "pattern": "^0(?:\\.0+)?$"
+          },
+          "pattern": "^(?:0|[1-9][0-9]{0,25})(?:\\.[0-9]{1,12})?$",
+          "title": "Sell Minimum",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_reference": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Source Reference",
+          "type": "string"
+        },
+        "spec_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Spec Revision",
+          "type": "string"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid To"
+        },
+        "venue_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Venue Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "available_at",
+        "revision_id",
+        "source_id",
+        "spec_revision",
+        "market_id",
+        "venue_id",
+        "asset_class",
+        "instrument_type",
+        "quantity_unit",
+        "currency",
+        "price_tick",
+        "buy_minimum",
+        "buy_increment",
+        "buy_maximum",
+        "sell_minimum",
+        "sell_increment",
+        "sell_maximum",
+        "odd_lot_policy",
+        "sell_lag_sessions",
+        "price_limit_mode",
+        "source_reference"
+      ],
+      "title": "TradingTerms",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Reference an individual record using #/$defs/Bar (or its public model name).",
+  "title": "Tivelo contracts v2"
+}

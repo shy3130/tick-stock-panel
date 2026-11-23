@@ -160,17 +160,6 @@ export function StrategyCard({
             )}
             {loading && <div className="mt-1 h-4 w-10 rounded bg-elevated animate-pulse" />}
           </button>
-          <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
-            <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
-          </button>
-          {onToggleMonitor && (
-            <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
-              <RadioTower className={`relative h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
-              {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
-            </button>
-          )}
         </>
       ) : cardSize === 'normal' ? (
         <>
@@ -202,17 +191,6 @@ export function StrategyCard({
               )}
             </div>
           </button>
-          <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
-            <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
-          </button>
-          {onToggleMonitor && (
-            <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
-              <RadioTower className={`relative h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
-              {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
-            </button>
-          )}
         </>
       ) : (
         /* mini */
@@ -235,19 +213,18 @@ export function StrategyCard({
             )}
             {loading && <span className="w-4 h-2.5 rounded bg-elevated animate-pulse" />}
           </button>
-          {onToggleMonitor && (
-            <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="relative p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
-              <RadioTower className={`h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
-              {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
-            </button>
-          )}
-          <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
-            <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
-          </button>
         </>
       )}
+      <div className={cardSize === 'mini' ? 'flex shrink-0 items-center gap-0.5' : 'absolute right-1.5 top-1.5 flex items-center gap-0.5'}>
+        {onToggleMonitor && <button onClick={event => { event.stopPropagation(); onToggleMonitor() }}
+          className="relative rounded p-0.5 transition-colors hover:bg-elevated" title={monitored ? '取消策略监控' : '开启策略监控'}>
+          <RadioTower className={`h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
+          {monitored && <span className="absolute inset-0 rounded bg-accent/20 animate-ping" />}
+        </button>}
+        <button onClick={event => { event.stopPropagation(); onSettings() }} title="策略设置" className="rounded p-0.5 transition-colors hover:bg-elevated">
+          <Settings2 className="h-3 w-3 text-muted hover:text-accent" />
+        </button>
+      </div>
     </motion.div>
   )
 }

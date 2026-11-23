@@ -8,8 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app import __version__
 from app.api import (
@@ -17,15 +16,22 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    chart_indicators,
+    config_backup,
     data,
+    definitions,
+    engine_jobs,
     events,
     ext_data,
     ext_pages,
     factors,
     financials,
+    guardian,
+    import_center,
     indices,
     intraday,
     kline,
+    lab,
     lots,
     market_recap,
     mining,
@@ -34,6 +40,7 @@ from app.api import (
     pages_admin,
     paper,
     pipeline,
+    position_policies,
     regime,
     rps,
     screener,
@@ -41,6 +48,7 @@ from app.api import (
     signals,
     stock_analysis,
     strategy,
+    strategy_pool,
     task_registry,
     watchlist,
 )
@@ -49,16 +57,22 @@ from app.api import settings as settings_api
 from app.api import upgrade_guard as upgrade_guard_api
 from app.api.routes import router as core_router
 from app.config import settings
+from app.data_providers.base import ProviderRequestError
 from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.extensions.loader import (
     configure_backend_extensions,
     current_extension_context,
     start_backend_extensions,
 )
+from app.frontend_static import FrontendStaticFiles, frontend_file_response
 from app.jobs import daily_pipeline
+from app.services.daily_health import DailyIntegrityError
+from app.services.heavy_job_limiter import HeavyJobLimitTimeoutError
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock, MiningProcessLockError
 from app.services.quote_service import QuoteService
+from app.services.shared_work import WorkBusyError
+from app.startup_diagnostics import startup_phase
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
@@ -102,14 +116,17 @@ async def _application_lifespan(app: FastAPI):
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
     # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
     try:
-        from app.services import auth as auth_service
-        auth_service.bootstrap_from_env()
+        with startup_phase(logger, "auth bootstrap"):
+            from app.services import auth as auth_service
+            auth_service.bootstrap_from_env()
     except Exception as e:  # noqa: BLE001
         logger.warning("auth bootstrap failed: %s", e)
 
     # 数据层
-    store = DataStore()
-    repo = KlineRepository(store)
+    with startup_phase(logger, "data store initialization"):
+        store = DataStore()
+    with startup_phase(logger, "repository initialization"):
+        repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
     # 去内置化种子迁移必须赶在下方 refresh_cache 之前: enriched 缓存构建时
@@ -117,31 +134,56 @@ async def _application_lifespan(app: FastAPI):
     # 列缺失 (跌停恒 0、连板梯队无数据), 直到下一次缓存刷新才自愈。
     _seeded_signals = 0
     try:
-        from app.strategy import custom_signals as _cs_seed
+        with startup_phase(logger, "signal seeding"):
+            from app.strategy import custom_signals as _cs_seed
 
-        _seeded_signals = _cs_seed.seed_if_empty(store.data_dir)
+            _seeded_signals = _cs_seed.seed_if_empty(store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("signal seeding failed (ignored): %s", e)
     # 自定义/复合因子载入注册表 (P3); 单个失败只跳过该因子 (fail-隔离)
-    from app.factors.store import load_into_registry
+    with startup_phase(logger, "custom factor module import"):
+        from app.factors.store import load_runtime_registry
 
     try:
-        loaded_factors = load_into_registry(store.data_dir)
+        with startup_phase(logger, "custom factor registration"):
+            loaded_factors = load_runtime_registry(store.data_dir)
         if loaded_factors:
             logger.info("custom factors loaded: %s", len(loaded_factors))
     except Exception as exc:  # noqa: BLE001
         logger.warning("custom factors load failed: %s", exc)
-    from app.services.mining_manager import MiningJobManager
+    with startup_phase(logger, "mining manager initialization"):
+        from app.services.mining_jobs import MiningRunStore
+        from app.services.mining_manager import MiningJobManager
 
-    mining_manager = MiningJobManager(store.data_dir)
-    recovered_mining_runs = mining_manager.recover_interrupted()
+        mining_manager = MiningJobManager(store.data_dir)
+    # A degraded instance must never rewrite another owner's live run manifests.
+    with startup_phase(logger, "mining run recovery"):
+        recovered_mining_runs = (
+            mining_manager.recover_interrupted() if app.state.mining_lock_acquired else 0
+        )
     app.state.mining_manager = mining_manager
     if recovered_mining_runs:
         logger.warning("recovered %d interrupted mining runs", recovered_mining_runs)
+    # 策略守护复验: 复用挖掘的任务编排 (线程 + spawn 子进程 + 持久 run store),
+    # 独立 namespace 存 run 记录; 与挖掘共用 heavy 槽 (避免双份全市场矩阵)。
+    with startup_phase(logger, "guardian manager initialization"):
+        guardian_manager = MiningJobManager(
+            store.data_dir,
+            kind="guardian",
+            store=MiningRunStore(store.data_dir, namespace="guardian"),
+        )
+    with startup_phase(logger, "guardian run recovery"):
+        recovered_guardian_runs = guardian_manager.recover_interrupted()
+    app.state.guardian_manager = guardian_manager
+    if recovered_guardian_runs:
+        logger.warning(
+            "recovered %d interrupted guardian runs", recovered_guardian_runs
+        )
     # 在接受回测请求前固定 managed generation，避免首批并发 worker 各自创建版本。
     if settings.backtest_matrix_disk_cache_enabled:
         try:
-            repo.get_matrix_data_generation("stock")
+            with startup_phase(logger, "enriched generation initialization"):
+                repo.get_matrix_data_generation("stock")
         except EnrichedGenerationUnavailableError as exc:
             logger.warning("enriched generation requires a full rebuild: %s", exc)
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
@@ -184,6 +226,12 @@ async def _application_lifespan(app: FastAPI):
             )
     except Exception as e:  # noqa: BLE001 — 仅日志, 失败不影响启动
         logger.warning("能力路由日志输出失败: %s", e)
+
+    # 发布完整冻结快照后再启动行情与监控线程，避免首批事件使用未完成的注册表。
+    from app.extensions.packages import start_managed_extensions
+    start_managed_extensions(
+        app, current_extension_context(data_dir=store.data_dir, repository=repo),
+    )
 
     # 二次开发升级保护: 后台常备备份用户修改的程序文件 (无清单时自动停用)
     from app.services.upgrade_guard import UpgradeGuard
@@ -436,6 +484,15 @@ async def _application_lifespan(app: FastAPI):
         logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
     except Exception as e:  # noqa: BLE001
         logger.warning("monitor engine load failed: %s", e)
+    # 模拟盘「绑定即评估」: 把账户绑定但无监控规则的策略注入评估循环
+    # (set_rules 全量覆盖, 必须在其后注入; 失败不阻断启动)。
+    try:
+        from app.strategy import paper_watch
+
+        synced = paper_watch.sync(store.data_dir, monitor_engine, strategy_engine)
+        logger.info("paper watch synced at startup: %d strategies", len(synced["watching"]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("paper watch sync failed (ignored): %s", e)
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
 
@@ -445,10 +502,19 @@ async def _application_lifespan(app: FastAPI):
         current_extension_context(data_dir=store.data_dir, repository=repo),
         extension_registry,
     )
+    from app.services.engine_jobs.manager import EngineJobManager
 
+    try:
+        app.state.engine_job_manager = EngineJobManager(store.data_dir)
+    except Exception:  # noqa: BLE001 — optional engine service failure must not disable the host
+        app.state.engine_job_manager = None
+        logger.error("独立引擎任务服务启动失败，已有功能继续运行", exc_info=False)
     try:
         yield
     finally:
+        engine_manager = getattr(app.state, "engine_job_manager", None)
+        if engine_manager and not engine_manager.shutdown():
+            logger.warning("独立引擎任务进程尚未退出，保留执行锁")
         repo._on_refresh_done = None  # noqa: SLF001
         wd = getattr(app.state, "watchdog", None)
         if wd:
@@ -458,6 +524,9 @@ async def _application_lifespan(app: FastAPI):
         mmanager = getattr(app.state, "mining_manager", None)
         if mmanager:
             mmanager.shutdown()
+        gmanager = getattr(app.state, "guardian_manager", None)
+        if gmanager:
+            gmanager.shutdown()
         if app.state.scheduler:
             app.state.scheduler.shutdown(wait=False)
         ps = getattr(app.state, "pull_scheduler", None)
@@ -478,28 +547,37 @@ async def _application_lifespan(app: FastAPI):
         mrs = getattr(app.state, "minute_refresh", None)
         if mrs:
             mrs.stop()
-        # webhook 投递线程池: 放弃排队投递并关闭, 避免通知静默丢失在 daemon 线程里
-        from app.services.quote_service import shutdown_webhook_executor
+        # webhook/系统通知投递线程池: 放弃排队投递并关闭, 避免通知静默丢失在 daemon 线程里
+        from app.services.quote_service import shutdown_delivery_executors
 
-        shutdown_webhook_executor()
+        shutdown_delivery_executors()
         logger.info("shutdown")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     mining_process_lock = MiningProcessLock(settings.data_dir)
+    lock_acquired = True
     try:
         mining_process_lock.acquire()
     except MiningProcessLockError:
-        # uvicorn 吞掉 lifespan 异常只留一行 startup failed; 桌面版失败页指向
-        # data/desktop.log, 先把真因 (含 traceback) 落盘, 不依赖 uvicorn 的日志行为
-        logger.error("挖掘锁被其他后端实例占用, lifespan 启动失败", exc_info=True)
-        raise
+        # 撞锁不再让整个后端起不来 (典型: 旧实例挂死在 shutdown 持锁不放):
+        # 面板以降级模式启动 — 挖掘启动入口返回 409, 用户可在挖掘页查看
+        # 持有者并 (满足陈旧判定时) 强制释放, 之后自动恢复。
+        lock_acquired = False
+        logger.warning(
+            "挖掘锁被其他进程占用, 面板以降级模式启动 (挖掘功能暂不可用; "
+            "可在挖掘页查看锁状态并强制释放)"
+        )
+    app.state.mining_process_lock = mining_process_lock
+    app.state.mining_lock_acquired = lock_acquired
     try:
         async with _application_lifespan(app):
             yield
     finally:
-        mining_process_lock.release()
+        # 用 lock.acquired 而非启动时的 flag: 强制释放接管后同样要在退出时释放
+        if mining_process_lock.acquired:
+            mining_process_lock.release()
 
 
 app = FastAPI(
@@ -508,6 +586,13 @@ app = FastAPI(
     description="A 股策略 + 回测面板 — TickFlow 适配",
     lifespan=lifespan,
 )
+
+@app.exception_handler(WorkBusyError)
+@app.exception_handler(HeavyJobLimitTimeoutError)
+async def shared_work_busy_handler(request: Request, exc: WorkBusyError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc), "code": "work_busy"},
+                        headers={"Retry-After": "3"})
+
 
 # CORS: 允许局域网访问 (自托管场景, 放开所有来源)
 # 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
@@ -542,6 +627,23 @@ _AUTH_WHITELIST_EXACT = (
     # 白名单, 仍走网关 Bearer 通道
     "/api/events",
 )
+
+
+@app.middleware("http")
+async def workload_middleware(request: Request, call_next):
+    import time
+
+    from app.services.workload import workload
+
+    group = next((name for name in ("screener", "kline", "overview", "watchlist", "backtest")
+                  if request.url.path == f"/api/{name}" or request.url.path.startswith(f"/api/{name}/")), None)
+    if group is None:
+        return await call_next(request)
+    started = time.perf_counter()
+    try:
+        return await call_next(request)
+    finally:
+        workload.record(f"http.{group}", "request", elapsed_s=time.perf_counter() - started)
 
 
 @app.middleware("http")
@@ -608,11 +710,15 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
+app.include_router(chart_indicators.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
 app.include_router(factors.router)
+app.include_router(definitions.router)
 app.include_router(mining.router)
+app.include_router(guardian.router)
+app.include_router(lab.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
@@ -622,18 +728,23 @@ app.include_router(abnormal.router)
 app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
+app.include_router(position_policies.router)
 app.include_router(data.router)
 app.include_router(ext_data.router)
 app.include_router(ext_pages.router)
 app.include_router(task_registry.router)
+app.include_router(engine_jobs.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)
 app.include_router(settings_api.router)
 app.include_router(upgrade_guard_api.router)
 app.include_router(strategy.router)
+app.include_router(strategy_pool.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
+app.include_router(config_backup.router)
+app.include_router(import_center.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(events.router)
@@ -688,6 +799,16 @@ async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> 
         content={"detail": str(exc), "suggestion": exc.suggestion},
     )
 
+
+@app.exception_handler(DailyIntegrityError)
+async def daily_integrity_error_handler(request: Request, exc: DailyIntegrityError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc), "code": "daily_integrity"})
+
+
+@app.exception_handler(ProviderRequestError)
+async def provider_request_error_handler(request: Request, exc: ProviderRequestError) -> JSONResponse:
+    return JSONResponse(status_code=502, content={"detail": str(exc), "code": "provider_request"})
+
 # 生产期静态文件(前端 dist)
 def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
     """挂载前端构建产物: /assets 走静态服务, 根级文件直出, 其余回退 SPA。
@@ -696,8 +817,13 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
     未匹配路径都回退 index.html, 浏览器把 HTML 当图标解析失败, Docker 与桌面
     安装包的浏览器页签因此没有图标。
     """
+    # 旧客户端可能缓存了 text/plain 的 JS/CSS。使用版本化资源地址，连带
+    # 相对路径动态 import 的分块一起绕过旧缓存；保留 /assets 兼容旧链接。
+    asset_base = f"/_static/{__version__}/assets"
     if (static_dir / "assets").exists():
-        target.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+        assets = FrontendStaticFiles(directory=static_dir / "assets")
+        target.mount("/assets", assets, name="assets")
+        target.mount(asset_base, assets, name="versioned-assets")
 
     @target.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
@@ -705,11 +831,14 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
         if full_path and "/" not in full_path and full_path not in (".", ".."):
             asset = static_dir / full_path
             if full_path != "index.html" and asset.is_file():
-                return FileResponse(asset)
+                return frontend_file_response(asset)
         index = static_dir / "index.html"
         if index.exists():
-            return FileResponse(
-                index,
+            markup = index.read_text(encoding="utf-8")
+            for quote in ('"', "'"):
+                markup = markup.replace(f"{quote}/assets/", f"{quote}{asset_base}/")
+            return HTMLResponse(
+                markup,
                 headers={"Cache-Control": "no-store, must-revalidate"},
             )
         return {"error": "frontend not built"}

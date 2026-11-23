@@ -5,8 +5,9 @@ tools= 调用模型, 文本 delta 逐段推给前端; 模型请求工具时执�
 进入下一轮, 正文继续在同一个占位消息上追加。生成任务与事件消费通过
 asyncio.Queue 并行 — 用户在模型思考/取数期间就能看到足迹事件。
 
-失败语义 fail-closed: 无 Key / Codex CLI(无 tools 协议)在入口直接给
-error 事件, 不做纯文本降级; 工具执行错误按既有契约回填给模型继续。
+Codex CLI 通过结构化输出适配相同的工具循环, 每轮完成后产出正文。
+失败语义 fail-closed: 未配置或供应商协议失败时给 error 事件,
+不做纯文本降级; 工具执行错误按既有契约回填给模型继续。
 """
 from __future__ import annotations
 
@@ -20,12 +21,14 @@ from typing import Any
 
 from app.custom.assistant import actions as assistant_actions
 from app.custom.assistant import tools as assistant_tools
+from app.custom.assistant.codex import stream_codex_round
 from app.custom.assistant.prompt import build_system_prompt
 from app.custom.assistant.streaming import stream_openai_round
 from app.services.ai_provider import (
     ai_configured,
     current_ai_context_window,
     current_ai_max_output_tokens,
+    current_reasoning_context_key,
     is_codex_cli_provider,
 )
 
@@ -66,18 +69,26 @@ def _classify_exception(exc: Exception) -> dict[str, str]:
             "input_too_long",
             f"{text} 可开启新对话或缩短提问后重试。",
         )
+    if "Codex CLI" in text and "超时" in text:
+        return _error_event("timeout", text)
     if "超时" in text or "Timeout" in exc.__class__.__name__ or "连接" in text or "Connection" in exc.__class__.__name__:
         return _error_event("network", "AI 服务连接或超时失败, 请稍后重试或检查 AI Base URL / 网络。")
     return _error_event("model", text or exc.__class__.__name__)
 
 
-def _truncate_history(history: list[dict[str, str]]) -> tuple[list[dict[str, str]], bool]:
+def _truncate_history(
+    history: list[dict[str, str]], *, reasoning_context: str | None = None,
+) -> tuple[list[dict[str, str]], bool]:
     """保留最近 N 条消息; 返回 (截断后历史, 是否发生了截断)。"""
-    clean = [
-        {"role": item["role"], "content": str(item.get("content") or "")}
-        for item in history
-        if item.get("role") in {"user", "assistant"} and str(item.get("content") or "").strip()
-    ]
+    clean = []
+    for item in history:
+        if item.get("role") not in {"user", "assistant"} or not str(item.get("content") or "").strip():
+            continue
+        message = {"role": item["role"], "content": str(item["content"])}
+        if (item["role"] == "assistant" and isinstance(item.get("reasoning_content"), str)
+                and item.get("reasoning_context") in (None, reasoning_context)):
+            message["reasoning_content"] = item["reasoning_content"]
+        clean.append(message)
     if len(clean) <= _MAX_HISTORY_MESSAGES:
         return clean, False
     start = len(clean) - _MAX_HISTORY_MESSAGES
@@ -93,7 +104,7 @@ def _estimate_input_tokens(messages: list[dict[str, Any]]) -> int:
     """与核心 ai_provider 相同口径的粗估: 中文 1 字 1 token, 其余 4 字符 1 token。"""
     total = 0
     for message in messages:
-        text = str(message.get("content") or "")
+        text = str(message.get("content") or "") + str(message.get("reasoning_content") or "")
         cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         total += cjk + (len(text) - cjk) // 4 + 1
     return max(1, total)
@@ -161,16 +172,9 @@ async def chat_stream(
         yield _line({"type": "done"})
         return
 
-    if is_codex_cli_provider():
-        yield _line(_error_event(
-            "provider",
-            "当前 AI 供应商(Codex CLI)不支持工具调用, AI 助手需要 OpenAI 兼容模型。",
-            _SETTINGS_HINT,
-        ))
-        yield _line({"type": "done"})
-        return
-
-    truncated, was_truncated = _truncate_history(history)
+    stream_round = stream_codex_round if is_codex_cli_provider() else stream_openai_round
+    reasoning_context = current_reasoning_context_key()
+    truncated, was_truncated = _truncate_history(history, reasoning_context=reasoning_context)
     if not truncated:
         yield _line(_error_event("model", "对话历史为空, 请先输入问题。"))
         yield _line({"type": "done"})
@@ -209,7 +213,15 @@ async def chat_stream(
 
         # 动作工具确认闸门: 先发确认卡事件并挂起, 用户点确认后才真正执行。
         # 拒绝/超时按工具错误契约回填(ok=False), 模型据此改走文字建议而非重试。
-        if name in assistant_actions.ACTION_TOOLS:
+        # 用户可在助手界面打开「免确认」偏好跳过这一步 (默认关闭, 见 preferences)。
+        # 轮次检查点走的是下面独立的 rounds_confirm 分支, 不受该开关影响。
+        # 只读调用 (如 create_strategy(show_guide=true) 取编写规范) 不产生写副作用,
+        # 不弹确认卡 —— 否则一个两步的建策略流程要用户点两次。
+        if (
+            name in assistant_actions.ACTION_TOOLS
+            and not assistant_actions.is_read_only_call(name, args)
+            and not assistant_actions.auto_approve_enabled()
+        ):
             action = await assistant_actions.registry.register(call_id, name, args)
             meta = assistant_actions.ACTION_META.get(name, {"label": name, "risk": ""})
             await queue.put({
@@ -257,19 +269,27 @@ async def chat_stream(
 
     async def run() -> None:
         try:
-            _guard_input_budget(req_messages)
             text_seen = False
             tool_rounds = 0
             round_checkpoint = _round_checkpoint()
             while True:
+                _guard_input_budget(req_messages)
                 round_text: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
-                async for event in stream_openai_round(req_messages, schemas, temperature=0.3, timeout=240.0):
+                reasoning_content: str | None = None
+                async for event in stream_round(req_messages, schemas, temperature=0.3, timeout=240.0):
                     if event["type"] == "text":
                         round_text.append(event["delta"])
                         await queue.put({"type": "delta", "content": event["delta"]})
                     elif event["type"] == "round_end":
                         tool_calls = event.get("tool_calls") or []
+                        reasoning_content = event.get("reasoning_content")
+
+                if reasoning_content is not None:
+                    await queue.put({
+                        "type": "assistant_context", "reasoning_content": reasoning_content,
+                        "reasoning_context": reasoning_context,
+                    })
 
                 if not tool_calls:
                     if not round_text and not text_seen:
@@ -315,6 +335,9 @@ async def chat_stream(
                 if round_text:
                     assistant_message["content"] = "".join(round_text)
                     text_seen = True
+                # DeepSeek 思考模式要求工具轮的 reasoning_content 原样回传, 否则下一轮 400。
+                if reasoning_content is not None:
+                    assistant_message["reasoning_content"] = reasoning_content
                 req_messages.append(assistant_message)
 
                 for call in tool_calls:

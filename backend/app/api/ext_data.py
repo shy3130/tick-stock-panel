@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Literal
 
 import polars as pl
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.market_time import CN_TZ, cn_today
+from app.services import ext_config_transfer
 from app.services.ext_data import (
     ExtConfig,
     ExtConfigStore,
@@ -31,8 +33,11 @@ from app.services.ext_data import (
     infer_fields_from_df,
     parse_upload_file,
     rows_to_parquet,
+    run_ext_data_io,
     write_ext_parquet,
 )
+from app.services.ext_data_schema import CreateExtReq, FieldDef, PullConfigReq
+from app.services.ext_data_schema import PullAuthReq as PullAuthReq
 from app.services.ext_pull import _request_json, fetch_and_ingest, pull_scheduler
 
 logger = logging.getLogger(__name__)
@@ -43,21 +48,7 @@ router = APIRouter(prefix="/api/ext-data", tags=["ext-data"])
 # Pydantic 模型
 # ---------------------------------------------------------------------------
 
-class FieldDef(BaseModel):
-    name: str
-    dtype: str = "string"        # string | int | float | bool
-    label: str = ""
 
-
-class CreateExtReq(BaseModel):
-    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
-    label: str = Field(..., min_length=1, max_length=64)
-    mode: Literal["snapshot", "timeseries"]
-    fields: list[FieldDef] = Field(..., min_length=1)
-    description: str = ""
-    symbol_map: dict = {}   # {"type": "mapped", "col": "..."} 或 {"type": "computed", "from": "code", "method": "append_exchange"}
-    code_map: dict = {}     # {"type": "mapped", "col": "..."} 或 {"type": "computed", "from": "symbol", "method": "strip_exchange"}
-    market_level: bool = False  # 市场级表: 行=全市场每日一条, 无 symbol 列 (如择时状态序列)
 
 
 class UpdateExtReq(BaseModel):
@@ -75,52 +66,7 @@ class IngestReq(BaseModel):
     rows: list[dict] = Field(..., min_length=1)
 
 
-class PullAuthReq(BaseModel):
-    """拉取接口鉴权方式 (与自定义行情源 AuthConfig 同口径)。
 
-    Key 本体存 secrets_store (secrets.json), 不写入 config.json。
-    """
-    type: Literal["none", "bearer", "header", "query"] = "none"
-    header: str = Field("Authorization", min_length=1, max_length=64)  # bearer/header 用
-    param: str = Field("token", min_length=1, max_length=64)          # query 用
-
-
-class PullConfigReq(BaseModel):
-    """定时拉取配置请求。"""
-    url: str = Field(..., min_length=1)
-    method: str = "GET"
-    headers: dict[str, str] | None = None
-    body: str | None = None
-    response_path: str = ""          # dot-path to rows array
-    field_map: dict[str, str] | None = None  # external → internal field name
-    schedule_minutes: int = Field(1440, ge=1)
-    enabled: bool = False
-    # 每日固定拉取时刻 "HH:MM" (北京时间): 配置后按墙钟每天该时刻拉一次,
-    # 忽略 schedule_minutes; null = 间隔制 (清除固定时刻)
-    schedule_time: str | None = Field(
-        None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
-    )
-    # 固定时刻的重复周期: daily=每天 | weekly=每周 | monthly=每月 (仅 schedule_time 生效)
-    schedule_period: str | None = Field(None, pattern=r"^(daily|weekly|monthly)$")
-    # weekly: 1=周一..7=周日; monthly: 1..31 (短月无该日则该月跳过)
-    schedule_day: int | None = Field(None, ge=1, le=31)
-    # 仅交易日: 跳过周六日 (法定节假日无法离线判定, 仍会按期尝试, 拉取幂等)
-    schedule_trading_only: bool = False
-    time_window_start: str | None = None   # "HH:MM", None=不限
-    time_window_end: str | None = None     # "HH:MM", None=不限
-    # 接口按日查询的参数名 (如 "date"): 配置后支持历史回补, 且当日拉取也带日期参数
-    date_param: str | None = Field(None, min_length=1, max_length=16, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    # 日期参数值的格式: iso/compact/ts_s/ts_ms (时间戳=该交易日北京时间 00:00:00), 缺省 iso
-    date_format: str = "iso"
-    # 日内序列表时间列名 (字段映射后的列名, 如 "ts"): 配置后同 symbol 允许多行,
-    # 按 [symbol, time_field] 去重; 留空 = 每日快照表 (按 symbol 去重)
-    time_field: str | None = Field(None, max_length=32)
-    # 鉴权方式; 请求中缺省 (None) = 保留现有配置, {"type":"none"} = 关闭鉴权
-    auth: PullAuthReq | None = None
-    # 单次拉取请求超时 (秒), 默认 30 与历史行为一致; 大响应接口可调高
-    timeout_seconds: int = Field(30, ge=5, le=300)
-    # 两级拉取配方 (目录 → 逐条目明细); 缺省 (None) = 保留现有配置
-    fanout: dict | None = None
 
 
 class ApiKeyReq(BaseModel):
@@ -151,6 +97,58 @@ def _store(request: Request) -> ExtConfigStore:
 
 def _data_dir(request: Request) -> Path:
     return request.app.state.repo.store.data_dir
+
+
+_CONFIG_FILE = File(...)
+_CONFIG_ID = Form(None)
+
+
+async def _read_config_package(file: UploadFile) -> bytes:
+    data = await file.read(ext_config_transfer.MAX_UPLOAD + 1)
+    if not data or len(data) > ext_config_transfer.MAX_UPLOAD:
+        raise HTTPException(400, "请选择不超过 4 MiB 的扩展配置 ZIP")
+    return data
+
+
+@router.get("/{config_id}/config/export")
+async def export_config(request: Request, config_id: str):
+    try:
+        data, filename = await run_ext_data_io(ext_config_transfer.export_config, _data_dir(request), config_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "扩展数据配置不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    })
+
+
+@router.post("/config/inspect")
+async def inspect_config_package(request: Request, file: UploadFile = _CONFIG_FILE):
+    data = await _read_config_package(file)
+    try:
+        return await run_ext_data_io(ext_config_transfer.inspect_config, _data_dir(request), data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/config/import")
+async def import_config_package(
+    request: Request, file: UploadFile = _CONFIG_FILE, config_id: str | None = _CONFIG_ID,
+):
+    data = await _read_config_package(file)
+    try:
+        config = await run_ext_data_io(
+            ext_config_transfer.import_config, _data_dir(request), data, config_id=config_id,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(409, "该标识已存在，请修改导入标识；现有配置、数据和 Key 均保留") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await run_ext_data_io(_refresh_views, request)
+    # Imported tables are new and disabled; scheduling begins only when the
+    # recipient explicitly saves an enabled pull configuration.
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +247,9 @@ def _read_ext_dataframe(
     snapshot_date: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    *,
+    columns: list[str] | None = None,
+    required_columns: list[str] | None = None,
 ) -> tuple[pl.DataFrame, str | None]:
     """读取扩展表数据。
 
@@ -259,13 +260,24 @@ def _read_ext_dataframe(
     """
     cfg_dir = data_dir / "ext_data" / config.id
 
+    def collect(lf: pl.LazyFrame) -> pl.DataFrame:
+        if columns:
+            available = lf.collect_schema().names()
+            keep = [c for c in columns if c in available]
+            required = required_columns or []
+            # Preserve full-row fallback for unknown output fields, and retain
+            # the original validation/errors for unknown filter/sort fields.
+            if keep and all(c in available for c in required):
+                lf = lf.select(list(dict.fromkeys([*keep, *required])))
+        return lf.collect()
+
     if config.mode == "snapshot":
         if start_date or end_date:
             raise HTTPException(400, "快照模式无历史分区, 不支持日期范围查询")
         path = cfg_dir / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), None
-        return pl.read_parquet(path), _latest_sync_date(config, data_dir)
+        return collect(pl.scan_parquet(path)), _latest_sync_date(config, data_dir)
 
     base = cfg_dir / "timeseries"
     if not base.exists():
@@ -276,7 +288,7 @@ def _read_ext_dataframe(
         path = base / f"date={day}" / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), day
-        return pl.read_parquet(path), day
+        return collect(pl.scan_parquet(path)), day
 
     partitions = sorted(
         d for d in base.iterdir()
@@ -301,25 +313,28 @@ def _read_ext_dataframe(
         # 没有它, 范围合并后消费方无法区分行来自哪一天。
         frames = []
         for d in selected:
-            f = pl.read_parquet(d / "part.parquet")
+            f = pl.scan_parquet(d / "part.parquet")
+            names = f.collect_schema().names()
             day = d.name[5:]
-            if "date" not in f.columns:
+            if "date" not in names:
                 f = f.with_columns(pl.lit(day).alias("date"))
-            elif "data_date" not in f.columns:
+            elif "data_date" not in names:
                 f = f.with_columns(pl.lit(day).alias("data_date"))
             frames.append(f)
         # diagonal: 各分区 schema 可能不一致 (配置中途加字段 → 早期分区少列),
         # 缺列自动补 null 并取超类型; 单分区时无需 concat
         df = pl.concat(frames, how="diagonal") if len(frames) > 1 else frames[0]
-        return df, f"{selected[0].name[5:]}..{selected[-1].name[5:]}"
+        return collect(df), f"{selected[0].name[5:]}..{selected[-1].name[5:]}"
 
     latest = partitions[-1]
     latest_date = latest.name[5:]
-    return pl.read_parquet(latest / "part.parquet"), latest_date
+    return collect(pl.scan_parquet(latest / "part.parquet")), latest_date
 
 
 def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
-    if df.is_empty() or "symbol" not in df.columns or "name" in df.columns:
+    if df.is_empty() or "symbol" not in df.columns:
+        return df
+    if "name" in df.columns and df["name"].null_count() == 0:
         return df
     path = data_dir / "instruments" / "instruments.parquet"
     if not path.exists():
@@ -328,6 +343,15 @@ def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
         inst = pl.read_parquet(path)
         if "symbol" in inst.columns and "name" in inst.columns:
             inst = inst.select(["symbol", "name"]).unique(subset=["symbol"], keep="last")
+            if "name" in df.columns:
+                lookup_name = "__instrument_name"
+                while lookup_name in df.columns:
+                    lookup_name += "_"
+                return (
+                    df.join(inst.rename({"name": lookup_name}), on="symbol", how="left")
+                    .with_columns(pl.coalesce("name", lookup_name).alias("name"))
+                    .drop(lookup_name)
+                )
             return df.join(inst, on="symbol", how="left")
     except Exception:
         return df
@@ -406,6 +430,84 @@ def _date_range(config: ExtConfig, data_dir: Path) -> list[str] | None:
     return [dates[0], dates[-1]]
 
 
+def _plate_stats(config: ExtConfig, data_dir: Path) -> dict | None:
+    """日内多盘表最新分区的盘次概览 (源卡片展示用)。
+
+    只读最新分区的时间列: 盘数 = 时刻值去重计数, from/to = 时刻范围 (HH:MM:SS,
+    与 collapse_ext_rows_at 的时刻切片同口径, 兼容 ISO 前缀/纯时刻两种列)。
+    非多盘表 (非 timeseries 或未配 time_field)、无分区、列缺失或文件损坏 → None。
+    """
+    if config.mode != "timeseries":
+        return None
+    tf = config.pull.time_field if config.pull else None
+    if not tf:
+        return None
+    base = _ext_data_dir(config, data_dir)
+    if not base.exists():
+        return None
+    parts = sorted(
+        d.name[5:] for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    )
+    if not parts:
+        return None
+    try:
+        col = pl.read_parquet(
+            base / f"date={parts[-1]}" / "part.parquet", columns=[tf]
+        )[tf].cast(pl.Utf8)
+    except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 无多盘信息, 不阻断列表
+        return None
+    if col.is_empty():
+        return None
+    tod = (
+        pl.DataFrame({tf: col})
+        .select(
+            pl.when(pl.col(tf).str.len_chars() >= 11)
+            .then(pl.col(tf).str.slice(11, 8))
+            .otherwise(pl.col(tf))
+            .alias("_tod")
+        )
+        .select(
+            plates=pl.col("_tod").n_unique(),
+            first=pl.col("_tod").min(),
+            last=pl.col("_tod").max(),
+            # 粒度判定 (值形态, 比盘数稳): 存在「含冒号且非 00:00:00」的时刻值
+            # → 日内多盘; 全为日期形态 (无冒号) 或 00:00:00 → 日级别。
+            # 盘后只拉过一两次的日内表不会因此误判 (非零时刻仍在)。
+            intraday=(pl.col("_tod").str.contains(":") & (pl.col("_tod") != "00:00:00")).any(),
+        )
+        .row(0, named=True)
+    )
+    return {
+        "date": parts[-1],
+        "plates": tod["plates"],
+        "from": tod["first"],
+        "to": tod["last"],
+        "granularity": "intraday" if tod["intraday"] else "daily",
+    }
+
+
+def _granularity_effective(config: ExtConfig, data_dir: Path) -> str | None:
+    """序列粒度生效值: 显式声明 > 数据形态自动判断; snapshot 表 → None。
+
+    判断规则 (auto): 未配 time_field → daily (落盘契约「留空 = 每日快照表」);
+    配了 time_field 但尚无可读分区 → intraday (以配置意图为准, 与历史 UI 行为
+    一致); 有数据 → _plate_stats 的值形态判定。
+    """
+    if config.mode != "timeseries":
+        return None
+    declared = config.pull.granularity if config.pull else "auto"
+    if declared in ("intraday", "daily"):
+        return declared
+    tf = config.pull.time_field if config.pull else None
+    if not tf:
+        return "daily"
+    stats = _plate_stats(config, data_dir)
+    if stats is None:
+        return "intraday"
+    return stats["granularity"]
+
+
 @router.get("")
 def list_configs(request: Request):
     """列出所有扩展数据配置。"""
@@ -416,6 +518,8 @@ def list_configs(request: Request):
         d = c.to_dict()
         d["latest_sync_date"] = _latest_sync_date(c, data_dir)
         d["date_range"] = _date_range(c, data_dir)
+        d["plate"] = _plate_stats(c, data_dir)
+        d["granularity_effective"] = _granularity_effective(c, data_dir)
         items.append(d)
     return {"items": items}
 
@@ -436,7 +540,10 @@ def create_config(request: Request, body: CreateExtReq):
         code_map=body.code_map,
         market_level=body.market_level,
     )
-    store.upsert(config)
+    try:
+        store.create(config)
+    except FileExistsError as exc:
+        raise HTTPException(400, "该标识已存在，请使用其他标识") from exc
     _refresh_views(request)
     return config.to_dict()
 
@@ -540,17 +647,26 @@ def list_rows(
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
 
     data_dir = _data_dir(request)
-    df, active_date = _read_ext_dataframe(config, data_dir, snapshot_date, start_date, end_date)
+    requested = [c.strip() for c in (columns or "").split(",") if c.strip()]
+    tf = config.pull.time_field if config.pull else None
+    required = [entry.partition(":")[0].strip() for entry in (filter or [])]
+    if sort:
+        required.append(sort.partition(":")[0].strip())
+    if tf:
+        required.append(tf)
+    df, active_date = _read_ext_dataframe(
+        config, data_dir, snapshot_date, start_date, end_date,
+        columns=["symbol", "code", "name", *requested] if requested else None,
+        required_columns=required,
+    )
     df = _with_instrument_name(df, data_dir)
     # 日内序列表: 按时间列升序, 保证分页/截断取到的是最早的盘
-    tf = config.pull.time_field if config.pull else None
     if tf and tf in df.columns:
         df = df.sort(tf)
     df = _apply_row_filters(df, filter)
     df = _apply_row_sort(df, sort)
     total = len(df)
     df = df.slice(offset, limit)
-    requested = [c.strip() for c in (columns or "").split(",") if c.strip()]
     if requested:
         keep = [c for c in ["symbol", "code", "name", *requested] if c in df.columns]
         if keep:
@@ -884,6 +1000,10 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 async def _write_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> None:
+    await run_ext_data_io(_copy_upload_capped, file, dest, max_bytes)
+
+
+def _copy_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> None:
     """分块把上传文件写入 dest, 累计超过 max_bytes 立即拒绝(413)。
 
     避免一次性 `await file.read()` 把整个文件读入内存(大文件可能触发高内存占用、
@@ -892,7 +1012,7 @@ async def _write_upload_capped(file: UploadFile, dest: Path, max_bytes: int) -> 
     total = 0
     with dest.open("wb") as f:
         while True:
-            chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+            chunk = file.file.read(_UPLOAD_CHUNK_BYTES)
             if not chunk:
                 break
             total += len(chunk)
@@ -909,6 +1029,10 @@ async def upload_data(
     snapshot_date: str | None = None,
 ):
     """上传 CSV/Excel 文件写入扩展数据。"""
+    return await run_ext_data_io(_upload_data, request, config_id, file, snapshot_date)
+
+
+def _upload_data(request: Request, config_id: str, file: UploadFile, snapshot_date: str | None):
     store = _store(request)
     config = store.get(config_id)
     if not config:
@@ -923,7 +1047,7 @@ async def upload_data(
     tmp_dir = Path(tempfile.mkdtemp())
     tmp_path = tmp_dir / f"upload{suffix}"
     try:
-        await _write_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
+        _copy_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
 
         # 直接读取文件，不做列重命名
         if suffix == ".csv":
@@ -1039,6 +1163,7 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         response_path=body.response_path,
         field_map=body.field_map,
         schedule_minutes=body.schedule_minutes,
+        schedule_seconds=body.schedule_seconds,
         enabled=body.enabled,
         schedule_time=body.schedule_time,
         schedule_period=body.schedule_period,
@@ -1049,8 +1174,15 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         date_param=body.date_param,
         date_format=body.date_format,
         time_field=body.time_field,
+        since_param=body.since_param,
+        granularity=body.granularity,
         auth=new_auth,
         timeout_seconds=body.timeout_seconds,
+        page_param=body.page_param,
+        page_size_param=body.page_size_param,
+        page_size=body.page_size,
+        page_start=body.page_start,
+        max_pages=body.max_pages,
         fanout=body.fanout if body.fanout is not None else (old_pull.fanout if old_pull else None),
         last_run=old_pull.last_run if old_pull else None,
         last_status=old_pull.last_status if old_pull else None,
@@ -1141,7 +1273,7 @@ async def test_pull(request: Request, config_id: str):
 async def run_pull(request: Request, config_id: str):
     """手动触发一次拉取并写入。"""
     store = _store(request)
-    config = store.get(config_id)
+    config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
     if not config.pull or not config.pull.url:
@@ -1149,26 +1281,26 @@ async def run_pull(request: Request, config_id: str):
 
     try:
         n, d = await fetch_and_ingest(config, _data_dir(request))
-        _refresh_views(request)
+        await run_ext_data_io(_refresh_views, request)
         # 写回执行状态, 让前端"上次执行"面板立即反映
-        updated = store.get(config_id)
+        updated = await run_ext_data_io(store.get, config_id)
         if updated and updated.pull:
             from datetime import datetime, timezone
             updated.pull.last_run = datetime.now(timezone.utc).isoformat()
             updated.pull.last_status = "success"
             updated.pull.last_message = f"{n} rows @ {d}"
             updated.pull.last_rows = n
-            store.upsert(updated)
+            await run_ext_data_io(store.upsert, updated)
         return {"status": "ok", "rows": n, "date": d}
     except Exception as e:
         # 失败也写回状态, 记录错误信息
-        failed = store.get(config_id)
+        failed = await run_ext_data_io(store.get, config_id)
         if failed and failed.pull:
             from datetime import datetime, timezone
             failed.pull.last_run = datetime.now(timezone.utc).isoformat()
             failed.pull.last_status = "error"
             failed.pull.last_message = str(e)[:200]
-            store.upsert(failed)
+            await run_ext_data_io(store.upsert, failed)
         raise HTTPException(400, f"拉取失败: {e}") from e
 
 
@@ -1185,7 +1317,7 @@ async def backfill_history_ep(
     查询)。幂等 —— 已存在的分区跳过, 失败单日不中断, 结果逐项返回。
     """
     store = _store(request)
-    config = store.get(config_id)
+    config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
     try:
@@ -1200,7 +1332,7 @@ async def backfill_history_ep(
         result = await backfill_history(config, _data_dir(request), start_d, end_d)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    _refresh_views(request)
+    await run_ext_data_io(_refresh_views, request)
     return {"status": "ok", **result}
 
 
@@ -1227,43 +1359,120 @@ def fix_symbol(request: Request, config_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _daily_series(
+    config: ExtConfig,
+    data_dir: Path,
+    field: str,
+    date: str | None,
+    symbols: str | None,
+    days: int,
+) -> dict:
+    """日级粒度序列: 近 N 个分区, 每标的每日一值 [YYYY-MM-DD, value]。
+
+    优先按字段映射后的业务日期或表自带 date 列分日, 缺少日期列时才使用
+    分区日期。同日多行 (误配/补写) 取末个非空值 — 日末定型语义。
+    窗口按「实际存在的分区」截取近 N 个, 中途缺日不补点。
+    """
+    base = _ext_data_dir(config, data_dir)
+    partitions: list[str] = []
+    if base.exists():
+        partitions = sorted(
+            d.name[5:] for d in base.iterdir()
+            if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+        )
+    if date:
+        target = _partition_date(date)
+        partitions = [p for p in partitions if p <= target]
+    empty = {
+        "config_id": config.id, "field": field, "granularity": "daily",
+        "date": partitions[-1] if partitions else None, "items": {},
+    }
+    if not partitions:
+        return empty
+    window = partitions[-days:]
+    df, _ = _read_ext_dataframe(config, data_dir, start_date=window[0], end_date=window[-1])
+    # 日期字段可被映射为「日期」等名称; 拉取分区日期不一定等于业务日期。
+    mapped_date = config.pull.field_map.get("date") if config.pull else None
+    day_col = next((c for c in (mapped_date, "date", "data_date") if c and c in df.columns), None)
+    if df.is_empty() or field not in df.columns or day_col is None or "symbol" not in df.columns:
+        return empty
+
+    if symbols:
+        wanted = [s.strip() for s in symbols.split(",") if s.strip()]
+        df = df.filter(pl.col("symbol").cast(pl.Utf8).is_in(wanted))
+
+    points = (
+        df.select(
+            pl.col("symbol").cast(pl.Utf8).alias("symbol"),
+            pl.col(day_col).cast(pl.Utf8).str.slice(0, 10).alias("d"),
+            pl.col(field).cast(pl.Float64).alias("v"),
+        )
+        .filter(pl.col("v").is_not_null() & pl.col("d").is_not_null() & (pl.col("d") <= window[-1]))
+        .sort(["symbol", "d"], maintain_order=True)
+        .group_by(["symbol", "d"], maintain_order=True)
+        .agg(pl.col("v").last())
+    )
+    items: dict[str, list[list[str | float]]] = {}
+    for row in points.iter_rows(named=True):
+        items.setdefault(row["symbol"], []).append([row["d"], float(row["v"])])
+    return {
+        "config_id": config.id,
+        "field": field,
+        "granularity": "daily",
+        "date": f"{window[0]}..{window[-1]}",
+        "days": len(window),
+        "items": items,
+    }
+
+
 @router.get("/{config_id}/series")
 def ext_series(
     request: Request,
     config_id: str,
     field: str = Query(..., min_length=1, description="数值字段名"),
-    date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区"),
+    date: str | None = Query(None, description="YYYY-MM-DD, 缺省取最新分区; 日级粒度时为近N日窗口右端"),
     symbols: str | None = Query(None, description="逗号分隔标的过滤, 缺省全表"),
+    days: int = Query(10, ge=1, le=60, description="日级粒度的近 N 日窗口"),
+    granularity: Literal["auto", "intraday", "daily"] = "auto",
 ):
-    """日内多盘序列 — 每标的一天的 [HH:MM:SS, value] 点列 (列表迷你图列用)。
+    """扩展列迷你图序列 — 列级显示粒度优先, auto 沿用表的默认粒度。
 
-    仅 timeseries 且配置了 time_field 的表有意义 (如集合竞价); 其他表 400。
-    value 为 null 的盘点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
-    控制响应体积; 无该日分区时 items 为空 (fail-closed, 不回退他日序列)。
+    - intraday (日内多盘, 如集合竞价): 每标的一天的 [HH:MM:SS, value] 点列;
+    - daily (日级别, 如主力净流入每日值): 每标的近 N 日、每日一值
+      [YYYY-MM-DD, value] — 按业务日期分日, 缺少日期列时使用分区日期;
+      无需 time_field, 同日多行取末个非空值 (日末定型语义)。
+    列级覆盖仅影响本次读取, 不修改配置或原始多盘记录。
+    value 为 null 的点剔除 (折线/柱状不画空点)。symbols 用于按可见页过滤,
+    控制响应体积; 无分区时 items 为空 (fail-closed, 不回退其他窗口)。
     """
     config = _store(request).get(config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
+    if config.mode != "timeseries":
+        raise HTTPException(400, "仅时序扩展表支持序列查询")
+    data_dir = _data_dir(request)
+    effective = granularity if granularity != "auto" else _granularity_effective(config, data_dir)
+    if effective == "daily":
+        return _daily_series(config, data_dir, field, date, symbols, days)
     time_field = config.pull.time_field if config.pull else None
-    if config.mode != "timeseries" or not time_field:
+    if not time_field:
         raise HTTPException(400, "仅配置了时间列 (time_field) 的时序扩展表支持序列查询")
 
-    data_dir = _data_dir(request)
     if date:
         day = _partition_date(date)
         path = data_dir / "ext_data" / config_id / "timeseries" / f"date={day}" / "part.parquet"
         if not path.exists():
-            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+            return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
     else:
         df_all, active = _read_ext_dataframe(config, data_dir)
         day = active
         if df_all.is_empty():
-            return {"config_id": config_id, "field": field, "date": day, "items": {}}
+            return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
         path = None
 
     df = pl.read_parquet(path) if path else df_all
     if df.is_empty() or field not in df.columns or time_field not in df.columns:
-        return {"config_id": config_id, "field": field, "date": day, "items": {}}
+        return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
 
     if symbols:
         wanted = [s.strip() for s in symbols.split(",") if s.strip()]
@@ -1283,7 +1492,7 @@ def ext_series(
     items: dict[str, list[list[str | float]]] = {}
     for row in points.select("symbol", "t", "v").iter_rows(named=True):
         items.setdefault(row["symbol"], []).append([row["t"], float(row["v"])])
-    return {"config_id": config_id, "field": field, "date": day, "items": items}
+    return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": items}
 
 
 @router.post("/detect-fields")
@@ -1296,6 +1505,10 @@ async def detect_fields(
     返回 symbol_candidates（数据匹配 000001.SZ 格式的列）和
     code_candidates（数据匹配 6位纯数字的列）。
     """
+    return await run_ext_data_io(_detect_fields, file)
+
+
+def _detect_fields(file: UploadFile):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in (".csv", ".xlsx", ".xls"):
         raise HTTPException(400, "仅支持 CSV / Excel 文件")
@@ -1303,7 +1516,7 @@ async def detect_fields(
     tmp_dir = Path(tempfile.mkdtemp())
     tmp_path = tmp_dir / f"upload{suffix}"
     try:
-        await _write_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
+        _copy_upload_capped(file, tmp_path, _MAX_UPLOAD_BYTES)
 
         # 直接读取，不要求 symbol 列
         if suffix == ".csv":
@@ -1421,6 +1634,27 @@ async def detect_url(body: DetectUrlReq):
     }
 
 
+def _describe_parquet_columns(glob: str) -> list[tuple[str, str]]:
+    """读取 Parquet 的 (列名, 类型), 类型用 DuckDB 类型名 (DOUBLE/BIGINT/VARCHAR…)。
+
+    DESCRIBE 的输出列名随 DuckDB 版本变化: 1.4 及以前是 data_type, 1.5 起是
+    column_type。写死任一名字都会在另一版本整体抛 BinderException, 使 schema
+    端点静默退回配置字段 (列对象只有 dtype 没有 type), 前端按 type 判断数值列
+    的下拉随之变空。这里按实际输出列名取值, 两个版本都可用。
+    """
+    import duckdb
+
+    # hive_partitioning=false: 时序表目录名形如 date=YYYY-MM-DD, DuckDB 默认据此
+    # 推断分区并在真实列之外多出一个 date 列, 污染列选择器里的扩展字段。
+    rel = duckdb.query(
+        f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)"
+    )
+    names = rel.columns
+    type_idx = names.index("column_type" if "column_type" in names else "data_type")
+    name_idx = names.index("column_name")
+    return [(row[name_idx], row[type_idx]) for row in rel.fetchall()]
+
+
 @router.get("/schema/{config_id}")
 def discover_schema(request: Request, config_id: str):
     """发现扩展数据的实际 Parquet schema（基于已有数据）。"""
@@ -1432,14 +1666,15 @@ def discover_schema(request: Request, config_id: str):
     glob = _parquet_glob(config, data_dir)
 
     try:
-        import duckdb
-        rows = duckdb.query(
-            f"SELECT column_name, data_type FROM (DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true))"
-        ).fetchall()
-        return {"columns": [{"name": r[0], "type": r[1]} for r in rows]}
+        return {"columns": [
+            {"name": name, "type": dtype}
+            for name, dtype in _describe_parquet_columns(glob)
+        ]}
     except Exception:
-        # 无数据时返回配置中定义的字段
-        return {"columns": [f.to_dict() for f in config.fields]}
+        # 无数据时返回配置中定义的字段 — 键名与真实 schema 对齐 (type 而非 dtype)
+        return {"columns": [
+            {"name": f.name, "type": f.dtype, "label": f.label} for f in config.fields
+        ]}
 
 
 @router.get("/schema-all")
@@ -1452,14 +1687,15 @@ def discover_all_schemas(request: Request):
         glob = _parquet_glob(config, data_dir)
 
         try:
-            import duckdb
-            cols = duckdb.query(
-                f"SELECT column_name, data_type FROM (DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true))"
-            ).fetchall()
             field_labels = {f.name: f.label for f in config.fields}
-            columns = [{"name": r[0], "type": r[1], "label": field_labels.get(r[0], r[0])} for r in cols]
+            columns = [
+                {"name": name, "type": dtype, "label": field_labels.get(name, name)}
+                for name, dtype in _describe_parquet_columns(glob)
+            ]
         except Exception:
-            columns = [f.to_dict() for f in config.fields]
+            columns = [
+                {"name": f.name, "type": f.dtype, "label": f.label} for f in config.fields
+            ]
 
         result.append({
             "id": config.id,
@@ -1468,6 +1704,9 @@ def discover_all_schemas(request: Request):
             # 日内多盘表的时间列名 (pull.time_field): 前端据此展示「选盘时刻/迷你图」
             # 列配置; snapshot 表与未配置时间列的表为 null
             "time_field": (config.pull.time_field if config.pull else None),
+            # 生效粒度: intraday=日内多盘 (当日逐盘) | daily=日级别 (近N日) |
+            # null=snapshot 表。列表列自定义器据此选择迷你图形态与序列口径
+            "granularity": _granularity_effective(config, data_dir),
             "columns": columns,
         })
     return {"items": result}

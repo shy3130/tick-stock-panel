@@ -135,6 +135,9 @@ export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, 
                   <div className="mt-1 text-[11px] text-muted">
                     回测 {periodStart} ~ {periodEnd} · {trades.length} 笔交易
                   </div>
+                  {result?.config.snapshot && (
+                    <p className="mt-1 text-xs text-secondary">图表使用当前工作区行情</p>
+                  )}
                   <div className="mt-1 text-[10px] text-muted/70">
                     ▲ 买入(红) · ▼ 卖出(绿) · 箭头旁为成交价 · 同日多笔合并显示
                   </div>
@@ -154,9 +157,9 @@ export function PicksSymbolKlineModal({ symbol, result, periodStart, periodEnd, 
                       <div className="text-right">
                         <div className="text-muted">最佳 / 最差</div>
                         <div className="num">
-                          <span className="text-bull">{fmtPct(stat.best)}</span>
+                          <span className={priceColorClass(stat.best)}>{fmtPct(stat.best)}</span>
                           <span className="text-muted"> / </span>
-                          <span className="text-bear">{fmtPct(stat.worst)}</span>
+                          <span className={priceColorClass(stat.worst)}>{fmtPct(stat.worst)}</span>
                         </div>
                       </div>
                     </div>

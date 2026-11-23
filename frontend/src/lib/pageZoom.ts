@@ -16,6 +16,7 @@
  * - z=1 时清空 transform/宽高, 与未开启缩放的状态完全一致。
  */
 import { storage } from '@/lib/storage'
+import { setUiPref } from '@/lib/uiPrefs'
 
 export const ZOOM_MIN = 0.8
 export const ZOOM_MAX = 1.5
@@ -71,6 +72,8 @@ export function getPageZoom(): number {
 /** 持久化并立即生效。 */
 export function setPageZoom(v: number): number {
   const z = clamp(v)
-  storage.pageZoom.set(z)
+  // 经 setUiPref 双写: localStorage 供 index.html 首帧脚本同步读取,
+  // 后端副本保证换端口 (桌面版端口递增 → origin 变化) 后缩放仍能恢复
+  setUiPref('tf-page-zoom', JSON.stringify(z))
   return applyPageZoom(z)
 }

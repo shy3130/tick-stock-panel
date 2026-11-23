@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 import pytest
 
+from app.data_providers.base import ProviderRequestError
 from app.plugins.fuyao import client as fc
 from app.plugins.fuyao import provider as fp
 from app.plugins.fuyao.provider import FuyaoProvider
@@ -457,7 +458,7 @@ def test_save_plugin_key_valid_persists_and_rescans(monkeypatch):
     monkeypatch.setattr(
         settings_api.secrets_store, "mask", lambda key, prefix=4, suffix=4: "abcd••••wxyz"
     )
-    monkeypatch.setattr(custom_sources, "load_all", lambda: reloaded.append(1))
+    monkeypatch.setattr(custom_sources, "refresh_plugin", lambda name: reloaded.append(name))
     monkeypatch.setattr(
         custom_sources, "list_plugins", lambda: [{"name": "fuyao", "available": True}]
     )
@@ -465,7 +466,7 @@ def test_save_plugin_key_valid_persists_and_rescans(monkeypatch):
     assert out["ok"] is True
     assert saved == {"fuyao_api_key": "good-key"}  # 字段名与 provider.SECRETS_FIELD 一致
     assert out["plugin_available"] is True
-    assert reloaded == [1]  # 保存后重扫, 插件即刻可用
+    assert reloaded == ["fuyao"]  # 只刷新当前插件，不关闭其他数据源
 
 
 def test_clear_plugin_key(monkeypatch):
@@ -475,7 +476,7 @@ def test_clear_plugin_key(monkeypatch):
     cleared: list = []
     monkeypatch.setattr(custom_sources, "is_builtin", lambda n: n == "fuyao")
     monkeypatch.setattr(settings_api.secrets_store, "clear", lambda *keys: cleared.extend(keys))
-    monkeypatch.setattr(custom_sources, "load_all", lambda: None)
+    monkeypatch.setattr(custom_sources, "refresh_plugin", lambda name: None)
     monkeypatch.setattr(
         custom_sources, "list_plugins", lambda: [{"name": "fuyao", "available": False}]
     )
@@ -618,6 +619,10 @@ class _FakeHistClient:
             raise fc.FuyaoError("扶摇接口错误 code=4001: 频率超限")
         return [b for b in self.bars.get(thscode, []) if start_ms <= b["date_ms"] <= end_ms]
 
+    def historical_kline_batch(self, thscodes, start_ms, end_ms):
+        # 旧用例专门覆盖整包与旧接口兜底;批量成功契约由独立用例覆盖。
+        raise fc.FuyaoError("测试旧接口回退")
+
     def dump_download_url(self, dump_kind):
         raise fc.FuyaoError("测试环境无 dump")
 
@@ -630,6 +635,7 @@ def _hist_provider(monkeypatch, fake: _FakeHistClient, allow_dumps: bool = False
     monkeypatch.setattr(fp, "fuyao_client", type("M", (), {"FuyaoClient": lambda **kw: fake}))
     monkeypatch.setattr(fp, "get_api_key", lambda: "test-key")
     monkeypatch.setattr(fp, "_HIST_INTERVAL_S", 0.0)
+    monkeypatch.setattr(fp, "_HIST_SMALL_SYMBOL_LIMIT", 0)
     if not allow_dumps:
         # API 路径测试必须与开发机真实 dump 缓存隔离; dump 测试显式传 allow_dumps=True。
         p._ensure_daily_big_dump = lambda start_d: None  # type: ignore[assignment]
@@ -737,12 +743,12 @@ def test_daily_api_deep_window_splits_into_10y_chunks(monkeypatch):
         assert b["start"] == a["end"] + 1  # 连续且不重叠
 
 
-def test_daily_api_soft_fail_per_symbol(monkeypatch):
-    """单标的失败软跳过, 不阻断其余标的。"""
+def test_daily_api_failure_after_batch_fallback_is_explicit(monkeypatch):
+    """批量与旧接口均失败时不得把缺失的股票视为成功。"""
     bars = {"000001.SZ": [_bar(date(2026, 8, 27), 11.05)]}
     provider = _hist_provider(monkeypatch, _FakeHistClient(bars, error_syms=("600519.SH",)))
-    df = provider.get_daily(["600519.SH", "000001.SZ"], datetime(2026, 8, 1), datetime(2026, 8, 28))
-    assert df["symbol"].unique().to_list() == ["000001.SZ"]
+    with pytest.raises(ProviderRequestError, match=r"600519\.SH"):
+        provider.get_daily(["600519.SH", "000001.SZ"], datetime(2026, 8, 1), datetime(2026, 8, 28))
 
 
 def test_iter_daily_api_is_bounded_by_symbol_batch(monkeypatch):
@@ -830,6 +836,59 @@ def test_daily_dump_stale_falls_back_to_api(monkeypatch):
     provider._dump_memo[fp._DAILY10_DUMP_KIND] = _recent_daily_dump()  # max=08-28
     provider.get_daily(["000001.SZ"], datetime(2026, 8, 24), datetime(2026, 9, 4))  # 09-04 周五
     assert provider._get_client().calls != []
+
+
+@pytest.mark.parametrize("deep_window", [False, True])
+def test_daily_dump_refreshes_cached_release_for_new_trading_days(monkeypatch, tmp_path, deep_window):
+    """常驻进程跨日后须检查新 dump, 不能一直拿旧缓存转逐票历史接口。"""
+    class DailyDumpClient(_FakeHistClient):
+        release = "20261027"
+
+        def __init__(self):
+            super().__init__()
+            self.downloads = []
+
+        def dump_download_url(self, dump_kind):
+            return {"presigned_url": f"https://example.test/releases/{self.release}/daily.parquet"}
+
+        def download_dump(self, dump_kind, dest):
+            self.downloads.append(self.release)
+            last = date(2026, 10, 27) if self.release == "20261027" else date(2026, 10, 29)
+            rows = [
+                _dump_bar("000001.SZ", day, close)
+                for day, close in [
+                    (date(2026, 10, 27), 10.0),
+                    (date(2026, 10, 28), 11.0),
+                    (date(2026, 10, 29), 12.0),
+                ] if day <= last
+            ]
+            _daily10_dump(rows).write_parquet(dest)
+            return dest
+
+    client = DailyDumpClient()
+    provider = _hist_provider(monkeypatch, client, allow_dumps=deep_window)
+    monkeypatch.setattr(fp, "_cache_dir", lambda: tmp_path)
+    if deep_window:
+        _daily10_dump([
+            _dump_bar("000001.SZ", date(2026, 10, 12), 9.0),
+            _dump_bar("000001.SZ", date(2026, 10, 27), 10.0),
+        ]).write_parquet(tmp_path / "daily_k__20261027.parquet")
+
+    first = provider.get_daily(
+        ["000001.SZ"], datetime(2026, 10, 27), datetime(2026, 10, 27)
+    )
+    assert first["date"].to_list() == [date(2026, 10, 27)]
+    client.release = "20261029"
+    refreshed = provider.get_daily(
+        ["000001.SZ"], datetime(2026, 10, 12 if deep_window else 27), datetime(2026, 10, 29)
+    )
+    expected_days = ([date(2026, 10, 12)] if deep_window else []) + [
+        date(2026, 10, 27), date(2026, 10, 28), date(2026, 10, 29),
+    ]
+    assert refreshed["date"].to_list() == expected_days
+    assert refreshed["close"].to_list() == ([9.0] if deep_window else []) + [10.0, 11.0, 12.0]
+    assert client.calls == []
+    assert client.downloads == ["20261027", "20261029"]
 
 
 def test_daily_dump_weekend_end_covered(monkeypatch):

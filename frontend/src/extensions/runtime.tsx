@@ -22,6 +22,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { ClassValue } from 'clsx'
 import { loadFrontendExtensions } from './registry'
 import type { FrontendExtension, FrontendExtensionModule } from './types'
+import type { StockPreviewUi } from './stockPreview'
 
 /** mount 挂载上下文: 宿主能力桥(window.__TSP_EXT__ 安装) + 页面卸载通知 */
 export interface PagePackCtx {
@@ -29,6 +30,8 @@ export interface PagePackCtx {
   QK: unknown
   cn: (...inputs: ClassValue[]) => string
   format: unknown
+  /** 可选新增能力；旧版页面包仍只使用 api/QK/cn/format。 */
+  ui?: StockPreviewUi
 }
 
 export interface PagePackRoute {
@@ -60,6 +63,7 @@ export interface RuntimePageMeta {
   label?: string
   path?: string
   error?: string
+  managed_by?: string
 }
 
 /** 产物分发 URL: 同源相对路径, dev(vite 代理)/生产(后端直挂)/桌面端一致。 */
@@ -167,7 +171,11 @@ export async function loadRuntimePageExtensions(opts: LoadRuntimeOptions = {}): 
     const url = runtimeBundleUrl(page.id)
     loaders[`runtime:${page.id}`] = () => {
       const impl = importModule ? importModule(url) : import(/* @vite-ignore */ url)
-      return impl.then(m => ({ default: packToExtension(m.default) }))
+      return withTimeout(impl, timeoutMs).then(m => {
+        const extension = packToExtension(m.default)
+        if (page.managed_by && extension.id !== page.managed_by) throw new Error('页面与配套后端的扩展 ID 不一致')
+        return { default: extension }
+      })
     }
   }
   if (Object.keys(loaders).length === 0) return

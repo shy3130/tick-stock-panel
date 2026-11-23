@@ -1,0 +1,289 @@
+{
+  "config": {
+    "asset_type": "stock",
+    "commission_pct": 0,
+    "entry_fill": "open_t+1",
+    "exit_fill": "open_t+1",
+    "fees_pct": 0,
+    "initial_capital": 10000,
+    "matching": "open_t+1",
+    "max_exposure_pct": 1.0,
+    "max_hold_days": null,
+    "max_positions": 1,
+    "minute_fill": false,
+    "position_policy_compute": null,
+    "position_policy_params": null,
+    "position_sizing": "equal",
+    "score_max": null,
+    "score_min": null,
+    "slippage_bps": 0,
+    "stamp_tax_pct": 0,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "trailing_take_profit_activate_pct": null,
+    "trailing_take_profit_drawdown_pct": null
+  },
+  "excluded_nondeterministic_fields": [
+    "result.stats.statistics_ms"
+  ],
+  "fixture": {
+    "entries": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "exits": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ],
+    "rows": [
+      {
+        "close": 10.0,
+        "date": "2025-01-02",
+        "high": 10.0,
+        "low": 10.0,
+        "name": "SYNTHETIC",
+        "open": 10.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      },
+      {
+        "close": 10.0,
+        "date": "2025-01-03",
+        "high": 10.0,
+        "low": 10.0,
+        "name": "SYNTHETIC",
+        "open": 10.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      },
+      {
+        "close": 10.0,
+        "date": "2025-01-06",
+        "high": 10.0,
+        "low": 10.0,
+        "name": "SYNTHETIC",
+        "open": 10.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      },
+      {
+        "close": 11.0,
+        "date": "2025-01-07",
+        "high": 11.0,
+        "low": 11.0,
+        "name": "SYNTHETIC",
+        "open": 11.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      },
+      {
+        "close": 11.0,
+        "date": "2025-01-08",
+        "high": 11.0,
+        "low": 11.0,
+        "name": "SYNTHETIC",
+        "open": 11.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      },
+      {
+        "close": 11.0,
+        "date": "2025-01-09",
+        "high": 11.0,
+        "low": 11.0,
+        "name": "SYNTHETIC",
+        "open": 11.0,
+        "score": 1.0,
+        "signal_limit_down": false,
+        "signal_limit_up": false,
+        "symbol": "600000.SH",
+        "volume": 100000.0
+      }
+    ]
+  },
+  "format": "tivelo-extraction-baseline-v1",
+  "options": {
+    "include_curves": true,
+    "include_monte_carlo": false,
+    "include_per_symbol_stats": true,
+    "include_return_distribution": true,
+    "include_trades": true
+  },
+  "result": {
+    "drawdown_curve": [
+      {
+        "date": "2025-01-02",
+        "value": 0.0
+      },
+      {
+        "date": "2025-01-03",
+        "value": 0.0
+      },
+      {
+        "date": "2025-01-06",
+        "value": 0.0
+      },
+      {
+        "date": "2025-01-07",
+        "value": 0.0
+      },
+      {
+        "date": "2025-01-08",
+        "value": 0.0
+      },
+      {
+        "date": "2025-01-09",
+        "value": 0.0
+      }
+    ],
+    "equity_curve": [
+      {
+        "cash": 10000.0,
+        "date": "2025-01-02",
+        "exposure": 0.0,
+        "positions": 0,
+        "value": 10000.0
+      },
+      {
+        "cash": 0.0,
+        "date": "2025-01-03",
+        "exposure": 1.0,
+        "positions": 1,
+        "value": 10000.0
+      },
+      {
+        "cash": 0.0,
+        "date": "2025-01-06",
+        "exposure": 1.0,
+        "positions": 1,
+        "value": 10000.0
+      },
+      {
+        "cash": 11000.0,
+        "date": "2025-01-07",
+        "exposure": 0.0,
+        "positions": 0,
+        "value": 11000.0
+      },
+      {
+        "cash": 11000.0,
+        "date": "2025-01-08",
+        "exposure": 0.0,
+        "positions": 0,
+        "value": 11000.0
+      },
+      {
+        "cash": 11000.0,
+        "date": "2025-01-09",
+        "exposure": 0.0,
+        "positions": 0,
+        "value": 11000.0
+      }
+    ],
+    "per_symbol_stats": [
+      {
+        "best": 0.1,
+        "n_trades": 1,
+        "symbol": "600000.SH",
+        "total_return": 0.1,
+        "win_rate": 1.0,
+        "worst": 0.1
+      }
+    ],
+    "stats": {
+      "annual_return": 53.7637,
+      "avg_exposure": 0.3333,
+      "avg_holding_days": 2.0,
+      "avg_loss": 0.0,
+      "avg_pnl": 0.1,
+      "avg_win": 0.1,
+      "best": 0.1,
+      "calmar": 0.0,
+      "execution": {
+        "buy_cash": 0,
+        "buy_exposure": 0,
+        "buy_invalid_price": 0,
+        "buy_limit_up": 0,
+        "buy_lot_size": 0,
+        "buy_no_slot": 0,
+        "buy_same_day_reentry": 0,
+        "buy_score_filter": 0,
+        "buy_suspended": 0,
+        "pending_exit": 0,
+        "sell_invalid_price": 0,
+        "sell_limit_down": 0,
+        "sell_suspended": 0
+      },
+      "final_equity": 11000.0,
+      "initial_capital": 10000.0,
+      "market_matrix_bytes": 342,
+      "market_matrix_shape": [
+        6,
+        1
+      ],
+      "max_drawdown": 0.0,
+      "max_exposure": 1.0,
+      "median_pnl": 0.1,
+      "n_trades": 1,
+      "pending_exit_positions": 0,
+      "profit_factor": null,
+      "sharpe": 7.1,
+      "sortino": null,
+      "terminal_settlement_count": 0,
+      "total_return": 0.1,
+      "win_rate": 1.0,
+      "worst": 0.1
+    },
+    "trades": [
+      {
+        "blocked_exit_days": 0,
+        "duration": 2,
+        "entry_date": "2025-01-03",
+        "entry_price": 10.0,
+        "entry_score": 1.0,
+        "entry_signal_date": "2025-01-02",
+        "entry_signal_id": null,
+        "entry_value": 10000.0,
+        "exit_date": "2025-01-07",
+        "exit_price": 11.0,
+        "exit_reason": "signal",
+        "exit_signal_date": "2025-01-06",
+        "exit_signal_id": null,
+        "exit_value": 11000.0,
+        "lots": 10.0,
+        "name": "SYNTHETIC",
+        "pnl_amount": 1000.0,
+        "pnl_pct": 0.1,
+        "position_pct": 1.0,
+        "shares": 1000.0,
+        "symbol": "600000.SH"
+      }
+    ]
+  },
+  "scope": "One hand-calculated fixed-price case; broader behavior is covered by existing tests.",
+  "semantics": "legacy.tsp.v1"
+}

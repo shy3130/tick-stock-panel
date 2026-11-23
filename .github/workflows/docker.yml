@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 # 触发:
 #   - push 到 main: 覆盖刷新 :latest + :sha(每次提交可追溯)
 #   - 打 v* tag:    额外产出带版本号的镜像(如 :v0.1.43), 便于固定回溯
-#   - 手动:         网页 Actions → Run workflow
+#   - 手动选择候选分支: 仅产出提交 SHA 标签
 on:
   push:
     branches: [main]
@@ -26,6 +26,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # issue #513: 镜像内 VERSION / pyproject / _FALLBACK_VERSION 从
+      # frontend/package.json 派生, 防止发版只改 package.json 时版本漂移。
+      - name: 同步版本号 (从 frontend/package.json 派生)
+        run: python3 scripts/sync_versions.py
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -45,7 +50,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
             type=sha,prefix=
             type=ref,event=tag
 

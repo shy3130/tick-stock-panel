@@ -1,6 +1,6 @@
 # 页面插件开发指南 (Page Pack SDK v1)
 
-页面插件是**运行时可挂载的页面产物**：把页面打包成单文件 ES 模块（`extension.js`），在「设置 → 页面插件」上传，刷新后即成为完整页面——自动注册路由、侧栏入口，可在菜单设置里排序/隐藏。本地 dev、生产构建、桌面端三种运行形态一致生效，宿主无需重新构建。
+页面插件是**运行时可挂载的页面产物**：把页面打包成单文件 ES 模块（`extension.js`），在「设置 → 导入与备份」上传，刷新后即成为完整页面——自动注册路由、侧栏入口，可在菜单设置里排序/隐藏。本地 dev、生产构建、桌面端三种运行形态一致生效，宿主无需重新构建。
 
 ## 快速开始
 
@@ -9,7 +9,11 @@ cp -r frontend/page-pack-template my-pack && cd my-pack
 pnpm install && pnpm build      # → dist/extension.js
 ```
 
-打开宿主「设置 → 页面插件」→ 填 ID（字母/数字/下划线）→ 选择 `dist/extension.js` → 上传并校验 → 刷新页面。
+打开宿主「设置 → 导入与备份」→ 选择 `dist/extension.js` → 预览页面标识（字母/数字/下划线）、确认来源及同名替换 → 导入并校验 → 刷新页面。
+
+### 导入源码或产物
+
+单文件 `.tsx` 或项目内源码页面也可从统一入口导入。当前部署须能解析源码依赖并找到 esbuild；源码编译成功后产物仍按 Page Pack v1 契约校验。源码清单中的受控插槽由项目构建加载，导入为页面包时只保留能挂载的页面能力。现成 `extension.js` 用同一入口预览，刷新后验证页面与菜单。[统一导入的兼容范围](./extension-packages.md#导入与管理)
 
 ## 产物契约 (apiVersion 1)
 
@@ -47,8 +51,52 @@ export default extension
 | `ctx.QK` | 集中查询键（若你自行使用 TanStack Query 可作 key 规范） |
 | `ctx.cn` | 样式类合并工具（clsx + tailwind-merge） |
 | `ctx.format` | 数值/日期格式化工具集 |
+| `ctx.ui?.openStockPreview(options)` | 打开宿主个股详情，复用日K、分时、自选、监控等原有操作 |
+| `ctx.ui?.closeStockPreview()` | 关闭公共个股详情弹窗 |
 
 **禁止** import 宿主内部模块（`@/lib/...` 等别名在产物构建中不可解析）；数据请求一律经 `ctx.api`，不得自行拼后端 URL 绕过封装。
+
+### 调用个股详情
+
+运行时页面不需要自己挂图表组件，也不把宿主图表引擎打进页面包。在 `mount(el, ctx)` 中使用能力桥：
+
+```ts
+const items = [
+  { symbol: '159558.SZ', name: '半导体设备ETF易方达' },
+  { symbol: '605365.SH', name: '立达信' },
+]
+
+button.onclick = () => {
+  const opened = ctx.ui?.openStockPreview({
+    symbol: items[0].symbol,
+    name: items[0].name,
+    navList: items,
+  })
+  // false：参数无效；undefined：旧宿主尚未提供 ui 能力。
+  if (!opened) status.textContent = '请检查完整代码，并确认宿主支持个股详情调用'
+}
+// 需要主动关闭时：ctx.ui?.closeStockPreview()
+```
+
+`symbol` 必填，使用六位数字加 `.SH`、`.SZ` 或 `.BJ` 的完整代码，股票、ETF、指数复用宿主的资产路由；不会按数字猜市场或资产类型。首尾空白和大小写会归一化。
+`name` 可省略或为 `null`。`navList` 可省略；传入当前列表后，标的在列表中且至少有两个有效标的时，启用原来的前后切股按钮和方向键。
+列表会复制、过滤无效项并按代码去重，保留调用方顺序。
+
+公共入口在当前窗口复用一个弹窗，连续调用更新当前标的，不叠加弹窗；未传入新列表时不沿用上一次列表。
+关闭仍使用原来的退出动画和查询清理，宿主路由切换或退出应用外壳会清空请求；不会新增独立行情缓存、轮询或后台任务。
+`ui` 是 v1 的可选新增能力，旧页面包无需修改；新页面在旧宿主运行时应先检测 `ctx.ui`。
+
+源码扩展（随宿主构建或通过源码导入编译）可使用公开入口：
+
+```tsx
+import { openStockPreview, closeStockPreview } from '@/extensions/stockPreview'
+
+<button onClick={() => openStockPreview({ symbol: '159558.SZ' })}>查看详情</button>
+```
+
+该公开模块只转发到宿主能力桥，不携带独立弹窗状态；源码编译为自包含页面后仍打开宿主弹窗。
+宿主尚未提供该能力时，公开函数返回 `false`，关闭函数可安全调用。
+手工维护的 Page Pack 工程继续使用 `ctx.ui`，不要导入宿主内部组件或复制其查询逻辑。
 
 ## 图标白名单
 
@@ -69,4 +117,10 @@ export default extension
 | --- | --- | --- |
 | 页面插件（运行时产物） | 免重建挂载、独立分发 | 本文档 |
 | 源码级扩展 `frontend/src/custom/<ns>/extension.tsx` | 随宿主一起构建维护、可用全部核心模块 | `docs/secondary-development.md` §3 |
-| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 扩展页面 |
+| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 页面管理 → 扩展页面 |
+
+配套后台扩展可使用 [前后端完整包](extension-packages.md)；单独上传 JS/TSX 只导入前端页面。
+
+## 交给 AI 开发
+
+给出页面路由、要读取的数据、表格列和预期操作。请 AI 先从 `frontend/page-pack-template/src/extension.tsx` 复制最小清单，使用 SDK 暴露的 `ctx`，再打包及检查唯一 ID、路由冲突、读取权限、返回清理函数和刷新后的导航。需要宿主局部插槽时，从 [源码扩展契约](./secondary-development.md#3-前端扩展规范)开始。

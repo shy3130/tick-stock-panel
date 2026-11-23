@@ -12,6 +12,8 @@ import { useEffect, useRef, type ReactNode } from 'react'
  * 视觉: 提供居中遮罩 + 面板容器, 面板样式由 panelClassName 定制。
  */
 export interface ModalProps {
+  /** 子对话框打开时暂停父层焦点陷阱和快捷键。 */
+  active?: boolean
   onClose: () => void
   children: ReactNode
   /** 对话框标题元素 id (用于 aria-labelledby) */
@@ -38,6 +40,7 @@ const FOCUSABLE = [
 ].join(',')
 
 export function Modal({
+  active = true,
   onClose,
   children,
   labelledBy,
@@ -48,6 +51,8 @@ export function Modal({
   closeOnBackdrop = true,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const activeRef = useRef(active)
+  activeRef.current = active
   // 记录鼠标按下时是否落在遮罩(而非面板)上。
   // 仅当 mousedown 和 mouseup 都在遮罩时才视为"点击遮罩关闭",
   // 避免在面板内拖选文本时鼠标移出面板边缘导致误关 (拖拽穿透)。
@@ -77,6 +82,7 @@ export function Modal({
     const raf = requestAnimationFrame(focusFirst)
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!activeRef.current) return
       if (e.key === 'Escape') {
         e.stopPropagation()
         onCloseRef.current()
@@ -134,7 +140,8 @@ export function Modal({
       <div
         ref={panelRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal={active ? true : undefined}
+        aria-hidden={active ? undefined : true}
         aria-labelledby={labelledBy}
         aria-label={labelledBy ? undefined : ariaLabel}
         tabIndex={-1}

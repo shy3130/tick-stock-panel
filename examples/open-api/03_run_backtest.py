@@ -1,8 +1,7 @@
 """示例 3 — 策略与回测 (scope: read:analysis + run:backtest)。
 
-列出策略清单 → 用纯 Polars 引擎跑一次策略回测 (所有安装自带, 无需 vectorbt)
-→ 读关键指标。GET /api/backtest/status 可查历史任务;
-POST /api/backtest/run 是 vectorbt 信号回测, 需 `uv sync --extra backtest`。
+列出策略清单，用内置 Tivelo 引擎运行一次策略回测并读取关键指标。
+POST /api/backtest/run 提供同一引擎支持的信号回测。
 """
 from datetime import date, timedelta
 

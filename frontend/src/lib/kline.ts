@@ -40,7 +40,10 @@ export function mergeLatestKlineRow(
   current: KlineDailyResponse | undefined,
   latest: KlineDailyLatestResponse,
 ): KlineDailyResponse | undefined {
-  if (!current || !latest.row || current.symbol !== latest.symbol) return current
+  if (!current || current.symbol !== latest.symbol) return current
+  if (latest.asset_type && latest.asset_type !== current.asset_type) current = { ...current, asset_type: latest.asset_type }
+  if (latest.quote_freshness) current = { ...current, quote_freshness: latest.quote_freshness }
+  if (!latest.row) return current
 
   const latestDate = String(latest.row.date).slice(0, 10)
   const last = current.rows.at(-1)
@@ -79,8 +82,16 @@ const CLOSE_MINUTE = '15:00'
 const MARKET_ALL_OVER = '15:30'
 
 /** 北京时间今日 YYYY-MM-DD (与后端 cn_today 同口径; 不用 UTC toISOString, 避免傍晚错日)。 */
-function cnToday(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+export function cnToday(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(now)
+}
+
+export function klineDateRange(months = 6, today = cnToday()): { start: string; end: string } {
+  const [year, month, day] = today.split('-').map(Number)
+  const start = new Date(Date.UTC(year, month - 1 - months, 1))
+  const lastDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate()
+  start.setUTCDate(Math.min(day, lastDay))
+  return { start: start.toISOString().slice(0, 10), end: today }
 }
 
 /** 北京时间此刻 'HH:MM'。 */

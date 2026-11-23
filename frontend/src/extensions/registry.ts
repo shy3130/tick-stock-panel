@@ -66,6 +66,9 @@ function registerExtension(extension: FrontendExtension) {
   const localSlotIds = new Set<string>()
   for (const slot of extension.slots ?? []) {
     assertId(slot.id, '插槽实现 ID')
+    if (slot.name === 'stock-preview.tabs' && (typeof slot.label !== 'string' || !slot.label.trim())) {
+      throw new Error(`个股详情标签 ${slot.id} 缺少标题 label`)
+    }
     const key = `${slot.name}:${slot.id}`
     if (localSlotIds.has(key)) throw new Error(`扩展内插槽实现重复: ${key}`)
     if ((slots.get(slot.name) ?? []).some(item => item.id === slot.id)) {
@@ -91,10 +94,16 @@ function registerExtension(extension: FrontendExtension) {
 export async function loadFrontendExtensions(
   modules: Record<string, () => Promise<FrontendExtensionModule>>,
 ) {
-  for (const source of Object.keys(modules).sort()) {
+  const sources = Object.keys(modules).sort()
+  // Fetch concurrently, then register in source order so duplicate-ID winners
+  // and error ordering remain deterministic regardless of network timing.
+  const loaded = await Promise.allSettled(sources.map(source => Promise.resolve().then(modules[source])))
+  for (const [index, source] of sources.entries()) {
     let extension: FrontendExtension | undefined
     try {
-      extension = (await modules[source]()).default
+      const result = loaded[index]
+      if (result.status === 'rejected') throw result.reason
+      extension = result.value.default
       if (!extension) throw new Error('模块必须 default export FrontendExtension')
       registerExtension(extension)
     } catch (error) {

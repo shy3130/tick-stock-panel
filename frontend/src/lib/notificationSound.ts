@@ -120,6 +120,10 @@ export function playNotificationSound() {
     const ctx = getCtx()
     if (!ctx) return
 
+    if (isCustomSoundKey(sound)) {
+      playCustomSound(sound)
+      return
+    }
     const preset = SOUND_PRESETS[sound]
     if (preset) preset(ctx)
   } catch {
@@ -145,10 +149,41 @@ export const SOUND_OPTIONS = [
 
 /** 预览声效 (设置页点"试听"用) */
 export function previewSound(sound: string) {
+  if (isCustomSoundKey(sound)) {
+    playCustomSound(sound)
+    return
+  }
   try {
     const ctx = getCtx()
     if (!ctx) return
     const preset = SOUND_PRESETS[sound]
     if (preset) preset(ctx)
   } catch { /* ignore */ }
+}
+
+/** 自定义语音包: key 形如 custom:<文件名>, 文件存后端 data/sound_packs */
+export const CUSTOM_SOUND_PREFIX = 'custom:'
+
+export function customSoundUrl(key: string): string {
+  const filename = key.slice(CUSTOM_SOUND_PREFIX.length)
+  return `/api/settings/sound-packs/${encodeURIComponent(filename)}/file`
+}
+
+/** 播放用户上传的音频 (HTMLAudioElement 即取即播, 失败静默) */
+function playCustomSound(key: string) {
+  try {
+    const audio = new Audio(customSoundUrl(key))
+    audio.play().catch(() => { /* 文件缺失/格式不支持时静默 */ })
+  } catch { /* ignore */ }
+}
+
+export function isCustomSoundKey(key: string): boolean {
+  return key.startsWith(CUSTOM_SOUND_PREFIX)
+}
+
+/** 合成声效 + 自定义语音包 → 下拉选项 ('无声' 恒排末尾) */
+export function mergeSoundOptions(packNames: string[]): { key: string; label: string }[] {
+  const synth = SOUND_OPTIONS.filter(o => o.key !== 'none')
+  const custom = packNames.map(n => ({ key: CUSTOM_SOUND_PREFIX + n, label: n }))
+  return [...synth, ...custom, { key: 'none', label: '无声' }]
 }

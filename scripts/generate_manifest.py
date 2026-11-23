@@ -24,7 +24,7 @@ EXCLUDED_SUFFIXES = {".pyc", ".log", ".tmp"}
 
 
 def _is_excluded(rel: str, name: str) -> bool:
-    if rel in EXCLUDED_DIRS or rel.split("/", 1)[0] in EXCLUDED_DIRS:
+    if any(part in EXCLUDED_DIRS for part in rel.split("/")):
         return True
     if name in EXCLUDED_NAMES:
         return True
@@ -42,7 +42,7 @@ def _sha256(path: Path) -> str:
 def generate(root: Path, *, version: str) -> dict[str, object]:
     files: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
         if _is_excluded(rel, path.name):

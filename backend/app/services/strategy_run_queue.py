@@ -19,8 +19,13 @@ import os
 import queue
 import threading
 import time
+import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
+
+from app.services.shared_work import WorkBusyError
+from app.services.workload import workload
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +84,17 @@ class StrategyRunHandle:
 
     def __init__(self, key: tuple, ordered_ids: list[str]) -> None:
         self.key = key
+        self.id = uuid.uuid4().hex
         self.started_at_ms = int(time.time() * 1000)
         self.finished_at_ms: int | None = None
+        self.source_version: object = None
+        self.queued_at = time.monotonic()
         self._lock = threading.Lock()
         self._results: dict[str, dict] = {}
         self._remaining: list[str] = list(ordered_ids)
         self._errors: dict[str, str] = {}
         self._error: str | None = None
+        self._error_status = 500
         self._done = False
 
     def complete(self, sid: str, payload: dict) -> None:
@@ -101,10 +110,12 @@ class StrategyRunHandle:
             if sid in self._remaining:
                 self._remaining.remove(sid)
 
-    def fail(self, message: str) -> None:
+    def fail(self, message: str, *, status_code: int = 500) -> None:
         with self._lock:
             self._error = message
+            self._error_status = status_code
             self._done = True
+            self.finished_at_ms = int(time.time() * 1000)
 
     def finish(self) -> None:
         with self._lock:
@@ -120,6 +131,7 @@ class StrategyRunHandle:
                 "pending": list(self._remaining),
                 "errors": dict(self._errors),
                 "error": self._error,
+                "error_status": self._error_status,
                 "done": self._done,
                 "started_at_ms": self.started_at_ms,
             }
@@ -140,8 +152,12 @@ class StrategyRunManager:
     # 完成后 handle 保留时长: 前端 2s 轮询在几分钟内足够拿完全部结果
     KEEP_DONE_MS = 5 * 60 * 1000
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_pending: int = 32, max_recent: int = 128, queue_timeout_s: float = 120) -> None:
         self._lock = threading.Lock()
+        self.execution_lock = threading.RLock()
+        self._admission = threading.BoundedSemaphore(max_pending)
+        self._max_pending, self._max_recent = max_pending, max_recent
+        self._queue_timeout_s = queue_timeout_s
         self._handles: dict[tuple, StrategyRunHandle] = {}
         # 已完成的 handle 暂存区: 分钟策略结果不落盘, 轮询方靠它读最终结果;
         # 与 _handles 分开存放, 保证「已完成不搭车, 重跑即新执行」语义不变
@@ -149,11 +165,40 @@ class StrategyRunManager:
         self._queue: queue.Queue[tuple[StrategyRunHandle, Callable]] = queue.Queue()
         self._worker: threading.Thread | None = None
 
+    @contextmanager
+    def execution(self):
+        from app.services.heavy_job_limiter import shared_heavy_job_limiter
+
+        if not self._admission.acquire(blocking=False):
+            raise WorkBusyError("策略计算等待队列已满，请稍后重试")
+        try:
+            if not self.execution_lock.acquire(timeout=self._queue_timeout_s):
+                raise WorkBusyError("策略计算等待超时，请稍后重试")
+            try:
+                # A cold strategy context can synchronously warm repository history,
+                # which already requires an exclusive reservation. Reserve it upfront
+                # so nested refreshes reuse capacity instead of attempting an upgrade.
+                with shared_heavy_job_limiter.slot("exclusive", timeout=self._queue_timeout_s):
+                    yield
+            finally:
+                self.execution_lock.release()
+        finally:
+            self._admission.release()
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"pending": len(self._handles), "recent": len(self._done_recent),
+                    "max_pending": self._max_pending, "max_recent": self._max_recent}
+
     def get_or_submit(
         self,
         key: tuple,
         ordered_ids: list[str],
         job: Callable[[StrategyRunHandle], None],
+        *,
+        reuse_completed_ms: float = 0,
+        source_version: object = None,
+        on_submit: Callable[[], None] | None = None,
     ) -> StrategyRunHandle:
         now_ms = time.time() * 1000
         with self._lock:
@@ -166,16 +211,52 @@ class StrategyRunManager:
                 ]:
                     del store[k]
             existing = self._handles.get(key)
+            # A caller can observe completion before the worker retires the handle.
+            if existing is not None and existing.snapshot()["done"]:
+                self._done_recent[key] = existing
+                del self._handles[key]
+                existing = None
             if existing is not None:
+                workload.record("strategy.batch", "shared")
                 return existing  # 执行中/排队中: 搭车, 不重复算
             done = self._done_recent.get(key)
+            if done is not None and reuse_completed_ms > 0:
+                snap = done.snapshot()
+                if (done.source_version == source_version and (snap["error"] or snap["errors"])
+                        and done.finished_at_ms is not None and now_ms - done.finished_at_ms < 1000):
+                    return done
+                if (done.source_version == source_version and not snap["error"] and not snap["errors"]
+                        and done.finished_at_ms is not None
+                        and now_ms - done.finished_at_ms < reuse_completed_ms):
+                    workload.record("strategy.batch", "cache_hit")
+                    return done
+            if len(self._handles) >= self._max_pending:
+                workload.record("strategy.batch", "rejected")
+                raise WorkBusyError("策略计算队列已满，请稍后重试")
+            if on_submit is not None:
+                on_submit()
             if done is not None:
                 del self._done_recent[key]  # 已完成: 重跑即新执行 (旧行为)
             handle = StrategyRunHandle(key, ordered_ids)
+            handle.source_version = source_version
             self._handles[key] = handle
-        self._ensure_worker()
-        self._queue.put((handle, job))
+        try:
+            self._ensure_worker()
+            self._queue.put((handle, job))
+        except RuntimeError as exc:
+            handle.fail("无法启动策略计算，请稍后重试")
+            self._retire_if_done(handle)
+            raise WorkBusyError("无法启动策略计算，请稍后重试") from exc
         return handle
+
+    def task_status(self, task_id: str) -> dict | None:
+        with self._lock:
+            handle = next((h for h in (*self._handles.values(), *self._done_recent.values()) if h.id == task_id), None)
+        if handle is None:
+            return None
+        snap = handle.snapshot()
+        return {"id": handle.id, "pending": snap["pending"], "errors": snap["errors"],
+                "error": snap["error"], "complete": snap["done"]}
 
     def _retire_if_done(self, handle: StrategyRunHandle) -> None:
         """worker 收尾后调用: 把 done handle 从执行区挪到暂存区供轮询。"""
@@ -183,8 +264,10 @@ class StrategyRunManager:
             if self._handles.get(handle.key) is handle:
                 del self._handles[handle.key]
                 self._done_recent[handle.key] = handle
+                while len(self._done_recent) > self._max_recent:
+                    self._done_recent.pop(next(iter(self._done_recent)))
 
-    def minute_summaries(self) -> list[dict]:
+    def minute_summaries(self, *, identity: tuple | None = None, asset_type: str | None = None) -> list[dict]:
         """所有分钟 (timeframe='1m') handle 的结果摘要, 供 cached-summary 合并。
 
         分钟策略结果不落 strategy_cache (日线语义), 渐进式转后台后前端靠
@@ -197,6 +280,10 @@ class StrategyRunManager:
         for h in handles:
             if len(h.key) < 2 or h.key[1] != "1m":
                 continue
+            if asset_type is not None and h.key[0] != asset_type:
+                continue
+            if identity is not None and (len(h.key) < 5 or h.key[4] != identity):
+                continue
             snap = h.snapshot()
             out.append({
                 "as_of": h.key[2] if len(h.key) > 2 else None,
@@ -205,6 +292,7 @@ class StrategyRunManager:
                         "total": int(payload.get("total") or 0),
                         "as_of": payload.get("as_of"),
                         "computed_at": payload.get("computed_at"),
+                        "available_at": payload.get("available_at"),
                     }
                     for sid, payload in snap["results"].items()
                 },
@@ -217,13 +305,21 @@ class StrategyRunManager:
         while True:
             handle, job = self._queue.get()
             try:
-                job(handle)
-            except Exception as e:
+                if time.monotonic() - handle.queued_at > self._queue_timeout_s:
+                    raise WorkBusyError("策略计算等待超时，请稍后重试")
+                with self.execution():
+                    workload.record("strategy.batch", "executed")
+                    job(handle)
+            except BaseException as e:
                 logger.exception("run_all 后台执行失败: %s", e)
-                handle.fail(str(e))
+                workload.record("strategy.batch", "failed")
+                handle.fail(str(e), status_code=503 if isinstance(e, (WorkBusyError, TimeoutError)) else 500)
             else:
+                if handle.snapshot()["errors"]:
+                    workload.record("strategy.batch", "failed")
                 handle.finish()
             self._retire_if_done(handle)
+            self._queue.task_done()
 
     def _ensure_worker(self) -> None:
         with self._lock:

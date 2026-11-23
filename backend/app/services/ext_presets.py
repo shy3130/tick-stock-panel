@@ -7,9 +7,13 @@
   - 扩展数据通用逻辑零改动 (ExtConfig / fetch_and_ingest / API / 前端均不动):
     概念/行业所需的「目录 → 逐条目」形态由 PullConfig.fanout 声明式表达,
     通用引擎 (ext_fanout) 执行, 无按 id 的特例分支。
+  - 「只播种一次」: 预设仅在首次安装 (ext_data 下无播种标记) 时创建;
+    之后缺失 = 用户删除过, 重启不复活 (用户可能已接自有概念/行业源,
+    复活会叠加每日重复拉取)。标记独立于表目录, 删表不会误清。
   - 「已存在则跳过」: 绝不覆盖用户已有配置与数据, 老用户零影响。
   - 出厂值变更时定向迁移: 仅当现有配置的 pull 精确命中历代出厂值时整体替换,
-    用户自定义过的一律不碰 (见 _RETIRED_FACTORY_PULLS)。
+    用户自定义过的一律不碰 (见 _RETIRED_FACTORY_PULLS)。迁移不受播种标记
+    限制 — 存活表的出厂配方升级必须继续送达。
   - 拉取失败只记 warning, 不阻断启动 (保持「没数据也能跑」)。
 
 数据来源 (概念/行业共用 fuyao 同花顺指数接口):
@@ -32,6 +36,7 @@ from app.services.ext_data import (
     ExtField,
     PullConfig,
 )
+from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,9 @@ _FUYAO_BOARD_RETRIES = 1
 _FUYAO_KEY_REF = "fuyao_api_key"
 
 _PRESET_IDS = ("ext_gn_ths", "ext_hy_ths")
+
+# 播种标记: 出厂预设只在标记缺失 (首次安装/老库首次升级到播种机制) 时创建。
+_SEED_MARKER = ".builtin_presets_seeded"
 
 
 # ---------------------------------------------------------------------------
@@ -205,24 +213,31 @@ def _is_retired_factory_pull(config_id: str, pull: PullConfig | None) -> bool:
 
 
 async def ensure_builtin_presets(data_dir: Path) -> None:
-    """启动时: 为缺失的预设创建配置, 并把历代出厂空壳/旧配方补齐为当前配方。
+    """启动时: 首次安装创建预设配置, 并把历代出厂空壳/旧配方补齐为当前配方。
 
     安全保证:
+      - 创建仅发生在播种标记缺失时 (全新数据目录, 或老库首次升级到本机制);
+        已播种后预设缺失 = 用户删除过, 绝不复活 (用户可能已接自有源,
+        复活会叠加每日 710 次成分股调用)
       - 已存在且是用户自定义配置 → 跳过, 绝不覆盖用户数据
       - 仅当 pull 为空 / 命中历代出厂配方指纹时, 用当前完整配方替换
+        (配方迁移不受播种标记限制, 存活表的出厂配方升级必须送达)
       - description 仅当命中出厂前缀时同步, 用户自定义描述不动
       - 只写 config.json (不拉数据), 失败只记 warning 不阻断启动
 
     数据获取: 由拉取调度器按 schedule_minutes 执行, 或用户在数据页点「拉取 → 执行」。
     """
     store = ExtConfigStore(data_dir)
+    marker = data_dir / "ext_data" / _SEED_MARKER
+    first_install = not marker.exists()
     for config in _presets():
         try:
             existing = store.get(config.id)
             if existing is None:
-                store.upsert(config)
-                logger.info("内置扩展表 %s 配置已就绪 (含出厂拉取配方)", config.id)
-                continue
+                if first_install:
+                    store.upsert(config)
+                    logger.info("内置扩展表 %s 配置已就绪 (含出厂拉取配方)", config.id)
+                continue  # 已播种后缺失 = 用户删除过, 不复活
 
             changed = False
             if _is_retired_factory_pull(config.id, existing.pull):
@@ -239,3 +254,10 @@ async def ensure_builtin_presets(data_dir: Path) -> None:
                 logger.info("内置扩展表 %s 出厂配方已更新为当前版本", config.id)
         except Exception as e:  # noqa: BLE001 — 启动契约: 预设写入失败不阻断
             logger.warning("内置扩展表 %s 配置写入失败 (不影响启动): %s", config.id, e)
+    if first_install:
+        # 先建配置后落标记: 中途失败下次启动幂等重试 (已建的命中「已存在跳过」)
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(marker, "")
+        except Exception as e:  # noqa: BLE001 — 启动契约: 标记失败不阻断
+            logger.warning("内置预设播种标记写入失败 (下次启动会重试创建): %s", e)

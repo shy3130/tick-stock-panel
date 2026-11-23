@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import errno
 import html
 import logging
 import os
@@ -23,13 +24,14 @@ import sys
 import threading
 import time
 import traceback
-from pathlib import Path
+from typing import BinaryIO
 
 logger = logging.getLogger(__name__)
 
 _APP_NAME = "TSP"
 _BASE_PORT = 3018
 _PORT_PROBE_RANGE = 50  # 从 3018 起最多试 50 个端口
+_instance_lock: BinaryIO | None = None
 
 
 def _failed_html(reason: str | None = None) -> str:
@@ -79,13 +81,12 @@ def _ensure_data_dir_writable() -> None:
 
 
 def _precheck_mining_lock() -> str | None:
-    """启动前预检挖掘锁。返回 None = 可启动; 返回 str = 冲突原因 (给失败页)。
+    """启动前预检挖掘锁。返回 None = 无冲突; 返回 str = 冲突原因 (仅日志)。
 
-    app.main 的 lifespan 第一件事就是抢 data_dir/.mining_process_lock,
-    被别的后端实例 (panel 模式、隧道后端或残留进程) 占住时 lifespan 直接
-    抛 MiningProcessLockError, uvicorn 吞掉后主线程只能等满超时报笼统的
-    "启动失败"。这里用同一把锁试抢一下, 提前把冲突翻译成用户可操作的指引。
-    试抢成功立即释放, 真正的持有仍由 lifespan 负责。
+    app.main 的 lifespan 会抢 data_dir/.mining_process_lock; 被别的后端
+    实例 (panel 模式、隧道后端或残留进程) 占住时, 现在 lifespan 只降级
+    (挖掘入口 409, 面板可用, 挖掘页提供强制释放), 这里提前留一条日志
+    方便排查。试抢成功立即释放, 真正的持有仍由 lifespan 负责。
     """
     from app.config import settings
     from app.services.mining_process_lock import (
@@ -112,38 +113,52 @@ def _precheck_mining_lock() -> str | None:
 def _acquire_single_instance() -> bool:
     """单实例锁。已运行返回 False (本进程应退出), 否则 True。
 
-    用 data_dir/.desktop.lock 文件锁实现。跨进程, 文件存在即视为已运行
-    (简单可靠; 不引入 msvcrt/fcntl 平台差异)。
+    文件内容仅供诊断, 实际以系统文件锁为准。进程崩溃后系统会自动释放,
+    避免残留 PID 被其他进程复用时永远误判为「已运行」。
     """
     from app.config import settings
 
+    global _instance_lock
+    if _instance_lock is not None:
+        return False
+
     lock_path = settings.data_dir / ".desktop.lock"
-    if lock_path.exists():
-        # 软检测: 写入进程 PID, 若该 PID 已不存在则视为残留锁, 允许接管
+    stream = lock_path.open("a+b")
+    try:
+        os.set_inheritable(stream.fileno(), False)
         try:
-            pid_str = lock_path.read_text(encoding="utf-8").strip()
-            pid = int(pid_str) if pid_str.isdigit() else None
-        except Exception:  # noqa: BLE001
-            pid = None
+            if os.name == "nt":
+                import msvcrt
 
-        if pid is not None and _pid_alive(pid):
-            logger.warning("检测到已有实例运行 (PID %d), 本进程退出", pid)
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise
+            logger.warning("检测到已有桌面实例持锁, 本进程退出")
             return False
-        # 残留锁: 清理后继续
-        logger.info("清理残留单实例锁 (PID %s 已不存在)", pid)
 
-    lock_path.write_text(str(_current_pid()), encoding="utf-8")
-    return True
+        stream.seek(0)
+        stream.truncate()
+        stream.write(str(_current_pid()).encode("ascii"))
+        stream.flush()
+        _instance_lock = stream
+        return True
+    finally:
+        if _instance_lock is not stream:
+            stream.close()
 
 
 def _release_single_instance() -> None:
-    from app.config import settings
-
-    lock_path = settings.data_dir / ".desktop.lock"
-    try:
-        lock_path.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
+    global _instance_lock
+    stream, _instance_lock = _instance_lock, None
+    if stream is not None:
+        # 不 unlink: 删除再重建会让并发启动的进程锁住不同文件, 同时通过检查。
+        stream.close()
 
 
 def _guard_streams() -> None:
@@ -249,20 +264,30 @@ def _current_pid() -> int:
     return os.getpid()
 
 
-def _find_free_port(start: int, count: int = _PORT_PROBE_RANGE) -> int:
-    """从 start 起找第一个可用端口。全部被占则返回 start (交给 uvicorn 报错)。"""
+def _reserve_listener(start: int, count: int = _PORT_PROBE_RANGE) -> socket.socket:
+    """保留桌面服务的监听端口，直至 uvicorn 接手。"""
     for port in range(start, start + count):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    return start
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                if port:
+                    # Winsock may let the same user bind loopback over a wildcard
+                    # listener. Probe all interfaces while keeping Uvicorn local.
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                        probe.bind(("0.0.0.0", port))
+            listener.bind(("127.0.0.1", port))
+            # macOS 可允许在通配地址已监听时绑定具体地址；监听成功才算占用成功。
+            listener.listen(socket.SOMAXCONN)
+        except OSError:
+            listener.close()
+            continue
+        return listener
+    raise OSError(f"桌面服务未找到空闲端口 ({start}–{start + count - 1})")
 
 
-def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
+def _run_uvmicorn(listener: socket.socket, ready_event: threading.Event) -> None:
     """后台线程: 启动 uvicorn 服务。ready_event 在线程退出时置位 (通知主线程)。"""
     import uvicorn
 
@@ -276,9 +301,10 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
         ready_event.set()
         return
 
+    host, port = listener.getsockname()
     config = uvicorn.Config(
         app,
-        host="127.0.0.1",  # 仅本机, 不暴露外网 (桌面版无需远程访问)
+        host=host,
         port=port,
         log_level="info",
         access_log=False,    # 桌面版不需要访问日志
@@ -297,7 +323,7 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
     server.config.callback_notify = None  # 不用 notify 机制
 
     try:
-        server.run()
+        server.run(sockets=[listener])
     except Exception:
         # server.run() 内部跑 lifespan 启动链, 任一步抛异常都会冒到这里。
         # 不捕获则线程静默死亡, 主线程 _wait_for_server 傻等满 60s 后报「超时」,
@@ -340,6 +366,14 @@ def _open_window(url: str) -> None:
     """主线程: 用 pywebview 打开桌面窗口。"""
     import webview  # type: ignore[import-not-found]
 
+    from app.config import settings
+
+    # 默认隐私模式会在退出后丢弃 localStorage；用户目录中的固定 profile 才能跨重启保留。
+    storage_path = settings.data_dir / "webview"
+    storage_path.mkdir(parents=True, exist_ok=True)
+    # pywebview 5.0 起默认取消所有文件下载 (Edge WebView2 / WKWebView 一致):
+    # 配置备份导出、回测 CSV 等 <a download> 直链会点击无反应, 必须在 start() 前显式开启。
+    webview.settings["ALLOW_DOWNLOADS"] = True
     window = webview.create_window(
         _APP_NAME,
         url,
@@ -349,8 +383,11 @@ def _open_window(url: str) -> None:
         # 桌面版固定单窗口, 禁用外部浏览器跳转
         confirm_close=False,
     )
-    # pywebview 会阻塞主线程直到窗口关闭
-    webview.start(debug=False)
+    # 继承隐藏启动标志时首次显示可能被抑制, GUI 就绪后再显式显示 (同失败页)。
+    webview.start(
+        lambda: window.show(), debug=False,
+        private_mode=False, storage_path=str(storage_path),
+    )
 
 
 def _open_static_window(html_text: str) -> None:
@@ -389,39 +426,36 @@ def main() -> int:
 
         return run_worker()
 
+    instance_acquired = False
+    listener = None
     try:
         _ensure_data_dir_writable()
-    except Exception:
-        # 数据目录不可写是致命错误, 无法继续
-        return 1
 
-    # 单实例: 已运行则退出
-    if not _acquire_single_instance():
-        return 0
+        if not _acquire_single_instance():
+            return 0
+        instance_acquired = True
 
-    # 挖掘锁预检: 被其他后端实例占住时 lifespan 必败, 提前秒显失败页并给出
-    # 操作指引, 而不是让用户对着超时后的笼统"启动失败"猜 (见 _precheck_mining_lock)
-    conflict = _precheck_mining_lock()
-    if conflict is not None:
-        logger.error("启动预检: %s", conflict.replace("\n", " "))
-        try:
-            _open_static_window(_failed_html(conflict))
-        except Exception:
-            # 失败页自身也打不开 (如缺 webview 依赖) 时不能让异常裸穿 main():
-            # console=False 下进程闪退无反馈, 且本路径在 try/finally 之外,
-            # 单实例锁会跳过释放
-            logger.exception("启动失败页窗口打开失败")
-        _release_single_instance()
-        return 1
+        # Restore before app.main imports or its startup log reads Key/prefs.
+        from app.config import settings
+        from app.desktop_engines.workspaces import logical_root
+        from app.services.data_dir_upgrade import recover_desktop_data
 
-    try:
-        port = _find_free_port(_BASE_PORT)
+        if logical_root(settings.data_dir) == settings.data_dir.resolve():
+            recover_desktop_data(settings.data_dir)
+
+        # 撞挖掘锁只降级, 其他预检异常必须同样落盘、弹框并释放桌面锁。
+        conflict = _precheck_mining_lock()
+        if conflict is not None:
+            logger.warning("启动预检: %s", conflict.replace("\n", " "))
+
+        listener = _reserve_listener(_BASE_PORT)
+        port = listener.getsockname()[1]
         logger.info("桌面版后端将监听 127.0.0.1:%d", port)
 
         # 后台线程起 uvicorn
         ready = threading.Event()
         server_thread = threading.Thread(
-            target=_run_uvmicorn, args=(port, ready), daemon=True,
+            target=_run_uvmicorn, args=(listener, ready), daemon=True,
             name="uvicorn",
         )
         server_thread.start()
@@ -434,6 +468,13 @@ def main() -> int:
                 if ready.is_set() else None
             )
             logger.error("后端未就绪 (reason=%s), 桌面版退出", reason)
+            if not ready.is_set():
+                frame = sys._current_frames().get(server_thread.ident)
+                if frame is not None:
+                    logger.error(
+                        "启动超时，后端线程调用栈:\n%s",
+                        "".join(traceback.format_stack(frame)),
+                    )
             _open_static_window(_failed_html(reason))
             return 1
 
@@ -454,11 +495,23 @@ def main() -> int:
         _show_crash("TSP 启动失败", traceback.format_exc())
         return 1
     finally:
-        _release_single_instance()
+        if listener is not None:
+            listener.close()
+        if instance_acquired:
+            _release_single_instance()
 
 
 if __name__ == "__main__":
     import multiprocessing
 
+    if getattr(sys, "frozen", False):
+        from app.desktop_engines.launcher import launch
+
+        try:
+            sys.exit(launch(main))
+        except (OSError, RuntimeError, ValueError) as exc:
+            if len(sys.argv) == 1:
+                _show_crash("TSP 引擎启动失败", f"{exc}\n\n可使用 TSP --engine status 检查当前组合。")
+            raise
     multiprocessing.freeze_support()
     sys.exit(main())

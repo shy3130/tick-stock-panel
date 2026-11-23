@@ -22,6 +22,7 @@ from typing import Any
 # 须确认才能执行的工具名(工具实现在 tools.py / tool_catalog)。
 ACTION_TOOLS: frozenset[str] = frozenset({
     "create_signal_strategy",
+    "create_strategy",
     "run_backtest",
     "add_to_watchlist",
     "sync_data",
@@ -32,6 +33,10 @@ ACTION_META: dict[str, dict[str, str]] = {
     "create_signal_strategy": {
         "label": "创建自定义信号",
         "risk": "将在信号库写入一个新的信号定义并清空策略/指标缓存",
+    },
+    "create_strategy": {
+        "label": "创建 AI 策略草稿",
+        "risk": "将写入一个 ai_ 策略文件 (草稿态, 需你在策略页发布后才生效)",
     },
     "run_backtest": {
         "label": "运行策略回测",
@@ -110,6 +115,30 @@ class PendingRegistry:
 
 
 registry = PendingRegistry()
+
+
+def auto_approve_enabled() -> bool:
+    """动作工具是否免确认直接执行 (助手界面上的开关, 默认关闭)。
+
+    只影响动作确认; 轮次检查点 (rounds_confirm) 是防跑飞的安全阀, 不受它影响。
+    读取失败一律按关闭处理 —— 宁可多弹一次确认, 也不能因配置异常静默放开写操作。
+    """
+    try:
+        from app.services import preferences
+
+        return bool(preferences.get_assistant_auto_approve_actions())
+    except Exception:  # noqa: BLE001 — 配置不可读时 fail-closed
+        return False
+
+
+def is_read_only_call(name: str, args: dict | None) -> bool:
+    """该次调用是否只读 (虽是动作工具但不产生写副作用), 无需弹确认卡。
+
+    目前只有 create_strategy 的 show_guide=true —— 它只返回策略编写规范,
+    不落盘。两步建策略流程若两步都要确认, 用户会莫名其妙点两次。
+    判据写在这里而非工具内部: 闸门在工具执行前就要决定是否拦, 那时还没有结果。
+    """
+    return name == "create_strategy" and bool((args or {}).get("show_guide"))
 
 
 def new_call_id() -> str:

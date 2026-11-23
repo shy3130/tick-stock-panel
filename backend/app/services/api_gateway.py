@@ -146,7 +146,7 @@ def required_scope(method: str, path: str) -> str | None:
     for m, prefix, scope in _RULES:
         if (m == "*" or m == method) and (path == prefix or path.startswith(prefix.rstrip("/") + "/")):
             # read:ext 域内的拉取 Key 状态子路径属管理面 (脱敏也不外露)
-            if scope == "read:ext" and path.endswith("/api-key"):
+            if scope == "read:ext" and path.endswith(("/api-key", "/config/export")):
                 return None
             return scope
     if path.startswith("/api/ext-data/"):

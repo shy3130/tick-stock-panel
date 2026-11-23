@@ -1,6 +1,6 @@
 """扶摇(同花顺金融数据 API) HTTP 客户端。
 
-职责: 认证、统一信封解包、快照分页、单标的日K、市场 dump 下载。不知道 provider / services 层。
+职责: 认证、统一信封解包、快照分页、单标的/批量日K、市场 dump 下载。不知道 provider / services 层。
 文档: https://fuyao.aicubes.cn/docs — REST + X-api-key, 响应信封 {code, message, data}。
 
 时间字段口径: 所有 *ms 字段(含 start/end 入参与 date_ms/ex_date_ms 出参)均为
@@ -15,9 +15,16 @@ from pathlib import Path
 
 import httpx
 
-logger = logging.getLogger(__name__)
+# Keep the module imports used by existing TSP plugins and their callers.
+from tivelo_data.legacy.fuyao_history import (  # noqa: F401
+    BASE_URL,
+    HISTORICAL_BATCH_LIMIT,
+    FuyaoError,
+    FuyaoHistoryClient,
+    FuyaoUnknownSymbolError,
+)
 
-BASE_URL = "https://fuyao.aicubes.cn"
+logger = logging.getLogger(__name__)
 
 # 单页 6000 覆盖全市场(实测 ~5600 含北交所, 2026-08 服务端不截断 limit=6000),
 # 一次请求拉完; 分页循环兜底未来标的扩容或服务端改为截断的场景。
@@ -26,43 +33,8 @@ _SNAPSHOT_MAX_PAGES = 50
 _PAGE_INTERVAL_S = 0.15  # 页间隔, 降低触发限频 (code=4001) 的概率
 
 
-class FuyaoError(Exception):
-    """扶摇接口错误(配置缺失 / 网络失败 / 信封 code != 0)。"""
-
-
-class FuyaoClient:
-    """扶摇 REST 客户端 (线程安全: httpx.Client 可并发复用)。"""
-
-    def __init__(self, api_key: str, base_url: str = BASE_URL, timeout: float = 20.0) -> None:
-        if not api_key:
-            raise FuyaoError("未配置 FUYAO_API_KEY")
-        self.last_server_ts = 0  # 最近一页响应里的服务端时间戳(ms), 供行情归属
-        self._http = httpx.Client(
-            base_url=base_url,
-            headers={"X-api-key": api_key},
-            timeout=timeout,
-        )
-
-    def close(self) -> None:
-        self._http.close()
-
-    # ---- 内部 ----
-    def _get(self, path: str, params: dict) -> dict:
-        """GET + 信封解包。code != 0 时抛 FuyaoError(含 code 与 message)。"""
-        try:
-            resp = self._http.get(path, params=params)
-        except httpx.HTTPError as e:
-            raise FuyaoError(f"网络请求失败: {e}") from e
-        if resp.status_code != 200:
-            raise FuyaoError(f"HTTP {resp.status_code}: {path}")
-        try:
-            payload = resp.json()
-        except ValueError as e:
-            raise FuyaoError(f"响应不是 JSON: {path}") from e
-        code = payload.get("code")
-        if code not in (0, "0", None):
-            raise FuyaoError(f"扶摇接口错误 code={code}: {payload.get('message', '')} ({path})")
-        return payload.get("data") or {}
+class FuyaoClient(FuyaoHistoryClient):
+    """扶摇行情、财务及市场数据客户端。"""
 
     # ---- 快照 ----
     def snapshot_page(
@@ -138,29 +110,6 @@ class FuyaoClient:
         return rows, server_ts
 
     # ---- 历史日K ----
-    def historical_kline(
-        self, thscode: str, start_ms: int, end_ms: int, adjust: str = "none"
-    ) -> list[dict]:
-        """单标的日K(interval=1d 固定)。单次窗口 ≤10 年, 超出由调用方分片。
-
-        adjust 必须显式传 "none" 取原始价 — 服务端默认是 forward(前复权),
-        官方前复权序列事件间存在逐日漂移, 项目内禁止使用。
-        返回 data.item 原始行: {date_ms, open_price, high_price, low_price,
-        close_price, volume(股), turnover(元)}。
-        """
-        data = self._get(
-            "/api/a-share/prices/historical",
-            {
-                "thscode": thscode,
-                "interval": "1d",
-                "adjust": adjust,
-                "start": int(start_ms),
-                "end": int(end_ms),
-            },
-        )
-        rows = data.get("item")
-        return rows if isinstance(rows, list) else []
-
     # ---- 财务 ----
     # 端点均单标的(thscode 不接受逗号)。取数模式二选一: limit=最近N期 或 start/end 区间,
     # 这里只用 limit。period=quarterly 覆盖每个季度末(含年报期), 与项目"各报告期累积"口径一致。

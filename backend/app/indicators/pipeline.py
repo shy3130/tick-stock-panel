@@ -20,10 +20,12 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable
+from datetime import date
 from datetime import timedelta as _timedelta
 from pathlib import Path
 
 import polars as pl
+from tivelo_data.legacy.frame import filter_halt_days
 
 from app.config import settings
 from app.enriched_generation import (
@@ -653,7 +655,9 @@ def _needed_references_limit_prices(needed: set[str]) -> bool:
             return True
     return False
 
-def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.DataFrame:
+def compute_signals(
+    df: pl.DataFrame, needed: set[str] | None = None, *, attach_extensions: bool = True,
+) -> pl.DataFrame:
     """注入自定义信号布尔列 (含迁移自内置的 signal_* 定义)。
 
     输入必须包含 compute_indicators() 产出的指标列。
@@ -666,7 +670,8 @@ def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.Data
     # 都按列存在性解析。历史多日帧仅注入时序模式 —— 快照代表"最新值",
     # 历史回看注入会引入未来数据 (CONTRIBUTING §5.3)。
     from app.factors import ext_factors
-    df = ext_factors.attach_ext_columns(df, include_snapshot=False)
+    if attach_extensions:
+        df = ext_factors.attach_ext_columns(df, include_snapshot=False)
     # 条件引用的注册表因子列先复用评分物化管线补算 (虚拟/自定义/复合均可)。
     from app.strategy import custom_signals
     exprs = _get_custom_signal_exprs()
@@ -805,19 +810,26 @@ def compute_limit_signals(
         df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("turnover_rate"))
 
     # 前一日参考收盘价（交易所涨跌停基准价）
-    # 仅在 adj_factor 发生变化（除权除息 XD/DR）时使用前复权昨收作为交易所参考价;
-    # 否则使用原始 raw_close.shift(1) 以避免浮点精度误差。
+    # 仅在 adj_factor 发生变化（除权除息 XD/DR）时用 前复权昨收/当日复权比例 还原到
+    # 当日口径 (即交易所除权参考价 = raw_prev / ex_factor); 否则使用原始
+    # raw_close.shift(1) 以避免浮点精度误差。注意不能直接用前复权昨收 —— 它还被
+    # 更晚的除权事件缩放过, 会把限价压低 F(prev)/F(today) 倍 (除权日误判封板)。
     if not need_price_limits:
         cleanup = [c for c in ("name", "float_shares", "limit_up", "limit_down", "listing_date") if c in df.columns]
         return df.drop(cleanup)
 
     _adj_today = pl.col("close") / pl.col("raw_close")
     _adj_yesterday = pl.col("close").shift(1).over("symbol") / pl.col("raw_close").shift(1).over("symbol")
-    _adj_changed = (_adj_today - _adj_yesterday).abs() > 1e-6
+    # raw_close=0 等脏行会让 _adj_today 变 inf: 不守卫的话 then 分支除以 inf 得
+    # 参考价 0, 产出行内一致的"涨停价 0"; 这里要求比例有限且为正, 脏行退化为
+    # 原始昨收口径 (与 matrix 路径的 current_raw>0 守卫对齐)。
+    _adj_changed = (
+        (_adj_today - _adj_yesterday).abs() > 1e-6
+    ) & _adj_today.is_finite() & (_adj_today > 0)
     df = df.with_columns(
         pl.when(_adj_changed)
-        .then(pl.col("close").shift(1).over("symbol"))   # 除权: 使用前复权昨收
-        .otherwise(pl.col("raw_close").shift(1).over("symbol"))  # 正常: 使用原始昨收
+        .then(pl.col("close").shift(1).over("symbol") / _adj_today)  # 除权: 除权参考价
+        .otherwise(pl.col("raw_close").shift(1).over("symbol"))      # 正常: 原始昨收
         .alias("_prev_raw_close")
     )
 
@@ -1027,23 +1039,6 @@ def compute_all(
         ])
 
     return df
-
-
-def filter_halt_days(df: pl.DataFrame) -> pl.DataFrame:
-    """过滤停牌日。
-
-    停牌日的 open/high 必然为 0 (无集合竞价)。注意 close 可能被数据源
-    填充为前收盘价而非 0, 因此不能用 "OHLC 全零" 判断, 否则会漏过这类
-    停牌记录 (如 *ST 撤销风险警示的停牌日), 污染 MA/ATR 等指标。旧版实时
-    落盘还会先把 open/high=0 填成 close, 对这类历史数据用零成交量和零成交额
-    作为兼容判据。
-    """
-    if df.is_empty() or "open" not in df.columns or "high" not in df.columns:
-        return df
-    halted = (pl.col("open") == 0) & (pl.col("high") == 0)
-    if "volume" in df.columns and "amount" in df.columns:
-        halted = halted | ((pl.col("volume") == 0) & (pl.col("amount") == 0))
-    return df.filter(~halted)
 
 
 # ================================================================
@@ -1398,18 +1393,13 @@ _BATCH_TARGET_ROWS = 150_000          # 小内存单批目标行数 (宽表 ~60-
 _BATCH_MIN_SYMBOLS = 50
 _MERGE_DATE_CHUNKS = 15               # 最终合并按日期切 15 块流式执行
 
-_ram_bytes_cache: int | None | bool = False  # False = 未探测
-
 
 def _total_ram_bytes() -> int | None:
-    global _ram_bytes_cache
-    if _ram_bytes_cache is False:
-        try:
-            import psutil
-            _ram_bytes_cache = psutil.virtual_memory().total
-        except Exception:
-            _ram_bytes_cache = None
-    return _ram_bytes_cache  # type: ignore[return-value]
+    try:
+        from app.services.memory_budget import memory_budget
+        return memory_budget().total_bytes
+    except Exception:
+        return None
 
 
 def _adaptive_sym_batch(default_batch: int, rows_per_symbol: int) -> int:
@@ -1518,6 +1508,72 @@ def _compute_storage_batches(
     if not parts:
         return _select_storage_cols(raw.head(0))
     return pl.concat(parts, how="diagonal_relaxed", rechunk=False)
+
+
+def recompute_daily_symbols(
+    repo, asset_type: str, *, start: date, symbols: list[str] | None,
+    on_batch_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """修补后按股票重算: 输入使用完整本地原始历史, 只发布 start 起的受影响行。
+
+    复用正式的复权、历史股本、停牌及连板计算, 不用已有 enriched 作原始价格前缀。
+    均线/MACD 等宽指标由现有读取链按新版本重新计算。
+    """
+    from app.services import daily_health, data_integrity, preferences
+    from app.tickflow.repository import daily_dirname, enriched_dirname
+
+    root = Path(repo.store.data_dir)
+    files = repo.daily_repair_files(asset_type)
+    if not files:
+        raise ValueError("没有可用于重算的原始日K")
+    raw_scan = scan_daily_parquet(files, cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
+    selected = sorted(set(symbols)) if symbols is not None else raw_scan.select("symbol").unique().collect()["symbol"].to_list()
+    if not selected:
+        raise ValueError("没有可用于重算的股票")
+    factors = _load_factors(root / ("adj_factor_etf" if asset_type == "etf" else "adj_factor") / "all.parquet") if asset_type != "index" else pl.DataFrame()
+    instruments = repo.get_instruments_asset("stock") if asset_type == "stock" else pl.DataFrame()
+    shares = load_share_history(root) if asset_type == "stock" else pl.DataFrame()
+    batch_size = max(1, min(preferences.get_enriched_batch_size(), 200))
+    publication = EnrichedPublication(root, asset_type, recover=True,
+                                     claim_wait_s=_PUBLICATION_CLAIM_WAIT_S, purpose="daily_repair")
+    written = 0
+    total = (len(selected) + batch_size - 1) // batch_size
+    try:
+        for offset in range(0, len(selected), batch_size):
+            batch = selected[offset:offset + batch_size]
+            raw = raw_scan.filter(pl.col("symbol").is_in(batch)).sort(["symbol", "date"]).collect(engine="streaming")
+            bad = data_integrity.invalid_daily_rows(raw)
+            if not bad.is_empty():
+                issues = data_integrity.inspect_invalid_history(root, daily_dirname(asset_type), files, bad)
+                daily_health.record_issues(root, issues)
+                if issues:
+                    first = issues[0]
+                    codes = "、".join(first.symbols[:5]) or "无法定位具体标的"
+                    raise ValueError(
+                        f"{daily_health.ASSET_LABELS[asset_type]}在 {first.day} 的原始历史日K仍异常"
+                        f"（{codes}：{first.reason}）, 未发布指标。"
+                        "已加入自检报告，请到 数据→自检/修补 处理后重试"
+                    )
+                raise ValueError("原始日K未通过校验或在检查期间发生变化，请重新自检或完成当日日K同步后重试，未发布指标")
+            enriched = compute_enriched(
+                raw,
+                factors=factors.filter(pl.col("symbol").is_in(batch)) if not factors.is_empty() else factors,
+                instruments=instruments.filter(pl.col("symbol").is_in(batch)) if not instruments.is_empty() else instruments,
+                historical_shares=shares.filter(pl.col("symbol").is_in(batch)) if not shares.is_empty() else shares,
+            )
+            output = _select_storage_cols(enriched.filter(pl.col("date") >= start))
+            written += repo.replace_enriched_rows(asset_type, output, start=start, symbols=batch, publication=publication)
+            publication.heartbeat()
+            if on_batch_done:
+                on_batch_done(offset // batch_size + 1, total)
+        publication.commit()
+    except BaseException:
+        publication.abandon()
+        raise
+    table = enriched_dirname(asset_type)
+    repo.refresh_view("kline_enriched" if asset_type == "stock" else table, str(root / table / "**/*.parquet"))
+    repo.invalidate_enriched_asset(asset_type)
+    return written
 
 
 def run_pipeline(data_dir: Path | None = None,

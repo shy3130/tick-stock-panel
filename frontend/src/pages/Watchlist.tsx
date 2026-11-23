@@ -6,18 +6,23 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Rows3, BarChart3, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, FileUp, FolderOpen, FolderMinus, FolderPlus } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type WatchlistGroupColor } from '@/lib/api'
 import { ExtSparkChart } from '@/components/screener/ExtSparkChart'
-import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
+import { MINUTE_SEED_MAX } from '@/lib/minuteBatchIncremental'
+import { useMinuteBatchQuery } from '@/lib/useMinuteBatchQuery'
+import { useWatchlistDailyBatch } from '@/lib/useWatchlistDailyBatch'
 import { extendMinuteTail } from '@/lib/minuteTailExtend'
+import { extendDailyTail } from '@/lib/dailyTailExtend'
+import { useWatchlistPrepare } from '@/lib/useWatchlistPrepare'
 import { reuseUnchangedSeries, EMPTY_ROWS } from '@/lib/series-identity'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber, fmtAssetPrice } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { toNavItems, type NavItem } from '@/lib/listNav'
+import { QuoteFreshnessBadge } from '@/components/QuoteFreshnessBadge'
+import { toNavItems, uniqueBy, type NavItem } from '@/lib/listNav'
 import {
   DimensionMembersDialog,
   dimensionKindForSourceField,
@@ -596,6 +601,7 @@ const StockCard = React.memo(function StockCard({
           {name && (
             <span className="text-xs text-secondary truncate">{name}</span>
           )}
+          <QuoteFreshnessBadge freshness={r.quote_freshness} compact />
           {board && (
             <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
               {board.label}
@@ -612,7 +618,7 @@ const StockCard = React.memo(function StockCard({
         {/* 第二行: 大价格 + 涨跌幅胶囊 */}
         <div className="flex items-end justify-between gap-2 mb-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
+            {fmtAssetPrice(price, r.asset_type)}
           </span>
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
@@ -682,6 +688,11 @@ const StockCard = React.memo(function StockCard({
     </div>
   )
 })
+
+function minuteScopeFor(rows: { symbol: string; asset_type?: string }[]): string {
+  // 分时按标的缓存。单纯排序不改变取数范围，指数走独立数据入口。
+  return rows.filter(row => row.asset_type !== 'index').map(row => row.symbol).sort().join(',')
+}
 
 // ===== 主页面 =====
 
@@ -780,7 +791,7 @@ export function Watchlist() {
   }, [columns])
 
   // 计算 ext 列参数
-  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
+  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns, extSchema.data?.items), [columns, extSchema.data])
 
   const toggleView = useCallback(() => {
     setGroupCardsOpen(false)
@@ -871,37 +882,17 @@ export function Watchlist() {
     queryFn: () => api.watchlistEnriched(extColumnsParam || undefined),
     enabled: (list.data?.symbols.length ?? 0) > 0,
   })
+  const preparation = useWatchlistPrepare(enriched.data?.rows)
 
-  // symbol 派生只依赖 enriched.data: 旧写法 symbols 每次渲染都是新引用 (击穿 memo)
-  // 且 filter×find 为 O(n²), 实时行情每 tick 重渲染时放大为每秒全量比较。
-  // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
-  const enrichedRows = enriched.data?.rows
-  const { symbols, symbolsKey, minuteSymbols, minuteSymbolsKey } = useMemo(() => {
-    const rows = enrichedRows ?? []
-    const syms = rows.map((r: any) => r.symbol)
-    const nonIndex = rows.filter((r: any) => r.asset_type !== 'index').map((r: any) => r.symbol)
-    return {
-      symbols: syms,
-      symbolsKey: syms.join(','),
-      minuteSymbols: nonIndex,
-      minuteSymbolsKey: nonIndex.join(','),
-    }
-  }, [enrichedRows])
+  // 直接使用已保存的自选名单，图表请求无需等待 enriched 行情返回。
+  const symbols = useMemo(() => list.data?.symbols.map(entry => entry.symbol) ?? [], [list.data?.symbols])
 
   // 实时行情状态 (提前到此处: 分时轮询判断需要 realtimeRunning)
   const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
 
-  // 批量日k数据 (天数由列配置决定; 分组卡片视图不展示蜡烛, 挂起请求)
-  const klineBatch = useQuery({
-    queryKey: QK.watchlistKlineBatch(`${symbolsKey}|${candleDays}`),
-    queryFn: () => api.klineDailyBatch(symbols, candleDays),
-    enabled: dailyKVisible && symbols.length > 0 && !groupCardsOpen,
-    staleTime: 5 * 60_000,  // 5 分钟内不重请求
-    // 改蜡烛天数/增删自选时沿用上一份批量数据 (按 symbol 查表渲染, 旧键不会被读到),
-    // 避免整列蜡烛闪空 — 与 Screener 批量查询同款
-    placeholderData: (prev: any) => prev,
-  })
+  // 批量日k数据 (天数由列配置决定; 分组卡片视图不展示蜡烛, 挂起请求)。
+  const klineBatch = useWatchlistDailyBatch(symbols, candleDays, dailyKVisible && !groupCardsOpen)
 
   // 当日蜡烛实时修补: 历史 K 线按 staleTime 周期拉取 (见 queryKeys 注释), 最后一根
   // 蜡烛用每 tick 刷新的 enriched 当日 OHLC 前端覆盖/追加, 蜡烛随实时行情跳动, 零额外请求。
@@ -910,30 +901,13 @@ export function Watchlist() {
   const klineData = useMemo(() => {
     const base = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
     const liveRows = enriched.data?.rows
-    const asOf = enriched.data?.as_of
     // 无可修补数据时直接返回查询缓存对象 — 它是 react-query 持有的外来引用,
     // 只能作为后续 tick 的比较参照 (prev), 不得进收敛 (next 会被原地改写)。
-    if (!dailyKVisible || !liveRows?.length || !asOf) {
+    if (!dailyKVisible || !liveRows?.length) {
       prevKlineSeriesRef.current = base
       return base
     }
-    const liveBySymbol = new Map<string, any>(liveRows.map((r: any) => [r.symbol, r]))
-    const patched: Record<string, KlineRow[]> = {}
-    for (const sym of Object.keys(base)) {
-      const arr = base[sym]
-      if (!Array.isArray(arr) || arr.length === 0) { patched[sym] = arr; continue }
-      const live = liveBySymbol.get(sym)
-      const { open, high, low, close } = live ?? {}
-      if (open == null || high == null || low == null || close == null) { patched[sym] = arr; continue }
-      const last = arr[arr.length - 1]
-      if (last.date === asOf) {
-        patched[sym] = [...arr.slice(0, -1), { ...last, open, high, low, close }]
-      } else if (last.date < asOf) {
-        patched[sym] = [...arr, { date: asOf, open, high, low, close }]
-      } else {
-        patched[sym] = arr
-      }
-    }
+    const patched = extendDailyTail(base, liveRows, enriched.data?.dates)
     const merged = reuseUnchangedSeries(prevKlineSeriesRef.current, patched)
     prevKlineSeriesRef.current = merged
     return merged
@@ -945,21 +919,12 @@ export function Watchlist() {
   const { data: prefsData } = usePreferences()
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
   const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
-  // 视口感知: 虚拟器渲染中的 symbol 集合 (可见 + overscan 缓冲), 由下方虚拟器
-  // 区域的 effect 写入; null = 未就绪/非虚拟化视图, 沿用全列表。首轮全量播种
-  // 缓存 (queryFn 在挂载时先于 ref 填充执行), 之后各轮只拉视口集合。
-  const minuteRequestSymbolsRef = useRef<string[] | null>(null)
-  const minuteBatch = useQuery({
-    queryKey: QK.minuteBatch(minuteSymbolsKey),
-    // 增量轮询 (prefer_local): 读缓存以最后一根为 since 只拉新增, 本地合并为
-    // 完整序列; 全量分钟健康时服务端零补拉, 不健康时也只增量。
-    // 请求集合 = 视口内 symbol (缓存按 symbol upsert, 视口外保留旧序列)
-    queryFn: () => {
-      const reqSymbols = minuteRequestSymbolsRef.current ?? minuteSymbols
-      return fetchMinuteBatchIncremental(qc, QK.minuteBatch(minuteSymbolsKey), reqSymbols, true)
-    },
-    enabled: intradayVisible && minuteSymbols.length > 0 && !groupCardsOpen,
-    staleTime: 10_000,
+  // 实际渲染的股票/ETF 由下方表格或卡片视口上报，变化时即使未开启轮询也补拉。
+  const [minuteScope, setMinuteScope] = useState('')
+  const minuteRequestSymbols = useMemo(() => minuteScope ? minuteScope.split(',') : [], [minuteScope])
+  const minuteBatch = useMinuteBatchQuery(minuteRequestSymbols, {
+    enabled: intradayVisible && !groupCardsOpen,
+    preferLocal: true,
     // SSE tick 新鲜 (enriched 10s 内被行情推送刷新过) → 分时图已由下方续画本地
     // 跳动, 轮询降为 30s 兜底校准; tick 断流时回到用户设定间隔
     refetchInterval: () => {
@@ -970,7 +935,6 @@ export function Watchlist() {
       const tickFresh = Date.now() - enriched.dataUpdatedAt < 10_000
       return tickFresh ? 30_000 : intradayRefreshInterval * 1000
     },
-    placeholderData: (prev: any) => prev,
   })
 
   // 分时图 SSE 续画: enriched 行情列每 tick 刷新 (SSE 触发), 前端本地续写分钟序列
@@ -1007,7 +971,6 @@ export function Watchlist() {
       qc.setQueryData(QK.watchlist, data)
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
-      qc.invalidateQueries({ queryKey: ['kline-batch'] })
     },
   })
 
@@ -1018,6 +981,13 @@ export function Watchlist() {
       qc.setQueryData(['watchlist-enriched', extColumnsParam], (old: any) => {
         if (!old?.rows) return old
         return { ...old, rows: old.rows.filter((r: any) => r.symbol !== sym) }
+      })
+      // 分钟缓存单 key 按 symbol 合并 — 同步摘除, 不等 LRU 自然淘汰
+      qc.setQueryData(QK.minuteBatch(), (old: any) => {
+        if (!old?.data || !(sym in old.data)) return old
+        const next = { ...old.data }
+        delete next[sym]
+        return { ...old, data: next }
       })
       // 2. 清除 list 缓存，触发后台 refetch
       qc.invalidateQueries({ queryKey: QK.watchlist })
@@ -1122,7 +1092,11 @@ export function Watchlist() {
 
   const listEntries = list.data?.symbols ?? []
   const allSymbols = listEntries.map(s => s.symbol)
-  const rows = enriched.data?.rows ?? []
+  // 兼容旧服务返回的重复行情，表格、卡片、分组统计与导航共用同一份行集合。
+  const rows = useMemo(
+    () => uniqueBy(enriched.data?.rows ?? [], row => row.symbol),
+    [enriched.data?.rows],
+  )
   const groupBySymbol = useMemo(
     () => new Map(listEntries.map(entry => [entry.symbol, entry.group_ids ?? []])),
     [listEntries],
@@ -1323,8 +1297,7 @@ export function Watchlist() {
     [filteredRows, sortRows, columns],
   )
 
-  // 日内多盘扩展列 (集合竞价等) 迷你图: 每个 bar/line 图列按列表标的拉当日序列
-  // (与策略页同口径; 人气排行等每日截面表无时间列, 不会出现图列)
+  // 扩展列迷你图按本列显示周期读取, 未指定时跟随数据表默认。
   const extChartColumns = useMemo(
     () => columns.filter(c =>
       c.visible && c.source.type === 'ext'
@@ -1332,7 +1305,12 @@ export function Watchlist() {
     [columns],
   )
   const extChartColsKey = extChartColumns
-    .map(c => `${(c.source as { configId: string }).configId}.${(c.source as { fieldName: string }).fieldName}`)
+    .map(c => {
+      const src = c.source as { configId: string; fieldName: string }
+      const granularity = c.extDisplay?.seriesGranularity
+        ?? extSchema.data?.items.find(t => t.id === src.configId)?.granularity ?? 'auto'
+      return `${src.configId}.${src.fieldName}:${c.extDisplay?.chartDays ?? 10}:${granularity}`
+    })
     .join(',')
   const extChartSymbolsKey = useMemo(
     () => sortedRows.map(r => r.symbol as string).sort().join(','),
@@ -1344,14 +1322,14 @@ export function Watchlist() {
       const symbols = extChartSymbolsKey ? extChartSymbolsKey.split(',') : []
       const entries = await Promise.all(extChartColumns.map(async c => {
         const src = c.source as { type: 'ext'; configId: string; fieldName: string }
-        const r = await api.extDataSeries(src.configId, src.fieldName, undefined, symbols)
+        const r = await api.extDataSeries(src.configId, src.fieldName, undefined, symbols, c.extDisplay?.chartDays || 10, c.extDisplay?.seriesGranularity)
         return [`${src.configId}.${src.fieldName}`, r.items ?? {}] as const
       }))
       return Object.fromEntries(entries) as Record<string, Record<string, [string, number][]>>
     },
     enabled: extChartColumns.length > 0 && extChartSymbolsKey.length > 0,
     staleTime: 5 * 60_000,
-    placeholderData: prev => prev,
+    placeholderData: (prev, previousQuery) => previousQuery?.queryKey[1] === extChartColsKey ? prev : undefined,
   })
   const extSeriesData = extChartColumns.length ? (extSeriesQuery.data ?? {}) : {}
 
@@ -1369,7 +1347,8 @@ export function Watchlist() {
 
   const cardColumns = useCardColumnCount()
   const cardGridRef = useRef<HTMLDivElement>(null)
-  const virtualizeCards = viewMode === 'card' && !groupCardsOpen && sortedRows.length > VIRTUAL_LIST_THRESHOLD
+  const virtualized = sortedRows.length > VIRTUAL_LIST_THRESHOLD
+  const virtualizeCards = viewMode === 'card' && !groupCardsOpen && virtualized
   const cardRowCount = Math.ceil(sortedRows.length / cardColumns)
   const { getScrollElement: getCardScrollElement, scrollMargin: cardScrollMargin } = useParentScroll(
     cardGridRef,
@@ -1385,39 +1364,33 @@ export function Watchlist() {
     scrollMargin: cardScrollMargin,
   })
 
-  // 视口感知 (数据层): 从虚拟器派生"正在渲染的 symbol" (可见 + overscan 缓冲,
-  // 滚动前已就绪)。非虚拟化视图 (小列表/表格/分组) 为 null → 沿用全列表。
-  // 每次渲染直读 getVirtualItems (滚动不换 deps, 不能 useMemo), 副作用集中在 effect。
-  const visibleCardSymbols = (() => {
-    if (!virtualizeCards) return null
-    // 与 minuteSymbols 同口径: 剔除指数 (minute-batch 契约只收股票/ETF)
-    const scope = new Set(minuteSymbols as string[])
-    const items = cardRowVirtualizer.getVirtualItems()
-    const out: string[] = []
-    for (const item of items) {
-      for (let i = item.index * cardColumns; i < (item.index + 1) * cardColumns && i < sortedRows.length; i++) {
-        const s = (sortedRows[i] as any)?.symbol
-        if (typeof s === 'string' && scope.has(s)) out.push(s)
+  const [visibleTableScope, setVisibleTableScope] = useState<string | null>(null)
+  const handleTableVisibleRows = useCallback((visibleRows: any[] | null) => {
+    setVisibleTableScope(visibleRows ? minuteScopeFor(visibleRows) : null)
+  }, [])
+  let visibleMinuteScope = ''
+  if (intradayVisible && !groupCardsOpen) {
+    if (!virtualized) {
+      visibleMinuteScope = minuteScopeFor(sortedRows)
+    } else {
+      let viewport = visibleTableScope
+      if (viewMode === 'card') {
+        const items = cardRowVirtualizer.getVirtualItems()
+        const first = items[0], last = items.at(-1)
+        viewport = first && last ? minuteScopeFor(sortedRows.slice(first.index * cardColumns, (last.index + 1) * cardColumns)) : null
       }
+      visibleMinuteScope = viewport ?? minuteScopeFor(sortedRows.slice(0, MINUTE_SEED_MAX))
     }
-    return out.length ? out : null
-  })()
-  const minuteVisibleKey = visibleCardSymbols?.join(',') ?? ''
-  const lastVisibleKeyRef = useRef<string | null>(null)
+  }
   useEffect(() => {
-    minuteRequestSymbolsRef.current = visibleCardSymbols
-    if (!minuteVisibleKey) return
-    if (lastVisibleKeyRef.current === minuteVisibleKey) return
-    const prevKey = lastVisibleKeyRef.current
-    lastVisibleKeyRef.current = minuteVisibleKey
-    if (prevKey === null) return   // 首次: 挂载播种轮已按全列表发出, 不额外触发
-    // 视口集合变化 (滚动到新区段) → 防抖 300ms 补拉一次, 新滚入的 symbol 即时就绪
-    const t = setTimeout(() => {
-      qc.invalidateQueries({ queryKey: QK.minuteBatch(minuteSymbolsKey) })
-    }, 300)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minuteVisibleKey, minuteSymbolsKey])
+    if (!virtualized || !visibleMinuteScope) {
+      setMinuteScope(visibleMinuteScope)
+      return
+    }
+    // 快速滚动只拉最终视口，避免每经过一屏都发起一轮分钟请求。
+    const timer = setTimeout(() => setMinuteScope(visibleMinuteScope), 300)
+    return () => clearTimeout(timer)
+  }, [visibleMinuteScope, virtualized])
 
   // 可见的 ext 列（卡片视图使用）
   const visibleExtCols = useMemo(
@@ -1475,13 +1448,17 @@ export function Watchlist() {
             </span>
             {/* 数据未就绪提示: 自选了但 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 指标全为 null */}
             {pendingCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted/15 text-muted border border-border/50 whitespace-nowrap"
-                title={`当前有 ${pendingCount} 只指标暂未就绪 (新股/冷门股或数据尚未同步), 等待每日数据更新后自动补全`}
+              <button
+                type="button"
+                disabled={preparation.isFetching}
+                onClick={() => { void preparation.refetch() }}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted/15 text-muted border border-border/50 whitespace-nowrap disabled:cursor-wait"
+                title={preparation.isFetching ? '正在按需补齐自选日K，已有数据仍可查看' :
+                  `${preparation.data?.filter(r => r.status !== 'ready').map(r => `${r.symbol}：${r.message}`).join('\n') || '日K暂未就绪，请检查数据源配置'}\n点击重试补齐`}
               >
                 <Clock className="h-2.5 w-2.5" />
-                待数据 {pendingCount}
-              </span>
+                {preparation.isFetching ? '补齐中' : preparation.data?.some(r => r.status === 'unsupported') ? '待配置' : '待数据'} {pendingCount}
+              </button>
             )}
             {/* 过滤提示: 仅在有筛选隐藏时出现, 柔和橙色融入整体 */}
             {hiddenCount > 0 && (
@@ -1630,6 +1607,7 @@ export function Watchlist() {
       )}
 
       <WatchlistGroupBar
+        entries={listEntries}
         groups={groups}
         counts={groupCounts}
         selected={selectedGroup}
@@ -1773,6 +1751,7 @@ export function Watchlist() {
               sort={sort}
               onSortToggle={handleSortToggle}
               extraSortableKeys={INTRADAY_SORTABLE_KEYS}
+              onVisibleRowsChange={handleTableVisibleRows}
               rowKey={(r: any) => r.symbol}
               rowClassName={(r: any) => cn('border-t border-border transition-colors duration-150 ease-smooth hover:bg-elevated/50', r.symbol === previewSymbol && 'bg-accent/10 hover:bg-accent/15')}
               // 日k列表头：标签 + 显示/隐藏眼睛按钮
@@ -1888,6 +1867,7 @@ export function Watchlist() {
                           ) : null}
                           {monitoredSymbols.has(r.symbol) && <span className="ml-2"><RealtimeDot /></span>}
                         </button>
+                        <QuoteFreshnessBadge freshness={r.quote_freshness} compact />
                         {/* 删除入口：从分组移除 + 从自选移除(二次确认) + 移到顶部 */}
                         <div className="ml-auto pl-1 shrink-0">
                           {confirmRemove === r.symbol ? (
@@ -1952,7 +1932,7 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
-                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtAssetPrice(price, r.asset_type)}</td>
                 }
                 if (key === 'pct') {
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>

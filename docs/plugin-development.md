@@ -1,15 +1,21 @@
 # 数据源插件开发指南
 
-数据源插件是可选的行情数据来源(fuyao、akshare 等),作为独立模块放在
-`backend/app/plugins/` 下。services 层(kline_sync / quote_service / financial_sync)
-全部通过统一路由点分流:插件声明了某数据集就走插件,未声明自动回退 TickFlow。
-因此**一个合格的插件只需要正确实现契约,不需要改动任何 service / API 代码**;
-反过来,插件也必须遵守内部数据契约(单位、代码格式、复权口径),框架不会替你转换。
+数据源插件可以作为项目内模块放在 `backend/app/plugins/`，也可通过独立 ZIP 发行。K 线同步、实时报价和财务同步按「设置 → 数据源」的能力路由选择 Provider。插件清单声明可用能力，安装和配置凭据后由用户选择接管范围。
+
+Provider 在接口边界完成单位、标的和复权口径转换。新增来源沿用现有路由及服务接口。
 
 > 无代码接入(纯 HTTP YAML 配置)请看 [custom-data-source.md](./custom-data-source.md),
 > 两种方式遵循同一套内部数据契约。
 
+## 外部安装
+
+通过「设置 → 导入与备份」上传独立源码 ZIP，数据源页的安装入口也会跳转到这里。现有内置目录方式继续兼容。开发独立引擎的数据源时，先核对目标进程的 Provider 契约、覆盖与历史时点要求。[外部数据源插件安装](external-data-source-packages.md) · [扩展数据与 AI 接入](secondary-development.md#扩展数据与供应商接入) · [同源双端发行示例](../examples/dual-host-data-source/README.md)
+
+开发者可从 [源码 ZIP 模板](../examples/data-source-plugin/README.md)开始。交给 AI 时，要求它核对 `Provider.name`、清单能力和方法签名，覆盖正常、空结果、上游失败与单位转换。测试通过后再用设置页试拉对应能力。[AI 接入与验收](./ai-integration.md#开发并导入扩展)
+
 ## 快速上手
+
+如果插件已经供应工作台的 `adj_factor`，同一供应商也可以把单次除权事件提供给独立研究引擎。HTTP 接口可以使用 `cn.equity.ex-factor.events.v1` 声明，工作台研究任务通过 `tsp_factors` 使用该数据集的独立路由。需要执行专用 SDK 的第三方插件可实现并发行签名 `dataset_provider`，通过 `engine_data_provider` 接入。TSP 原有源码 ZIP 继续使用原插件安装器与接口。[HTTP 因子示例](../packages/tivelo-data/README.md#从数据源直接采集沪深除权因子) · [签名数据源示例](../packages/tivelo-data/examples/native-provider/README.md)
 
 一个插件 = 一个目录 + 一个 `plugin.yaml` 清单:
 
@@ -28,18 +34,28 @@ display_name: "我的数据源"                 # 设置页显示名
 runtime: none                            # 运行时类型: node | python | none
 entry: app.plugins.my_source.provider:MyProvider   # provider 类的导入路径
 check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可选)
-datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial
+datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/full_minute/financial
 api_key_env: MY_SOURCE_API_KEY           # (可选)声明后设置页提供 Key 输入框
 hidden: false                            # (可选)true = 已加载但对设置页隐藏,不注册不展示
-description: "数据源描述"
+description: |
+  ## 接入说明
+  使用 **个人 API Key** 获取数据。
 install_hint: "pip install xxx"          # 未装依赖时显示的安装提示
-homepage: "https://example.com"          # (可选)官网/申请地址, 显示在设置页 Key 配置说明中
+homepage: "https://example.com"          # (可选)官网/文档地址, 显示在插件详情中
+homepage_label: "访问官网"                 # (可选)链接文字, 缺省为「显示名 官网」
 billing: points                          # (可选)计费标识: "points" → 设置页能力芯片/适配行标注「积分」
 billing_note: "消耗与频率/范围相关,间隔越短越高"  # (可选)计费提示: 设置页按警示框展示
 usage_notes:                             # (可选)使用要点: 各能力规模/节奏, 详情卡以列表展示
-  - "实时快照: 600 只/批, 全市场一轮约 10 批"
-key_manage_url: "https://example.com/me" # (可选)Key/账务管理页, 显示在设置页 Key 配置区(如积分明细入口)
+  - "实时快照: **600 只/批**, 全市场一轮约 10 批"
+  - "请先阅读 [接口文档](https://example.com/docs)。"
+key_manage_url: "https://example.com/me" # (可选)Key/账务管理页, 显示在插件详情中
+key_manage_label: "获取 Key / 查看用量"    # (可选)缺省为「管理 Key / 查看账户用量」
+register_url: "https://example.com/register" # (可选)详情中的「注册」链接
 ```
+
+`homepage_label`、`key_manage_label` 为可选纯文本，最多 200 字符；不填或留空时使用默认文案，没有对应 URL 时不显示入口。外部安装包的 `homepage`、`key_manage_url` 和 `register_url` 必须使用 HTTPS。链接在「数据源」与「已安装扩展」详情中展示，不依赖 `api_key_env` 或 Key 配置状态。新增字段不改变插件 API 版本，旧清单继续兼容。
+
+这两处详情及数据源安装预览的 `description`、详情中的 `usage_notes` 支持基础 Markdown：1–4 级标题、加粗、行内代码、无序/有序列表、引用、分隔线、表格和 HTTP/HTTPS 链接。YAML 多行正文可用 `|` 编写；名称、按钮与链接文案保持纯文本。当前不是完整 GFM，不支持图片、代码围栏或原始 HTML；原始 HTML 和不安全协议链接只显示为文字，不会执行。
 
 只声明真实提供的数据集;未声明的数据集 `provider_has_dataset` 返回 False,自动回退
 TickFlow。不要声明做不了的数据集(粒度含义见下文"能力声明的粒度")。
@@ -64,7 +80,7 @@ TickFlow 的「先探后存」语义:
 | `python` | 纯 Python 依赖, `pip install` | akshare、tushare |
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
 
-`runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
+内置插件的 `runtime` 决定依赖安装方式，实际就绪检测由 `check` 函数负责。外部源码包只检查依赖兼容性，不执行 pip/npm 安装。
 
 ### check 函数
 
@@ -155,6 +171,10 @@ class MyProvider:
                    on_chunk_done=None, freq="1m") -> pl.DataFrame:
         """分钟K: [symbol, datetime(北京墙钟), open, high, low, close, volume, amount(元, 可空)]"""
 
+    def iter_minute(self, symbols, start_time, end_time, asset_type="stock",
+                    freq="1m", on_chunk_done=None) -> Iterator[pl.DataFrame]:
+        """(可选)有界分批返回与 get_minute 同形的分钟K;历史落盘优先消费。"""
+
     def get_intraday_batch(self, symbols, count=300, asset_type="stock") -> pl.DataFrame:
         """(声明 full_minute 数据集时实现) 全量分钟修复轮: 给定标的当日 1 分钟K,
         canonical 8 列同 get_minute; 内部自行分块/限速。"""
@@ -166,11 +186,18 @@ class MyProvider:
     def get_realtime(self) -> list[dict]:
         """全市场实时快照 → list[dict]。失败软返回 [], 不抛异常(不阻断轮询线程)。"""
 
+    def get_realtime_symbols(self, symbols: list[str], *, asset_type="stock") -> list[dict] | None:
+        """(可选)补拉全市场快照未覆盖的自选/详情股票或 ETF，字段同 realtime。
+        未实现时不补拉；失败返回 None，成功无数据返回 []，不得内部静默跨源。"""
+
     def get_realtime_indices(self, symbols: list[str]) -> list[dict] | None:
         """(可选)指数实时快照 → list[dict], 行字段与 get_realtime 一致。
         A 股快照普遍不含指数(fuyao 的指数在独立端点); 声明 realtime 的源
         强烈建议实现本方法, 否则指数行情冻结在本地日K兜底。失败返回 None,
         成功但无数据返回 []。"""
+
+    # symbols now includes saved watchlist indices and visible detail leases,
+    # in addition to the core indices, benchmarks and enabled monitoring rules.
 
     def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
         """(声明 depth5 时实现)五档盘口, 返回以 symbol 为键的标准盘口字典。"""
@@ -203,7 +230,32 @@ provider 不应自行切换或回退到其他数据源。
 }
 ```
 
-### get_minute 的 datetime 时区契约
+### 历史分钟请求与流式接口
+
+核心把完整的 `symbols`、时间窗、`asset_type` 和 `freq` 一次交给选中的源，
+不再按固定 50 只拆分历史分钟请求。标的分批、时间分段、分页、限频、重试和
+同源端点降级均由 Provider 管理；不得静默改用另一个数据源。
+
+提供 `iter_minute` 时，历史落盘逐帧校验并写入，不在核心攒齐全市场结果。
+每帧至少包含 `symbol/datetime/open/high/low/close/volume`，`amount` 可缺省或为空；
+标的和时间不可为空，合法的休市、停牌、无数据批次可以返回空帧。
+源应限制输出帧的行数，避免先累积全市场历史再一次 `yield`；请求批次和输出帧
+不要求一一对应，可在源内合并小结果，减少反复合并同一日分区的写盘成本。
+
+`on_chunk_done(cur, total)` 仍为两参，计量单位由源决定（如请求数或标的数），
+需覆盖空批次；等待限流期间可重复报告当前进度作为心跳，回调抛出的异常必须
+原样传递以支持取消。不要把未知的总量或失败批次伪装为已成功完成。
+消费者提前退出、写盘失败或取消时会关闭迭代器；源在 `finally` 中释放临时资源。
+注册源重载或更换 Key 时，在途迭代持有旧实例，结束后才关闭旧连接。
+
+未实现 `iter_minute` 的旧插件继续调用 `get_minute`：仍一次收到完整请求，
+宿主不会在兼容层偷偷拆批；返回结果作为一帧保存。这能兼容旧包和配置，但
+无法保证旧插件内部的内存峰值；全市场深历史源建议补充流式接口。
+原有 `get_minute` 返回 DataFrame 的调用方式保持可用。
+YAML 源的 `batch/rpm/timeout` 继续有效，由源自身执行；无须迁移配置。
+盘中 `full_minute` 的独立权限、请求池和刷新调度沿用原契约。
+
+### get_minute / iter_minute 的 datetime 时区契约
 
 `datetime` 必须是**北京时间墙钟**（naive，如 `2026-08-28 09:35:00`），与日K的
 `date` 语义对齐；不要返回 UTC 或带时区的时间。前端分时图按交易时段时轴
@@ -215,7 +267,7 @@ provider 不应自行切换或回退到其他数据源。
 
 入口守卫（`kline_sync._enforce_minute_beijing_wallclock`）对所有分钟源强制归一：
 带时区 → 自动换算成北京墙钟；naive 但整体呈 UTC 特征（如 01:30）→ 自动 +8 纠偏并
-记日志；完全无法识别的口径 → 拒收并回退 TickFlow。契约仍要求源头写对，守卫只是兜底。
+记日志；完全无法识别的口径 → 拒收，不静默跨源。契约仍要求源头写对，守卫只是兜底。
 
 可选类属性 `minute_history_days = 5` 声明 1 分钟历史深度（交易日）；未声明视为
 深历史（TickFlow 基准）。浅源（如免费分时仅保留最近 5 个交易日的源）声明后，
@@ -234,6 +286,10 @@ provider 不应自行切换或回退到其他数据源。
 > - `get_intraday_latest(symbols=None, count=3) -> pl.DataFrame` — **可选**,
 >   稳态增量轮专用:尽量单请求返回全市场每只标的最新 `count` 根。未实现时
 >   服务自动降级为仅修复轮,节奏下限抬到 60s(全天批量打不住 6s 节奏)。
+> - **价格基准契约**:两个方法都必须返回**原始价(不复权)**。本地分钟库以 raw
+>   基准落盘 (`.raw_basis` 标记),读取侧统一做前复权投影;返回已复权价格会与
+>   本地存储混基准,产生静默的错误价格。服务状态面板的 `minute_basis_raw`
+>   字段会暴露本地库的基准迁移状态。
 >
 > 两个方法的返回帧都过 `_enforce_minute_beijing_wallclock` 时区守卫(与
 > `get_minute` 同纪律);失败抛异常或返回空 df 均按空轮处理,连续空轮触发
@@ -248,7 +304,8 @@ provider 不应自行切换或回退到其他数据源。
 | `get_realtime` | **软失败**: 返回 `[]` + warning 日志, 保证轮询线程不中断 |
 | `get_realtime_indices` | **软失败**: 返回 `None` + warning 日志, 保留上轮有效缓存; 成功无数据返回 `[]` |
 | `get_depth_batch` | 单批异常由服务隔离并保留其他批次; 不跨数据源回退 |
-| `get_minute` | 抛异常时调用方自动回退 TickFlow 重试 |
+| `get_minute` | `ProviderRequestError` 明确上报失败，不跨源；旧非流式调用的普通异常保留告警与空帧语义 |
+| `iter_minute` | 取数或数据契约错误中止本次任务，不跨源；已保存帧保留并刷新查询视图，后续可重新补齐。取消异常原样透传 |
 | `get_daily` / `get_adj_factors` / `get_financials` | 异常由上层同步流程捕获记录; 无数据返回空 DataFrame |
 | `iter_daily` | 可选; 每批必须符合 `get_daily` 契约。流正常结束后才提交 staging; 未捕获异常会丢弃 staging。provider 内已定义的单标的软失败语义保持不变 |
 
@@ -258,6 +315,23 @@ provider 不应自行切换或回退到其他数据源。
 确保最终 `cur == total`。
 
 ### get_realtime 行字段
+
+自选和当前详情的行情需求由同一个 `QuoteService` 合并去重，页面不自行启动行情轮询。
+TickFlow 全市场快照未覆盖的自选/详情标的按码补拉（包括未开启全量 ETF 拉取时的少量 ETF）；
+指数通过既有 `get_realtime_indices` 补充。自定义源未提供某个标的时保留有效旧数据并显示日期/过期状态，
+不把历史日K当实时快照，不为补齐行情静默切换数据源。显式选择的实时源未加载或未声明 `realtime` 时同样不回退。
+
+详情使用 `PUT /api/intraday/subscriptions/{client_id}` 登记 `{ "symbols": ["000985.SH"] }`，
+每个租约最多 64 只、90 秒有效；`DELETE` 释放，页面约每 20 秒续租，隐藏窗口停止续租。
+接口只登记需求，不立即取数，不改变行情总开关，也不写入用户配置；服务端重启后页面续租恢复。
+多个窗口的重叠标的由同一个行情工作线程按集合拉取，手动刷新与后台轮询复用同轮结果。
+该去重范围为单个后端进程（默认部署）；多个后端进程/副本需要独立的集中行情工作进程。
+
+自选行和日K详情新增可选的 `quote_freshness` 对象，包含 `state`、`message`、`data_date`、
+`quote_ts`（毫秒，可空）、`checked_at`、`max_age_ms`。状态包括 `live`、`delayed`、`stale`、
+`historical`、`unknown`、`missing`、`paused`、`disabled`。日期和时间按标的判断，不用资产大类日期替代；
+未提供时间戳的旧数据保持可读，标记为时间未知，不伪造实时性。休市、盘前、午休和收盘按北京时间边界判断。
+原响应字段、历史 Parquet 和用户配置保持兼容；提示信息不落盘。
 
 | 字段 | 必需 | 契约 |
 | --- | --- | --- |
@@ -314,15 +388,21 @@ uv run --extra dev python -m ruff check app/plugins/<your_plugin>/ tests/test_<y
 ## 现有插件参考
 
 - **`backend/app/plugins/fuyao/`** — 同花顺官方 REST 数据源(runtime: none, 纯 HTTP 零依赖)
-  - 提供 `realtime`(A 股全市场快照, 分页拉取)、`daily`(原始价日K三档: 近端窗口走 daily-k-10d dump, 深窗口走 daily-k 10 年全量 dump(172MB 一次下载、缓存复用、10d 补尾), 兜底单标的接口按 10 年自动分片)、`adj_factor`(事件 dump + 前收盘价从本地日K dump 一次取齐、缺价标的回退单标的接口, 按交易所公式推导单事件比值, 涨跌停自检; 全市场配价从逐标的 ~13 分钟降为秒级); Key 在设置页卡片直接配置(先探后存), 或 `.env` 配 `FUYAO_API_KEY`
-  - `client.py` — httpx 客户端(X-api-key 认证 + 统一信封解包 + 分页 + 页间隔限频 + 单标的日K + dump 预签名下载, S3 下载不带 Key 头)
+  - 提供 `realtime`(A 股全市场快照, 分页拉取)、`daily`(股票原始日K: ≤10 只优先批量历史接口; 更大范围近端走 daily-k-10d dump, 深窗口走 daily-k 10 年全量 dump(缓存复用、10d 补尾); dump 缺口或不可用时走批量接口, 每组最多10只、按10年自动分片; 漏组或批量失败回退旧单只接口)、`adj_factor`(事件 dump + 前收盘价从本地日K dump 一次取齐、缺价标的回退单标的接口, 按交易所公式推导单事件比值, 涨跌停自检; 全市场配价从逐标的 ~13 分钟降为秒级); Key 在设置页卡片直接配置(先探后存), 或 `.env` 配 `FUYAO_API_KEY`
+  - `client.py` — httpx 客户端(X-api-key 认证 + 统一信封解包 + 分页 + 页间隔限频 + 单只/批量日K + dump 预签名下载, S3 下载不带 Key 头)
   - `provider.py` — Provider 实现(实测/文档双字段名映射、百分数→小数制、volume 股→手、上海零点戳 +8h 时区、dump 按 release 版本缓存、软失败、Key 探测)
-  - `tests/test_fuyao_provider.py` — 73 个契约测试, 是新插件的测试范本
+  - `tests/test_fuyao_provider.py`、`tests/test_fuyao_historical_batch.py` — Provider 与批量历史契约测试, 是新插件的测试范本
 - **`backend/app/plugins/tdxquant/`** — 通达信量化数据服务(runtime: python; `tdxaidata` 已是后端默认依赖, ctypes 包装的私有 TCP 协议, wheel 自带跨平台原生库)
-  - 提供 `realtime`(五市场全 A 股票池枚举 + 600 只/批快照, 批间失败隔离)、`depth5`(快照自带买卖五档数组, 手口径透传)、`daily`(count 模式单标的拉取, 原始价, volume 股→手, amount 万元→元, `iter_daily` 逐标的流式)、`adj_factor`(事件接口每10股口径 ÷10 转每股 + 本地K线一次配价, 交易所公式推导单事件比值, 涨跌停自检)、`minute`(1m count 模式单标的, 240 根/日, 深度约 40 交易日, datetime=Date+Time 拼北京墙钟 naive, 与日K同口径 股→手/万元→元)、`full_minute`(修复轮 `get_intraday_batch` 当日窗口 + 稳态增量 `get_intraday_latest` 每股最新 N 根; 无批量端点, 全市场一轮 10 分钟量级); 指数快照直接支持(上证指数走 TDX 999999.SH 别名, `get_realtime_indices` 映射); 快照无名称列由维表关联; 未声明 financial → 回退 TickFlow; 清单声明 `billing: points` + `key_manage_url`(商城积分明细入口)
+  - 提供 `realtime`(五市场全 A 股票池枚举 + 600 只/批快照, 批间失败隔离)、`depth5`(快照自带买卖五档数组, 手口径透传)、`daily`(count 模式单标的拉取, 原始价, volume 股→手, amount 万元→元, `iter_daily` 逐标的流式)、`adj_factor`(事件接口每10股口径 ÷10 转每股 + 本地K线一次配价, 交易所公式推导单事件比值, 涨跌停自检)、`minute`(1m count 模式单标的, 240 根/日, 深度约 40 交易日, datetime=Date+Time 拼北京墙钟 naive, 与日K同口径 股→手/万元→元)、`full_minute`(修复轮 `get_intraday_batch` 当日窗口 + 稳态增量 `get_intraday_latest` 每股最新 N 根; 无批量端点, 全市场一轮 10 分钟量级); 指数快照直接支持(上证指数走 TDX 999999.SH 别名, `get_realtime_indices` 映射); 快照无名称列由维表关联; 未声明 financial → 回退 TickFlow; 清单通过 `billing: points` 标记积分计费，并通过 `register_url` 提供注册入口
   - `client.py` — 原生层封装(lib 私有物化 + token 注入双 ini + `TDX_AI_DATA_LIB` 指向、空闲首连 "Invalid server response" 重试包装、股票池 12h 缓存)
   - `provider.py` — Provider 实现(快照昨收=LastClose/高低=Max/Min 字段映射、涨跌幅 (Now-LastClose)/LastClose 小数制、RefreshTime 北京墙钟→epoch ms、软失败)
-  - `probe.py` — 候选 Key 探测的独立子进程(原生 DLL 每进程单 Key): 分阶段进度留痕定位原生层死点; 因 TDX 会话按 IP 复用(错误 Key 在活跃会话下也能拉数), 探测语义为格式+连通性而非 Key 真伪, 真伪由首次实拉暴露
+  - `probe.py` — 候选 Key 探测的独立子进程(原生 DLL 每进程单 Key): 分阶段进度留痕定位原生层死点; 服务端明确拒绝凭据或额度时不保存。因 TDX 会话按 IP 复用(错误 Key 在活跃会话下也能拉数), 通过探测仅代表格式与连通性检查通过, 不保证所有数据接口均有权限。
+
+TdxQuant 在 SDK 清理响应前检查服务端错误, 保留错误原因并脱敏; 明确的凭据/额度拒绝不重试, 实时分钟轮立即熔断。历史分钟请求失败会通过 `app.data_providers.base.ProviderRequestError` 传递到任务层并标记失败, 不转换成成功的 0 行或跨源重试; 其他插件也可用该异常显式声明请求失败。带时区的分钟请求窗口在插件边界归一为北京墙钟, 再与原生分钟列比较。正常停牌、休市或窗口内无数据的空结果保留原语义。
+
+Fuyao 股票批量历史日K固定请求 `interval=1d&adjust=none`，并核对响应口径、标的分组、必要字段与日期范围。按 `thscode` 对齐分组，合法空组不重复补查；漏组或批量端点无权限、限频、不可用时回退原单只接口，仍使用原价。单只接口明确返回 `code=1002` 且消息为当前代码的 `Unknown thscode: <symbol>` 时，仅跳过该源未覆盖的标的，保留其本地历史，由核心原有 `zero_row_out` 回报本轮 0 行；同一补查会话的后续时间片不再重复请求该代码。其他参数错误、权限、限频和网络失败仍抛 `ProviderRequestError`，现有流式同步丢弃本轮暂存数据，保留正式分区；设置页试拉显示错误。仅升级股票日K，指数/ETF 路由、除权因子计算、Key 优先级、配置和 Parquet schema 均不变；无新增缓存，沿用现有整包缓存及仓库发布、视图刷新链路。批量端点文档见 [Fuyao 批量历史 K 线](https://fuyao.aicubes.cn/docs/api-reference/prices/#historical-batch)。
+
+除权事件也在原生 `get_cw_data` 响应上执行上述检查：SDK 1.2.2 的 `get_divid_factors` 会将服务端失败与正常无事件都转换为空 DataFrame，不能用 DataFrame 是否为空判断请求成功。插件按 SDK 的 `Date/Type/Value` 契约解析事件，保留每 10 股单位及闭区间日期筛选；正常无事件返回空列表，事件或配价请求失败则中止本轮、保留原有因子文件，并向任务层及数据源试拉返回明确错误。
 
 ## 路由机制(无需关心, 仅参考)
 

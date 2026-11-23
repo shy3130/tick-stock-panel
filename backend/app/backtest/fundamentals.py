@@ -201,7 +201,7 @@ def build_fundamental_matrices(
     return result
 
 
-def attach_matrix_fundamental_fields(market: Any, data_dir: Path | None, names: Any) -> Any:
+def attach_matrix_fundamental_fields(market: Any, data_dir: Path | None, names: Any, *, evidence=None) -> Any:
     """把财务因子作为 matrix fields 附加到 (frozen) MarketDataMatrix 副本。"""
     import dataclasses
 
@@ -209,6 +209,8 @@ def attach_matrix_fundamental_fields(market: Any, data_dir: Path | None, names: 
     if not requested:
         return market
     snapshot = load_fundamental_snapshot(data_dir)
+    if evidence is not None and snapshot is not None:
+        evidence.record_frame("financial_announcements", snapshot)
     extra = build_fundamental_matrices(market, snapshot, requested)
     if not extra:
         return market
