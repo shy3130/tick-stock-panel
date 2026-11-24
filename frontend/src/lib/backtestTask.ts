@@ -211,6 +211,8 @@ export function startBacktest(params: {
   max_exposure_pct?: number
   initial_capital?: number
   position_sizing?: string
+  position_policy?: string | null
+  position_policy_params?: Record<string, any> | null
   params?: Record<string, any> | null
   overrides?: Record<string, any> | null
   mode?: 'position' | 'full'
@@ -253,6 +255,11 @@ export function startBacktest(params: {
     max_exposure_pct: params.max_exposure_pct,
     initial_capital: params.initial_capital,
     position_sizing: params.position_sizing,
+    position_policy: params.position_policy ?? undefined,
+    position_policy_params:
+      params.position_policy_params && Object.keys(params.position_policy_params).length > 0
+        ? JSON.stringify(params.position_policy_params)
+        : undefined,
     params: params.params ? JSON.stringify(params.params) : undefined,
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
