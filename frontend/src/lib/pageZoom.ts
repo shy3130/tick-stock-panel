@@ -5,8 +5,8 @@
  * 实现: #root 上 transform: scale(z) + origin 0 0 + 宽高按 1/z 补偿。
  * 不用 CSS zoom: zoom≠1 时视觉坐标 (clientX/rect) 与布局坐标分离,
  * ECharts/zrender 的鼠标命中不做换算 (echarts#15103), 十字光标/tooltip
- * 会偏移约 (1-1/z); 而 transform 下浏览器规范对 offsetX 自动逆变换回
- * 元素本地坐标系, 图表与拖拽类库零改动即正确。
+ * 会偏移约 (1-1/z); transform 下浏览器会把 offsetX 换算回元素本地坐标。
+ * Lightweight Charts 使用 clientX/Y, 在 vite.config.ts 中统一补上坐标换算。
  *
  * - 值域 0.8–1.5, 步进 0.05, localStorage 持久化 (storage.pageZoom); 默认 1。
  * - JS 定位的浮层 (#root 内 fixed/absolute) 需把视觉坐标换算回布局坐标:
