@@ -3650,6 +3650,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbol, ...(days != null ? { days } : {}) }),
     }),
+  reloadMinuteDay: (date: string, symbols: string[]) =>
+    request<{ status: string; job_id: string }>('/api/kline/reload_minute_day', {
+      method: 'POST',
+      body: JSON.stringify({ date, symbols }),
+    }),
   repairMinuteGaps: (targets: Pick<MinuteGapRow, 'symbol' | 'date'>[] | string[]) =>
     request<{ status: string; job_id: string }>('/api/kline/repair_minute_gaps', {
       method: 'POST',
@@ -5416,6 +5421,10 @@ export interface PipelineJob {
     requested_gaps?: number
     remaining_gaps?: number
     minute_rows?: number
+    minute_added?: number
+    minute_updated?: number
+    minute_received?: number
+    minute_missing?: number
     skipped_stages?: string[]
   } | null
   error: string | null
