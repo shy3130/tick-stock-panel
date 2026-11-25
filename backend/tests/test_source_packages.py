@@ -198,10 +198,11 @@ def test_manifest_contract_and_dependency_compatibility(isolated):
     for changes in ({"plugin_api_version": 9}, {"entry": "app.other:Provider"}, {"datasets": ["invented"]}):
         with pytest.raises(ValueError):
             packages.inspect_archive(bundle(**changes))
-    preview, _ = packages.inspect_archive(bundle(requires_python=">=99"))
+    data = bundle(requires_python=">=99")
+    preview, _ = packages.inspect_archive(data)
     assert preview["errors"]
     with pytest.raises(ValueError, match="requires_python"):
-        packages.install(bundle(requires_python=">=99"), preview["digest"])
+        packages.install(data, preview["digest"])
 
 
 def test_name_conflict_and_yaml_mutation_rejected(isolated):
