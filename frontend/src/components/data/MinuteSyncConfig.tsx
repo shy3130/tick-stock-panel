@@ -1,8 +1,9 @@
 import { useState, useEffect, useId, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Trash2, Download, Calendar, SlidersHorizontal, Activity } from 'lucide-react'
+import { Loader2, Trash2, Download, Calendar, SlidersHorizontal, Activity, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { cnToday } from '@/lib/kline'
 import { MissingCapChip } from '@/lib/capability-labels'
 import { MinuteGapPanel } from '@/components/data/MinuteGapPanel'
 
@@ -77,6 +78,28 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
       // 通知主页面跟踪 job 进度 (ActiveJobCard 会显示实时进度+日志)
       if (res.job_id && onJobStart) onJobStart(res.job_id)
     }).finally(() => setFetchingMode(''))
+  }
+
+  const [reloadDate, setReloadDate] = useState('')
+  const [reloadCodes, setReloadCodes] = useState('')
+  const reloadDateRef = useRef<HTMLInputElement>(null)
+  const reload = useMutation({
+    mutationFn: ({ date, symbols }: { date: string; symbols: string[] }) => api.reloadMinuteDay(date, symbols),
+    onSuccess: ({ job_id }) => {
+      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+      onJobStart?.(job_id)
+    },
+  })
+  const today = cnToday()
+  const reloadSymbols = [...new Set(reloadCodes.toUpperCase().split(/[,，、\s]+/).filter(Boolean))]
+  const canReload = hasMinuteCap && reloadSymbols.length > 0 && reloadDate !== '' && reloadDate <= today
+    && !reload.isPending && fetchingMode === ''
+  const selectReloadTarget = ({ symbol, date }: { symbol: string; date: string }) => {
+    setReloadCodes(symbol)
+    setReloadDate(date)
+    reload.reset()
+    setTab('sync')
+    requestAnimationFrame(() => reloadDateRef.current?.focus())
   }
 
   return (
@@ -202,6 +225,43 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
       </div>
       </div>
 
+      <form aria-labelledby={`${tabId}-reload-title`} className="space-y-3 border-y border-border/60 py-4"
+        onSubmit={event => {
+          event.preventDefault()
+          if (canReload) reload.mutate({ date: reloadDate, symbols: reloadSymbols })
+        }}>
+        <div className="space-y-1">
+          <h3 id={`${tabId}-reload-title`} className="text-sm font-medium text-foreground">按日重拉</h3>
+          <p className="text-xs leading-relaxed text-secondary">用当前分钟源补齐和更新指定交易日。源未返回的分钟保留本地记录。</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)_auto] sm:items-end">
+          <label className="block min-w-0 text-xs text-secondary">
+            股票或 ETF 代码
+            <input type="text" required value={reloadCodes} disabled={!hasMinuteCap || reload.isPending}
+              placeholder="如 600000.SH, 510300.SH" autoComplete="off" spellCheck={false}
+              aria-describedby={`${tabId}-reload-codes-help`}
+              onChange={event => { setReloadCodes(event.target.value); reload.reset() }}
+              className="mt-1.5 min-h-11 w-full min-w-0 rounded-btn border border-border bg-base px-3 font-mono text-sm text-foreground placeholder:text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50" />
+          </label>
+          <label className="block min-w-0 text-xs text-secondary">
+            交易日
+            <input ref={reloadDateRef} type="date" required max={today} value={reloadDate}
+              disabled={!hasMinuteCap || reload.isPending}
+              onChange={event => { setReloadDate(event.target.value); reload.reset() }}
+              className="mt-1.5 min-h-11 w-full min-w-0 rounded-btn border border-border bg-base px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50" />
+          </label>
+          <button type="submit" disabled={!canReload}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-accent/30 bg-accent/5 px-4 text-xs font-medium text-foreground transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40">
+            {reload.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-accent" /> : <RefreshCw aria-hidden="true" className="h-3.5 w-3.5 text-accent" />}
+            {reload.isPending ? '正在启动…' : '开始重拉'}
+          </button>
+        </div>
+        <p id={`${tabId}-reload-codes-help`} className="text-xs text-secondary">多只标的用逗号或空格分隔。</p>
+        {!hasMinuteCap && <p className="text-xs text-secondary">配置可用的分钟数据源后即可重拉。</p>}
+        {reload.isError && <p role="alert" className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-foreground">{reload.error instanceof Error ? reload.error.message : '启动重拉失败，请重试。'}</p>}
+        {reload.isSuccess && <p role="status" className="text-xs text-secondary">任务已启动，可在数据页查看进度。</p>}
+      </form>
+
       {/* 区块 B: 手动获取 (一次性操作, 独立于上方自动同步开关) */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -212,7 +272,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
         <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => handleFetch('40d')}
-          disabled={!hasMinuteCap || fetchingMode !== ''}
+          disabled={!hasMinuteCap || fetchingMode !== '' || reload.isPending}
           className="inline-flex min-h-20 flex-col items-center justify-center gap-1 px-2 py-3 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           {fetchingMode === '40d' ? (
@@ -223,7 +283,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
         </button>
         <button
           onClick={() => handleFetch('1y')}
-          disabled={!hasMinuteCap || fetchingMode !== ''}
+          disabled={!hasMinuteCap || fetchingMode !== '' || reload.isPending}
           className="inline-flex min-h-20 flex-col items-center justify-center gap-1 px-2 py-3 rounded-btn border border-accent/30 bg-accent/5 text-accent text-xs font-medium hover:bg-accent/10 disabled:opacity-40 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           {fetchingMode === '1y' ? (
@@ -247,7 +307,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
         tabIndex={0}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:p-5"
       >
-        <MinuteGapPanel hasCap={hasMinuteCap} onJobStart={onJobStart} />
+        <MinuteGapPanel hasCap={hasMinuteCap} onJobStart={onJobStart} onReload={selectReloadTarget} />
       </div>
       <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-base/20 px-4 py-3 sm:px-5">
       {/* 区块 C: 清空 (危险操作, 独立分隔) */}

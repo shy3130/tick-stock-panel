@@ -146,6 +146,32 @@ def count_remaining_gaps(minute_dir: Path, trade_date: _date, symbols: list[str]
     return len(symbols) - df["symbol"].n_unique() + bad.height
 
 
+def estimate_missing_bars(frame: pl.DataFrame, trade_date: _date, symbols: list[str], now: datetime) -> int:
+    """逐标的、逐交易时段估算缺根，兼容分钟源对开盘边界的不同标记。"""
+    if trade_date.weekday() >= 5:
+        return 0
+    expected = _expected_bars_for(trade_date, now.date(), (now.hour, now.minute))
+    if frame.is_empty():
+        return expected * len(symbols)
+    timestamp = pl.col("datetime")
+    time = timestamp.dt.time()
+    minute = timestamp.dt.truncate("1m")
+    selected = frame.filter(
+        pl.col("symbol").is_in(symbols) & (timestamp.dt.date() == trade_date)
+        & (timestamp <= now.replace(tzinfo=None))
+    )
+    counts = selected.group_by("symbol").agg(
+        minute.filter(time.is_between(pl.time(9, 30), pl.time(11, 30))).n_unique().alias("morning"),
+        minute.filter(time.is_between(pl.time(13), pl.time(15))).n_unique().alias("afternoon"),
+    )
+    morning = min(expected, FULL_DAY_BARS // 2)
+    afternoon = expected - morning
+    covered = counts.select(
+        (pl.col("morning").clip(upper_bound=morning) + pl.col("afternoon").clip(upper_bound=afternoon)).sum()
+    ).item()
+    return expected * len(symbols) - int(covered or 0)
+
+
 def scan_minute_gaps(
     minute_dir: Path,
     *,

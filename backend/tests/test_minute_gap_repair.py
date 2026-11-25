@@ -82,6 +82,48 @@ def test_repair_deduplicates_symbols_and_forces_historical_window(repair_env):
     env.invalidate.assert_called()
 
 
+def test_day_reload_routes_selected_assets_and_reports_progress(repair_env, monkeypatch):
+    env = repair_env
+
+    def reload(repo, capset, day, groups, *, on_chunk_done, before_write, on_updated):
+        assert repo is env.repo
+        assert day == date(2026, 10, 20)
+        assert groups == {"stock": ["600000.SH"], "etf": ["510300.SH"]}
+        on_chunk_done(1, 2, day.isoformat())
+        before_write()
+        return {"minute_rows": 3, "minute_added": 1, "minute_updated": 2,
+                "minute_received": 10, "minute_missing": 7}
+
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    monkeypatch.setattr(kline.kline_sync, "reload_minute_day", reload)
+    response = env.client.post("/api/kline/reload_minute_day", json={
+        "date": "2026-10-20", "symbols": [" 600000.sh ", "510300.SH", "600000.SH"],
+    })
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    wait_for(lambda: env.store.get(job_id)["status"] == "succeeded")
+    job = env.store.get(job_id)
+    assert job["result"] == {"minute_rows": 3, "minute_added": 1, "minute_updated": 2,
+                             "minute_received": 10, "minute_missing": 7, "universe_size": 2}
+    assert any(entry["msg"] == "正在重拉 2026-10-20 的分钟K…" for entry in job["log"])
+    assert "预计仍缺 7 根" in job["log"][-1]["msg"]
+    env.sync.assert_not_called()
+    env.pool.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [
+    {"date": "20261020", "symbols": ["600000.SH"]},
+    {"date": "2026-10-22", "symbols": ["600000.SH"]},
+    {"date": "2026-10-20", "symbols": []},
+    {"date": "2026-10-20", "symbols": ["000001.SH"]},
+])
+def test_day_reload_rejects_invalid_targets(repair_env, monkeypatch, body):
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    response = repair_env.client.post("/api/kline/reload_minute_day", json=body)
+    assert response.status_code == 400
+    assert repair_env.store.active_id() is None
+
+
 @pytest.mark.parametrize("symbols", [None, [], "600000.SH", [None], [""], [" "], [123],
                                          ["600000.SH"] * 2001, ["000001.SH"], ["510300.SH"]])
 def test_repair_rejects_invalid_scope_before_creating_job(repair_env, symbols):

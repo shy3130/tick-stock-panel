@@ -1520,11 +1520,11 @@ def _cleanup_null_datetime_minute(repo: KlineRepository) -> None:
         logger.debug("minute cleanup check failed: %s", e)
 
 
-def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
+def _migrate_symbol_to_date_partition(repo: KlineRepository, minute_table: str = "kline_minute") -> bool:
     """将旧版 symbol= 分区迁移为 date= 分区。迁移完成后删除旧目录。"""
-    minute_dir = repo.store.data_dir / "kline_minute"
+    minute_dir = repo.store.data_dir / minute_table
     if next(minute_dir.glob("symbol=*/*.parquet"), None) is None:
-        return
+        return False
     with repo._write_lock:
         sources = sorted(minute_dir.glob("symbol=*/*.parquet"))
         frames = []
@@ -1538,7 +1538,7 @@ def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
             )
             frames.append(df)
         if not frames:
-            return
+            return False
         # 全部读入且写入成功才删除源文件。中途失败可以安全重试。
         added = _write_minute_partition(pl.concat(frames, how="diagonal_relaxed"), minute_dir, missing_only=True)
         for part in sources:
@@ -1547,6 +1547,7 @@ def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
             if not any(folder.iterdir()):
                 folder.rmdir()
         logger.info("minute-K migration done: %d rows added", added)
+        return True
 
 
 def sync_and_persist_minute(
@@ -1621,8 +1622,7 @@ def sync_and_persist_minute(
     now = cn_now()
 
     if repair_date is not None:
-        start_time = datetime.combine(repair_date, clock_time(9, 25), CN_TZ)
-        end_time = min(datetime.combine(repair_date, clock_time(15, 5), CN_TZ), now)
+        start_time, end_time = _minute_day_window(repair_date, now)
         if end_time <= start_time:
             return 0
     else:
@@ -1696,3 +1696,156 @@ def sync_and_persist_minute(
 
     logger.info("minute K synced: %d rows (%d symbols)", written, len(symbols))
     return written
+
+
+def _minute_day_window(day: date, now: datetime) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, clock_time(9, 25), CN_TZ)
+    end = min(datetime.combine(day, clock_time(15, 5), CN_TZ), now)
+    return start, end
+
+
+def _valid_reload_minutes(
+    frame: pl.DataFrame, symbols: list[str], start: datetime, end: datetime,
+) -> pl.DataFrame:
+    if frame.is_empty():
+        return frame
+    required = set(CANONICAL_MINUTE_COLS) - {"amount"}
+    if required - set(frame.columns):
+        raise ProviderRequestError("分钟数据源缺少必要行情字段")
+    timestamp = pl.col("datetime")
+    time = timestamp.dt.time()
+    return frame.filter(
+        pl.col("symbol").is_in(symbols)
+        & timestamp.is_between(start.replace(tzinfo=None), end.replace(tzinfo=None))
+        & (timestamp == timestamp.dt.truncate("1m"))
+        & (time.is_between(pl.time(9, 25), pl.time(11, 30)) | time.is_between(pl.time(13), pl.time(15)))
+        & pl.all_horizontal(pl.col(c).is_finite() & (pl.col(c) > 0) for c in ("open", "high", "low", "close"))
+        & (pl.col("high") >= pl.max_horizontal("open", "close", "low"))
+        & (pl.col("low") <= pl.min_horizontal("open", "close"))
+        & pl.col("volume").is_finite()
+        & (pl.col("volume") >= 0)
+    ).select(
+        *(column for column in CANONICAL_MINUTE_COLS if column in frame.columns and column != "amount"),
+        pl.when(pl.col("amount").is_finite() & (pl.col("amount") >= 0)).then(pl.col("amount")).alias("amount")
+        if "amount" in frame.columns else pl.lit(None, dtype=pl.Float64).alias("amount"),
+    )
+
+
+def _merge_reloaded_minute_day(existing: pl.DataFrame, incoming: pl.DataFrame) -> tuple[pl.DataFrame, int, int]:
+    """只更新源返回且确有变化的分钟，保留缺省成交额和已有扩展列。"""
+    if incoming.is_empty():
+        return existing, 0, 0
+    keys = ["symbol", "datetime"]
+    incoming = incoming.unique(subset=keys, keep="last")
+    if existing.is_empty():
+        return incoming, incoming.height, 0
+
+    existing = existing.with_columns(pl.col("datetime").cast(pl.Datetime("us")))
+    values = [column for column in incoming.columns if column not in keys]
+    original = existing.join(incoming.select(keys), on=keys, how="semi").unique(subset=keys, keep="last")
+    previous = original.select(
+        *keys,
+        pl.lit(True).alias("_found"),
+        *(
+            (pl.col(column) if column in original.columns else pl.lit(None)).alias(f"_previous_{column}")
+            for column in values
+        ),
+        *(column for column in original.columns if column not in incoming.columns),
+    )
+    compared = incoming.join(previous, on=keys, how="left").with_columns(
+        pl.coalesce("amount", "_previous_amount").alias("amount")
+    )
+    changed = compared.filter(
+        pl.col("_found").is_null()
+        | pl.any_horizontal(pl.col(column).ne_missing(pl.col(f"_previous_{column}")) for column in values)
+    )
+    if changed.is_empty():
+        return existing, 0, 0
+    added = changed["_found"].null_count()
+    updates = changed.drop("_found", *(f"_previous_{column}" for column in values))
+    merged = pl.concat([existing.join(updates.select(keys), on=keys, how="anti"), updates], how="diagonal_relaxed")
+    return merged, added, updates.height - added
+
+
+def reload_minute_day(
+    repo: KlineRepository, capset: CapabilitySet, day: date, groups: dict[AssetType, list[str]], *,
+    on_chunk_done: Callable[[int, int, str], None], before_write: Callable[[], None],
+    on_updated: Callable[[str], None] | None = None,
+) -> dict[str, int]:
+    """在一次任务内获取指定交易日，完整接收响应后按标的及分钟合并。"""
+    from app.services.minute_gaps import estimate_missing_bars
+
+    source = minute_source_stamp()
+    _, tickflow, error = _resolve_minute_provider(source.provider)
+    if error is not None or (tickflow and not capset.has(Cap.KLINE_MINUTE_BATCH)):
+        raise ProviderRequestError("当前分钟数据源不可用，请检查数据源配置")
+    data_dir = repo.store.data_dir
+    raw_basis = minute_adjust.minute_basis_is_raw(data_dir)
+    now = cn_now()
+    start, end = _minute_day_window(day, now)
+    limit = resolve_limit(capset, Cap.KLINE_MINUTE_BATCH, default_batch=100, default_rpm=30,
+                          default_rpm_when_unset=False)
+    frames_by_table: dict[str, tuple[list[str], pl.DataFrame]] = {}
+
+    for index, (asset_type, symbols) in enumerate(groups.items()):
+        table = "kline_etf_minute" if asset_type == "etf" else "kline_minute"
+        frames: list[pl.DataFrame] = []
+
+        def collect(frame: pl.DataFrame, *, selected=symbols, collected=frames) -> None:
+            valid = _valid_reload_minutes(frame, selected, start, end)
+            if not valid.is_empty():
+                collected.append(valid)
+
+        def progress(done: int, total: int, _label: str, *, group_index=index) -> None:
+            percent = int((group_index + min(done / max(total, 1), 1)) / len(groups) * 100)
+            on_chunk_done(percent, 100, day.isoformat())
+
+        if end > start:
+            sync_minute_batch(
+                symbols, start_time=start, end_time=end, batch_size=limit.batch, rpm=limit.rpm,
+                on_chunk_done=progress, on_segment=collect, asset_type=asset_type, raw_basis=raw_basis,
+            )
+        incoming = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        frames_by_table[table] = symbols, incoming
+
+    added = updated = received = missing = 0
+    touched_tables: set[str] = set()
+
+    def check_context() -> None:
+        if source != minute_source_stamp() or raw_basis != minute_adjust.minute_basis_is_raw(data_dir):
+            raise WorkBusyError("分钟数据源或价格基准已变化，请重新拉取")
+
+    try:
+        for table, (_, incoming) in frames_by_table.items():
+            # 新建日期分区前接入原有迁移，否则直读日期分区会遮住旧分区同日数据。
+            if not incoming.is_empty() and next((data_dir / table).glob("symbol=*/*.parquet"), None) is not None:
+                before_write()
+                check_context()
+                if _migrate_symbol_to_date_partition(repo, table):
+                    touched_tables.add(table)
+        with repo._write_lock:
+            before_write()
+            check_context()
+            for table, (symbols, incoming) in frames_by_table.items():
+                path = data_dir / table / f"date={day}" / "part.parquet"
+                existing = pl.read_parquet(path) if path.exists() else pl.DataFrame()
+                merged, inserted, replaced = _merge_reloaded_minute_day(existing, incoming)
+                if inserted or replaced:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write_parquet(merged.sort(["symbol", "datetime"]), path)
+                    touched_tables.add(table)
+                added += inserted
+                updated += replaced
+                if not incoming.is_empty():
+                    received += incoming.n_unique(subset=["symbol", "datetime"])
+                missing += estimate_missing_bars(merged, day, symbols, now)
+    finally:
+        for table in sorted(touched_tables):
+            repo.refresh_view(table, f"{data_dir.as_posix()}/{table}/**/*.parquet")
+        if touched_tables and on_updated is not None:
+            on_updated("minute")
+
+    return {
+        "minute_rows": added + updated, "minute_added": added, "minute_updated": updated,
+        "minute_received": received, "minute_missing": missing,
+    }

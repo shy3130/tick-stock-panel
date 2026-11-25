@@ -16,7 +16,11 @@ import './MinuteGapPanel.css'
 
 const PAGE = 10
 
-export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean; onJobStart?: (jobId: string) => void }) {
+export function MinuteGapPanel({ hasCap = true, onJobStart, onReload }: {
+  hasCap?: boolean
+  onJobStart?: (jobId: string) => void
+  onReload?: (target: Pick<MinuteGapRow, 'symbol' | 'date'>) => void
+}) {
   const qc = useQueryClient()
   const [filter, setFilter] = useState('')
   const [page, setPage] = useState(0)
@@ -183,7 +187,7 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
                       <dd className="whitespace-nowrap font-mono text-secondary">{g.first_time ?? '—'} ~ {g.last_time ?? '—'}</dd>
                     </div>
                   </dl>
-                  <div className="minute-gap-repair">
+                  <div className="minute-gap-repair flex flex-col items-stretch gap-1">
                     <button
                       type="button"
                       disabled={!hasCap || repair.isPending}
@@ -192,6 +196,13 @@ export function MinuteGapPanel({ hasCap = true, onJobStart }: { hasCap?: boolean
                     >
                       尝试补齐
                     </button>
+                    {onReload && <button
+                      type="button"
+                      aria-label={`按日重拉 ${g.symbol} ${g.date}`}
+                      disabled={!hasCap || repair.isPending}
+                      onClick={() => onReload({ symbol: g.symbol, date: g.date })}
+                      className="min-h-11 whitespace-nowrap rounded-btn px-2 py-1.5 text-[10px] text-secondary hover:bg-elevated hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0"
+                    >按日重拉</button>}
                   </div>
                 </li>
               ))}

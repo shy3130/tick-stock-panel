@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import math
+from collections.abc import Callable
 from datetime import date, timedelta
 from functools import lru_cache, partial
 from typing import Optional
@@ -1434,11 +1435,45 @@ async def repair_minute_gaps(request: Request, body: dict):
     )
 
 
+@router.post("/reload_minute_day")
+async def reload_minute_day(request: Request, body: dict):
+    """按交易日重拉指定股票和 ETF，补缺并更新源返回的分钟。"""
+    value = body.get("date")
+    try:
+        day = date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="交易日必须为 YYYY-MM-DD") from None
+    if day.isoformat() != value or day > cn_today():
+        raise HTTPException(status_code=400, detail="交易日必须为 YYYY-MM-DD 且不能在未来")
+
+    symbols = body.get("symbols")
+    if not isinstance(symbols, list) or not symbols or any(
+        not isinstance(symbol, str) or not symbol.strip() for symbol in symbols
+    ):
+        raise HTTPException(status_code=400, detail="请输入股票或 ETF 代码")
+    _reject_over_limit(symbols, "minute")
+
+    repo = request.app.state.repo
+    groups = {}
+    for symbol in dict.fromkeys(value.strip().upper() for value in symbols):
+        asset = repo.resolve_asset_type(symbol)
+        if asset not in {"stock", "etf"}:
+            raise HTTPException(status_code=400, detail="按日重拉仅支持股票和 ETF")
+        groups.setdefault(asset, []).append(symbol)
+    quotes = getattr(request.app.state, "quote_service", None)
+    return await trigger_minute_sync(
+        repo, request.app.state.capabilities, reload_target=(day, groups),
+        on_minute_updated=quotes.notify_data_updated if quotes is not None else None,
+    )
+
+
 async def trigger_minute_sync(
     repo, capset, *, override_days=None, extend_flag=None, repair_symbols: list[str] | None = None,
     repair_targets: dict[date, list[str]] | None = None,
+    reload_target: tuple[date, dict[kline_sync.AssetType, list[str]]] | None = None,
+    on_minute_updated: Callable[[str], None] | None = None,
 ) -> dict:
-    """复用分钟同步的分块落盘、容量限制和取消机制; 缺口补拉限定标的且强制回溯。"""
+    """分钟同步、缺口补拉和按日重拉共用任务容量、进度和取消机制。"""
     import asyncio
 
     from app.api.data import invalidate_storage_cache
@@ -1452,15 +1487,16 @@ async def trigger_minute_sync(
     from app.services.preferences import get_minute_sync_days
     from app.tickflow.pools import get_pool
 
+    targeted = repair_symbols is not None or reload_target is not None
     if not _minute_allowed(capset):
-        if repair_symbols is not None:
+        if targeted:
             raise HTTPException(status_code=403, detail="当前分钟数据源不可用, 请先在设置中配置可用数据源")
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
     # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
     job_id, is_new = job_store.create(long_running=True)
     if not is_new:
-        if repair_symbols is not None:
-            raise HTTPException(status_code=409, detail="已有数据任务正在运行, 请等待完成后再批量补拉")
+        if targeted:
+            raise HTTPException(status_code=409, detail="已有数据任务正在运行，请等待完成后再试")
         return {"status": "reused", "job_id": job_id}
 
     async def task() -> None:
@@ -1473,8 +1509,10 @@ async def trigger_minute_sync(
             job_store.progress(job_id, stage, pct, msg)
 
         try:
-            progress("sync_minute", 5, "准备补拉缺口标的…" if repair_symbols is not None else "解析标的池…")
-            if repair_symbols is not None:
+            progress("sync_minute", 5, "准备指定标的…" if targeted else "解析标的池…")
+            if reload_target is not None:
+                universe = [symbol for group in reload_target[1].values() for symbol in group]
+            elif repair_symbols is not None:
                 universe = repair_symbols
             else:
                 # 标的池 = instruments 维表 + 自选 (单一来源, 不拉 CN_Equity_A/SW1 池)
@@ -1501,13 +1539,23 @@ async def trigger_minute_sync(
             def _on_chunk(done: int, total: int, seg_label: str, *, group_index: int = 0) -> None:
                 # 进度映射: 10% (标的池解析完) → 95%, 留 5% 给写入+刷新
                 pct = 10 + int((group_index + done / max(total, 1)) / group_count * 85)
-                action = "补拉缺口分钟K" if repair_symbols is not None else "拉取分钟K"
-                progress("sync_minute", pct, f"{action}… {done}/{total} 批 [{seg_label}]")
+                if reload_target is not None:
+                    progress("sync_minute", pct, f"正在重拉 {seg_label} 的分钟K…")
+                else:
+                    action = "补拉缺口分钟K" if targeted else "拉取分钟K"
+                    progress("sync_minute", pct, f"{action}… {done}/{total} 批 [{seg_label}]")
 
             def _run():
                 from app.jobs.daily_pipeline import _refresh_single_view
 
                 try:
+                    if reload_target is not None:
+                        day, groups = reload_target
+                        return kline_sync.reload_minute_day(
+                            repo, capset, day, groups, on_chunk_done=_on_chunk,
+                            before_write=lambda: progress("sync_minute", 95, f"校验并保存 {day} 的分钟K…"),
+                            on_updated=on_minute_updated,
+                        )
                     if repair_targets:
                         added = remaining = 0
                         source = kline_sync.minute_source_stamp()
@@ -1538,13 +1586,20 @@ async def trigger_minute_sync(
                         _refresh_single_view(repo, "kline_minute")
 
             result = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
-            if repair_symbols is None:
+            if not targeted:
                 from app.jobs.daily_pipeline import _refresh_single_view
 
                 _refresh_single_view(repo, "kline_minute")
 
             written = result["minute_rows"]
-            if repair_targets:
+            if reload_target is not None:
+                day = reload_target[0]
+                if result["minute_received"]:
+                    message = (f"{day} 重拉完成，新增 {result['minute_added']} 根、更新 {result['minute_updated']} 根，"
+                               f"预计仍缺 {result['minute_missing']} 根")
+                else:
+                    message = f"分钟数据源没有返回 {day} 的有效记录，预计仍缺 {result['minute_missing']} 根"
+            elif repair_targets:
                 message = f"新增 {written} 根分钟 K，复查 {result['requested_gaps']} 条，仍有 {result['remaining_gaps']} 条缺口"
             elif repair_symbols is not None:
                 message = f"缺口分钟补拉完成, 写入 {written} 行; 是否补齐以体检结果为准"

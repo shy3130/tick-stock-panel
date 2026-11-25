@@ -10,7 +10,7 @@ import { MinuteSyncConfig } from './MinuteSyncConfig'
 
 vi.mock('@/lib/api', () => ({ api: {
   preferences: vi.fn(), updateMinuteSync: vi.fn(), syncMinute: vi.fn(),
-  clearMinute: vi.fn(), minuteGaps: vi.fn(), syncMinuteSingle: vi.fn(), repairMinuteGaps: vi.fn(),
+  clearMinute: vi.fn(), minuteGaps: vi.fn(), syncMinuteSingle: vi.fn(), repairMinuteGaps: vi.fn(), reloadMinuteDay: vi.fn(),
 } }))
 vi.mock('@/components/Toast', () => ({ toast: vi.fn() }))
 
@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.mocked(api.minuteGaps).mockResolvedValue(report)
   vi.mocked(api.syncMinute).mockResolvedValue({ job_id: 'minute-job', status: 'started' })
   vi.mocked(api.repairMinuteGaps).mockResolvedValue({ job_id: 'repair-job', status: 'started' })
+  vi.mocked(api.reloadMinuteDay).mockResolvedValue({ job_id: 'reload-job', status: 'started' })
 })
 
 it('零成交残留单独说明, 不提供无效补拉按钮', async () => {
@@ -78,6 +79,9 @@ async function click(text: string) {
 async function filter(value: string) {
   const input = host.querySelector<HTMLInputElement>('input[placeholder="按代码 / 日期过滤"]')!
   expect(input).toBeTruthy()
+  await fill(input, value)
+}
+async function fill(input: HTMLInputElement, value: string) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -97,7 +101,50 @@ it('同步设置和体检分开展示, 切换页签不丢失筛选条件', async
   await filter('000001')
   await click('同步与获取')
   await click('数据体检')
-  expect(host.querySelector<HTMLInputElement>('input')?.value).toBe('000001')
+  expect(host.querySelector<HTMLInputElement>('input[placeholder="按代码 / 日期过滤"]')?.value).toBe('000001')
+})
+
+it('按日重拉支持体检未列出的日期，提交精确日期和去重后的股票与 ETF 代码', async () => {
+  await render()
+  const form = host.querySelector('form')!
+  const codes = form.querySelector<HTMLInputElement>('input[type="text"]')!
+  const day = form.querySelector<HTMLInputElement>('input[type="date"]')!
+  const start = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
+  expect(start.disabled).toBe(true)
+  await fill(codes, '600000.sh，510300.SH 600000.SH')
+  await fill(day, '2999-01-01')
+  expect(start.disabled).toBe(true)
+  await fill(day, '2024-09-06')
+  expect(start.disabled).toBe(false)
+  await click('开始重拉')
+  expect(api.reloadMinuteDay).toHaveBeenCalledExactlyOnceWith('2024-09-06', ['600000.SH', '510300.SH'])
+  expect(api.repairMinuteGaps).not.toHaveBeenCalled()
+  expect(onJobStart).toHaveBeenCalledWith('reload-job')
+})
+
+it('体检行带入重拉范围，等待任务期间防重复，失败时保留填写内容', async () => {
+  let reject!: (error: Error) => void
+  vi.mocked(api.reloadMinuteDay).mockImplementation(() => new Promise((_, fail) => { reject = fail }))
+  await render()
+  await click('数据体检')
+  const link = host.querySelector<HTMLButtonElement>(`[aria-label="按日重拉 ${rows[0].symbol} ${rows[0].date}"]`)!
+  await act(async () => link.click())
+  const form = host.querySelector('form')!
+  expect(form.closest<HTMLElement>('[role="tabpanel"]')?.hidden).toBe(false)
+  const codes = form.querySelector<HTMLInputElement>('input[type="text"]')!
+  const day = form.querySelector<HTMLInputElement>('input[type="date"]')!
+  expect(codes.value).toBe(rows[0].symbol)
+  expect(day.value).toBe(rows[0].date)
+  expect(api.reloadMinuteDay).not.toHaveBeenCalled()
+  await fill(day, '2024-09-06')
+  await click('开始重拉')
+  const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
+  expect(button.disabled).toBe(true)
+  await act(async () => reject(new Error('已有数据任务正在运行')))
+  await settle()
+  expect(button.disabled).toBe(false)
+  expect(codes.value).toBe(rows[0].symbol)
+  expect(form.querySelector('[role="alert"]')?.textContent).toContain('已有数据任务正在运行')
 })
 
 it('页签支持方向键切换并把键盘焦点移到选中项', async () => {
