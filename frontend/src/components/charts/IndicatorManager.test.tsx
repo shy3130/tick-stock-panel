@@ -21,8 +21,10 @@ const close = vi.fn()
 const presets = [
   { ...newChartIndicator(), id: 'builtin_ma', name: 'MA' },
   { ...newChartIndicator('macd'), id: 'builtin_macd', name: 'MACD' },
-  { ...newChartIndicator('blank'), id: 'builtin_volume', name: '成交量', syntax: 'tdx' as const, source: '量:VOL,VOLSTICK;' },
+  { ...newChartIndicator('blank'), id: 'builtin_volume', name: '成交量', syntax: 'expression' as const, format: 'volume' as const,
+    parameters: [], outputs: [{ key: 'VOLBAR', label: '量', formula: 'V', style: 'volume' as const, color: '#C74040' }] },
 ]
+const savedSource = () => ({ ...newChartIndicator('blank'), syntax: 'tdx' as const, source: '价格:C;', outputs: [], parameters: [] })
 const rows = [1, 2, 3, 4].map(n => ({ date: `2026-01-0${n}`, open: n, high: n + 1, low: n, close: n }))
 const click = async (text: string) => act(async () => { [...document.querySelectorAll('button')].find(b => b.textContent === text)!.click() })
 async function input(label: string, value: string) {
@@ -51,26 +53,27 @@ beforeEach(() => {
 })
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks() })
 
-it('creates an empty source indicator and saves pasted code without seeding presets', async () => {
+it('creates and saves a blank expression indicator without seeding presets', async () => {
   await mount()
   expect(document.body.textContent).toContain('把你的公式放到图上')
   await click('创建空白指标')
-  expect(document.querySelector<HTMLTextAreaElement>('[aria-label="公式源码"]')!.value).toBe('')
+  expect(document.querySelector<HTMLTextAreaElement>('[aria-label="输出1公式"]')!.value).toBe('')
   expect(document.querySelector('[aria-label="指标模板"]')).toBeNull()
   await input('指标名称', '我的均线')
-  await input('公式源码', '均线:MA(C,5),COLORYELLOW;')
+  await input('输出1公式', 'MA(C,5)')
   await click('保存方案')
   const [library, revision] = calls.save.mock.calls[0]
   expect(revision).toBe('a'.repeat(64))
   expect(library.definitions).toHaveLength(1)
-  expect(library.definitions[0]).toMatchObject({ name: '我的均线', syntax: 'tdx', source: '均线:MA(C,5),COLORYELLOW;', outputs: [], parameters: [] })
+  expect(library.definitions[0]).toMatchObject({ name: '我的均线', syntax: 'expression', parameters: [],
+    outputs: [{ key: 'LINE1', formula: 'MA(C,5)' }] })
   expect(library.views.daily[0]).toMatchObject({ parameters: {}, visible: false })
   expect(initial.library.definitions).toEqual([])
   expect(close).toHaveBeenCalledOnce()
 })
 
 it('adds chosen built-ins to the draft and shows them after saving alongside existing formulas', async () => {
-  const custom = newChartIndicator()
+  const custom = savedSource()
   initial.library.definitions = [custom]
   initial.library.views.daily = [{ id: custom.id, parameters: {}, visible: true }]
   await mount()
@@ -83,10 +86,11 @@ it('adds chosen built-ins to the draft and shows them after saving alongside exi
   expect(calls.save).not.toHaveBeenCalled()
   expect(initial.library.definitions).toEqual([custom])
   expect(document.querySelector('[aria-label="添加MA到日K指标栏"]')).toBeNull()
-  expect(document.querySelector<HTMLTextAreaElement>('[aria-label="公式源码"]')!.value).toContain('VOLSTICK')
+  expect(document.querySelector<HTMLTextAreaElement>('[aria-label="输出1公式"]')!.value).toBe('V')
   await click('保存方案')
   const [library] = calls.save.mock.calls[0]
   expect(library.definitions.map((d: { name: string }) => d.name)).toEqual([custom.name, 'MA', 'MACD', '成交量'])
+  expect(library.definitions[0]).toEqual(custom)
   expect(library.views.daily.map((s: IndicatorSelection) => s.visible)).toEqual([true, true, true, true])
   expect(library.views.daily.at(-1).volume_compare).toEqual({ days: 1, show_labels: true, show_readout: true })
   expect(library.views.minute).toEqual([])
@@ -255,8 +259,8 @@ it('edits volume comparison labels and readouts independently without changing m
 })
 
 it('keeps source errors and the draft, then previews the corrected pasted source', async () => {
+  initial.library.definitions = [savedSource()]
   await mount()
-  await click('创建空白指标')
   const source = '均线:MA(C,3);\n买入:CROSS(C,均线),NODRAW;'
   await input('公式源码', source)
   calls.compile.mockRejectedValueOnce(new ApiError('第2行：不支持的函数 UNKNOWN', 400))
@@ -280,8 +284,8 @@ it('keeps source errors and the draft, then previews the corrected pasted source
 
 
 it('parses and saves source without a market-data snapshot', async () => {
+  initial.library.definitions = [savedSource()]
   await mount([])
-  await click('创建空白指标')
   await input('公式源码', '均线:MA(C,5);')
   await click('解析并预览')
   expect(calls.compile).toHaveBeenCalledOnce()
@@ -423,14 +427,14 @@ it('requires confirmation before removing an indicator from both views', async (
 it('supports preview and save shortcuts without leaking them to the chart', async () => {
   await mount([])
   await click('创建空白指标')
-  await input('公式源码', '均线:MA(C,5);')
-  const source = document.querySelector<HTMLTextAreaElement>('[aria-label="公式源码"]')!
+  await input('输出1公式', 'MA(C,5)')
+  const formula = document.querySelector<HTMLTextAreaElement>('[aria-label="输出1公式"]')!
   const parentKeydown = vi.fn()
   document.addEventListener('keydown', parentKeydown)
   try {
-    await act(async () => source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })))
+    await act(async () => formula.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })))
     expect(calls.compile).toHaveBeenCalledOnce()
-    await act(async () => source.dispatchEvent(new KeyboardEvent('keydown', { key: 's', metaKey: true, bubbles: true, cancelable: true })))
+    await act(async () => formula.dispatchEvent(new KeyboardEvent('keydown', { key: 's', metaKey: true, bubbles: true, cancelable: true })))
     expect(calls.save).toHaveBeenCalledOnce()
     expect(parentKeydown).not.toHaveBeenCalled()
   } finally { document.removeEventListener('keydown', parentKeydown) }
@@ -438,8 +442,8 @@ it('supports preview and save shortcuts without leaking them to the chart', asyn
 
 it('retains source after a network save failure without presenting it as a formula error', async () => {
   calls.save.mockRejectedValue(new ApiError('保存暂时不可用，请重试', 503))
+  initial.library.definitions = [savedSource()]
   await mount([])
-  await click('创建空白指标')
   await input('公式源码', '均线:MA(C,5);')
   await click('保存方案')
   expect(document.querySelector('[role="alert"]')!.textContent).toContain('保存暂时不可用')

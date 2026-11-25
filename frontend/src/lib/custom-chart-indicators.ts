@@ -54,8 +54,9 @@ export const EMPTY_INDICATOR_LIBRARY: ChartIndicatorLibrary = { version: 1, defi
 const identifier = () => `ci_${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`}`
 
 export function newChartIndicator(): ChartIndicatorDefinition {
-  return { id: identifier(), name: '新指标', syntax: 'tdx', source: '', pane: 'sub', format: 'number',
-    precision: 2, reset_daily: false, parameters: [], outputs: [] }
+  return { id: identifier(), name: '新指标', syntax: 'expression', pane: 'sub', format: 'number',
+    precision: 2, reset_daily: false, parameters: [],
+    outputs: [{ key: 'LINE1', label: '曲线1', formula: '', style: 'line', color: '#a855f7' }] }
 }
 
 export function copyChartIndicator(definition: ChartIndicatorDefinition): ChartIndicatorDefinition {

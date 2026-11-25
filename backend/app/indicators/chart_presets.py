@@ -1,31 +1,51 @@
 """Built-in chart formulas and defaults for an unconfigured workspace."""
 
-from app.indicators.chart import ChartIndicator, ChartLibrary, ChartSelection, VolumeCompareSettings
+from app.indicators.chart import (
+    ChartIndicator,
+    ChartLibrary,
+    ChartOutput,
+    ChartSelection,
+    VolumeCompareSettings,
+)
+
+
+def _line(key: str, formula: str, color: str, *, label: str | None = None) -> ChartOutput:
+    return ChartOutput(
+        key=key, label=label or key, formula=formula, color=color, color_mode="fixed"
+    )
+
+
+def _rsi(period: int, color: str) -> ChartOutput:
+    gain = f"SMA_FIRST(GAIN,{period},1)"
+    loss = f"SMA_FIRST(LOSS,{period},1)"
+    return _line(f"RSI{period}", f"100-100/(1+{gain}/MAX({loss},0.000000000001))", color)
+
 
 _MA = ChartIndicator(
     id="builtin_ma",
     name="MA",
-    syntax="tdx",
     pane="main",
     format="price",
-    source=(
-        "MA5:IF(BARSCOUNT(C)>=5,MA(C,5),DRAWNULL),COLORA1A1A1;\n"
-        "MA10:IF(BARSCOUNT(C)>=10,MA(C,10),DRAWNULL),COLORF6823B;\n"
-        "MA20:IF(BARSCOUNT(C)>=20,MA(C,20),DRAWNULL),COLOR1673F9;\n"
-        "MA60:IF(BARSCOUNT(C)>=60,MA(C,60),DRAWNULL),COLORF65C8B;"
-    ),
+    outputs=[
+        _line("MA5", "MA(C,5)", "#A1A1A1"),
+        _line("MA10", "MA(C,10)", "#3B82F6"),
+        _line("MA20", "MA(C,20)", "#F97316"),
+        _line("MA60", "MA(C,60)", "#8B5CF6"),
+    ],
 )
 
 _VOLUME = ChartIndicator(
     id="builtin_volume",
     name="成交量",
-    syntax="tdx",
     format="volume",
-    source=(
-        "量:VOL,VOLSTICK;\n"
-        "VOL5:IF(BARSCOUNT(VOL)>=5,MA(VOL,5),DRAWNULL),COLOR15CCFA;\n"
-        "VOL10:IF(BARSCOUNT(VOL)>=10,MA(VOL,10),DRAWNULL),COLORF65C8B;"
-    ),
+    outputs=[
+        ChartOutput(
+            key="VOLBAR", label="量", formula="V", style="volume",
+            color="#C74040", color_mode="candle",
+        ),
+        _line("VOL5", "MA(V,5)", "#FACC15"),
+        _line("VOL10", "MA(V,10)", "#8B5CF6"),
+    ],
 )
 
 BUILTIN_CHART_INDICATORS = (
@@ -33,54 +53,53 @@ BUILTIN_CHART_INDICATORS = (
     ChartIndicator(
         id="builtin_macd",
         name="MACD",
-        syntax="tdx",
         precision=3,
-        source=(
-            "DIF:EMA(C,12)-EMA(C,26),COLOR15CCFA;\n"
-            "DEA:EMA(DIF,9),COLORF65C8B;\n"
-            "MACD:(DIF-DEA)*2,COLORSTICK;"
-        ),
+        outputs=[
+            _line("DIF", "EMA_FIRST(C,12)-EMA_FIRST(C,26)", "#FACC15"),
+            _line("DEA", "EMA_FIRST(DIF,9)", "#8B5CF6"),
+            ChartOutput(
+                key="MACD", label="MACD", formula="(DIF-DEA)*2", style="histogram",
+                color="#C74040", color_mode="sign",
+            ),
+        ],
     ),
     _VOLUME,
     ChartIndicator(
         id="builtin_rsi",
         name="RSI",
-        syntax="tdx",
         precision=1,
-        source=(
-            "LC:=IF(BARSCOUNT(C)=1,C,REF(C,1));\n"
-            "GAIN:=MAX(C-LC,0);\n"
-            "LOSS:=MAX(LC-C,0);\n"
-            "RSI6:100-100/(1+SMA(GAIN,6,1)/MAX(SMA(LOSS,6,1),0.000000000001)),COLOR15CCFA;\n"
-            "RSI14:100-100/(1+SMA(GAIN,14,1)/MAX(SMA(LOSS,14,1),0.000000000001)),COLORF6823B;\n"
-            "RSI24:100-100/(1+SMA(GAIN,24,1)/MAX(SMA(LOSS,24,1),0.000000000001)),COLORF65C8B;"
-        ),
+        outputs=[
+            ChartOutput(key="GAIN", label="上涨额", formula="MAX(C-REF(C,1),0)", hidden=True),
+            ChartOutput(key="LOSS", label="下跌额", formula="MAX(REF(C,1)-C,0)", hidden=True),
+            _rsi(6, "#FACC15"),
+            _rsi(14, "#3B82F6"),
+            _rsi(24, "#8B5CF6"),
+        ],
     ),
     ChartIndicator(
         id="builtin_kdj",
         name="KDJ",
-        syntax="tdx",
         precision=1,
-        source=(
-            "LL:=LLV(L,9);\n"
-            "SPAN9:=HHV(H,9)-LL;\n"
-            "RSV:=IF(BARSCOUNT(C)>=9 AND SPAN9>0,100*(C-LL)/SPAN9,DRAWNULL);\n"
-            "K:SMA(RSV,3,1),COLOR15CCFA;\n"
-            "D:SMA(K,3,1),COLORF6823B;\n"
-            "J:3*K-2*D,COLORF65C8B;"
-        ),
+        outputs=[
+            ChartOutput(
+                key="RSV", label="RSV",
+                formula="100*(C-LLV(L,9))/MAX(HHV(H,9)-LLV(L,9),0)", hidden=True,
+            ),
+            _line("K", "SMA_FIRST(RSV,3,1)", "#FACC15"),
+            _line("D", "SMA_FIRST(K,3,1)", "#3B82F6"),
+            _line("J", "3*K-2*D", "#8B5CF6"),
+        ],
     ),
     ChartIndicator(
         id="builtin_boll",
         name="BOLL",
-        syntax="tdx",
         pane="main",
         format="price",
-        source=(
-            "中轨:IF(BARSCOUNT(C)>=20,MA(C,20),DRAWNULL),COLOR1673F9;\n"
-            "上轨:中轨+2*STD(C,20),COLORDB8BD5;\n"
-            "下轨:中轨-2*STD(C,20),COLOREED322;"
-        ),
+        outputs=[
+            _line("MID", "MA(C,20)", "#F97316", label="中轨"),
+            _line("UPPER", "MID+2*STD(C,20)", "#D58BDB", label="上轨"),
+            _line("LOWER", "MID-2*STD(C,20)", "#22D3EE", label="下轨"),
+        ],
     ),
 )
 
