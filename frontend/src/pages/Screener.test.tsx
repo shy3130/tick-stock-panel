@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Screener } from './Screener'
 import { api } from '@/lib/api'
+import { useQuoteStream } from '@/lib/useQuoteStream'
 
 const state = vi.hoisted(() => ({
   pool: ['minute', 'daily'],
@@ -17,7 +18,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@/lib/api', async importOriginal => {
   const original = await importOriginal<typeof import('@/lib/api')>()
   return { ...original, api: { ...original.api,
-    screenerStrategies: vi.fn(), screenerCachedSummary: vi.fn(), screenerCachedResult: vi.fn(),
+    screenerStrategies: vi.fn(), screenerCachedSummary: vi.fn(), screenerCachedResult: vi.fn(), screenerCached: vi.fn(),
     screenerRunPreset: vi.fn(), screenerRunAll: vi.fn(),
     watchlistList: vi.fn(async () => ({ symbols: [] })),
     monitorRulesList: vi.fn(async () => ({ rules: [] })),
@@ -30,6 +31,7 @@ vi.mock('@/lib/useSharedQueries', () => ({
   useCapabilities: () => ({ data: { capabilities: {} } }),
   useQuoteStatus: () => ({ data: { running: false, is_trading_hours: false } }),
 }))
+vi.mock('@/lib/useDataVersions', () => ({ useDataVersions: () => {} }))
 vi.mock('@/lib/useStrategyPool', () => ({ useStrategyPool: () => ({
   pool: state.pool,
   groups: [],
@@ -58,9 +60,31 @@ vi.mock('@/components/screener/StrategyBuilderDialog', () => ({ StrategyBuilderD
 } }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: () => null }))
 vi.mock('@/components/screener/ScreenerTable', () => ({
-  ScreenerTable: ({ rows }: { rows: { symbol: string }[] }) => <output>{rows.map(row => row.symbol).join(',')}</output>,
+  ScreenerTable: ({ rows }: { rows: { symbol: string; close?: number; change_pct?: number }[] }) => (
+    <output>{rows.map(row => `${row.symbol} ${row.close ?? ''} ${row.change_pct ?? ''}`).join(',')}</output>
+  ),
 }))
 vi.mock('@/components/Toast', () => ({ toast: vi.fn() }))
+
+class MockQuoteSource extends EventTarget {
+  static current: MockQuoteSource
+
+  constructor() {
+    super()
+    MockQuoteSource.current = this
+  }
+
+  close() {}
+
+  emit(event: string, revision: string) {
+    this.dispatchEvent(new MessageEvent(event, { data: JSON.stringify({ revision }) }))
+  }
+}
+
+function QuoteStream({ enabled }: { enabled: boolean }) {
+  useQuoteStream(enabled, undefined)
+  return null
+}
 
 let host: HTMLDivElement
 let root: Root
@@ -105,9 +129,12 @@ async function tick() {
   await act(async () => { await vi.advanceTimersByTimeAsync(20) })
 }
 
-async function render() {
+async function render(realtimeEnabled?: boolean) {
   await act(async () => root.render(
-    <MemoryRouter><QueryClientProvider client={client}><Screener /></QueryClientProvider></MemoryRouter>,
+    <MemoryRouter><QueryClientProvider client={client}>
+      {realtimeEnabled !== undefined && <QuoteStream enabled={realtimeEnabled} />}
+      <Screener />
+    </QueryClientProvider></MemoryRouter>,
   ))
   await tick()
 }
@@ -166,4 +193,53 @@ it('does not attach a late failure from the previous card to the cached strategy
   expect(host.textContent).toContain('000001.SZ')
   expect(host.textContent).not.toContain(errorMessage)
   expect(api.screenerRunPreset).toHaveBeenCalledTimes(1)
+})
+
+it.each(['single', 'all'] as const)('refreshes %s strategy prices on ordinary quote events', async (view) => {
+  vi.stubGlobal('EventSource', MockQuoteSource)
+  const row = { symbol: '000001.SZ', close: 10, change_pct: 0.01, score: 1 }
+  const daily = { as_of: day, strategy: 'daily', total: 1, elapsed_ms: 0 }
+  const result = () => ({ ...daily, rows: [{ ...row }] })
+  vi.mocked(api.screenerCachedResult).mockImplementation(async () => ({
+    result: result(), strategy_ids_by_symbol: {}, today_ever_rows: null, updated_at: null,
+  }))
+  vi.mocked(api.screenerCached).mockImplementation(async () => ({
+    as_of: day, results: { daily: result() }, today_ever_matched: null, today_ever_rows: null, updated_at: null,
+  }))
+
+  await render(false)
+  if (view === 'single') {
+    await clickCard('日线策略')
+  } else {
+    const allButton = host.querySelector<HTMLButtonElement>('button[title="显示全部策略个股"]')!
+    await act(async () => allButton.click())
+    await tick()
+  }
+  expect(host.querySelector('output')?.textContent).toBe('000001.SZ 10 0.01')
+  vi.mocked(api.screenerCachedSummary).mockClear()
+
+  row.close = 11
+  row.change_pct = 0.02
+  await act(async () => MockQuoteSource.current.emit('quotes_updated', 'disabled'))
+  await tick()
+  expect(host.querySelector('output')?.textContent).toBe('000001.SZ 10 0.01')
+
+  await render(true)
+  await act(async () => MockQuoteSource.current.emit('quotes_updated', 'next'))
+  await tick()
+  expect(host.querySelector('output')?.textContent).toBe('000001.SZ 11 0.02')
+  expect(api.screenerCachedSummary).not.toHaveBeenCalled()
+  expect(api.screenerRunPreset).not.toHaveBeenCalled()
+  expect(api.screenerRunAll).not.toHaveBeenCalled()
+
+  row.close = 12
+  await act(async () => {
+    MockQuoteSource.current.emit('quotes_updated', 'second')
+    MockQuoteSource.current.emit('strategy_results_updated', 'monitor')
+  })
+  await tick()
+  expect(host.querySelector('output')?.textContent).toBe('000001.SZ 11 0.02')
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+  expect(host.querySelector('output')?.textContent).toBe('000001.SZ 12 0.02')
+  expect(api.screenerCachedSummary).toHaveBeenCalledTimes(1)
 })

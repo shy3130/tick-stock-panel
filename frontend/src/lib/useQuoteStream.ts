@@ -113,9 +113,21 @@ export function useQuoteStream(
     let toastFired = false
     const revisions = createRevisionTracker()
     const refetchType = () => document.visibilityState === 'hidden' ? 'none' as const : 'active' as const
-    const refreshStrategies = () => strategyThrottlerRef.current.fire(() => {
-      qc.invalidateQueries({ queryKey: ['screener-cached'], refetchType: refetchType() })
-    })
+    let pendingStrategySummary = false
+    const refreshStrategies = (includeSummary = true) => {
+      // 行情和监控事件可能同轮到达；监控事件在节流窗口内仍要刷新摘要。
+      pendingStrategySummary ||= includeSummary
+      strategyThrottlerRef.current.fire(() => {
+        const refreshSummary = pendingStrategySummary
+        pendingStrategySummary = false
+        if (!refreshSummary && !enabledRef.current) return
+        void qc.invalidateQueries({
+          queryKey: QK.screenerCachedPrefix,
+          predicate: query => refreshSummary || query.queryKey[1] !== QK.screenerCachedSummary[1],
+          refetchType: refetchType(),
+        }, { cancelRefetch: false })
+      })
+    }
 
     // 分组 invalidation: watchlist-enriched 走 5s 节流 (整表 N 行×64 字段重拉,
     // 大自选时每秒一拍代价最大), 其余前缀立即。节流 leading 立即 + trailing 兜底。
@@ -182,6 +194,8 @@ export function useQuoteStream(
           // 无配置时全部刷新 (向后兼容)
           invalidatePrefixes(SSE_INVALIDATE_PREFIXES)
         }
+        // 策略明细接口取同日最新报价，普通行情事件只需刷新明细。
+        refreshStrategies(false)
         // 焦点股票日K增量刷新: 只取内存中的当日行并合并缓存尾部。
         if (document.visibilityState !== 'hidden') for (const symbol of focusSymbols()) {
           void qc.fetchQuery({ ...klineDailyLatestQueryOptions(symbol), staleTime: 0 })
