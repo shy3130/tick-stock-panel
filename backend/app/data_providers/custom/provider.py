@@ -446,24 +446,41 @@ class GenericHTTPProvider(CheckedDailyClient):
         return df.select(keep) if keep else pl.DataFrame()
 
     _DATETIME_STR_FORMATS = (
-        None,  # 自动推断
+        # 显式格式优先: polars 自动推断(format=None)在 strict=False 下解析失败
+        # 返回全 null 而非抛错, 放在首位会把"全 null"误当成功格式直接返回,
+        # 导致 datetime 全 null → 落盘 0 行 (#2026-11-25 分时图整批丢失实锤)。
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
         "%Y/%m/%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
+        None,  # 自动推断兜底(显式格式均未命中时)
     )
 
     @classmethod
     def _parse_datetime_series(cls, s: pl.Series) -> pl.Series:
-        """逐格式尝试解析字符串 datetime; 均失败返回全 null (宽松语义)。"""
+        """逐格式尝试解析字符串 datetime, null 最少的格式胜出 (宽松语义)。
+
+        polars 的 to_datetime(strict=False) 对格式不匹配返回全 null 而非抛错,
+        命中即 return 会把首个格式(带秒格式对无秒数据)的全 null 误当结果
+        (2026-11-25 分时图 datetime 全 null → 落盘 0 行实锤), 改为择优。
+        """
+        best: pl.Series | None = None
+        best_nulls = s.len() + 1
         for fmt in cls._DATETIME_STR_FORMATS:
             try:
-                return (
+                parsed = (
                     s.str.to_datetime(strict=False, format=fmt)
                     if fmt else s.str.to_datetime(strict=False)
                 )
             except Exception:  # noqa: BLE001 — 该格式不适用, 换下一个
                 continue
+            nulls = parsed.null_count()
+            if nulls == 0:
+                return parsed
+            if nulls < best_nulls:
+                best, best_nulls = parsed, nulls
+        if best is not None:
+            return best
         return pl.Series("datetime", [None] * s.len(), dtype=pl.Datetime("us"))
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
