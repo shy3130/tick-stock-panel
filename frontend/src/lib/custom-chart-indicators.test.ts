@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { copyChartIndicator, indicatorBars, indicatorPlotSeries, indicatorReadouts, indicatorSourceIdentity, resolveChartIndicators, type IndicatorEvaluation } from './custom-chart-indicators'
+import { copyChartIndicator, indicatorBars, indicatorPlotSeries, indicatorReadouts, indicatorSourceIdentity, newChartIndicator as createIndicator, resolveChartIndicators, type IndicatorEvaluation } from './custom-chart-indicators'
 import { legacyChartIndicator as newChartIndicator } from './chart-indicator-fixtures'
 
 it('keeps day/minute parameter choices separate and copies definitions without sharing state', () => {
@@ -71,12 +71,12 @@ it('copies server presets and draws candle-coloured volume without intermediate 
   expect(indicatorReadouts(evaluation)[0]).toHaveLength(1)
 })
 
-it('creates only a blank source definition and preserves source verbatim when copied', async () => {
-  const { newChartIndicator: createSource } = await import('./custom-chart-indicators')
-  const d = createSource()
-  expect(d).toMatchObject({ syntax: 'tdx', source: '', outputs: [], parameters: [] })
-  d.source = '{源码}\n中文:MA(C,5),NODRAW;'
-  expect(copyChartIndicator(d).source).toBe(d.source)
+it('starts with a blank expression and copies saved source verbatim', () => {
+  const definition = createIndicator()
+  expect(definition).toMatchObject({ syntax: 'expression', parameters: [],
+    outputs: [{ key: 'LINE1', formula: '', style: 'line' }] })
+  const legacy = { ...definition, syntax: 'tdx' as const, source: '{源码}\n中文:MA(C,5),NODRAW;', outputs: [] }
+  expect(copyChartIndicator(legacy)).toMatchObject({ syntax: 'tdx', source: legacy.source })
 })
 
 it('keeps NODRAW readouts, plots drawing extents on the native scale and never turns them into visible price lines', async () => {

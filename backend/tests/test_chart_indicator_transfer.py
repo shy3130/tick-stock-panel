@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import zipfile
+from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
@@ -40,7 +41,10 @@ def test_missing_scheme_displays_ma_and_volume_without_writing_preferences():
         "days": 1, "show_labels": True, "show_readout": True,
     }
     assert library["views"]["minute"] == []
-    assert any(definition["id"] == "builtin_macd" for definition in initial["presets"])
+    assert {d["id"]: d["syntax"] for d in initial["presets"]} == dict.fromkeys(
+        ("builtin_ma", "builtin_macd", "builtin_volume", "builtin_rsi", "builtin_kdj", "builtin_boll"),
+        "expression",
+    )
     exported = charts.export_definitions(["builtin_ma", "builtin_volume"], initial["revision"])
     assert exported["definitions"] == library["definitions"]
     assert preferences._path().read_bytes() == before
@@ -49,6 +53,54 @@ def test_missing_scheme_displays_ma_and_volume_without_writing_preferences():
     charts.save_library(charts.LibrarySave(library=empty, revision=initial["revision"]))
     assert charts.get_library()["library"] == empty.model_dump()
     assert preferences.load()["unrelated"] == "keep"
+
+
+def test_native_presets_and_saved_tdx_formula_evaluate_together():
+    source = {
+        "id": "saved_tdx",
+        "name": "旧源码",
+        "syntax": "tdx",
+        "source": "均线:MA(C,5);DRAWICON(C>75,L,1);",
+    }
+    preferences.save({"chart_indicators": {"version": 1, "definitions": [source]}})
+    library = charts.get_library()
+    presets = library["presets"]
+    saved = library["library"]["definitions"]
+    assert saved[0]["source"] == source["source"]
+    start = date(2026, 1, 1)
+    rows = [
+        {
+            "time": (start + timedelta(days=i - 1)).isoformat(),
+            "open": i + (1 if i % 2 else -1),
+            "high": i + 2,
+            "low": i - 0.5,
+            "close": i,
+            "volume": 100 + i,
+        }
+        for i in range(1, 81)
+    ]
+    result = charts.evaluate(charts.EvaluateRequest.model_validate({
+        "symbol": "000001.SZ",
+        "timeframe": "daily",
+        "rows": rows,
+        "definitions": [*presets, *saved],
+    }))
+
+    assert result["errors"] == []
+    indicators = {item["id"]: item for item in result["results"]}
+    assert len(indicators) == 7
+    for preset in presets:
+        indicator = indicators[preset["id"]]
+        assert indicator["syntax"] == "expression"
+        assert all(output["values"][-1] is not None for output in indicator["outputs"])
+    assert indicators["builtin_ma"]["outputs"][0]["values"][:5] == [None] * 4 + [3.0]
+    assert indicators["builtin_boll"]["outputs"][0]["values"][-1] == 70.5
+    volume = indicators["builtin_volume"]["outputs"][0]
+    assert volume["style"] == "volume"
+    assert volume["colors"][:2] == ["#2D9B65", "#C74040"]
+    assert indicators["saved_tdx"]["syntax"] == "tdx"
+    assert indicators["saved_tdx"]["outputs"][0]["values"][-1] == 78.0
+    assert len(indicators["saved_tdx"]["drawings"][0]["points"]) == 5
 
 
 def test_saved_null_and_empty_schemes_do_not_receive_defaults():
