@@ -722,6 +722,7 @@ export function Layout() {
                 {!itemRail && (
                   <>
                     <span className="tsp-nav-label">{label}</span>
+                    {to === '/monitor' && <MonitorBadge active={isActive} />}
                     {arch === 'ext' && <span className="tsp-nav-tag tsp-sidebar-note font-mono" aria-hidden="true">EXT</span>}
                     {badge && <span className="tsp-nav-tag tsp-sidebar-warning">{badge}</span>}
                     {to === '/data' && isDataSyncing && (
@@ -730,7 +731,6 @@ export function Layout() {
                     {to === '/data' && !isDataSyncing && dataSyncJustDone && (
                       <CheckCircle2 className="tsp-sidebar-success h-3.5 w-3.5 shrink-0" aria-label="同步完成" />
                     )}
-                    {to === '/monitor' && <MonitorBadge active={isActive} />}
                   </>
                 )}
               </>
