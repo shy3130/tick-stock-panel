@@ -26,6 +26,8 @@ export const EXT_DATA_QUERY_PREFIXES = new Set([
   'table-schema', 'custom-signals-options',
 ])
 
+const screenerCachedPrefix = ['screener-cached'] as const
+
 export const QK = {
   engineJobsRoot: ['engine-jobs'] as const,
   engineInputs: ['engine-jobs', 'inputs'] as const,
@@ -90,9 +92,10 @@ export const QK = {
   strategyPool:         ['strategy-pool'] as const,
   strategyList:         (assetType: string = 'all', timeframe = '1d', includeResearch = false) =>
                           ['strategies', assetType, timeframe, includeResearch] as const,
-  screenerCachedSummary: ['screener-cached', 'summary'] as const,
-  screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
-  screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,
+  screenerCachedPrefix,
+  screenerCachedSummary: [...screenerCachedPrefix, 'summary'] as const,
+  screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => [...screenerCachedPrefix, 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
+  screenerCached:       (asOf?: string, ext?: string) => [...screenerCachedPrefix, 'all', asOf ?? '', ext ?? ''] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   /** 扩展列迷你图: 列集 (含显示周期和天数) + 日期 + 标的集。 */
   extSeriesAll:        ['ext-series'] as const,
@@ -222,10 +225,7 @@ export const QK = {
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
 // 新增需要 SSE 推送的查询，只需在此加一行
 //
-// 注意: 策略页 (screener-cached) 不在此列表 —— 行情刷新时策略结果不变
-// (非监控策略读盘后静态缓存, 监控策略由独立的 strategy_results_updated 事件在
-// 重算完成后刷新)。若加入 'screener', 会导致每个行情 tick 双重刷新策略页,
-// 且在 monitor "重算" 窗口内读到空结果, 造成策略列表闪烁 (变 0 → 空失效 → 又出现)。
+// 策略明细与策略监控结果在 useQuoteStream 共用节流，避免两种事件重复拉取明细。
 
 export const SSE_INVALIDATE_PREFIXES = [
   // 精确前缀: 只命中自选页的实时数据 (quotes/enriched)。不能用宽泛的 'watchlist' ——

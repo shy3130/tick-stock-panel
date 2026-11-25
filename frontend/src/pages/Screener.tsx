@@ -11,6 +11,7 @@ import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { pendingStrategyIds, pollingInterval, useDocumentVisible } from '@/lib/refreshPolicy'
+import { useQuoteStreamStatus } from '@/lib/useQuoteStream'
 import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -203,12 +204,15 @@ export function Screener() {
   // 摘要只覆盖日线缓存; 分钟策略命中数来自手动单跑。
   // run_all 渐进式返回后后台仍在算 → 轮询摘要, 算完的策略逐个点亮。
   //
-  // 后端会用当前实时行情覆盖结果里的价格类字段 (close/change_pct 等), 所以
-  // 交易时段内需要定期重取, 否则列表一直停在首次加载那一刻的涨跌幅, 与详情
-  // 弹窗的实时价对不上。摘要没有价格字段, 仍只在 run_all 未完成时轮询。
+  // 明细接口会用同日行情覆盖展示价格。SSE 正常时低频兜底，断开时盘中恢复轮询。
   const quoteStatus = useQuoteStatus()
   const documentVisible = useDocumentVisible()
-  const inTradingSession = quoteStatus.data?.is_trading_hours !== false
+  const streamStatus = useQuoteStreamStatus()
+  const resultPollInterval = pollingInterval(
+    quoteStatus.data?.is_trading_hours !== false ? 6_000 : 60_000,
+    prefs?.realtime_quotes_enabled === true && streamStatus === 'connected',
+    documentVisible,
+  )
   const summaryQuery = useQuery({
     queryKey: pendingRun?.taskId ? [...QK.screenerCachedSummary, pendingRun.taskId] : QK.screenerCachedSummary,
     queryFn: () => api.screenerCachedSummary(pendingRun?.taskId),
@@ -221,8 +225,7 @@ export function Screener() {
     queryKey: QK.screenerCached(asOf, extColumnsParam),
     queryFn: () => api.screenerCached(extColumnsParam || undefined),
     enabled: assetType === 'stock' && tfFilter !== '1m' && showAll,
-    // 交易时段跟随行情轮询; 收盘后价格不再变, 降为 60s 仅兜底数据修正
-    refetchInterval: pollingInterval(inTradingSession ? 6_000 : 60_000, false, documentVisible),
+    refetchInterval: resultPollInterval,
   })
 
   const singleCachedQuery = useQuery({
@@ -233,8 +236,7 @@ export function Screener() {
       && !showAll
       && !!activeStrategy
       && summaryQuery.data?.results[activeStrategy]?.as_of === asOf,
-    // 与 fullCachedQuery 同口径: 列表与详情共享同一份实时覆盖后的价格
-    refetchInterval: pollingInterval(inTradingSession ? 6_000 : 60_000, false, documentVisible),
+    refetchInterval: resultPollInterval,
   })
 
   const dataStatus = useDataStatus({ staleTime: 0 })
