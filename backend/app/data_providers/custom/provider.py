@@ -364,6 +364,28 @@ class GenericHTTPProvider(CheckedDailyClient):
         ) if not df.is_empty()]
         return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
 
+    # 分钟窗口子段天数(自然日): 单帧 = batch × 天数 × 240 行, 5 天 × 20 只约 2.4 万行。
+    MINUTE_SUBSEGMENT_DAYS = 5
+
+    @staticmethod
+    def _split_minute_window(
+        start_time: datetime | None, end_time: datetime, days: int
+    ) -> list[tuple[datetime | None, datetime]]:
+        """把 [start, end] 按 days 自然日切为连续子窗口。
+
+        start_time 为 None 时不切分（保持"由源决定全量"的原语义）。
+        子窗口首尾衔接：分钟数据落在 09:30-15:00，00:00 边界无实际行重叠。
+        """
+        if start_time is None:
+            return [(None, end_time)]
+        subs = []
+        cur = start_time
+        while cur < end_time:
+            nxt = min(cur + timedelta(days=days), end_time)
+            subs.append((cur, nxt))
+            cur = nxt
+        return subs
+
     def _iter_minute_dataset(
         self, ds_name: str, symbols: list[str], start_time: datetime | None,
         end_time: datetime | None, asset_type: AssetType, freq: str, on_chunk_done,
@@ -376,22 +398,30 @@ class GenericHTTPProvider(CheckedDailyClient):
             override[cfg.asset_type_param] = asset_type
         if cfg.freq_param:
             override[cfg.freq_param] = freq
-        chunks = chunked(symbols, cfg.batch)
+        # 窗口子段切分（自然日）：大窗口（days>=20）时"batch 只 × 全窗口"单帧
+        # 可达数十万行，normalize 内存峰值巨大、中途失败整批丢失。
+        # 切分后单帧 = batch × 子段天数 × 240 行，失败恢复粒度细化到子段。
+        subs = self._split_minute_window(start_time, end_time)
+        chunks = list(chunked(symbols, cfg.batch))
+        total = len(chunks) * len(subs)
+        done = 0
         for i, chunk in enumerate(chunks):
-            self._minute_pacer.wait(ds_name, cfg.rpm,
-                                    (lambda cur=i: on_chunk_done(cur, len(chunks))) if on_chunk_done else None)
-            try:
-                rows = self._request_rows(
-                    cfg, symbols=chunk, start_time=start_time, end_time=end_time,
-                    override_params=override or None, override_body=override or None,
-                )
-            except Exception as exc:  # history failures must reach the task
-                raise ProviderRequestError(f"自定义源 {self.name} 分钟请求失败: {type(exc).__name__}") from exc
-            df = self._mapped_frame(cfg, rows)
-            df = self._normalize_minute(df)
-            yield df
-            if on_chunk_done:
-                on_chunk_done(i + 1, len(chunks))
+            for sub_start, sub_end in subs:
+                self._minute_pacer.wait(ds_name, cfg.rpm,
+                                        (lambda cur=done: on_chunk_done(cur, total)) if on_chunk_done else None)
+                try:
+                    rows = self._request_rows(
+                        cfg, symbols=chunk, start_time=sub_start, end_time=sub_end,
+                        override_params=override or None, override_body=override or None,
+                    )
+                except Exception as exc:  # history failures must reach the task
+                    raise ProviderRequestError(f"自定义源 {self.name} 分钟请求失败: {type(exc).__name__}") from exc
+                df = self._mapped_frame(cfg, rows)
+                df = self._normalize_minute(df)
+                yield df
+                done += 1
+                if on_chunk_done:
+                    on_chunk_done(done, total)
 
     def get_financials(
         self,
