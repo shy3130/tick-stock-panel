@@ -388,8 +388,10 @@ def test_api_env_key_backup_restores_on_new_device(src_env, tmp_path_factory, mo
     from app.api.config_backup import router
     from app.config import settings
     from app.data_providers.custom import loader
+    from app.services import auth as auth_service
     from app.services.ext_data import get_ext_api_key
 
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     (src_env / "user_data" / "secrets.json").unlink()
     monkeypatch.setattr(settings, "ai_api_key", "test-env-ai")
     monkeypatch.setattr(settings, "tickflow_api_key", "test-env-tickflow")
@@ -402,7 +404,7 @@ def test_api_env_key_backup_restores_on_new_device(src_env, tmp_path_factory, mo
     monkeypatch.setenv("EXT_EXT1_API_KEY", "test-env-ext")
     app = FastAPI()
     app.include_router(router)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         for params in ({}, {"categories": "preferences"}, {"categories": "auth"}):
             response = client.get("/api/config-backup/export", params=params)
             assert response.status_code == 200

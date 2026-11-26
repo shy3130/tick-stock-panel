@@ -49,9 +49,11 @@ def _write(path: Path, content: str | dict) -> None:
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch) -> TestClient:
     from app.config import settings
+    from app.services import auth as auth_service
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(preferences, "load", lambda: {})
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     _write(tmp_path / "strategies" / "custom" / "custom_standalone.py", STANDALONE)
     _write(tmp_path / "user_data" / "custom_factors" / "uf_dep.json", UF_DEP)
     _write(
@@ -63,7 +65,7 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     app.include_router(strategy_api.router)
     app.include_router(definitions_api.router)
     app.state.strategy_engine = StrategyEngine(strategy_dirs=[tmp_path / "strategies" / "custom"])
-    yield TestClient(app)
+    yield TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345))
     for fid in loaded:
         unregister_factor(fid)
 
