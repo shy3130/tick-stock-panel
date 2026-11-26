@@ -11,13 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.auth import require_management
 from app.backtest import position_policies as pp
 from app.config import settings
 
 router = APIRouter(prefix="/api/backtest/position-policies", tags=["backtest"])
+_MANAGE = [Depends(require_management)]
 
 
 def _data_dir(request: Request) -> Path:
@@ -68,7 +70,7 @@ def get_position_policy(policy_id: str, request: Request) -> dict:
     return {"id": policy_id, "meta": meta, "code": user_code}
 
 
-@router.post("/validate")
+@router.post("/validate", dependencies=_MANAGE)
 def validate_position_policy(req: PolicySaveRequest, request: Request) -> dict:
     """保存前预检: 安全校验 + 结构解析 + 合成冒烟, 不落盘。"""
     policy_id = req.id or ""
@@ -87,7 +89,7 @@ def validate_position_policy(req: PolicySaveRequest, request: Request) -> dict:
     return {"ok": result["ok"], "issues": result["issues"], "smoke": result["smoke"]}
 
 
-@router.post("")
+@router.post("", dependencies=_MANAGE)
 def save_position_policy(req: PolicySaveRequest, request: Request) -> dict:
     meta = {"id": req.id or "", "label": req.label,
             "description": req.description, "params": req.params}
@@ -102,7 +104,7 @@ def save_position_policy(req: PolicySaveRequest, request: Request) -> dict:
     return result
 
 
-@router.delete("/{policy_id}")
+@router.delete("/{policy_id}", dependencies=_MANAGE)
 def delete_position_policy(policy_id: str, request: Request) -> dict:
     _validate_policy_id(policy_id)
     if not pp.delete_policy(_data_dir(request), policy_id):

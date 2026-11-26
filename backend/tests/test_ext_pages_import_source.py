@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import ext_pages
+from app.services import auth as auth_service
 from app.services import ext_source_import
 
 pytestmark = pytest.mark.skipif(
@@ -37,11 +38,12 @@ export default {
 """
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     app = FastAPI()
     app.include_router(ext_pages.router)
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path / "data"))
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
 def test_compile_fixture_bundles_host_alias_and_shim(tmp_path):
@@ -57,8 +59,8 @@ def test_compile_fixture_bundles_host_alias_and_shim(tmp_path):
     assert "fixture.tsx" in summary
 
 
-def test_upload_endpoint_compiles_and_stores(tmp_path):
-    c = _client(tmp_path)
+def test_upload_endpoint_compiles_and_stores(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
     r = c.post(
         "/api/ext-pages/import-source",
         files={"file": ("demo_page.tsx", _FIXTURE_TSX.encode(), "text/plain")},
@@ -70,8 +72,8 @@ def test_upload_endpoint_compiles_and_stores(tmp_path):
     assert (tmp_path / "data" / "ext_pages" / "zz_imported_demo" / "bundle.js").is_file()
 
 
-def test_upload_rejects_non_tsx(tmp_path):
-    c = _client(tmp_path)
+def test_upload_rejects_non_tsx(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
     r = c.post(
         "/api/ext-pages/import-source",
         files={"file": ("evil.js", b"export default {}", "text/plain")},
@@ -81,7 +83,7 @@ def test_upload_rejects_non_tsx(tmp_path):
 
 def test_upload_without_esbuild_returns_409(tmp_path, monkeypatch):
     monkeypatch.setattr(ext_source_import, "find_esbuild", lambda: None)
-    c = _client(tmp_path)
+    c = _client(tmp_path, monkeypatch)
     r = c.post(
         "/api/ext-pages/import-source",
         files={"file": ("demo.tsx", _FIXTURE_TSX.encode(), "text/plain")},
@@ -90,16 +92,16 @@ def test_upload_without_esbuild_returns_409(tmp_path, monkeypatch):
     assert "esbuild" in r.json()["detail"]
 
 
-def test_from_project_validates_namespace(tmp_path):
-    c = _client(tmp_path)
+def test_from_project_validates_namespace(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
     assert c.post("/api/ext-pages/import-source/from-project", json={"namespace": "_template"}).status_code == 400
     assert c.post("/api/ext-pages/import-source/from-project", json={"namespace": "../x"}).status_code == 400
     assert c.post("/api/ext-pages/import-source/from-project", json={"namespace": "not_exist_ns"}).status_code == 400
 
 
-def test_from_project_compiles_real_namespace(tmp_path):
+def test_from_project_compiles_real_namespace(tmp_path, monkeypatch):
     """真实编译一个小体量的本项目扩展, 验证完整链路 (真实前端源码树)。"""
-    c = _client(tmp_path)
+    c = _client(tmp_path, monkeypatch)
     r = c.post("/api/ext-pages/import-source/from-project", json={"namespace": "concept-analysis"})
     assert r.status_code == 200, r.text
     meta = r.json()

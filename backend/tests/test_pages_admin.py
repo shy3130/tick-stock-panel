@@ -10,14 +10,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import pages_admin
+from app.services import auth as auth_service
 
 
 def _make_client(tmp_path: Path, monkeypatch, custom_root: Path) -> TestClient:
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     app = FastAPI()
     app.include_router(pages_admin.router)
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path / "data"))
     monkeypatch.setattr(pages_admin, "_custom_root", lambda: custom_root)
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
 def _seed_custom(root: Path, ns: str = "zz_test_delete") -> Path:

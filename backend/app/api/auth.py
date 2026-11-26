@@ -19,12 +19,14 @@ import logging
 import time
 from collections import defaultdict
 from threading import Lock
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.services import auth
 from app.services.api_gateway import is_local_network as _is_local_network
+from app.services.api_gateway import is_loopback as _is_loopback
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +47,59 @@ def _client_ip(request: Request) -> str:
 
     安全关键: 仅当直连 peer(request.client.host)本身是回环/内网地址
     (即请求确实经过同机/内网的可信反代)时, 才采信 X-Forwarded-For。
-    否则公网请求可伪造 `X-Forwarded-For: 127.0.0.1` 冒充内网, 绕过
-    「未设密码仅本机可访问」闸门、抢占 setup 端点、并绕过登录限流。
+    反代会把真实对端 IP 追加在 X-Forwarded-For 最右侧, 必须从右向左解析:
+    先取首个非内网 IP(防公网攻击者在最左端伪造 127.0.0.1 绕过门禁或轮换 IP
+    绕过登录限流); 若全为内网 IP, 取首个非回环内网 IP(防局域网客户端冒充本机回环)。
     """
     direct = request.client.host if request.client else ""
     xff = request.headers.get("x-forwarded-for")
     if xff and direct and _is_local_network(direct):
-        return xff.split(",")[0].strip()
+        hops = [h.strip() for h in xff.split(",") if h.strip()]
+        if hops:
+            for hop in reversed(hops):
+                if not _is_local_network(hop):
+                    return hop
+            for hop in reversed(hops):
+                if not _is_loopback(hop):
+                    return hop
+            return hops[-1]
     return direct or "unknown"
+
+
+def is_cross_origin_request(
+    request: Request,
+    allowed_origins: tuple[str, ...] | list[str] = (),
+) -> bool:
+    """判断浏览器请求是否来自非同源/跨站上下文。"""
+    origin = (request.headers.get("origin") or "").strip()
+    if origin:
+        if origin in allowed_origins:
+            return False
+        if urlsplit(origin).netloc != (request.headers.get("host") or ""):
+            return True
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        return not (origin and origin in allowed_origins)
+    return False
+
+
+def require_management(request: Request) -> None:
+    """高危管理操作统一门禁 (代码/插件写入、密钥导出、备份恢复、Token 管理、目录删除)。
+
+    与只读/业务接口不同, 高危操作不接受 API Token, 拒绝跨站来源,
+    且未设密码时仅允许本机回环同源访问 (局域网须先设密码并登录)。
+    """
+    if request.headers.get("authorization"):
+        raise HTTPException(403, "管理操作仅供面板管理会话使用")
+    origin = (request.headers.get("origin") or "").strip()
+    if origin and urlsplit(origin).netloc != (request.headers.get("host") or ""):
+        raise HTTPException(403, "管理操作需要同源访问")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "拒绝跨站管理请求")
+    if auth.is_configured():
+        if not auth.is_valid_session(request.cookies.get(COOKIE_NAME, "")):
+            raise HTTPException(401, "请先登录")
+    elif not _is_loopback(_client_ip(request)) or not _is_loopback(request.url.hostname):
+        raise HTTPException(403, "请先设置访问密码并登录，或通过本机访问此管理功能")
 
 
 def _check_login_rate_limit(ip: str) -> None:
@@ -122,10 +169,12 @@ def auth_status(request: Request) -> dict:
 
 @router.post("/setup")
 def setup_password(req: PasswordIn, request: Request) -> dict:
-    """首次设置访问密码。仅限本机/内网请求(防公网抢占)。
+    """首次设置访问密码。仅限本机/内网同源请求(防公网抢占与跨站劫持)。
 
     若已设置过密码, 返回 409(改密码走 /change-password)。
     """
+    if is_cross_origin_request(request):
+        raise HTTPException(status_code=403, detail="首次设置密码需要同源访问")
     # 关键: 限制只有服务器主人(本机/内网)能设密码
     client_ip = _client_ip(request)
     if not _is_local_network(client_ip):
@@ -191,14 +240,17 @@ def change_password(req: ChangePasswordIn, request: Request) -> dict:
     if not auth.is_configured():
         raise HTTPException(status_code=409, detail="尚未设置访问密码")
 
+    ip = _client_ip(request)
+    _check_login_rate_limit(ip)
+
     # 验证旧密码
     new_token = auth.verify_and_create_session(req.old_password)
     if not new_token:
-        ip = _client_ip(request)
         _record_login_fail(ip)
         raise HTTPException(status_code=401, detail="旧密码错误")
     # 临时 token 用完即弃
     auth.revoke_session(new_token)
+    _clear_login_fails(ip)
 
     # 改密码(set_password 会清空所有会话)
     auth.set_password(req.new_password)
