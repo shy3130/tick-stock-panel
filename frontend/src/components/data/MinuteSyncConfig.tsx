@@ -7,6 +7,8 @@ import { cnToday } from '@/lib/kline'
 import { MissingCapChip } from '@/lib/capability-labels'
 import { MinuteGapPanel } from '@/components/data/MinuteGapPanel'
 
+const DATE_INPUT_CLASS = 'mt-1.5 min-h-11 w-full min-w-0 rounded-btn border border-border bg-base px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50'
+
 // hasCap: 分钟K能力当前是否可用 (路由矩阵判定, 生效源含插件/自定义源)
 export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: boolean; onJobStart?: (jobId: string) => void; onClose?: () => void }) {
   const [tab, setTab] = useState<'sync' | 'health'>('sync')
@@ -65,6 +67,11 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
     },
   })
 
+  const followMinuteJob = ({ job_id }: { job_id: string }) => {
+    qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+    if (job_id) onJobStart?.(job_id)
+  }
+
   // 手动获取 (两个独立按钮, 各自指定天数, 不影响自动同步偏好)
   const [fetchingMode, setFetchingMode] = useState<'' | '40d' | '1y'>('')
   const handleFetch = (mode: '40d' | '1y') => {
@@ -73,10 +80,8 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
     const fetchDays = mode === '40d' ? localSegment : 365
     setFetchingMode(mode)
     api.syncMinute(fetchDays, true).then((res) => {
-      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       qc.invalidateQueries({ queryKey: QK.dataStatus })
-      // 通知主页面跟踪 job 进度 (ActiveJobCard 会显示实时进度+日志)
-      if (res.job_id && onJobStart) onJobStart(res.job_id)
+      followMinuteJob(res)
     }).finally(() => setFetchingMode(''))
   }
 
@@ -85,15 +90,21 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
   const reloadDateRef = useRef<HTMLInputElement>(null)
   const reload = useMutation({
     mutationFn: ({ date, symbols }: { date: string; symbols: string[] }) => api.reloadMinuteDay(date, symbols),
-    onSuccess: ({ job_id }) => {
-      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
-      onJobStart?.(job_id)
-    },
+    onSuccess: followMinuteJob,
   })
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
+  const rangeFetch = useMutation({
+    mutationFn: ({ start, end }: { start: string; end: string }) => api.syncMinuteRange(start, end),
+    onSuccess: followMinuteJob,
+  })
+  const startingJob = fetchingMode !== '' || reload.isPending || rangeFetch.isPending
   const today = cnToday()
+  const rangeError = rangeStart > today || rangeEnd > today ? '日期最晚为今天。'
+    : rangeStart && rangeEnd && rangeStart > rangeEnd ? '结束日期须在开始日期当天或之后。' : ''
+  const canFetchRange = hasMinuteCap && !!rangeStart && !!rangeEnd && !rangeError && !startingJob
   const reloadSymbols = [...new Set(reloadCodes.toUpperCase().split(/[,，、\s]+/).filter(Boolean))]
-  const canReload = hasMinuteCap && reloadSymbols.length > 0 && reloadDate !== '' && reloadDate <= today
-    && !reload.isPending && fetchingMode === ''
+  const canReload = hasMinuteCap && reloadSymbols.length > 0 && reloadDate !== '' && reloadDate <= today && !startingJob
   const selectReloadTarget = ({ symbol, date }: { symbol: string; date: string }) => {
     setReloadCodes(symbol)
     setReloadDate(date)
@@ -248,7 +259,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
             <input ref={reloadDateRef} type="date" required max={today} value={reloadDate}
               disabled={!hasMinuteCap || reload.isPending}
               onChange={event => { setReloadDate(event.target.value); reload.reset() }}
-              className="mt-1.5 min-h-11 w-full min-w-0 rounded-btn border border-border bg-base px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50" />
+              className={DATE_INPUT_CLASS} />
           </label>
           <button type="submit" disabled={!canReload}
             className="inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-accent/30 bg-accent/5 px-4 text-xs font-medium text-foreground transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40">
@@ -272,7 +283,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
         <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => handleFetch('40d')}
-          disabled={!hasMinuteCap || fetchingMode !== '' || reload.isPending}
+          disabled={!hasMinuteCap || startingJob}
           className="inline-flex min-h-20 flex-col items-center justify-center gap-1 px-2 py-3 rounded-btn bg-accent/90 text-white text-xs font-medium hover:bg-accent disabled:opacity-40 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           {fetchingMode === '40d' ? (
@@ -283,7 +294,7 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
         </button>
         <button
           onClick={() => handleFetch('1y')}
-          disabled={!hasMinuteCap || fetchingMode !== '' || reload.isPending}
+          disabled={!hasMinuteCap || startingJob}
           className="inline-flex min-h-20 flex-col items-center justify-center gap-1 px-2 py-3 rounded-btn border border-accent/30 bg-accent/5 text-accent text-xs font-medium hover:bg-accent/10 disabled:opacity-40 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           {fetchingMode === '1y' ? (
@@ -297,6 +308,41 @@ export function MinuteSyncConfig({ hasCap, onJobStart, onClose }: { hasCap: bool
           A股标的 · 前复权价格 · 从本地最早数据向前叠加 ·{' '}
           均按上方「分段大小」分段拉取、每段即落盘
         </div>
+        <form aria-labelledby={`${tabId}-range-title`} className="space-y-3 border-t border-border/60 pt-4"
+          onSubmit={event => {
+            event.preventDefault()
+            if (canFetchRange) rangeFetch.mutate({ start: rangeStart, end: rangeEnd })
+          }}>
+          <div className="space-y-1">
+            <h3 id={`${tabId}-range-title`} className="text-sm font-medium text-foreground">按日期范围拉取</h3>
+            <p className="text-xs leading-relaxed text-secondary">按全市场分钟同步标的池分段拉取，包含起止两天。可选同一天。</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+            <label className="block min-w-0 text-xs text-secondary">
+              开始日期
+              <input type="date" name="start_date" required max={today} value={rangeStart}
+                disabled={!hasMinuteCap || rangeFetch.isPending}
+                onChange={event => { setRangeStart(event.target.value); rangeFetch.reset() }}
+                className={DATE_INPUT_CLASS} />
+            </label>
+            <label className="block min-w-0 text-xs text-secondary">
+              结束日期
+              <input type="date" name="end_date" required min={rangeStart || undefined} max={today} value={rangeEnd}
+                disabled={!hasMinuteCap || rangeFetch.isPending}
+                aria-invalid={!!rangeError} aria-describedby={rangeError ? `${tabId}-range-error` : undefined}
+                onChange={event => { setRangeEnd(event.target.value); rangeFetch.reset() }}
+                className={DATE_INPUT_CLASS} />
+            </label>
+            <button type="submit" disabled={!canFetchRange}
+              className="col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-accent/30 bg-accent/5 px-4 text-xs font-medium text-foreground transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40 sm:col-span-1">
+              {rangeFetch.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-accent" /> : <Download aria-hidden="true" className="h-3.5 w-3.5 text-accent" />}
+              {rangeFetch.isPending ? '正在启动…' : '拉取所选范围'}
+            </button>
+          </div>
+          {rangeError && <p id={`${tabId}-range-error`} role="status" className="text-xs text-secondary">{rangeError}</p>}
+          {rangeFetch.isError && <p role="alert" className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-foreground">{rangeFetch.error instanceof Error ? rangeFetch.error.message : '启动拉取失败，请重试。'}</p>}
+          {rangeFetch.isSuccess && <p role="status" className="text-xs text-secondary">任务已启动，可在数据页查看进度。</p>}
+        </form>
       </div>
       </div>
       <div
