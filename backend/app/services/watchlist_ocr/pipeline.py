@@ -69,7 +69,7 @@ def build_instrument_lookups(data_dir: Path) -> tuple[dict[str, str], dict[str, 
         if not path.exists():
             continue
         try:
-            df = pl.read_parquet(path)
+            df = pl.read_parquet(path, glob=False)
             if "symbol" not in df.columns:
                 continue
             has_code = "code" in df.columns

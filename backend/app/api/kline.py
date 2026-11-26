@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from app.db_safe import is_valid_ext_ident
 from app.indicators.pipeline import compute_enriched_single
 from app.market_time import cn_now, cn_today, in_continuous_session
+from app.parquet import parquet_glob
 from app.price_limits import (
     is_no_limit_day,
     is_risk_warning_name,
@@ -1521,7 +1522,7 @@ async def trigger_minute_sync(
                 if inst_path.exists():
                     try:
                         import polars as pl
-                        inst = pl.read_parquet(inst_path, columns=["symbol"])
+                        inst = pl.read_parquet(inst_path, glob=False, columns=["symbol"])
                         all_symbols.update(inst["symbol"].to_list())
                     except Exception:  # noqa: BLE001
                         pass
@@ -1986,11 +1987,7 @@ async def rebuild_enriched(request: Request):
                 enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_dir.exists() else 0
 
                 # 刷新视图
-                d = repo.store.data_dir.as_posix()
-                for view_name, glob in [
-                    ("kline_enriched", f"{d}/kline_daily_enriched/**/*.parquet"),
-                ]:
-                    repo.refresh_view(view_name, glob)
+                repo.refresh_view("kline_enriched", parquet_glob(enriched_dir))
 
                 # 失效内存 enriched 快照: get_enriched_latest 对非空缓存不校验
                 # generation, 只刷 DuckDB 视图不重载内存缓存的话, 重建结果对

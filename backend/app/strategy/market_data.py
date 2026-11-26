@@ -193,8 +193,8 @@ def get_ext_timeseries(config_id, start=None, end=None, columns=None):
             continue
         try:
             frag = (
-                pl.read_parquet(part, columns=["symbol", *want])
-                if want is not None else pl.read_parquet(part)
+                pl.read_parquet(part, glob=False, columns=["symbol", *want])
+                if want is not None else pl.read_parquet(part, glob=False)
             )
         except Exception as exc:  # noqa: BLE001 — 单分区损坏只跳过, 不炸整个调用
             logger.warning(

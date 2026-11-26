@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.parquet import parquet_glob
 from app.strategy import paper
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _last_close(data_dir: Path, symbol: str, asset_type: str) -> float | None:
     try:
         import polars as pl
         df = (
-            pl.scan_parquet((base / "**" / "*.parquet").as_posix())
+            pl.scan_parquet(parquet_glob(base))
             .filter(pl.col("symbol") == symbol)
             .sort("date")
             .select(pl.col("close").last())

@@ -36,7 +36,7 @@ def _get_symbols(data_dir: Path) -> list[str]:
     if not inst_path.exists():
         return []
     try:
-        df = pl.read_parquet(inst_path, columns=["symbol"])
+        df = pl.read_parquet(inst_path, glob=False, columns=["symbol"])
         return df["symbol"].to_list()
     except Exception as e:
         logger.warning("读取 instruments 失败: %s", e)
@@ -302,7 +302,7 @@ def get_financial_df(data_dir: Path, table: str) -> pl.DataFrame:
     if not path.exists():
         return pl.DataFrame()
     try:
-        return pl.read_parquet(path)
+        return pl.read_parquet(path, glob=False)
     except Exception as e:
         logger.warning("读取 financials/%s 失败: %s", table, e)
         return pl.DataFrame()

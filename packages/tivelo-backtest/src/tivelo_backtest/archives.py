@@ -581,7 +581,7 @@ def read_result(directory) -> tuple[RunLock, BacktestResult, RunMetrics]:
         for path, (attribute, model, fields) in _result_tables(manifest.encoding).items():
             expected = pl.Schema({"sequence": pl.UInt64, **fields})
             table_path = _safe_path(root, path)
-            lazy = pl.scan_parquet(table_path)
+            lazy = pl.scan_parquet(table_path, glob=False)
             if lazy.collect_schema() != expected:
                 raise ValueError("result table schema differs")
             count = lazy.select(pl.len()).collect().item()

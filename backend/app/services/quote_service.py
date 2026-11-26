@@ -37,7 +37,7 @@ from pathlib import Path
 import polars as pl
 
 from app.market_time import CN_TZ, cn_now, cn_today
-from app.parquet import scan_daily_parquet
+from app.parquet import parquet_glob, scan_daily_parquet
 from app.polars_guard import guarded_collect
 from app.services.index_const import CORE_INDEX_SYMBOLS
 from app.strategy.intraday_signals import IntradaySignalEvaluator
@@ -2096,7 +2096,7 @@ class QuoteService:
         if cached is not None and cached[0] == key:
             return cached[1]
         frame = guarded_collect(
-            scan_daily_parquet([entry[0] for entry in files])
+            scan_daily_parquet([entry[0] for entry in files], glob=False)
             .select(columns)
             .filter((pl.col("date") >= today - timedelta(days=150)) & (pl.col("date") != today))
             .sort(["symbol", "date"]),
@@ -2173,7 +2173,7 @@ class QuoteService:
 
                 cutoff = today - timedelta(days=90)
                 table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
-                daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
+                daily_glob = parquet_glob(self._repo.store.data_dir / table)
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = self._etf_live_history(today, ohlcv_cols) if asset_type == "etf" else None
                 if hist_df is None:
@@ -2202,7 +2202,7 @@ class QuoteService:
                 factors = pl.DataFrame()
                 if factor_path and factor_path.exists():
                     try:
-                        factors = pl.read_parquet(factor_path)
+                        factors = pl.read_parquet(factor_path, glob=False)
                     except Exception as e:  # noqa: BLE001
                         # fail-visible: 复权因子读失败继续算会让本轮 enriched 以
                         # 不复权口径落盘并进缓存, 后续增量轮以此为基准 — 必须留痕

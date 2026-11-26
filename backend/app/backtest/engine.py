@@ -50,7 +50,7 @@ from app.backtest.matrix import (
 from app.backtest.price_basis import BacktestPriceBasis, BackwardAdjustment
 from app.config import settings
 from app.enriched_generation import EnrichedGenerationUnavailableError
-from app.parquet import scan_enriched_parquet
+from app.parquet import parquet_glob, scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 if TYPE_CHECKING:
@@ -671,7 +671,7 @@ class BacktestEngine:
             logger.debug("backtest load panel cache miss: %s", e)
 
         from app.tickflow.repository import enriched_dirname
-        enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
+        enriched_glob = parquet_glob(self.repo.store.data_dir / enriched_dirname(asset_type))
 
         try:
             lf = scan_enriched_parquet(enriched_glob)

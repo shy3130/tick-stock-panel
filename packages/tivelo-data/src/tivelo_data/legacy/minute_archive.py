@@ -2,6 +2,7 @@
 
 import stat
 from datetime import date, timedelta
+from glob import escape
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -156,7 +157,7 @@ def stage_archives(connection, directory, archive, context):
                 day,
                 day,
                 int(symbol_folder),
-                str(frozen),
+                escape(frozen.as_posix()),
                 symbol_folder,
                 symbols,
                 day,
@@ -182,6 +183,6 @@ def stage_archives(connection, directory, archive, context):
                             ELSE ?::DATE END, symbol, {_numeric_text(schema, "close")}, {stamp}
                 FROM read_parquet(?, hive_partitioning=false)
                 WHERE symbol IN (SELECT unnest(?))""",
-            [*args, day, day, str(frozen), symbols],
+            [*args, day, day, escape(frozen.as_posix()), symbols],
         )
     frozen.unlink(missing_ok=True)

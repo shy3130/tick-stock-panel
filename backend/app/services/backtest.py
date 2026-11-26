@@ -19,7 +19,7 @@ from tivelo_backtest.legacy.simulator import (
 from tivelo_backtest.research.matrix import build_market_matrix
 
 from app.config import settings
-from app.parquet import scan_enriched_parquet
+from app.parquet import parquet_glob, scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ class BacktestService:
         """读取指定资产的日 K，预热指标后裁回请求区间。"""
         try:
             from app.tickflow.repository import enriched_dirname
-            enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
+            enriched_glob = parquet_glob(self.repo.store.data_dir / enriched_dirname(asset_type))
             # 指标 warmup (#201): MA/MACD/RSI/BOLL 需要区间前的历史窗口,
             # 直接按 [start,end] 过滤后 compute_all 会让区间头部的指标失真。
             # 与挖掘侧同款公式 (mining_runtime: warmup = max(120, bars*1.6)),

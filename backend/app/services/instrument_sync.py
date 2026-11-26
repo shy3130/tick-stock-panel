@@ -140,7 +140,7 @@ def _preserve_instrument_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFram
         )
         return df
     try:
-        existing = pl.read_parquet(path)
+        existing = pl.read_parquet(path, glob=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("instruments 历史维表读取失败, 无法补全股本字段: %s", e)
         return df
@@ -203,7 +203,7 @@ def enrich_names_from_quotes(
     if not inst_path.exists():
         return 0
 
-    df = pl.read_parquet(inst_path)
+    df = pl.read_parquet(inst_path, glob=False)
 
     # 只更新空 name 的行
     updates = pl.DataFrame({

@@ -179,7 +179,7 @@ def since_cursor(data_dir, config: ExtConfig, day: date) -> str | None:
     import polars as pl
 
     try:
-        col = pl.read_parquet(part, columns=[pull.time_field])[pull.time_field]
+        col = pl.read_parquet(part, glob=False, columns=[pull.time_field])[pull.time_field]
         value = col.max()
     except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 全量, 不阻断拉取
         return None

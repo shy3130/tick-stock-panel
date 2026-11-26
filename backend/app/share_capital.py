@@ -16,7 +16,7 @@ def load_share_history(data_dir: Path) -> pl.DataFrame:
     if not path.exists():
         return pl.DataFrame()
     try:
-        shares = pl.read_parquet(path)
+        shares = pl.read_parquet(path, glob=False)
         if not {"symbol", "period_end", "float_shares"} <= set(shares.columns):
             return pl.DataFrame()
         return shares

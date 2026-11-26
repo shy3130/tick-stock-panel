@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import tempfile
 from contextlib import ExitStack
+from glob import escape
 from pathlib import Path
 
 import duckdb
@@ -120,7 +121,8 @@ class SnapshotReader:
                     raise TiveloError(
                         ErrorCode.SNAPSHOT_CORRUPT, "Snapshot fact file is unavailable"
                     ) from exc
-                files.append(str(path))
+                # DuckDB expands glob characters even in bound file arguments.
+                files.append(escape(path.as_posix()))
         return sorted(set(files))
 
     def _batches(

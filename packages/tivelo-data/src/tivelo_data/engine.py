@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from contextlib import ExitStack, contextmanager
+from glob import escape
 from pathlib import Path
 
 import duckdb
@@ -253,7 +254,7 @@ class DataEngine:
             connection.execute("SET memory_limit = ?", [self.memory_limit])
             connection.execute("SET threads = 1")
             connection.execute("SET temp_directory = ?", [str(final.parent / "sort-spill")])
-            paths = [str(path) for path in chunks]
+            paths = [escape(path.as_posix()) for path in chunks]
             # All identifiers below come from our registered schema, never SQL from a provider.
             for keys in (REVISION_KEYS[record_type], (*BUSINESS_KEYS[record_type], "available_at")):
                 group = ", ".join(f'"{key}"' for key in keys)

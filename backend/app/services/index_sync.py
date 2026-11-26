@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import polars as pl
 
 from app.indicators.pipeline import compute_enriched
+from app.parquet import parquet_glob, scan_daily_parquet
 from app.services import kline_sync, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
@@ -340,7 +341,7 @@ def _load_etf_factors(repo: KlineRepository) -> pl.DataFrame:
     if not factor_path.exists():
         return pl.DataFrame()
     try:
-        return pl.read_parquet(factor_path)
+        return pl.read_parquet(factor_path, glob=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("ETF 复权因子读取失败: %s", e)
         return pl.DataFrame()
@@ -356,7 +357,7 @@ def etf_adj_factor_window_start(adj_path, history_start: datetime) -> datetime:
     if not adj_path.exists():
         return history_start
     try:
-        max_date = pl.scan_parquet(adj_path).select(pl.col("trade_date").max()).collect().item()
+        max_date = pl.scan_parquet(adj_path, glob=False).select(pl.col("trade_date").max()).collect().item()
     except Exception as e:
         logger.warning("读取 ETF 除权因子最新日期失败, 回退日K历史起点: %s", e)
         return history_start
@@ -376,10 +377,9 @@ def _load_local_etf_daily(repo: KlineRepository, symbols: list[str]) -> pl.DataF
     daily_dir = repo.store.data_dir / "kline_etf_daily"
     if not daily_dir.exists() or not any(daily_dir.glob("date=*")):
         return pl.DataFrame()
-    from app.parquet import scan_daily_parquet
     try:
         return (
-            scan_daily_parquet((daily_dir / "**" / "*.parquet").as_posix())
+            scan_daily_parquet(parquet_glob(daily_dir))
             .filter(pl.col("symbol").is_in(symbols))
             .collect()
         )

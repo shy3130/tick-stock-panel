@@ -8,6 +8,7 @@ import polars as pl
 
 from app.indicators.pipeline import compute_enriched
 from app.market_time import CN_TZ
+from app.parquet import parquet_glob
 from app.services import kline_sync
 from app.services.data_integrity import invalid_daily_rows
 from app.services.heavy_job_limiter import HeavyJobLimitTimeoutError, shared_heavy_job_limiter
@@ -78,9 +79,9 @@ def _ensure_history(repo, capset, symbol: str, asset_type: str, start: date, end
     daily_table = {"stock": "kline_daily", "etf": "kline_etf_daily", "index": "kline_index_daily"}[asset_type]
     enriched_table = {"stock": "kline_enriched", "etf": "kline_etf_enriched", "index": "kline_index_enriched"}[asset_type]
     enriched_folder = "kline_daily_enriched" if asset_type == "stock" else enriched_table
-    root = repo.store.data_dir.as_posix()
-    repo.refresh_view(daily_table, f"{root}/{daily_table}/**/*.parquet")
-    repo.refresh_view(enriched_table, f"{root}/{enriched_folder}/**/*.parquet")
+    root = repo.store.data_dir
+    repo.refresh_view(daily_table, parquet_glob(root / daily_table))
+    repo.refresh_view(enriched_table, parquet_glob(root / enriched_folder))
     repo.remember_prepared_daily(asset_type, enriched)
     return enriched
 
