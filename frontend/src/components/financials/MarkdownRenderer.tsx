@@ -100,23 +100,22 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
 // ===== 表格解析 =====
 
 function parseTable(lines: string[], start: number): { rows: string[][]; consumed: number } | null {
-  // 找到连续的表格行(以 | 开头)
-  const tableLines: string[] = []
-  let idx = start
-  while (idx < lines.length && lines[idx].trim().startsWith('|')) {
-    tableLines.push(lines[idx].trim())
+  const separator = lines[start + 1]?.trim()
+  if (!separator?.startsWith('|')) return null
+  const parseRow = (line: string) =>
+    line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+  const header = parseRow(lines[start])
+  const delimiters = parseRow(separator)
+  // 只有每列都有合法分隔符时才消费第二行，否则它仍是正文。
+  if (delimiters.length !== header.length || delimiters.some(cell => !/^:?-+:?$/.test(cell))) return null
+
+  const rows = [header]
+  let idx = start + 2
+  while (idx < lines.length && lines[idx].trimStart().startsWith('|')) {
+    rows.push(parseRow(lines[idx]))
     idx++
   }
-  if (tableLines.length < 2) return null
-  // 第二行必须是分隔行 |---|---|
-  if (!/^|[\s-:|]+$/.test(tableLines[1]) && !tableLines[1].split('|').every(c => /^[\s-:]*$/.test(c))) {
-    return null
-  }
-  const parseRow = (line: string) =>
-    line.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
-  const header = parseRow(tableLines[0])
-  const body = tableLines.slice(2).map(parseRow)
-  return { rows: [header, ...body], consumed: tableLines.length }
+  return { rows, consumed: idx - start }
 }
 
 // ===== 主渲染 =====
@@ -148,13 +147,13 @@ export function MarkdownRenderer({ content, compact = false }: { content: string
     const hMatch = trimmed.match(/^(#{1,4})\s+(.+)$/)
     if (hMatch) {
       const level = hMatch[1].length
-      const text = hMatch[2]
-      const sizeCls = level === 1 ? 'text-[16px] leading-6' : level === 2 ? 'text-sm' : 'text-xs'
+      const Heading = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4'
+      const sizeCls = level === 1 ? 'text-[16px] leading-6' : level === 2 ? 'text-sm leading-5' : 'text-xs leading-5'
       const mtCls = level <= 2 ? 'mt-6' : 'mt-5'
       blocks.push(
-        <div key={key++} className={`${sizeCls} ${mtCls} mb-3 font-semibold text-foreground flex items-center gap-1.5`}>
-          {renderInline(text, `h-${key}`)}
-        </div>,
+        <Heading key={key++} className={`${compact ? 'my-2 text-sm leading-5' : `${sizeCls} ${mtCls} mb-3`} font-semibold text-foreground`}>
+          {renderInline(hMatch[2], `h-${key}`)}
+        </Heading>,
       )
       i++
       continue
@@ -185,6 +184,7 @@ export function MarkdownRenderer({ content, compact = false }: { content: string
         // 窄表 table-fixed + 末列加宽, 单元格可折行; 宽表列多而内容短,
         // 挤压会把标的/代码折成多行(600127.S / H), 改为按内容取宽 + 单元格不折行 + 横向滚动。
         const wide = ncol > 4
+        const wrapCls = wide ? 'whitespace-nowrap' : 'break-words'
         blocks.push(
           <div key={key++} className={`my-5 rounded-btn border border-border/30 ${wide ? 'overflow-x-auto' : 'overflow-hidden'}`}>
             <table className={wide
@@ -202,7 +202,7 @@ export function MarkdownRenderer({ content, compact = false }: { content: string
               <thead>
                 <tr className="bg-elevated/50">
                   {header.map((cell, ci) => (
-                    <th key={ci} className="px-2.5 py-1.5 text-left font-medium text-foreground border-b border-border/40 whitespace-nowrap">
+                    <th key={ci} className={`px-2.5 py-1.5 text-left font-medium text-foreground border-b border-border/40 ${wrapCls}`}>
                       {renderInline(cell, `th-${key}-${ci}`)}
                     </th>
                   ))}
@@ -212,7 +212,7 @@ export function MarkdownRenderer({ content, compact = false }: { content: string
                 {body.map((row, ri) => (
                   <tr key={ri} className="border-b border-border/20 last:border-0 hover:bg-elevated/20">
                     {row.map((cell, ci) => (
-                      <td key={ci} className={`px-2.5 py-1.5 text-foreground align-top ${wide ? 'whitespace-nowrap' : 'break-words'}`}>
+                      <td key={ci} className={`px-2.5 py-1.5 text-foreground align-top ${wrapCls}`}>
                         {renderInline(cell, `td-${key}-${ri}-${ci}`)}
                       </td>
                     ))}
@@ -280,5 +280,8 @@ export function MarkdownRenderer({ content, compact = false }: { content: string
 
   // 注意:外层不加 space-y-*,否则会覆盖各块自己的 margin-top 导致间距失效。
   // 让各块的 my-* 自然叠加(margin collapse),间距更可控。
-  return <div className={compact ? 'min-w-0 break-words [&>p]:my-2 [&>p]:text-xs [&>p]:text-secondary [&>ul]:my-2 [&>ol]:my-2 [&_li]:text-xs [&_li]:text-secondary [&>div]:my-2 [&>div]:text-sm [&>blockquote]:my-2 [&>hr]:my-3 [&>:first-child]:mt-0 [&>:last-child]:mb-0' : undefined}>{blocks}</div>
+  const compactCls = compact
+    ? '[&>p]:my-2 [&>p]:text-xs [&>p]:text-secondary [&>ul]:my-2 [&>ol]:my-2 [&_li]:text-xs [&_li]:text-secondary [&>div]:my-2 [&>div]:text-sm [&>blockquote]:my-2 [&>hr]:my-3 [&>:first-child]:mt-0 [&>:last-child]:mb-0'
+    : ''
+  return <div className={`min-w-0 [overflow-wrap:anywhere] ${compactCls}`}>{blocks}</div>
 }
