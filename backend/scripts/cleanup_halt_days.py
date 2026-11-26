@@ -18,6 +18,8 @@ from pathlib import Path
 
 import polars as pl
 
+from app.parquet import parquet_glob
+
 logger = logging.getLogger(__name__)
 
 # kline_daily 原始表与 enriched 表的脏数据都在这些分区里
@@ -27,7 +29,7 @@ HALT_PRED = (pl.col("open") == 0) & (pl.col("high") == 0)
 
 
 def _scan_dirty(table: str) -> pl.DataFrame:
-    glob = str(DATA_DIR / table / "**" / "*.parquet")
+    glob = parquet_glob(DATA_DIR / table)
     cast = pl.ScanCastOptions(integer_cast="allow-float")
     return (
         pl.scan_parquet(glob, hive_partitioning=True, cast_options=cast)
@@ -51,7 +53,7 @@ def _clean_table(table: str, dry_run: bool) -> int:
         if not part.exists():
             logger.warning("[%s] 分区文件不存在: %s", table, part)
             continue
-        df = pl.read_parquet(part)
+        df = pl.read_parquet(part, glob=False)
         before = df.height
         cleaned = df.filter(~HALT_PRED)
         after = cleaned.height

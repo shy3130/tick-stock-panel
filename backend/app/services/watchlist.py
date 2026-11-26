@@ -83,7 +83,7 @@ def _read_entries() -> pl.DataFrame:
     p = _path()
     if not p.exists():
         return _empty_entries()
-    df = pl.read_parquet(p)
+    df = pl.read_parquet(p, glob=False)
     # 旧 schema 兼容: 单值 group_id → group_ids=[gid]; 两列都缺 → 空列表
     if "group_ids" not in df.columns:
         old = df["group_id"].to_list() if "group_id" in df.columns else [None] * df.height
@@ -105,7 +105,7 @@ def _write_entries(df: pl.DataFrame) -> None:
     # 首次从旧 schema 迁移到 group_ids 前, 备份原文件(一次性)
     if p.exists():
         try:
-            if "group_ids" not in pl.read_parquet_schema(p).names():
+            if "group_ids" not in pl.scan_parquet(p, glob=False).collect_schema().names():
                 shutil.copy(p, p.with_suffix(p.suffix + ".bak"))
         except OSError as e:
             logger.warning("watchlist backup before migration failed: %s", e)

@@ -267,7 +267,7 @@ class MinuteRefreshService:
             )
             if not part.exists():
                 return None
-            mx = pl.read_parquet(part, columns=["datetime"])["datetime"].max()
+            mx = pl.read_parquet(part, glob=False, columns=["datetime"])["datetime"].max()
             if mx is None:
                 return None
             # 分区 datetime 为北京墙钟 naive, cn_now 带时区 → 剥齐再比

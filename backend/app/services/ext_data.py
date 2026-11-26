@@ -691,7 +691,7 @@ def build_code_lookup(data_dir: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
-        df = pl.read_parquet(path, columns=["code", "symbol"])
+        df = pl.read_parquet(path, glob=False, columns=["code", "symbol"])
         return dict(zip(df["code"].to_list(), df["symbol"].to_list()))
     except Exception:
         return {}
@@ -938,7 +938,7 @@ def write_ext_parquet(
         key.append(tf)
 
     if out_path.exists():
-        existing = cast_df_to_schema(pl.read_parquet(out_path), config.fields)
+        existing = cast_df_to_schema(pl.read_parquet(out_path, glob=False), config.fields)
         old_schema, new_schema = existing.schema, df.schema
         for name in old_schema.keys() & new_schema.keys():
             old_type, new_type = old_schema[name], new_schema[name]
@@ -1036,7 +1036,7 @@ def fix_symbol_format(config: ExtConfig, data_dir: Path) -> int:
     lookup = build_code_lookup(data_dir)
     for parquet_path in parquet_files:
         try:
-            df = pl.read_parquet(parquet_path)
+            df = pl.read_parquet(parquet_path, glob=False)
             if "symbol" not in df.columns:
                 continue
             old = df["symbol"].to_list()

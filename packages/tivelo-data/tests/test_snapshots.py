@@ -90,11 +90,21 @@ def test_published_snapshot_implements_the_public_reader_vectors(make_engine):
         assert len(verify_reader(reader, execution=True)) == 18
 
 
+@pytest.mark.parametrize(("directory", "alternate_case"), [
+    ("store", False), ("Store [AB]", False), ("Store [AB]", True),
+])
 def test_d04_independent_full_pipeline_preserves_decimal_utc_and_missing_values(
-    make_bar, make_engine
+    make_bar, make_engine, tmp_path, directory, alternate_case,
 ):
     bar = make_bar(close="11.123456789123", turnover=None)
-    engine, provider, plan = make_engine((bar,))
+    root = tmp_path / directory
+    if alternate_case:
+        root.mkdir()
+        alias = tmp_path / directory.lower()
+        if not alias.is_dir() or not alias.samefile(root):
+            pytest.skip("requires a case-insensitive filesystem")
+        root = alias
+    engine, provider, plan = make_engine((bar,), directory=root)
     assert provider.calls == 0
     candidate = engine.sync(plan)
     with pytest.raises(TiveloError):

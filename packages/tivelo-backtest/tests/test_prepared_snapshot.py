@@ -18,8 +18,9 @@ class Observer:
         pass
 
 
-def test_prepared_queries_share_fact_buffers_and_preserve_as_of_selection(tmp_path, monkeypatch):
-    root = tmp_path / "bundle"
+@pytest.mark.parametrize("directory", ["bundle", "Bundle [AB]"])
+def test_prepared_queries_share_fact_buffers_and_preserve_as_of_selection(tmp_path, monkeypatch, directory):
+    root = tmp_path / directory
     base = bar(2, "10")
     revision = bar(2, "12", available_at=at(4), ingested_at=at(4), revision_id="later")
     reference, _ = write_bundle(

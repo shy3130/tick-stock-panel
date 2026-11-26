@@ -148,7 +148,7 @@ def get_cached(key: str, expected_rows: int) -> pl.Series | None:
         _stats["miss"] += 1
         return None
     try:
-        series = pl.read_parquet(path).to_series(0)
+        series = pl.read_parquet(path, glob=False).to_series(0)
         if series.len() != expected_rows:
             raise ValueError(f"缓存行数不符: {series.len()} != {expected_rows}")
     except Exception as e:  # noqa: BLE001 — 损坏缓存删除并回退现算

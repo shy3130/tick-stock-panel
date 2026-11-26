@@ -696,7 +696,7 @@ def _read_registered_artifact(
         raise ValueError(f"mining artifact is unavailable: {name}")
     if registered.stat().st_size > _MAX_ARTIFACT_BYTES:
         raise ValueError(f"mining artifact exceeds size limit: {name}")
-    return pl.read_parquet(registered)
+    return pl.read_parquet(registered, glob=False)
 
 
 def _project_result(

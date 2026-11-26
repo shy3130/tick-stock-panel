@@ -37,7 +37,7 @@ from app.enriched_generation import (
     get_enriched_generation_snapshot,
 )
 from app.market_time import CN_TZ, cn_today
-from app.parquet import scan_enriched_parquet
+from app.parquet import parquet_glob, scan_enriched_parquet
 from app.polars_guard import guarded_collect
 from app.services.minute_adjust import apply_minute_adjustment, minute_basis_is_raw
 from app.startup_diagnostics import startup_phase
@@ -49,6 +49,15 @@ logger = logging.getLogger(__name__)
 # 为空, K 线接口逐请求现算指标。仅 warmup 线程用, 同步/懒加载路径单次。
 _ENRICHED_WARMUP_MAX_ATTEMPTS = 3
 _ENRICHED_WARMUP_PUBLISH_WAIT_SECONDS = 5.0
+
+
+def _parquet_view_sql(name: str, glob: str) -> str:
+    # DuckDB cannot bind parameters in CREATE VIEW.
+    literal = glob.replace("'", "''")
+    return (
+        f"CREATE OR REPLACE VIEW {name} AS "
+        f"SELECT * FROM read_parquet('{literal}', union_by_name=true)"
+    )
 
 
 def replace_with_retry(src: Path, dst: Path, *, attempts: int = 10, delay_s: float = 0.5) -> None:
@@ -193,62 +202,29 @@ class DataStore:
 
     def _register_views(self, db: duckdb.DuckDBPyConnection) -> None:
         """把 Parquet 目录挂载为 DuckDB 视图(§7.3)。"""
-        d = self.data_dir.as_posix()
-        statements = [
-            f"""CREATE OR REPLACE VIEW kline_daily AS
-                SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_enriched AS
-                SELECT * FROM read_parquet('{d}/kline_daily_enriched/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_index_daily AS
-                SELECT * FROM read_parquet('{d}/kline_index_daily/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_index_enriched AS
-                SELECT * FROM read_parquet('{d}/kline_index_enriched/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_etf_daily AS
-                SELECT * FROM read_parquet('{d}/kline_etf_daily/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_etf_enriched AS
-                SELECT * FROM read_parquet('{d}/kline_etf_enriched/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_etf_minute AS
-                SELECT * FROM read_parquet('{d}/kline_etf_minute/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_minute AS
-                SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW adj_factor AS
-                SELECT * FROM read_parquet('{d}/adj_factor/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW adj_factor_etf AS
-                SELECT * FROM read_parquet('{d}/adj_factor_etf/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments AS
-                SELECT * FROM read_parquet('{d}/instruments/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments_index AS
-                SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments_etf AS
-                SELECT * FROM read_parquet('{d}/instruments_etf/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW instruments_ext AS
-                SELECT * FROM read_parquet('{d}/instruments_ext/**/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW kline_ext AS
-                SELECT * FROM read_parquet('{d}/kline_ext/**/*.parquet', union_by_name=true)""",
-            # 财务数据视图
-            f"""CREATE OR REPLACE VIEW financials_metrics AS
-                SELECT * FROM read_parquet('{d}/financials/metrics/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW financials_income AS
-                SELECT * FROM read_parquet('{d}/financials/income/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW financials_balance_sheet AS
-                SELECT * FROM read_parquet('{d}/financials/balance_sheet/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW financials_cash_flow AS
-                SELECT * FROM read_parquet('{d}/financials/cash_flow/*.parquet', union_by_name=true)""",
-            f"""CREATE OR REPLACE VIEW financials_shares AS
-                SELECT * FROM read_parquet('{d}/financials/shares/*.parquet', union_by_name=true)""",
-            # 五档盘口 sealed 真假涨停(独立旁路存储,不进 enriched)
-            f"""CREATE OR REPLACE VIEW depth5 AS
-                SELECT * FROM read_parquet('{d}/depth5/**/*.parquet', union_by_name=true)""",
-        ]
-        for sql in statements:
+        views = {
+            name: parquet_glob(self.data_dir / name)
+            for name in (
+                "kline_daily", "kline_index_daily", "kline_index_enriched", "kline_etf_daily",
+                "kline_etf_enriched", "kline_etf_minute", "kline_minute", "adj_factor",
+                "adj_factor_etf", "instruments", "instruments_index", "instruments_etf",
+                "instruments_ext", "kline_ext", "depth5",
+            )
+        }
+        views["kline_enriched"] = parquet_glob(self.data_dir / "kline_daily_enriched")
+        views.update({
+            f"financials_{table}": parquet_glob(self.data_dir / "financials" / table, "*.parquet")
+            for table in ("metrics", "income", "balance_sheet", "cash_flow", "shares")
+        })
+        for name, glob in views.items():
             try:
-                with startup_phase(logger, f"DuckDB view {sql.split()[4]}"):
-                    db.execute(sql)
-            except Exception as e:  # noqa: BLE001
+                with startup_phase(logger, f"DuckDB view {name}"):
+                    db.execute(_parquet_view_sql(name, glob))
+            except Exception:  # noqa: BLE001
                 # 空数据目录(首次启动)或权限问题时 DuckDB 会抛 IOException;
                 # 跨版本/平台也可能抛 CatalogException 等。空目录缺视图不影响启动
                 # (后续同步写入数据后会重新刷新视图),这里一律降级为 debug 日志。
-                logger.debug("view registration skipped (no parquet yet): %s", sql[:60])
+                logger.debug("view registration skipped: %s", name)
         with startup_phase(logger, "unified DuckDB views"):
             self._register_unified_views(db)
 
@@ -414,12 +390,12 @@ class KlineRepository:
         self._on_refresh_done: Callable[[], None] | None = None
 
         # parquet glob 路径
-        self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
-        self._index_enriched_glob = str(store.data_dir / "kline_index_enriched" / "**" / "*.parquet")
-        self._etf_enriched_glob = str(store.data_dir / "kline_etf_enriched" / "**" / "*.parquet")
-        self._inst_glob = str(store.data_dir / "instruments" / "**" / "*.parquet")
-        self._index_inst_glob = str(store.data_dir / "instruments_index" / "**" / "*.parquet")
-        self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
+        self._enriched_glob = parquet_glob(store.data_dir / "kline_daily_enriched")
+        self._index_enriched_glob = parquet_glob(store.data_dir / "kline_index_enriched")
+        self._etf_enriched_glob = parquet_glob(store.data_dir / "kline_etf_enriched")
+        self._inst_glob = parquet_glob(store.data_dir / "instruments")
+        self._index_inst_glob = parquet_glob(store.data_dir / "instruments_index")
+        self._etf_inst_glob = parquet_glob(store.data_dir / "instruments_etf")
 
     @property
     def db(self) -> duckdb.DuckDBPyConnection:
@@ -466,10 +442,7 @@ class KlineRepository:
         with self._ddl_lock:
             cursor = self._new_cursor()
             try:
-                cursor.execute(
-                    f"CREATE OR REPLACE VIEW {name} AS "
-                    f"SELECT * FROM read_parquet('{glob}', union_by_name=true)"
-                )
+                cursor.execute(_parquet_view_sql(name, glob))
                 return True
             except Exception as e:  # noqa: BLE001 — 空目录/权限问题降级为警告, 与既有刷新行为一致
                 logger.warning("refresh view %s failed: %s", name, e)
@@ -687,7 +660,7 @@ class KlineRepository:
 
             step = time.perf_counter()
             logger.info("enriched refresh step start: read latest parquet %s", target_parquet)
-            df_latest = pl.read_parquet(target_parquet)
+            df_latest = pl.read_parquet(target_parquet, glob=False)
             logger.info("enriched refresh step done: read latest parquet rows=%d (%.2fs)", len(df_latest), time.perf_counter() - step)
             if df_latest.is_empty():
                 logger.info("enriched refresh skipped: latest parquet empty (%.2fs)", time.perf_counter() - started)
@@ -812,7 +785,7 @@ class KlineRepository:
         try:
             from app.indicators.pipeline import compute_enriched_today, filter_halt_days
 
-            daily = filter_halt_days(pl.read_parquet(daily_path))
+            daily = filter_halt_days(pl.read_parquet(daily_path, glob=False))
             missing = daily.join(
                 df_today.select("symbol").unique(),
                 on="symbol",
@@ -1142,7 +1115,7 @@ class KlineRepository:
                 return
             latest = date.fromisoformat(dates[-1])
             target_parquet = enriched_dir / f"date={dates[-1]}" / "part.parquet"
-            df_latest = pl.read_parquet(target_parquet)
+            df_latest = pl.read_parquet(target_parquet, glob=False)
             if df_latest.is_empty():
                 return
 
@@ -1188,7 +1161,7 @@ class KlineRepository:
                 return
             latest = date.fromisoformat(dates[-1])
             target_parquet = enriched_dir / f"date={dates[-1]}" / "part.parquet"
-            df_latest = pl.read_parquet(target_parquet)
+            df_latest = pl.read_parquet(target_parquet, glob=False)
             if df_latest.is_empty():
                 return
 
@@ -1222,7 +1195,7 @@ class KlineRepository:
                 return
             # 先合并各文件的字段，旧文件缺少 as_of 时也能使用新文件的日期。
             df = guarded_collect(
-                pl.concat([pl.scan_parquet(path) for path in files], how="diagonal_relaxed"),
+                pl.concat([pl.scan_parquet(path, glob=False) for path in files], how="diagonal_relaxed"),
                 priority="background",
             )
             if not df.is_empty():
@@ -1732,7 +1705,7 @@ class KlineRepository:
             if not files:
                 raise ValueError("回测区间没有本地原始日 K，请先同步行情")
             query = pl.scan_parquet(
-                sorted(files), hive_partitioning=True, extra_columns="ignore",
+                sorted(files), glob=False, hive_partitioning=True, extra_columns="ignore",
                 schema={"symbol": pl.String, "date": pl.Date,
                         **dict.fromkeys(("open", "high", "low", "close"), pl.Float64)},
                 cast_options=pl.ScanCastOptions(float_cast="upcast", integer_cast="allow-float"),
@@ -1873,7 +1846,7 @@ class KlineRepository:
         return self.store.data_dir / ("kline_etf_minute" if asset_type == "etf" else "kline_minute")
 
     def _minute_glob_for(self, asset_type: str) -> str:
-        return str(self._minute_dir_for(asset_type) / "**" / "*.parquet")
+        return parquet_glob(self._minute_dir_for(asset_type))
 
     def _maybe_adjust_minute(self, df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
         """原始基准标记开启时应用读取时复权投影 (services/minute_adjust 三层架构)。
@@ -1909,7 +1882,7 @@ class KlineRepository:
             part = self._minute_partition_path(asset_type, trade_date)
             source = part if part is not None else self._minute_glob_for(asset_type)
             df = guarded_collect(
-                pl.scan_parquet(source).filter(
+                pl.scan_parquet(source, glob=part is None).filter(
                     (pl.col("symbol") == symbol)
                     & (pl.col("datetime").dt.date() == trade_date)
                 ).sort("datetime")
@@ -1936,7 +1909,7 @@ class KlineRepository:
             part = self._minute_partition_path(asset_type, trade_date)
             source = part if part is not None else self._minute_glob_for(asset_type)
             df = guarded_collect(
-                pl.scan_parquet(source).filter(
+                pl.scan_parquet(source, glob=part is None).filter(
                     pl.col("symbol").is_in(symbols)
                     & (pl.col("datetime").dt.date() == trade_date)
                 ).sort(["symbol", "datetime"])
@@ -2023,7 +1996,7 @@ class KlineRepository:
         if not parts:
             return pl.DataFrame()
         try:
-            lf = pl.scan_parquet(parts)
+            lf = pl.scan_parquet(parts, glob=False)
             available = set(lf.collect_schema().names())
             select_cols = [c for c in ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"] if c in available]
             df = guarded_collect(
@@ -2435,7 +2408,7 @@ class KlineRepository:
             raise ValueError("无法确认待清理记录为非交易记录, 原数据保持不变")
         base = pl.DataFrame()
         if symbols is not None and paths:
-            base = pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed")
+            base = pl.concat([pl.read_parquet(p, glob=False) for p in paths], how="diagonal_relaxed")
             base = base.filter(~pl.col("symbol").is_in(symbols))
         merged = pl.concat([base, incoming], how="diagonal_relaxed").unique(
             subset=["symbol", "date"], keep="last",
@@ -2472,7 +2445,7 @@ class KlineRepository:
         frames = []
         for path in sorted(part.glob("*.parquet")):
             self._validate_repair_path(path)
-            scan = pl.scan_parquet(path)
+            scan = pl.scan_parquet(path, glob=False)
             columns = set(scan.collect_schema().names())
             if "symbol" not in columns:
                 return set()
@@ -2522,7 +2495,7 @@ class KlineRepository:
             for path in paths:
                 self._validate_repair_path(path)
                 try:
-                    symbols.update(pl.read_parquet(path, columns=["symbol"])["symbol"].drop_nulls().to_list())
+                    symbols.update(pl.read_parquet(path, glob=False, columns=["symbol"])["symbol"].drop_nulls().to_list())
                 except (OSError, pl.exceptions.PolarsError):
                     complete = False
             return symbols, complete
@@ -2582,7 +2555,7 @@ class KlineRepository:
             for path in paths:
                 self._validate_repair_path(path)
             fingerprints = {p: self._partition_fingerprint(p) for p in paths}
-            existing = (pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed")
+            existing = (pl.concat([pl.read_parquet(p, glob=False) for p in paths], how="diagonal_relaxed")
                         if paths else pl.DataFrame())
             keep = existing.filter(~pl.col("symbol").is_in(symbols)) if not existing.is_empty() else existing
             incoming = frame.filter(pl.col("date") == day) if not frame.is_empty() else frame
@@ -2646,14 +2619,14 @@ class KlineRepository:
 
     def refresh_index_views(self) -> None:
         """刷新指数相关 DuckDB 视图。"""
-        d = self.store.data_dir.as_posix()
+        d = self.store.data_dir
         for name, path in {
-            "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
-            "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
-            "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
-            "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
-            "instruments_index": f"{d}/instruments_index/**/*.parquet",
-            "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+            "kline_index_daily": parquet_glob(d / "kline_index_daily"),
+            "kline_index_enriched": parquet_glob(d / "kline_index_enriched"),
+            "kline_etf_daily": parquet_glob(d / "kline_etf_daily"),
+            "kline_etf_enriched": parquet_glob(d / "kline_etf_enriched"),
+            "instruments_index": parquet_glob(d / "instruments_index"),
+            "instruments_etf": parquet_glob(d / "instruments_etf"),
         }.items():
             self.refresh_view(name, path)
         with self._ddl_lock:
@@ -2670,21 +2643,21 @@ class KlineRepository:
         内联了同一份视图重建 SQL, 清库那份还漏了几张视图导致漂移。此处收敛为单一入口:
         覆盖全部 13 张视图 (二者的超集), 空目录 (清库后) 也能安全重挂。
         """
-        d = self.store.data_dir.as_posix()
+        d = self.store.data_dir
         views = {
-            "kline_daily": f"{d}/kline_daily/**/*.parquet",
-            "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
-            "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
-            "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
-            "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
-            "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
-            "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
-            "kline_minute": f"{d}/kline_minute/**/*.parquet",
-            "adj_factor": f"{d}/adj_factor/**/*.parquet",
-            "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
-            "instruments": f"{d}/instruments/**/*.parquet",
-            "instruments_index": f"{d}/instruments_index/**/*.parquet",
-            "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+            "kline_daily": parquet_glob(d / "kline_daily"),
+            "kline_enriched": parquet_glob(d / "kline_daily_enriched"),
+            "kline_index_daily": parquet_glob(d / "kline_index_daily"),
+            "kline_index_enriched": parquet_glob(d / "kline_index_enriched"),
+            "kline_etf_daily": parquet_glob(d / "kline_etf_daily"),
+            "kline_etf_enriched": parquet_glob(d / "kline_etf_enriched"),
+            "kline_etf_minute": parquet_glob(d / "kline_etf_minute"),
+            "kline_minute": parquet_glob(d / "kline_minute"),
+            "adj_factor": parquet_glob(d / "adj_factor"),
+            "adj_factor_etf": parquet_glob(d / "adj_factor_etf"),
+            "instruments": parquet_glob(d / "instruments"),
+            "instruments_index": parquet_glob(d / "instruments_index"),
+            "instruments_etf": parquet_glob(d / "instruments_etf"),
         }
         for name, path in views.items():
             self.refresh_view(name, path)
@@ -2762,7 +2735,7 @@ class KlineRepository:
             ).sort(["symbol", "date"])
 
         for _ in range(retries):
-            existing = pl.read_parquet(out) if out.exists() else pl.DataFrame()
+            existing = pl.read_parquet(out, glob=False) if out.exists() else pl.DataFrame()
             base_fp = self._partition_fingerprint(out)
             merged = _merge(existing)
             with self._write_lock:
@@ -2772,7 +2745,7 @@ class KlineRepository:
             return
         # 乐观重试耗尽 (罕见: 高频并发写同一分区): 退回锁内全量模式保证正确性
         with self._write_lock:
-            existing = pl.read_parquet(out) if out.exists() else pl.DataFrame()
+            existing = pl.read_parquet(out, glob=False) if out.exists() else pl.DataFrame()
             self._write_partition_locked(out, _merge(existing), existing, publication)
 
     def _write_partition_locked(
@@ -2949,7 +2922,7 @@ class KlineRepository:
         )
         # 覆写语义: 读旧内容只为跳过无变化的写, 读在锁外 (误判最多造成一次
         # 冗余覆写, 不影响正确性); 锁内只做替换 + commit。
-        existing = pl.read_parquet(out) if out.exists() else pl.DataFrame()
+        existing = pl.read_parquet(out, glob=False) if out.exists() else pl.DataFrame()
         with self._write_lock:
             self._write_partition_locked(out, df_storage, existing, publication)
 

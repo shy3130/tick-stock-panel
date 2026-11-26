@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.market_time import CN_TZ, cn_today
+from app.parquet import parquet_glob
 from app.services import ext_config_transfer
 from app.services.ext_data import (
     ExtConfig,
@@ -215,8 +216,8 @@ def _parquet_glob(config: ExtConfig, data_dir: Path) -> str:
     """
     cfg_dir = data_dir / "ext_data" / config.id
     if config.mode == "snapshot":
-        return str(cfg_dir / "*.parquet")
-    return str(cfg_dir / "timeseries" / "**" / "*.parquet")
+        return parquet_glob(cfg_dir, "*.parquet")
+    return parquet_glob(cfg_dir / "timeseries")
 
 
 def _safe_json_value(value):
@@ -277,7 +278,7 @@ def _read_ext_dataframe(
         path = cfg_dir / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), None
-        return collect(pl.scan_parquet(path)), _latest_sync_date(config, data_dir)
+        return collect(pl.scan_parquet(path, glob=False)), _latest_sync_date(config, data_dir)
 
     base = cfg_dir / "timeseries"
     if not base.exists():
@@ -288,7 +289,7 @@ def _read_ext_dataframe(
         path = base / f"date={day}" / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), day
-        return collect(pl.scan_parquet(path)), day
+        return collect(pl.scan_parquet(path, glob=False)), day
 
     partitions = sorted(
         d for d in base.iterdir()
@@ -313,7 +314,7 @@ def _read_ext_dataframe(
         # 没有它, 范围合并后消费方无法区分行来自哪一天。
         frames = []
         for d in selected:
-            f = pl.scan_parquet(d / "part.parquet")
+            f = pl.scan_parquet(d / "part.parquet", glob=False)
             names = f.collect_schema().names()
             day = d.name[5:]
             if "date" not in names:
@@ -328,7 +329,7 @@ def _read_ext_dataframe(
 
     latest = partitions[-1]
     latest_date = latest.name[5:]
-    return collect(pl.scan_parquet(latest / "part.parquet")), latest_date
+    return collect(pl.scan_parquet(latest / "part.parquet", glob=False)), latest_date
 
 
 def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
@@ -340,7 +341,7 @@ def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
     if not path.exists():
         return df
     try:
-        inst = pl.read_parquet(path)
+        inst = pl.read_parquet(path, glob=False)
         if "symbol" in inst.columns and "name" in inst.columns:
             inst = inst.select(["symbol", "name"]).unique(subset=["symbol"], keep="last")
             if "name" in df.columns:
@@ -453,7 +454,7 @@ def _plate_stats(config: ExtConfig, data_dir: Path) -> dict | None:
         return None
     try:
         col = pl.read_parquet(
-            base / f"date={parts[-1]}" / "part.parquet", columns=[tf]
+            base / f"date={parts[-1]}" / "part.parquet", glob=False, columns=[tf]
         )[tf].cast(pl.Utf8)
     except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 无多盘信息, 不阻断列表
         return None
@@ -840,7 +841,7 @@ def _prev_daily_close(data_dir: Path, target_date: str) -> pl.DataFrame | None:
     path = daily / f"date={prevs[-1]}" / "part.parquet"
     if not path.exists():
         return None
-    df = pl.read_parquet(path, columns=["symbol", "close"])
+    df = pl.read_parquet(path, glob=False, columns=["symbol", "close"])
     return (
         df.with_columns(_bare_symbol_expr().alias("_bare"))
         .select([pl.col("_bare"), pl.col("close").cast(pl.Float64).alias("prev_close")])
@@ -889,7 +890,7 @@ def _dimension_intraday_compute(
 
     try:
         bars = pl.read_parquet(
-            minute_dir / f"date={target}" / "part.parquet",
+            minute_dir / f"date={target}" / "part.parquet", glob=False,
             columns=["symbol", "datetime", "close"],
         )
     except Exception as exc:  # noqa: BLE001
@@ -1470,7 +1471,7 @@ def ext_series(
             return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
         path = None
 
-    df = pl.read_parquet(path) if path else df_all
+    df = pl.read_parquet(path, glob=False) if path else df_all
     if df.is_empty() or field not in df.columns or time_field not in df.columns:
         return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
 
@@ -1647,7 +1648,8 @@ def _describe_parquet_columns(glob: str) -> list[tuple[str, str]]:
     # hive_partitioning=false: 时序表目录名形如 date=YYYY-MM-DD, DuckDB 默认据此
     # 推断分区并在真实列之外多出一个 date 列, 污染列选择器里的扩展字段。
     rel = duckdb.query(
-        f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)"
+        "DESCRIBE SELECT * FROM read_parquet(?, union_by_name=true, hive_partitioning=false)",
+        params=[glob],
     )
     names = rel.columns
     type_idx = names.index("column_type" if "column_type" in names else "data_type")
@@ -1719,25 +1721,16 @@ def discover_all_schemas(request: Request):
 def _refresh_views(request: Request) -> None:
     """重新注册 DuckDB 视图以包含新的扩展数据。"""
     repo = request.app.state.repo
-    db = repo.store.db
-    d = repo.store.data_dir.as_posix()
+    data_dir = repo.store.data_dir
 
     # 注册旧路径视图（兼容）
-    for name, subdir in [("instruments_ext", "instruments_ext"), ("kline_ext", "kline_ext")]:
-        old_glob = f"{d}/{subdir}/**/*.parquet"
-        old_dir = Path(d) / subdir
-        if old_dir.exists():
-            sql = (
-                f"CREATE OR REPLACE VIEW {name} AS "
-                f"SELECT * FROM read_parquet('{old_glob}', union_by_name=true)"
-            )
-            try:
-                db.execute(sql)
-            except Exception:
-                pass
+    for name in ("instruments_ext", "kline_ext"):
+        old_dir = data_dir / name
+        if next(old_dir.rglob("*.parquet"), None) is not None:
+            repo.refresh_view(name, parquet_glob(old_dir))
 
     # 注册新路径视图：每个扩展表一个视图 ext_{config_id}
-    ext_base = Path(d) / "ext_data"
+    ext_base = data_dir / "ext_data"
     if ext_base.exists():
         for cfg_dir in ext_base.iterdir():
             if not cfg_dir.is_dir():
@@ -1754,15 +1747,11 @@ def _refresh_views(request: Request) -> None:
                     view_name = f"ext_{cfg_id}"
                     # snapshot: part.parquet 在 cfg_dir/ 根下; timeseries: 在 timeseries/ 子目录
                     mode = raw.get("mode", "snapshot")
-                    if mode == "snapshot":
-                        glob_pattern = f"{cfg_dir.as_posix()}/*.parquet"
-                    else:
-                        glob_pattern = f"{cfg_dir.as_posix()}/timeseries/**/*.parquet"
-                    sql = (
-                        f"CREATE OR REPLACE VIEW {view_name} AS "
-                        f"SELECT * FROM read_parquet('{glob_pattern}', union_by_name=true)"
+                    glob_pattern = (
+                        parquet_glob(cfg_dir, "*.parquet") if mode == "snapshot"
+                        else parquet_glob(cfg_dir / "timeseries")
                     )
-                    db.execute(sql)
+                    repo.refresh_view(view_name, glob_pattern)
             except Exception:
                 pass
 

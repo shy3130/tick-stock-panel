@@ -93,7 +93,7 @@ def inspect_invalid_history(root: Path, table: str, files: list[Path], invalid: 
     from app.parquet import scan_daily_parquet
 
     paths = (
-        scan_daily_parquet(files, include_file_paths="__integrity_file")
+        scan_daily_parquet(files, glob=False, include_file_paths="__integrity_file")
         .join(invalid.select("symbol", "date").unique().lazy(),
               on=["symbol", "date"], how="semi", nulls_equal=True)
         .select("__integrity_file").unique().collect(engine="streaming")["__integrity_file"]
@@ -183,7 +183,7 @@ def _quote_ts_max_ms(part_dir: Path) -> int | None:
             if file_max is None and meta.num_rows > 0:
                 # statistics 未写入 → 回退列扫描
                 file_max = (
-                    pl.scan_parquet(path)
+                    pl.scan_parquet(path, glob=False)
                     .select(pl.col("quote_ts").max())
                     .collect()
                     .item()
@@ -234,14 +234,14 @@ def _partition_snapshot_defects(
 
     for path in sorted(part_dir.glob("*.parquet")):
         try:
-            schema = pl.read_parquet_schema(path)
+            schema = pl.scan_parquet(path, glob=False).collect_schema()
             if "quote_ts" not in schema:
                 continue
             columns = [
                 name for name in ("symbol", "quote_ts", "volume", "amount")
                 if name in schema
             ]
-            frame = pl.read_parquet(path, columns=columns).with_columns(
+            frame = pl.read_parquet(path, glob=False, columns=columns).with_columns(
                 pl.col("quote_ts").cast(pl.Int64, strict=False),
             )
             has_symbol = "symbol" in frame.columns

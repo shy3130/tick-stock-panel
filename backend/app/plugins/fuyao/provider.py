@@ -254,7 +254,7 @@ def _dump_covers(dump: pl.DataFrame, start_d: date, end_d: date) -> bool:
 def _dump_date_range(path: Path) -> tuple[date | None, date | None]:
     """lazy 读 parquet 的 date_ms 边界(走元数据/少量行组, 不整读大文件)。"""
     row = (
-        pl.scan_parquet(path)
+        pl.scan_parquet(path, glob=False)
         .select(
             pl.from_epoch(pl.col("date_ms").min() + _SH_MS, time_unit="ms").dt.date().alias("dmin"),
             pl.from_epoch(pl.col("date_ms").max() + _SH_MS, time_unit="ms").dt.date().alias("dmax"),
@@ -361,7 +361,7 @@ class FuyaoProvider:
         memo = self._dump_memo.get(dump_kind)
         if memo is not None:
             return memo
-        df = pl.read_parquet(self._ensure_dump_path(dump_kind, cache_prefix))
+        df = pl.read_parquet(self._ensure_dump_path(dump_kind, cache_prefix), glob=False)
         self._dump_memo[dump_kind] = df
         return df
 
@@ -1150,7 +1150,7 @@ class FuyaoProvider:
             path = self._ensure_daily_big_dump(None)
             if path is None:
                 return None
-            sources = [self._closes_scan(pl.scan_parquet(path))]
+            sources = [self._closes_scan(pl.scan_parquet(path, glob=False))]
             ten = self._dump_memo.get(_DAILY10_DUMP_KIND)
             if ten is not None:
                 sources.append(self._closes_scan(ten.lazy()))
@@ -1160,7 +1160,7 @@ class FuyaoProvider:
                 except FuyaoError as e:
                     logger.info("扶摇 10d dump 不可用, 配价仅用 10 年 dump: %s", e)
                 else:
-                    sources.append(self._closes_scan(pl.scan_parquet(p10)))
+                    sources.append(self._closes_scan(pl.scan_parquet(p10, glob=False)))
             win = bounds.select(
                 "symbol",
                 (pl.col("first_ex") - pl.duration(days=_PREV_CLOSE_BACKDAYS)).alias("lo"),

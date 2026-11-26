@@ -6,6 +6,7 @@ import hashlib
 import json
 import stat
 from datetime import UTC, datetime, time
+from glob import escape
 from itertools import chain, groupby
 from operator import itemgetter
 from pathlib import Path
@@ -248,7 +249,7 @@ class RepositoryFactorProvider(PagedRepositoryProvider):
                          AND (trade_date IS NULL OR
                               (trade_date < ? AND (?::DATE IS NULL OR trade_date >= ?)))
                        ORDER BY symbol, trade_date, ordinal""",
-                    [str(scan), list(self.bindings), self.end, lower, lower],
+                    [escape(scan.as_posix()), list(self.bindings), self.end, lower, lower],
                 )
                 with query.to_arrow_reader(2048) as batches:
                     for symbol, group in groupby(_rows(batches, context), itemgetter(0)):

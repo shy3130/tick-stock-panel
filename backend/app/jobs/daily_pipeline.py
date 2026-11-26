@@ -23,6 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config import settings
 from app.indicators.pipeline import filter_halt_days, run_pipeline
 from app.market_time import cn_today
+from app.parquet import parquet_glob
 from app.services import index_sync, instrument_sync, kline_sync
 from app.services import preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
@@ -55,15 +56,15 @@ def _prune_partial_enriched_partitions(daily_dir: Path, enriched_dir: Path) -> l
             expected: set[str] = set()
             # 每次只读单文件的停牌判定列, 不加载全历史或指标宽表。
             for path in daily_part.glob("*.parquet"):
-                schema = pl.read_parquet_schema(path)
+                schema = pl.scan_parquet(path, glob=False).collect_schema()
                 if not {"symbol", "open", "high"}.issubset(schema):
                     raise ValueError("daily 缺少 symbol/open/high, 无法判断有效标的覆盖")
                 columns = [c for c in ("symbol", "open", "high", "volume", "amount") if c in schema]
-                daily = pl.read_parquet(path, columns=columns)
+                daily = pl.read_parquet(path, glob=False, columns=columns)
                 expected.update(filter_halt_days(daily)["symbol"].drop_nulls().to_list())
             actual: set[str] = set()
             for path in part.glob("*.parquet"):
-                actual.update(pl.read_parquet(path, columns=["symbol"])["symbol"].drop_nulls().to_list())
+                actual.update(pl.read_parquet(path, glob=False, columns=["symbol"])["symbol"].drop_nulls().to_list())
         except Exception as e:
             logger.warning("enriched 覆盖检查跳过 %s, 保留分区: %s", part.name, e)
             continue
@@ -98,10 +99,10 @@ def _prune_stale_price_partitions(
     for ds in common:
         try:
             daily = pl.read_parquet(
-                daily_dir / f"date={ds}" / "*.parquet", columns=["symbol", "close"]
+                parquet_glob(daily_dir / f"date={ds}", "*.parquet"), columns=["symbol", "close"]
             )
             enr = pl.read_parquet(
-                enriched_dir / f"date={ds}" / "*.parquet", columns=["symbol", "raw_close"]
+                parquet_glob(enriched_dir / f"date={ds}", "*.parquet"), columns=["symbol", "raw_close"]
             )
         except Exception:
             continue  # 列缺失/不可读 → 交给既有完整性检查兜底
@@ -153,7 +154,7 @@ def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
     inst_path = Path(settings.data_dir) / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
-            inst = pl.read_parquet(inst_path, columns=["symbol"])
+            inst = pl.read_parquet(inst_path, glob=False, columns=["symbol"])
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments 维表读取失败, 标的池仅剩自选: %s", e)
@@ -969,21 +970,21 @@ def _refresh_views(repo: KlineRepository) -> None:
 
 def _refresh_single_view(repo: KlineRepository, name: str) -> None:
     """刷新单个 DuckDB 视图。"""
-    d = repo.store.data_dir.as_posix()
+    d = repo.store.data_dir
     paths = {
-        "kline_daily": f"{d}/kline_daily/**/*.parquet",
-        "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
-        "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
-        "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
-        "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
-        "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
-        "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
-        "kline_minute": f"{d}/kline_minute/**/*.parquet",
-        "adj_factor": f"{d}/adj_factor/**/*.parquet",
-        "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
-        "instruments": f"{d}/instruments/**/*.parquet",
-        "instruments_index": f"{d}/instruments_index/**/*.parquet",
-        "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+        "kline_daily": parquet_glob(d / "kline_daily"),
+        "kline_enriched": parquet_glob(d / "kline_daily_enriched"),
+        "kline_index_daily": parquet_glob(d / "kline_index_daily"),
+        "kline_index_enriched": parquet_glob(d / "kline_index_enriched"),
+        "kline_etf_daily": parquet_glob(d / "kline_etf_daily"),
+        "kline_etf_enriched": parquet_glob(d / "kline_etf_enriched"),
+        "kline_etf_minute": parquet_glob(d / "kline_etf_minute"),
+        "kline_minute": parquet_glob(d / "kline_minute"),
+        "adj_factor": parquet_glob(d / "adj_factor"),
+        "adj_factor_etf": parquet_glob(d / "adj_factor_etf"),
+        "instruments": parquet_glob(d / "instruments"),
+        "instruments_index": parquet_glob(d / "instruments_index"),
+        "instruments_etf": parquet_glob(d / "instruments_etf"),
     }
     path = paths.get(name)
     if not path:
@@ -998,8 +999,8 @@ def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:
     """单独刷新 instruments 视图。"""
-    d = repo.store.data_dir.as_posix()
-    repo.refresh_view("instruments", f"{d}/instruments/**/*.parquet")
+    d = repo.store.data_dir
+    repo.refresh_view("instruments", parquet_glob(d / "instruments"))
 
 
 def _push_phase_change_alert(data_dir) -> None:

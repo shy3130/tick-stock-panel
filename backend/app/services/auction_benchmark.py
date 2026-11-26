@@ -116,7 +116,7 @@ def _read_kline_closes(data_dir: Path, d: date_cls) -> dict[str, float]:
         files = sorted(root.glob("*.parquet"))
         if not files:
             return {}
-        df = pl.concat([pl.read_parquet(f, columns=["symbol", "close"]) for f in files])
+        df = pl.concat([pl.read_parquet(f, glob=False, columns=["symbol", "close"]) for f in files])
         return dict(zip(df["symbol"].to_list(), df["close"].to_list()))
     except (OSError, pl.exceptions.PolarsError):
         return {}
@@ -132,7 +132,7 @@ def _enrich(data_dir: Path, trade_date: date_cls, items: list[dict]) -> list[dic
     try:
         files = sorted(root.glob("*.parquet"))
         if files:
-            df = pl.concat([pl.read_parquet(f, columns=["symbol", "open", "close"]) for f in files])
+            df = pl.concat([pl.read_parquet(f, glob=False, columns=["symbol", "open", "close"]) for f in files])
             day0 = dict(zip(df["symbol"].to_list(), zip(df["open"].to_list(), df["close"].to_list())))
     except (OSError, pl.exceptions.PolarsError):
         day0 = {}

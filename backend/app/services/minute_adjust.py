@@ -82,7 +82,7 @@ def _load_factor_frames(
         if cached is not None and cached[0] == newest:
             return cached[1], cached[2]
 
-    factors = pl.read_parquet([str(f) for f in files])
+    factors = pl.read_parquet([str(f) for f in files], glob=False)
     if factors.is_empty() or not {"symbol", "trade_date", "ex_factor"}.issubset(factors.columns):
         frames = (pl.DataFrame(), pl.DataFrame())
     else:
@@ -176,7 +176,7 @@ def _daily_close_lookup(daily_dir: Path, trade_day: date) -> dict[str, float] | 
     if not part.exists():
         return None
     try:
-        df = pl.read_parquet(part, columns=["symbol", "close"])
+        df = pl.read_parquet(part, glob=False, columns=["symbol", "close"])
     except Exception as e:
         logger.warning("迁移读日K分区失败 %s: %s", part, e)
         return None
@@ -247,7 +247,7 @@ def migrate_minute_to_raw(
                     stats["skipped_no_daily"] += 1
                     continue
                 part = part_dir / "part.parquet"
-                df = pl.read_parquet(part)
+                df = pl.read_parquet(part, glob=False)
                 if df.is_empty() or "close" not in df.columns:
                     continue
                 anchors = _partition_anchor_ratio(df, daily_close)
