@@ -23,25 +23,21 @@
 
 <a id="sponsors"></a>
 
-<img src="docs/sponsors/sponsor-header.svg" width="240" alt="赞助支持 Sponsor">
+## 特别赞助
 
-<div align="center">
+<p align="center">
+  <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC" target="_blank" rel="noopener noreferrer">
+    <img src="docs/sponsors/modelflare_banner_zh.png?v=1" alt="Modelflare — 低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型" width="100%">
+  </a><br>
+  <strong>感谢 <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">Modelflare</a> 赞助本项目！</strong> 由美国 Havenbyte LLC 运营，满血稳定不掺水，低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型。指定 OpenAI 分组提供 65% / 75% / 85% 每日缓存命中率保障。单笔充值 US$20 解锁 GPT 0.015x，US$50 解锁 Claude 0.03x。支持大陆正规商务合作。<strong><a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">专属链接注册&nbsp;→</a></strong>
+</p>
 
-<a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC" target="_blank" rel="noopener noreferrer">
-  <img src="docs/sponsors/modelflare_banner_zh.png?v=1" alt="Modelflare — 低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型" width="100%">
-</a>
-
-**感谢 [Modelflare](https://modelflare.dev/sign-up?partner=CFYSN0AM2APC) 赞助本项目！** 由美国 Havenbyte LLC 运营，满血稳定不掺水，低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型。指定 OpenAI 分组提供 65% / 75% / 85% 每日缓存命中率保障。单笔充值 US$20 解锁 GPT 0.015x，US$50 解锁 Claude 0.03x。支持大陆正规商务合作。**[专属链接注册 →](https://modelflare.dev/sign-up?partner=CFYSN0AM2APC)**
-
----
-
-<a href="https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
-  <img src="docs/sponsors/runninghub-banner-v8.svg?v=2" alt="RunningHub API — 一个 API Key 直连 400+ 主流大模型" width="100%">
-</a>
-
-**本项目由赞助商 [RunningHub](https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c) 提供支持** · 一个 API Key 直连 400+ 主流大模型 · **[立即免费测试 →](https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c)**
-
-</div>
+<p align="center">
+  <a href="https://www.runninghub.ai/zh-cn/call-api?source=github&inviteCode=edt5wh7c" target="_blank" rel="noopener noreferrer">
+    <img src="docs/sponsors/runninghub-banner-v8.svg?v=2" alt="RunningHub API — 一个 API Key 直连 400+ 主流大模型" width="100%">
+  </a><br>
+  <strong>本项目由赞助商 <a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c">RunningHub</a> 提供支持</strong> · 一个 API Key 直连 400+ 主流大模型 · <strong><a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c">立即免费测试&nbsp;→</a></strong>
+</p>
 
 ---
 
@@ -263,6 +259,25 @@ docker run -d --name tsp -p 3018:3018 \
 </details>
 
 联系邮箱 shy3130@qq.com。[项目网站](https://tsp.shy313.com/)　 [LINUX DO 社区](https://linux.do)
+
+<a id="project-sponsors"></a>
+
+## 项目赞助商
+
+<table aria-label="项目赞助商">
+  <tr>
+    <td width="124" align="center"><a href="https://tickflow.org/auth/register?ref=V3KDGXPEA"><img src="docs/sponsors/tickflow-logo.svg" width="104" alt="TickFlow"></a></td>
+    <td>提供 A 股实时行情和历史 K 线数据。</td>
+  </tr>
+  <tr>
+    <td width="124" align="center"><a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC"><img src="docs/sponsors/modelflare-logo.svg" width="104" alt="Modelflare"></a></td>
+    <td>通过统一 API 接入 GPT、Claude、Gemini 等模型。</td>
+  </tr>
+  <tr>
+    <td width="124" align="center"><a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c"><img src="docs/sponsors/runninghub-logo.svg" width="104" alt="RunningHub"></a></td>
+    <td>提供大模型、图像与视频生成及工作流 API。</td>
+  </tr>
+</table>
 
 <a id="license"></a>
 <a id="-license"></a>
