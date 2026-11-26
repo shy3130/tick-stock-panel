@@ -11,6 +11,7 @@ import polars as pl
 import pytest
 
 from app.api import kline as kline_api
+from app.market_time import CN_TZ
 from app.services import kline_sync
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import DataStore, KlineRepository
@@ -75,12 +76,19 @@ def test_etf_detail_sync_is_visible_to_detail_and_list(market):
     assert calls == [([ETF], "etf")]
 
 
-def test_mixed_minute_sync_keeps_asset_stores_separate(market):
+@pytest.mark.parametrize(("options", "bars_per_symbol"), [
+    ({"force_full_days": True}, 2),
+    ({"date_range": (DAY, DAY)}, 1),
+])
+def test_mixed_minute_sync_keeps_asset_stores_separate(market, monkeypatch, options, bars_per_symbol):
     repo, request, calls = market
-    written = kline_sync.sync_and_persist_minute([STOCK, ETF], repo, request.app.state.capabilities, force_full_days=True)
+    monkeypatch.setattr(kline_sync, "cn_now", lambda: datetime(2026, 11, 5, 9, 31, 30, tzinfo=CN_TZ))
+    written = kline_sync.sync_and_persist_minute([STOCK, ETF], repo, request.app.state.capabilities, **options)
 
-    assert written == 4
+    assert written == 2 * bars_per_symbol
     assert calls == [([STOCK], "stock"), ([ETF], "etf")]
+    assert repo.get_minute(STOCK, DAY).height == bars_per_symbol
+    assert repo.get_minute(ETF, DAY, asset_type="etf").height == bars_per_symbol
     assert repo.get_minute(STOCK, DAY)["symbol"].unique().to_list() == [STOCK]
     assert repo.get_minute(ETF, DAY, asset_type="etf")["symbol"].unique().to_list() == [ETF]
     assert repo.get_minute(ETF, DAY).is_empty()

@@ -1381,20 +1381,40 @@ def refresh_views(request: Request):
 async def sync_minute(request: Request):
     """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。
 
-    body 可选: { "days": int } — 指定拉取天数 (不传则用偏好设置)。
+    body 可传 days/extend，或单独指定 start_date/end_date（含首尾）。
     """
     # 可选 body: { "days": int, "extend": bool }
     # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
-    body = {}
     try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        pass
+        body = await request.json() if await request.body() else {}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="分钟 K 同步参数必须是有效 JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="分钟 K 同步参数必须是对象")
+
+    date_range = None
+    if "start_date" in body or "end_date" in body:
+        if "days" in body or "extend" in body:
+            raise HTTPException(status_code=400, detail="指定日期范围时请单独传入起止日期")
+        values = body.get("start_date"), body.get("end_date")
+        try:
+            start, end = map(date.fromisoformat, values)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="请提供 YYYY-MM-DD 格式的起止日期") from None
+        if (start.isoformat(), end.isoformat()) != values:
+            raise HTTPException(status_code=400, detail="请提供 YYYY-MM-DD 格式的起止日期")
+        if start > end or end > cn_today():
+            raise HTTPException(status_code=400, detail="开始日期须早于或等于结束日期，结束日期最晚为今天")
+        date_range = (start, end)
+
+    quotes = getattr(request.app.state, "quote_service", None)
     return await trigger_minute_sync(
         request.app.state.repo,
         request.app.state.capabilities,
         override_days=body.get("days"),
         extend_flag=body.get("extend"),
+        date_range=date_range,
+        on_minute_updated=quotes.notify_data_updated if date_range is not None and quotes is not None else None,
     )
 
 
@@ -1472,6 +1492,7 @@ async def trigger_minute_sync(
     repo, capset, *, override_days=None, extend_flag=None, repair_symbols: list[str] | None = None,
     repair_targets: dict[date, list[str]] | None = None,
     reload_target: tuple[date, dict[kline_sync.AssetType, list[str]]] | None = None,
+    date_range: tuple[date, date] | None = None,
     on_minute_updated: Callable[[str], None] | None = None,
 ) -> dict:
     """分钟同步、缺口补拉和按日重拉共用任务容量、进度和取消机制。"""
@@ -1489,14 +1510,15 @@ async def trigger_minute_sync(
     from app.tickflow.pools import get_pool
 
     targeted = repair_symbols is not None or reload_target is not None
+    explicit_request = targeted or date_range is not None
     if not _minute_allowed(capset):
-        if targeted:
+        if explicit_request:
             raise HTTPException(status_code=403, detail="当前分钟数据源不可用, 请先在设置中配置可用数据源")
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
     # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
     job_id, is_new = job_store.create(long_running=True)
     if not is_new:
-        if targeted:
+        if explicit_request:
             raise HTTPException(status_code=409, detail="已有数据任务正在运行，请等待完成后再试")
         return {"status": "reused", "job_id": job_id}
 
@@ -1529,11 +1551,11 @@ async def trigger_minute_sync(
                 # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute
                 index_set = repo.get_index_symbol_set()
                 universe = sorted(s for s in all_symbols if s not in index_set)
-            progress("sync_minute", 10, f"标的池 {len(universe)} 只")
-
-            days = override_days if override_days else get_minute_sync_days()
-            # extend=1 → 向前扩展; days>=365 也自动向前扩展
-            extend_backward = bool(extend_flag) or days >= 365
+            range_label = f"{date_range[0]} 至 {date_range[1]}" if date_range is not None else ""
+            if date_range is not None and not universe:
+                raise ValueError("分钟 K 标的池为空，请先同步标的列表")
+            prefix = f"{range_label} · " if range_label else ""
+            progress("sync_minute", 10, f"{prefix}标的池 {len(universe)} 只")
 
             group_count = len(repair_targets) if repair_targets else 1
 
@@ -1572,11 +1594,18 @@ async def trigger_minute_sync(
                             )
                         return {"minute_rows": added, "remaining_gaps": remaining,
                                 "requested_gaps": sum(map(len, repair_targets.values()))}
+                    if date_range is not None:
+                        written = kline_sync.sync_and_persist_minute(
+                            universe, repo, capset, date_range=date_range,
+                            on_chunk_done=_on_chunk, on_updated=on_minute_updated,
+                        )
+                        return {"minute_rows": written}
                     if repair_symbols is not None:
                         progress("sync_minute", 10, f"补拉 {len(universe)} 只缺口标的的分钟K…")
+                    days = override_days if override_days else get_minute_sync_days()
                     written = kline_sync.sync_and_persist_minute(
                         universe, repo, capset, days=days,
-                        extend_backward=extend_backward,
+                        extend_backward=bool(extend_flag) or days >= 365,
                         force_full_days=repair_symbols is not None,
                         on_chunk_done=_on_chunk,
                     )
@@ -1587,7 +1616,7 @@ async def trigger_minute_sync(
                         _refresh_single_view(repo, "kline_minute")
 
             result = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
-            if not targeted:
+            if not explicit_request:
                 from app.jobs.daily_pipeline import _refresh_single_view
 
                 _refresh_single_view(repo, "kline_minute")
@@ -1604,6 +1633,11 @@ async def trigger_minute_sync(
                 message = f"新增 {written} 根分钟 K，复查 {result['requested_gaps']} 条，仍有 {result['remaining_gaps']} 条缺口"
             elif repair_symbols is not None:
                 message = f"缺口分钟补拉完成, 写入 {written} 行; 是否补齐以体检结果为准"
+            elif date_range is not None:
+                message = (
+                    f"{range_label} 分钟 K 拉取完成，写入 {written} 行"
+                    if written else f"{range_label} 没有可用的分钟 K 数据"
+                )
             else:
                 message = f"分钟 K 同步完成,{written} 行"
             progress("done", 100, message)
