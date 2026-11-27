@@ -84,13 +84,22 @@ let qc: QueryClient
 async function flush() {
   for (let i = 0; i < 4; i += 1) {
     await act(async () => {
-      await Promise.resolve()
+      await new Promise(resolve => setTimeout(resolve, 15))
     })
   }
 }
 
-function renderCard(onOpenStock = vi.fn()) {
-  act(() => {
+async function waitForText(expected: string) {
+  for (let i = 0; i < 30; i += 1) {
+    if (container.textContent?.includes(expected)) return
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 15))
+    })
+  }
+}
+
+async function renderCard(onOpenStock = vi.fn()) {
+  await act(async () => {
     root.render(
       <QueryClientProvider client={qc}>
         <AuctionScanCard onOpenStock={onOpenStock} />
@@ -119,8 +128,8 @@ it('未启用态展示待启用引导，点击开启发送 collector 启用配�
   mocks.extDataList.mockResolvedValue({ items: [makeConfig()] })
   mocks.extDataPullConfig.mockResolvedValue({ status: 'ok', pull: {} })
 
-  renderCard()
-  await flush()
+  await renderCard()
+  await waitForText('待采集任务启用')
 
   expect(container.textContent).toContain('待采集任务启用')
   expect(container.textContent).toContain('开启 9:25 自动扫描')
@@ -156,8 +165,8 @@ it('采集中状态显示正在扫描提示', async () => {
   })
   mocks.extDataRows.mockResolvedValue(makeRows({ date: null, dates: [], rows: [], total: 0 }))
 
-  renderCard()
-  await flush()
+  await renderCard()
+  await waitForText('采集中')
 
   expect(container.textContent).toContain('采集中')
   expect(container.textContent).toContain('正在扫描全市场竞价快照')
@@ -177,8 +186,8 @@ it('今日无命中时明确区分空命中态并展示累计天数', async () =
     rows: [],
   }))
 
-  renderCard()
-  await flush()
+  await renderCard()
+  await waitForText('当日无符合条件标的')
 
   expect(container.textContent).toContain('已累计 2 个交易日')
   expect(container.textContent).toContain('2026-04-15 竞价扫描已完成，当日无符合条件标的')
@@ -188,7 +197,7 @@ it('今日有命中展示列表、支持点开个股详情与切换历史交易�
   mocks.extDataList.mockResolvedValue({
     items: [makeConfig({
       date_range: ['2026-04-14', '2026-04-15'],
-      pull: { ...makeConfig().pull!, enabled: true, last_status: 'success', last_rows: 1 },
+      pull: { ...makeConfig().pull!, enabled: true, last_status: 'success', last_rows: 2 },
     })],
   })
   mocks.extDataRows.mockImplementation((_id: string, opts?: { date?: string }) => {
@@ -210,13 +219,31 @@ it('今日有命中展示列表、支持点开个股详情与切换历史交易�
         ],
       }))
     }
-    return Promise.resolve(makeRows())
+    return Promise.resolve(makeRows({
+      total: 2,
+      rows: [
+        ...makeRows().rows,
+        {
+          symbol: '300750.SZ',
+          trade_date: '2026-04-15',
+          name: '宁德时代',
+          open_gap_pct: 0.071,
+          auction_vol_ratio: 14.2,
+          auction_price: 214.2,
+          prev_close: 200.0,
+          auction_volume: 2000,
+          collected_at: '2026-04-15T09:25:03+08:00',
+        },
+      ],
+    }))
   })
 
-  const onOpenStock = renderCard()
-  await flush()
+  const onOpenStock = await renderCard()
+  await waitForText('平安银行')
 
   expect(container.textContent).toContain('平安银行')
+  expect(container.textContent).toContain('宁德时代')
+  expect(container.textContent).toContain('创')
   expect(container.textContent).toContain('+5.50%')
   expect(container.textContent).toContain('12.4x')
 
@@ -226,7 +253,10 @@ it('今日有命中展示列表、支持点开个股详情与切换历史交易�
   expect(onOpenStock).toHaveBeenCalledWith(
     '000001.SZ',
     '平安银行',
-    [{ symbol: '000001.SZ', name: '平安银行' }],
+    [
+      { symbol: '000001.SZ', name: '平安银行' },
+      { symbol: '300750.SZ', name: '宁德时代' },
+    ],
   )
 
   const select = container.querySelector('select[aria-label="选择历史交易日"]') as HTMLSelectElement
@@ -236,7 +266,7 @@ it('今日有命中展示列表、支持点开个股详情与切换历史交易�
     setter.call(select, '2026-04-14')
     select.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await flush()
+  await waitForText('贵州茅台')
 
   expect(container.textContent).toContain('贵州茅台')
   expect(container.textContent).toContain('+6.20%')
@@ -257,8 +287,8 @@ it('部分批次失败同时展示告警与已保留命中列表', async () => {
   })
   mocks.extDataRows.mockResolvedValue(makeRows())
 
-  renderCard()
-  await flush()
+  await renderCard()
+  await waitForText('平安银行')
 
   expect(container.textContent).toContain('部分批次失败，已保留已成功结果')
   expect(container.textContent).toContain('第3批超时')
@@ -274,8 +304,8 @@ it('历史读取失败展示错误提示而非伪装空态', async () => {
   })
   mocks.extDataRows.mockRejectedValue(new Error('parquet 读取异常'))
 
-  renderCard()
-  await flush()
+  await renderCard()
+  await waitForText('历史记录读取失败')
 
   expect(container.textContent).toContain('历史记录读取失败')
   expect(container.textContent).toContain('parquet 读取异常')
