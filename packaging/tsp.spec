@@ -91,6 +91,7 @@ datas += [
 hiddenimports += [
     "app.plugins.fuyao.provider",
     "app.plugins.fuyao.client",
+    "app.plugins.tdxquant.auth_breaker",
     "app.plugins.tdxquant.provider",
     "app.plugins.tdxquant.client",
     "app.plugins.tdxquant.probe",
