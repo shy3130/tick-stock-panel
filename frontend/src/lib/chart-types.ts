@@ -80,6 +80,8 @@ export interface DailyChartProps {
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   height?: number
+  /** 等待自定义副图评估期间在画布下方预留的像素高度（不拉伸主图） */
+  reservedBottomSpace?: number
   showMA?: boolean
   showInfoBar?: boolean
   showMarkers?: boolean

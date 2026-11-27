@@ -206,7 +206,7 @@ export function StockDailyKChart({
 
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
-      {showIndicatorControls && rows.length > 0 && (
+      {showIndicatorControls && (rows.length > 0 || customChart) && (
         <div className={renderer === 'lightweight' ? `flex min-h-10 flex-wrap items-center gap-1 border-b border-border/50 bg-elevated/20 px-3 py-1.5 ${alignedLayout ? '' : 'xl:h-10 xl:flex-nowrap xl:py-0'}` : 'flex items-center gap-1.5 px-1 pb-0.5'}>
           {renderer === 'lightweight' && <span className="mr-2 shrink-0 text-xs font-semibold text-foreground">日 K</span>}
           {!customChart && SUB_CHART_META.map(ind => (
