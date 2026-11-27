@@ -8,10 +8,13 @@ DLL 与运行时 ini 随 wheel 分发。两个实测约束决定本模块的形�
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
+import threading
 import time
+from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
 
@@ -45,6 +48,43 @@ _NONE_RETRIES = 2  # 空返回(可能是永久性坏代码)只补试一次
 _RETRY_SLEEP_S = 0.6
 _UNIVERSE_TTL_S = 12 * 3600.0
 
+_SESSION_LOCK = threading.RLock()
+_ACTIVE_SESSION_FP: str | None = None
+
+
+def _session_fingerprint(dll_path: Path, api_key: str) -> str:
+    return hashlib.sha256(f"{dll_path.resolve()}\0{api_key}".encode()).hexdigest()
+
+
+def _bind_native_session(native_cls, dll_path: Path, api_key: str) -> None:
+    """将进程级 _NativeTdxAiData 单例绑定到当前 (dll_path, api_key)。
+
+    tdxaidata 原生层为进程级单例，DLL 仅在 start() 时读取一次 TdxAiData.ini。
+    进程内更换或重存 Key 时必须先 stop() 并复位 _is_started，否则后续请求仍沿用旧 Token。
+    """
+    global _ACTIVE_SESSION_FP
+
+    fp = _session_fingerprint(dll_path, api_key)
+    with _SESSION_LOCK:
+        os.environ[LIB_ENV] = str(dll_path)
+        native = native_cls.get_instance()
+        changed = fp != _ACTIVE_SESSION_FP
+        if changed and getattr(native, "_is_started", False):
+            start_lock = getattr(native, "_start_lock", None)
+            with start_lock if start_lock is not None else nullcontext():
+                native._dll_path = str(dll_path)
+                dll = getattr(native, "_dll", None)
+                if dll is not None and hasattr(dll, "stop"):
+                    try:
+                        dll.stop()
+                    except Exception as exc:  # noqa: BLE001 — 原生层关闭异常不得阻塞重建
+                        logger.warning("TdxQuant 原生会话停止失败(将继续重置): %s", exc)
+                native._is_started = False
+            logger.info("TdxQuant Key 已变更，已重置原生会话，下一次请求将加载新凭据")
+        elif changed and hasattr(native, "_dll_path"):
+            native._dll_path = str(dll_path)
+        _ACTIVE_SESSION_FP = fp
+
 
 class TdxQuantClient:
     """原生 tqs 的薄封装: 重试、股票池枚举、快照/日K/除权三个取数面。"""
@@ -61,6 +101,7 @@ class TdxQuantClient:
 
         self._tqs = tqs
         self._native_cls = _NativeTdxAiData
+        _bind_native_session(self._native_cls, dll, api_key)
         self._universe: list[str] = []
         self._universe_at = 0.0
         self._warmup()
@@ -68,46 +109,62 @@ class TdxQuantClient:
     def _warmup(self, attempts: int = 5) -> None:
         """DLL 冷启动后有一段"未就绪"窗口, 业务调用持续失败(实测首批整批丢弃)。
 
-        用最小快照轮询到就绪; 一直失败不抛 — 后续调用可能自愈, 只留告警。
+        用最小快照轮询到就绪; 鉴权/额度被服务端明确拒绝时立刻中止预热，不再重试刷屏；
+        其它瞬态失败不抛 — 后续调用可能自愈, 只留告警。
         """
         for _ in range(attempts):
             try:
-                rows = self._tqs.get_market_snapshot_batch(
-                    stock_list=["600519.SH"], field_list=["Now"]
-                )
-                if isinstance(rows, dict) and rows:
-                    return
+                native = self._native_cls.get_instance()
+                if hasattr(native, "get_market_snapshot_batch"):
+                    with _SESSION_LOCK:
+                        raw = native.get_market_snapshot_batch("600519.SH", "Now")
+                    _raise_response_error(raw, getattr(self, "api_key", ""))
+                    if self._tqs._clean(raw):
+                        return
+                else:
+                    rows = self._tqs.get_market_snapshot_batch(
+                        stock_list=["600519.SH"], field_list=["Now"]
+                    )
+                    if isinstance(rows, dict) and rows:
+                        return
+            except TdxQuantAuthError as exc:
+                logger.warning("TdxQuant 原生层预热遇到鉴权/额度异常，已中止预热: %s", exc)
+                return
             except Exception:  # noqa: BLE001 — 就绪探测, 任何异常都重试
                 pass
             time.sleep(1.2)
         logger.warning("TdxQuant 原生层预热未成功(%d 次), 首批业务调用可能失败重试", attempts)
 
-    def close(self) -> None:  # 原生 DLL 常驻进程, 无可回收句柄; 保留接口对齐 loader
+    def close(self) -> None:  # 原生 DLL 常驻进程, 换 Key 由 _bind_native_session 负责热重载
         self._universe.clear()
 
     # ---- 原生调用(重试包装) ----
-    def _raw(self, method: str, *args):
-        """直接调原生层并 _clean 解包; 异常重试 3 次、空返回补试 1 次。
+    def _raw(self, method: str, *args, retries: int = _RETRIES):
+        """直接调原生层并 _clean 解包; 异常重试 retries 次、空返回补试 1 次。
 
         空闲后首连 "Invalid server response" 实测重试即恢复; 坏代码等
         永久错误重试也只会快失败(返回 None), 不至于长阻塞。
+        原生调用本身受 _SESSION_LOCK 保护，避免换 Key 时 dll.stop() 与在途请求并发冲突。
         """
         last: Exception = TdxQuantError(f"{method} 未知失败")
-        for attempt in range(_RETRIES):
+        max_attempts = max(1, retries)
+        for attempt in range(max_attempts):
             try:
-                raw = getattr(self._native_cls.get_instance(), method)(*args)
+                with _SESSION_LOCK:
+                    raw = getattr(self._native_cls.get_instance(), method)(*args)
                 _raise_response_error(raw, getattr(self, "api_key", ""))
                 out = self._tqs._clean(raw)
                 if out is not None:
                     return out
                 last = TdxQuantError(f"{method} 返回空数据(第 {attempt + 1} 次)")
-                if attempt + 1 >= _NONE_RETRIES:
+                if attempt + 1 >= min(_NONE_RETRIES, max_attempts):
                     break
             except TdxQuantAuthError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 原生 ctypes 层异常类型不可枚举
                 last = TdxQuantError(f"{method}: {exc}")
-            time.sleep(_RETRY_SLEEP_S)
+            if attempt + 1 < max_attempts:
+                time.sleep(_RETRY_SLEEP_S)
         raise last
 
     # ---- 股票池 ----
@@ -116,13 +173,25 @@ class TdxQuantClient:
         now = time.time()
         if self._universe and now - self._universe_at < _UNIVERSE_TTL_S:
             return list(self._universe)
+        native = self._native_cls.get_instance()
+        use_raw = hasattr(native, "get_stock_list")
         last: TdxQuantError = TdxQuantError("股票列表为空(五个市场均无返回)")
         for _attempt in range(_RETRIES):
             out: list[str] = []
             try:
                 for market in _MARKETS:
-                    lst = self._tqs.get_stock_list(market=market, list_type=0)
+                    if use_raw:
+                        cleaned = self._raw("get_stock_list", market, 0, retries=1)
+                        lst = (
+                            cleaned["Value"]
+                            if isinstance(cleaned, dict) and isinstance(cleaned.get("Value"), list)
+                            else cleaned
+                        )
+                    else:
+                        lst = self._tqs.get_stock_list(market=market, list_type=0)
                     out.extend(code for code in (lst or []) if isinstance(code, str) and code)
+            except TdxQuantAuthError:
+                raise
             except Exception as exc:  # noqa: BLE001 — SDK 内部异常类型不可枚举
                 last = TdxQuantError(f"get_stock_list: {exc}")
                 out = []
@@ -134,26 +203,38 @@ class TdxQuantClient:
 
     # ---- 快照 ----
     def snapshot_batch(self, codes: list[str]) -> dict[str, dict]:
-        """批量快照 → {code: row(字段见 SNAPSHOT_FIELDS)}。SDK 内部已做批处理。
+        """批量快照 → {code: row(字段见 SNAPSHOT_FIELDS)}。
 
-        空闲后首连易 "Invalid server response"(实测重试即恢复), 批级失败必须
-        重试 — provider 只做批间隔离, 这里不重试会整批丢标的。
+        优先经 _raw() 在 _clean 之前检查服务端错误，确保鉴权/额度错误立刻以
+        TdxQuantAuthError 上抛、不再静默重试与刷屏；无原生方法时回退 tqs 兼容测试替身。
         """
         if not codes:
             return {}
-        last: TdxQuantError = TdxQuantError(f"snapshot_batch({len(codes)} 只): 未知失败")
+        stocks = list(codes)
+        native = self._native_cls.get_instance()
+        if hasattr(native, "get_market_snapshot_batch") and hasattr(self._tqs, "_batch_records"):
+            cleaned = self._raw(
+                "get_market_snapshot_batch", ",".join(stocks), ",".join(SNAPSHOT_FIELDS)
+            )
+            rows = self._tqs._batch_records(cleaned, stocks)
+            if isinstance(rows, dict) and rows:
+                return rows
+            raise TdxQuantError(f"snapshot_batch({len(stocks)} 只): 空返回")
+        last: TdxQuantError = TdxQuantError(f"snapshot_batch({len(stocks)} 只): 未知失败")
         for _attempt in range(_RETRIES):
             try:
                 rows = self._tqs.get_market_snapshot_batch(
-                    stock_list=list(codes), field_list=list(SNAPSHOT_FIELDS)
+                    stock_list=stocks, field_list=list(SNAPSHOT_FIELDS)
                 )
+            except TdxQuantAuthError:
+                raise
             except Exception as exc:  # noqa: BLE001 — SDK 内部异常类型不可枚举
-                last = TdxQuantError(f"snapshot_batch({len(codes)} 只): {exc}")
+                last = TdxQuantError(f"snapshot_batch({len(stocks)} 只): {exc}")
                 time.sleep(_RETRY_SLEEP_S)
                 continue
             if isinstance(rows, dict) and rows:
                 return rows
-            last = TdxQuantError(f"snapshot_batch({len(codes)} 只): 空返回")
+            last = TdxQuantError(f"snapshot_batch({len(stocks)} 只): 空返回")
             time.sleep(_RETRY_SLEEP_S)
         raise last
 
