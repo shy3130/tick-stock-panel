@@ -269,7 +269,7 @@ docker run -d --name tsp -p 3018:3018 \
 
 ## 文档与社区
 
-[操作说明书](./操作说明书.md)　 [功能手册](./docs/features.md)　 [完整文档索引](./docs/README.md)　 [0.4.2 版本说明](./docs/release-v0.4.2.md)　 [贡献指南](./CONTRIBUTING.md)　 [版本记录](https://github.com/shy3130/tick-stock-panel/releases)
+[操作说明书](./操作说明书.md)　 [功能手册](./docs/features.md)　 [完整文档索引](./docs/README.md)　 [0.4.3 版本说明](./docs/release-v0.4.3.md)　 [贡献指南](./CONTRIBUTING.md)　 [版本记录](https://github.com/shy3130/tick-stock-panel/releases)
 
 <a id="community"></a>
 <a id="️-支持与交流"></a>
