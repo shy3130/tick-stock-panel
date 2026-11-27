@@ -504,13 +504,18 @@ async def run_collector(
     registered = registry.get_ext_collector(pull.collector)
     if registered is None:
         raise ValueError(f"未找到已注册的扩展采集器 '{pull.collector}'")
+    from app.extensions.market_access import CoreMarketAccess
+
+    repo = getattr(state, "repo", None)
     ctx = ExtCollectorContext(
         api_version=BACKEND_EXTENSION_API_VERSION,
         data_dir=Path(data_dir),
         target_date=target_date,
         config_id=config.id,
-        repository=getattr(state, "repo", None),
+        repository=repo,
         is_test=is_test,
+        params=dict(pull.collector_params or {}),
+        market=CoreMarketAccess(Path(data_dir), repo),
     )
     timeout = pull.timeout_seconds or 30
     result = await asyncio.wait_for(
