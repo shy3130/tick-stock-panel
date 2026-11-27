@@ -15,14 +15,16 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 from app.api.ext_pages import router
+from app.services import auth as auth_service
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     app = FastAPI()
     app.include_router(router)
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
 def _bundle_js() -> bytes:

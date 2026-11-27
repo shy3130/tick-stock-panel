@@ -13,8 +13,10 @@ import shutil
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, suppress
+from glob import escape
 from pathlib import Path
+from unicodedata import normalize
 
 from pydantic import Field, TypeAdapter, ValidationError
 from tivelo_contracts.base import Contract, Digest, RelativePath, canonical_bytes
@@ -57,6 +59,26 @@ def durable_mkdir(path: Path) -> None:
         _sync_directory(directory.parent)
 
 
+def _glob_directory_spelling(directory: Path) -> Path:
+    """Use the stored spelling where DuckDB will expand escaped path components."""
+    parts = list(directory.parts)
+    for index, part in enumerate(parts):
+        if part == directory.anchor or escape(part) == part:
+            continue
+        parent = Path(*parts[:index])
+        with suppress(OSError):
+            expected = (parent / part).lstat()
+            folded = normalize("NFC", part).casefold()
+            for entry in parent.iterdir():
+                if entry.name == part:
+                    break
+                if normalize("NFC", entry.name).casefold() == folded and os.path.samestat(
+                    entry.lstat(), expected
+                ):
+                    parts[index] = entry.name
+                    break
+    return Path(*parts)
+
 
 def _install_immutable(source: Path, destination: Path) -> bool:
     # Windows cannot replace a file another publisher has open. Rename
@@ -77,7 +99,7 @@ class SnapshotStore:
     def __init__(self, root: str | Path):
         directory = Path(root).expanduser().resolve()
         durable_mkdir(directory)
-        self.root = directory.resolve(strict=True)
+        self.root = _glob_directory_spelling(directory.resolve(strict=True))
         self.index = self.path("index.sqlite3")
         with self.transaction() as connection:
             tables = {

@@ -2,32 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import Annotated
-from urllib.parse import urlsplit
 
 import yaml
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from app.api.auth import COOKIE_NAME, _client_ip
+from app.api.auth import require_management as require_management
 from app.data_providers.custom import packages
-from app.services import auth
-
-
-def require_management(request: Request):
-    # Unlike read-only APIs, uploading Python is code execution. LAN access without
-    # a password is not enough. No API-token scope grants this permission.
-    if request.headers.get("authorization"):
-        raise HTTPException(403, "插件安装仅供面板管理会话使用")
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):
-        raise HTTPException(403, "插件管理需要同源访问")
-    if request.headers.get("sec-fetch-site") == "cross-site":
-        raise HTTPException(403, "拒绝跨站插件管理请求")
-    if auth.is_configured():
-        if not auth.is_valid_session(request.cookies.get(COOKIE_NAME, "")):
-            raise HTTPException(401, "请先登录")
-    elif _client_ip(request) not in ("127.0.0.1", "::1", "localhost") or request.url.hostname not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(403, "请先设置访问密码并登录，或通过本机访问安装插件")
 
 
 @asynccontextmanager

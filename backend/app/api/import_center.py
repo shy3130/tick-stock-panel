@@ -14,8 +14,9 @@ from tivelo_contracts.base import Digest
 from tivelo_contracts.signatures import MAX_ENVELOPE
 
 from app.api import ext_pages
+from app.api.auth import require_management
 from app.api.definitions import _uploads
-from app.custom.source_packages.routes import read_upload, require_management
+from app.custom.source_packages.routes import read_upload
 from app.extensions.packages import ExtensionPackageStore
 from app.services import import_center
 from app.services.engine_installation import EngineInstallation

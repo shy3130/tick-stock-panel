@@ -40,6 +40,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from app.plugins.tdxquant.auth_breaker import AuthCircuitBreaker
 from app.plugins.tdxquant.client import (
     SNAPSHOT_FIELDS,
     TdxQuantAuthError,
@@ -404,32 +405,45 @@ class TdxQuantProvider:
     def __init__(self) -> None:
         self.config = _TdxQuantConfig()
         self._client: TdxQuantClient | None = None
-        self._auth_failed_at: float | None = None
-        self._auth_failure_reason = ""
+        self._auth_breaker = AuthCircuitBreaker(
+            blank_threshold=self._AUTH_BLANK_STREAK,
+            cooldown_s=self._AUTH_COOLDOWN_S,
+        )
+
+    @property
+    def _auth_failed_at(self) -> float | None:
+        return self._auth_breaker.tripped_at
+
+    @_auth_failed_at.setter
+    def _auth_failed_at(self, value: float | None) -> None:
+        self._auth_breaker.tripped_at = value
+
+    @property
+    def _auth_failure_reason(self) -> str:
+        return self._auth_breaker.reason
+
+    @_auth_failure_reason.setter
+    def _auth_failure_reason(self, value: str) -> None:
+        self._auth_breaker.reason = value
 
     def _auth_cooldown_active(self) -> bool:
-        if self._auth_failed_at is None:
-            return False
-        if time.monotonic() - self._auth_failed_at < self._AUTH_COOLDOWN_S:
-            return True
-        self._auth_failed_at = None  # 冷却期满, 放行重试
-        return False
+        return self._auth_breaker.is_open()
 
-    def _trip_auth_breaker(self, streak: int, first_error: str) -> None:
-        self._auth_failed_at = time.monotonic()
-        self._auth_failure_reason = first_error
-        logger.error(
-            "TdxQuant 连续 %d 只标的分钟请求失败, 疑似凭据、权限或额度异常, "
-            "已熔断 %d 分钟: 分钟增量/修复轮暂停拉取。请到 设置→数据源 重新保存 "
-            "TdxQuant Key (保存即自动恢复)。首个错误: %s",
-            streak, int(self._AUTH_COOLDOWN_S // 60), first_error or "未知",
+    def _trip_auth_breaker(self, streak: int, first_error: str, *, source: str = "数据") -> None:
+        self._auth_breaker.trip(first_error, source=source, streak=streak)
+
+    def _auth_cooldown_error(self) -> TdxQuantAuthError:
+        return TdxQuantAuthError(
+            self._auth_breaker.reason
+            or "TdxQuant 凭据、接口权限或额度不可用，请核对后重新保存 Key"
         )
 
     @staticmethod
     def _is_blank_error(e: TdxQuantError) -> bool:
-        return "返回空数据" in str(e)
+        return AuthCircuitBreaker.is_blank_error(e)
 
-    def close(self) -> None:  # loader.load_all 重建注册表时会对每个 provider 调 close
+    def close(self) -> None:  # loader.load_all / refresh_plugin 重建注册表时会对每个 provider 调 close
+        self._auth_breaker.reset()
         if self._client is not None:
             with contextlib.suppress(Exception):
                 self._client.close()
@@ -443,33 +457,79 @@ class TdxQuantProvider:
     # ---- realtime ----
     def get_realtime(self) -> list[dict]:
         """全市场实时快照 → 内部 realtime records。失败软返回空列表(不阻断轮询)。"""
+        if self._auth_breaker.is_open():
+            reason = self._auth_breaker.reason or "TdxQuant 凭据或额度异常熔断中"
+            self.last_realtime_meta = {
+                "requested": 0,
+                "received": 0,
+                "failed_batches": 1,
+                "total_batches": 1,
+                "errors": [reason],
+            }
+            return []
         client = self._get_client()
+        self.last_realtime_meta: dict | None = None
         try:
             universe = client.stock_universe()
+        except TdxQuantAuthError as e:
+            self._trip_auth_breaker(1, str(e), source="实时快照")
+            self.last_realtime_meta = {
+                "requested": 0,
+                "received": 0,
+                "failed_batches": 1,
+                "total_batches": 1,
+                "errors": [str(e)],
+            }
+            return []
         except TdxQuantError as e:
             logger.warning("TdxQuant 股票池枚举失败: %s", e)
+            self.last_realtime_meta = {
+                "requested": 0,
+                "received": 0,
+                "failed_batches": 1,
+                "total_batches": 1,
+                "errors": [f"股票池枚举失败: {e}"],
+            }
             return []
 
         fallback_ms = int(time.time() * 1000)
         records: list[dict] = []
         dropped = failed_batches = 0
+        total_batches = math.ceil(len(universe) / _SNAPSHOT_BATCH) if universe else 0
+        batch_errors: list[str] = []
         for i in range(0, len(universe), _SNAPSHOT_BATCH):
             codes = universe[i : i + _SNAPSHOT_BATCH]
             try:
                 rows = client.snapshot_batch(codes)
+            except TdxQuantAuthError as e:
+                failed_batches += 1
+                batch_no = i // _SNAPSHOT_BATCH + 1
+                batch_errors.append(f"第{batch_no}批({len(codes)}只): {e}")
+                self._trip_auth_breaker(1, str(e), source="实时快照")
+                break
             except TdxQuantError as e:
                 failed_batches += 1
-                logger.warning("TdxQuant 快照批次失败(%d 只, 第 %d 批): %s", len(codes), i // _SNAPSHOT_BATCH + 1, e)
+                batch_no = i // _SNAPSHOT_BATCH + 1
+                batch_errors.append(f"第{batch_no}批({len(codes)}只): {e}")
+                logger.warning("TdxQuant 快照批次失败(%d 只, 第 %d 批): %s", len(codes), batch_no, e)
                 continue
+            self._auth_breaker.record_success()
             for code, row in rows.items():
                 rec = _map_snapshot_row(code, row, fallback_ms)
                 if rec is not None:
                     records.append(rec)
                 else:
                     dropped += 1
+        self.last_realtime_meta = {
+            "requested": len(universe),
+            "received": len(records),
+            "failed_batches": failed_batches,
+            "total_batches": total_batches,
+            "errors": batch_errors,
+        }
         if failed_batches:
             logger.warning("TdxQuant 快照 %d/%d 批失败, 本轮仅返回 %d 条",
-                           failed_batches, math.ceil(len(universe) / _SNAPSHOT_BATCH), len(records))
+                           failed_batches, total_batches, len(records))
         if not records and universe:
             logger.warning("TdxQuant 实时行情本轮 0 条(请求 %d 只), 疑似连接或协议异常", len(universe))
         elif dropped:
@@ -478,14 +538,20 @@ class TdxQuantProvider:
 
     def get_realtime_symbols(self, symbols: list[str], *, asset_type: str = "stock") -> list[dict] | None:
         """Targeted stock/ETF demand, using the same native snapshot and unit mapper."""
+        if self._auth_breaker.is_open():
+            return None
         records = []
         fallback_ms = int(time.time() * 1000)
         for i in range(0, len(symbols), _SNAPSHOT_BATCH):
             try:
                 rows = self._get_client().snapshot_batch(symbols[i:i + _SNAPSHOT_BATCH])
+            except TdxQuantAuthError as exc:
+                self._trip_auth_breaker(1, str(exc), source="订阅行情")
+                return records or None
             except TdxQuantError as exc:
                 logger.warning("TdxQuant 订阅行情补拉失败: %s", exc)
                 return records or None
+            self._auth_breaker.record_success()
             for code, row in rows.items():
                 rec = _map_snapshot_row(code, row, fallback_ms)
                 if rec is not None:
@@ -498,6 +564,8 @@ class TdxQuantProvider:
         TDX 快照直接支持指数代码; 未映射的代码跳过(上层用本地日K兜底)。
         失败返回 None 保留上轮有效缓存, 成功但无数据返回 []。
         """
+        if self._auth_breaker.is_open():
+            return None
         wanted: list[str] = []
         for s in symbols:
             if not s:
@@ -509,9 +577,13 @@ class TdxQuantProvider:
             return []
         try:
             rows = self._get_client().snapshot_batch(wanted)
+        except TdxQuantAuthError as e:
+            self._trip_auth_breaker(1, str(e), source="指数行情")
+            return None
         except TdxQuantError as e:
             logger.warning("TdxQuant 指数行情拉取失败: %s", e)
             return None
+        self._auth_breaker.record_success()
         fallback_ms = int(time.time() * 1000)
         records = []
         for code, row in rows.items():
@@ -556,6 +628,8 @@ class TdxQuantProvider:
             if on_chunk_done:
                 on_chunk_done(0, 0)
             return
+        if self._auth_breaker.is_open():
+            raise self._auth_cooldown_error()
         client = self._get_client()
         start_d = start_time.date() if start_time else None
         end_d = end_time.date() if end_time else date.today()
@@ -564,9 +638,14 @@ class TdxQuantProvider:
         for i, symbol in enumerate(symbols):
             try:
                 raw = client.his_dats(symbol, end_d, count)
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source="日K")
+                raise
             except TdxQuantError as e:
                 logger.warning("TdxQuant 日K %s 拉取失败: %s", symbol, e)
                 raw = {}
+            else:
+                self._auth_breaker.record_success()
             rows = _kline_rows(symbol, raw, start_d, end_d)
             if rows and rows[0]["date"] is not None and start_d is not None and rows[0]["date"] > start_d:
                 logger.info("TdxQuant 日K %s: count=%d 仅覆盖到 %s(窗口起点 %s 之前的数据不在返回内)",
@@ -594,6 +673,8 @@ class TdxQuantProvider:
         """
         if not symbols or asset_type != "stock":
             return pl.DataFrame(schema=_ADJ_SCHEMA)
+        if self._auth_breaker.is_open():
+            raise self._auth_cooldown_error()
         client = self._get_client()
         start_d = start_time.date() if start_time else None
         end_d = end_time.date() if end_time else date.today()
@@ -602,11 +683,15 @@ class TdxQuantProvider:
         for i, symbol in enumerate(symbols):
             try:
                 events = client.divid_factors(symbol, start_d, end_d + timedelta(days=_ADJ_FUTURE_DAYS))
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source="除权因子")
+                raise
             except TdxQuantError as e:
                 logger.warning("TdxQuant 除权事件 %s 拉取失败: %s", symbol, e)
                 # 失败不能当作「该股无除权」；由任务层标记失败，整轮不写入
                 # 不完整因子，也避免权限/额度异常后继续请求其余数千只。
                 raise
+            self._auth_breaker.record_success()
             events = [ev for ev in events if _compact_date(ev.get("Date")) is not None]
             if events:
                 events.sort(key=lambda ev: str(ev.get("Date")))
@@ -628,6 +713,9 @@ class TdxQuantProvider:
         """一次 count 模式日K → {交易日: 原始收盘价}(推导前收盘与自检共用)。"""
         try:
             raw = client.his_dats(symbol, end_d, _bars_for_window((end_d - start_d).days))
+        except TdxQuantAuthError as e:
+            self._trip_auth_breaker(1, str(e), source="除权配价")
+            raise
         except TdxQuantError as e:
             logger.warning("TdxQuant 除权配价 %s 日K失败: %s", symbol, e)
             raise
@@ -718,6 +806,8 @@ class TdxQuantProvider:
             if on_chunk_done:
                 on_chunk_done(0, 0)
             return
+        if self._auth_breaker.is_open():
+            raise self._auth_cooldown_error()
         client = self._get_client()
         # 同步窗口来自 cn_now/单股 API, 可能带时区; 原生接口和返回列均用北京墙钟。
         if start_time is not None and start_time.tzinfo is not None:
@@ -730,7 +820,12 @@ class TdxQuantProvider:
         pending_rows = 0
         for i, symbol in enumerate(symbols):
             # 请求失败应中止历史同步并标记失败, 不得作为无数据继续遍历全市场。
-            raw = client.his_dats(symbol, end_dt, count, period="1m")
+            try:
+                raw = client.his_dats(symbol, end_dt, count, period="1m")
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source="分钟K")
+                raise
+            self._auth_breaker.record_success()
             rows = _minute_rows(symbol, raw, start_time, end_dt)
             if not rows and raw.get("Date") and not _minute_rows(symbol, raw, None, None):
                 _warn_minute_unparsed(symbol, raw)  # 去掉窗口过滤仍 0 行才是解析失败
@@ -772,28 +867,25 @@ class TdxQuantProvider:
         today = now.date()
         fetch = max(_MINUTE_BARS_PER_DAY, min(count, 480)) + _MINUTE_BARS_PER_DAY
         out: list[pl.DataFrame] = []
-        blank_streak = 0
         failures = 0
         first_error = ""
         for symbol in symbols:
             try:
                 raw = client.his_dats(symbol, now, fetch, period="1m")
             except TdxQuantAuthError as e:
-                self._trip_auth_breaker(1, str(e))
+                self._trip_auth_breaker(1, str(e), source="分钟修复轮")
                 break
             except TdxQuantError as e:
                 failures += 1
                 first_error = first_error or str(e)
                 if self._is_blank_error(e):
-                    blank_streak += 1
-                    if blank_streak >= self._AUTH_BLANK_STREAK:
-                        self._trip_auth_breaker(blank_streak, first_error)
+                    if self._auth_breaker.record_blank(first_error, source="分钟修复轮"):
                         break
                 else:
-                    blank_streak = 0
+                    self._auth_breaker.record_success()
                 logger.debug("TdxQuant 修复轮 %s 拉取失败: %s", symbol, e)
                 continue
-            blank_streak = 0
+            self._auth_breaker.record_success()
             rows = _minute_rows(symbol, raw, None, None, today_only=today)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
@@ -824,34 +916,34 @@ class TdxQuantProvider:
         if not targets:
             try:
                 targets = client.stock_universe()
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source="分钟增量轮")
+                return pl.DataFrame(schema=_MINUTE_SCHEMA)
             except TdxQuantError as e:
                 logger.warning("TdxQuant 增量轮股票池枚举失败: %s", e)
                 return pl.DataFrame(schema=_MINUTE_SCHEMA)
         count = max(1, min(int(count), 30))
         now = datetime.now()
         out: list[pl.DataFrame] = []
-        blank_streak = 0
         failures = 0
         first_error = ""
         for j, symbol in enumerate(targets):
             try:
                 raw = client.his_dats(symbol, now, count, period="1m")
             except TdxQuantAuthError as e:
-                self._trip_auth_breaker(1, str(e))
+                self._trip_auth_breaker(1, str(e), source="分钟增量轮")
                 break
             except TdxQuantError as e:
                 failures += 1
                 first_error = first_error or str(e)
                 if self._is_blank_error(e):
-                    blank_streak += 1
-                    if blank_streak >= self._AUTH_BLANK_STREAK:
-                        self._trip_auth_breaker(blank_streak, first_error)
+                    if self._auth_breaker.record_blank(first_error, source="分钟增量轮"):
                         break
                 else:
-                    blank_streak = 0
+                    self._auth_breaker.record_success()
                 logger.debug("TdxQuant 增量轮 %s 拉取失败: %s", symbol, e)
                 continue
-            blank_streak = 0
+            self._auth_breaker.record_success()
             rows = _minute_rows(symbol, raw, None, None)
             if rows:
                 out.append(pl.DataFrame(rows, schema=_MINUTE_SCHEMA))
@@ -870,6 +962,8 @@ class TdxQuantProvider:
     # ---- depth5 ----
     def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
         """五档盘口 → {symbol: 标准盘口字典}。数量单位手(透传), 价格转 float。"""
+        if self._auth_breaker.is_open():
+            return {}
         client = self._get_client()
         out: dict[str, dict] = {}
         fallback_ms = int(time.time() * 1000)
@@ -877,9 +971,13 @@ class TdxQuantProvider:
             batch = symbols[i : i + _SNAPSHOT_BATCH]
             try:
                 rows = client.snapshot_batch(batch)
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source="五档盘口")
+                break
             except TdxQuantError as e:
                 logger.warning("TdxQuant 五档批次失败(第 %d 批): %s", i // _SNAPSHOT_BATCH + 1, e)
                 continue
+            self._auth_breaker.record_success()
             for code, row in rows.items():
                 entry = self._depth_entry(row, fallback_ms)
                 if entry is not None:
@@ -917,6 +1015,10 @@ class TdxQuantProvider:
 
     # ---- 设置页试拉 ----
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
+        if dataset in _DATASETS:
+            # 用户在设置页手动点「试拉」(如后台充值积分后复核) 时放行单次探测;
+            # 若仍鉴权失败, 首个请求会立即重新触发熔断并返回明确服务端原因。
+            self._auth_breaker.reset()
         if dataset in ("daily", "adj_factor"):
             syms = [s for s in (symbols or [])][:3] or ["000001.SZ"]
             try:
@@ -955,8 +1057,12 @@ class TdxQuantProvider:
             syms = [s for s in (symbols or [])][:5] or ["600519.SH", "000001.SZ"]
             try:
                 rows = self._get_client().snapshot_batch(syms)
+            except TdxQuantAuthError as e:
+                self._trip_auth_breaker(1, str(e), source=dataset)
+                return {"provider": self.name, "dataset": dataset, "rows": 0, "error": str(e)}
             except TdxQuantError as e:
                 return {"provider": self.name, "dataset": dataset, "rows": 0, "error": str(e)}
+            self._auth_breaker.reset()
             fallback_ms = int(time.time() * 1000)
             if dataset == "realtime":
                 head = [r for r in (_map_snapshot_row(c, row, fallback_ms) for c, row in rows.items()) if r]

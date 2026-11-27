@@ -488,7 +488,7 @@ def _safe_aggregate_financials(repo) -> dict | None:
         if path.exists():
             try:
                 import polars as pl
-                df = pl.read_parquet(path, columns=["symbol"])
+                df = pl.read_parquet(path, glob=False, columns=["symbol"])
                 rows = len(df)
                 symbols = df["symbol"].n_unique() if not df.is_empty() else 0
                 tables_info[table] = {"rows": rows, "symbols": symbols}

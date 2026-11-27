@@ -14,12 +14,17 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from app.api.auth import require_management
 from app.config import settings
 
-router = APIRouter(prefix="/api/pages-admin", tags=["pages-admin"])
+router = APIRouter(
+    prefix="/api/pages-admin",
+    tags=["pages-admin"],
+    dependencies=[Depends(require_management)],
+)
 
 # 与前端扩展注册表 ID 规则 (extensions/registry.ts ID_RE) 保持同形
 _NS_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")

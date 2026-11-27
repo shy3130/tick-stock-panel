@@ -3645,6 +3645,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ...(days ? { days } : {}), ...(extend ? { extend: true } : {}) }),
     }),
+  syncMinuteRange: (startDate: string, endDate: string) =>
+    request<{ status: string; job_id: string }>('/api/kline/sync_minute', {
+      method: 'POST',
+      body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+      quiet: true,
+    }),
   syncMinuteSingle: (symbol: string, days?: number) =>
     request<{ status: string; symbol: string; rows: number }>('/api/kline/sync_minute_single', {
       method: 'POST',
@@ -4287,6 +4293,24 @@ export const api = {
   extDataList: () =>
     request<{ items: ExtDataConfig[] }>('/api/ext-data'),
 
+  extDataCollectors: () =>
+    request<{ items: ExtCollectorItem[] }>('/api/ext-data/collectors'),
+
+  /**
+   * 跨扩展调用已注册后端扩展路由 (`/api/extensions/<extensionId>/<path>`),
+   * 供源码扩展与运行时 Page Pack 通过 `ctx.api` 复用同源鉴权、超时与错误处理。
+   */
+  extensionRequest: <T = unknown>(extensionId: string, path: string, init?: RequestOptions) => {
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(extensionId)) {
+      return Promise.reject(new ApiError(`非法扩展 ID: ${extensionId}`, 400))
+    }
+    const cleanPath = path.replace(/^\/+/, '')
+    if (!cleanPath || cleanPath.includes('..') || /^[a-z]+:/i.test(cleanPath)) {
+      return Promise.reject(new ApiError(`非法扩展路径: ${path}`, 400))
+    }
+    return request<T>(`/api/extensions/${encodeURIComponent(extensionId)}/${cleanPath}`, init)
+  },
+
   extDataRows: (id: string, opts?: { date?: string; limit?: number; columns?: string[] }) => {
     const qs = new URLSearchParams()
     if (opts?.date) qs.set('date', opts.date)
@@ -4536,7 +4560,7 @@ export const api = {
     ),
 
   extDataPullConfig: (id: string, body: {
-    url: string; method?: string; headers?: Record<string, string>; body?: string;
+    url: string; collector?: string | null; collector_params?: Record<string, unknown> | null; method?: string; headers?: Record<string, string>; body?: string;
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
     /** 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes; null=沿用分钟值 */
@@ -4583,7 +4607,7 @@ export const api = {
     ),
 
   extDataPullRun: (id: string, timeoutSeconds?: number) =>
-    request<{ status: string; rows: number; date: string }>(
+    request<{ status: string; rows: number; date: string; message?: string; partial_errors?: string[] }>(
       `/api/ext-data/${id}/pull/run`,
       { method: 'POST', timeoutMs: extPullTimeoutMs(timeoutSeconds) },
     ),
@@ -5559,8 +5583,30 @@ export interface ExtPullAuth {
   key_ref?: string
 }
 
+export interface ExtCollectorParamSchema {
+  type?: 'float' | 'int' | 'string' | 'bool' | string
+  label?: string
+  default?: unknown
+  min?: number
+  max?: number
+}
+
+export interface ExtCollectorItem {
+  id: string
+  extension_id: string
+  label: string
+  description: string
+  default_mode: 'snapshot' | 'timeseries'
+  default_fields: ExtDataField[]
+  params_schema: Record<string, ExtCollectorParamSchema>
+}
+
 export interface PullConfig {
   url: string
+  /** 扩展采集器 ID (如 "auction_scan.market_925"); 与 url 二选一 */
+  collector?: string | null
+  /** 扩展采集器自定义参数 (透传给后端 ExtCollectorContext.params) */
+  collector_params?: Record<string, unknown> | null
   method: string
   headers?: Record<string, string>
   body?: string | null
@@ -5692,6 +5738,8 @@ export interface ExtDataConfig {
   plate?: { date: string; plates: number; from: string; to: string; granularity: 'intraday' | 'daily' } | null
   /** 生效序列粒度 (显式声明 > 数据形态判断): intraday | daily; snapshot 表为 null */
   granularity_effective?: 'intraday' | 'daily' | null
+  /** 当前是否处于采集中 (服务端内存状态，重启归零) */
+  running?: boolean
   pull?: PullConfig | null
 }
 
@@ -5714,6 +5762,8 @@ export interface ExtDataRowsResult {
   label: string
   mode: 'snapshot' | 'timeseries'
   date: string | null
+  /** 时序表已有分区日期列表 (按日期倒序 YYYY-MM-DD) */
+  dates?: string[]
   total: number
   limit: number
   fields: ExtDataField[]

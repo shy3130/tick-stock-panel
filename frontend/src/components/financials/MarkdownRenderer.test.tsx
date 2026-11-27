@@ -49,6 +49,29 @@ it('leaves signed pct inside inline code untouched', async () => {
   expect(html).toContain('<code')
 })
 
+it('keeps formatted headings in normal text flow', async () => {
+  const html = await renderToHtml('### 1. 一句话定调 **趋势判断** 上涨 +2.35%，昨日 -1.20%。\n\n正文另起一段。')
+  const host = document.createElement('div')
+  host.innerHTML = html
+  const heading = host.querySelector('h3')
+  expect(heading?.textContent).toBe('1. 一句话定调 趋势判断 上涨 +2.35%，昨日 -1.20%。')
+  expect(heading?.querySelector('strong')?.textContent).toBe('趋势判断')
+  expect(heading?.querySelector('.text-bull')?.textContent).toBe('上涨')
+  expect(heading?.classList.contains('flex')).toBe(false)
+  expect(heading?.nextElementSibling?.textContent).toBe('正文另起一段。')
+})
+
+it.each(['| 补充内容 | 理由 |', '| : | --- |', '| --- |'])(
+  'keeps pipe-prefixed text with an invalid table separator %s', async separator => {
+    const html = await renderToHtml(`| 标的 | 价格 |\n${separator}\n| 示例 | 5.01 元 |`)
+    const host = document.createElement('div')
+    host.innerHTML = html
+    expect(host.querySelector('table')).toBeNull()
+    expect(host.querySelectorAll('p')[1]?.textContent).toBe(separator)
+    expect(host.querySelectorAll('p')[2]?.textContent).toBe('| 示例 | 5.01 元 |')
+  },
+)
+
 it('renders Markdown links with formatted labels and safe external navigation', async () => {
   const html = await renderToHtml('阅读 [**接入文档**](https://example.com/docs)。')
   const host = document.createElement('div')
@@ -86,7 +109,7 @@ it('wide tables (>4 cols) use auto layout, nowrap cells and horizontal scroll', 
 it('narrow tables (<=4 cols) keep fixed layout with breakable cells', async () => {
   const html = await renderToHtml(
     '| 维度 | 数值 | 判断 |\n' +
-    '|---|---|---|\n' +
+    '| :--- | ---: | :---: |\n' +
     '| 营收 | 12.3亿元 | 同比上涨 |\n',
   )
   expect(html).toContain('table-fixed')

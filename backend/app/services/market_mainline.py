@@ -22,6 +22,7 @@ from pathlib import Path
 import polars as pl
 
 from app.market_time import cn_today
+from app.parquet import parquet_glob
 from app.services.fs_utils import atomic_write_parquet
 from app.services.rps_rotation import _load_concept_map_df
 
@@ -91,7 +92,7 @@ def load_risk_warning_symbols(data_dir: Path) -> frozenset[str]:
     inst_dir = data_dir / "instruments"
     if inst_dir.exists():
         try:
-            df = pl.read_parquet(inst_dir / "**" / "*.parquet").select(["symbol", "name"])
+            df = pl.read_parquet(parquet_glob(inst_dir)).select(["symbol", "name"])
             st = df.filter(polars_is_risk_warning_name(pl.col("name")))
             syms = frozenset(s.upper() for s in st["symbol"].to_list())
         except Exception as e:
@@ -106,7 +107,7 @@ def load_mainline_history(data_dir: Path, kind: str = "concept") -> pl.DataFrame
     if not p.exists():
         return pl.DataFrame()
     try:
-        df = pl.read_parquet(p)
+        df = pl.read_parquet(p, glob=False)
     except Exception as e:
         logger.warning("load_mainline_history failed: %s", e)
         return pl.DataFrame()
@@ -162,7 +163,7 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
             return pl.DataFrame()
 
     limit_rows = (
-        pl.scan_parquet(enriched_dir / "**" / "*.parquet")
+        pl.scan_parquet(parquet_glob(enriched_dir))
         .select(["date", "symbol", "consecutive_limit_ups", "amount"])
         .filter(
             (pl.col("date") >= start) & (pl.col("date") <= end)
@@ -254,7 +255,7 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
 def replace_mainline_range(data_dir: Path, start: date, end: date, kind: str, new_rows: pl.DataFrame) -> None:
     """历史修正按范围替换: 新结果为空时, 也要移除该范围旧主线。"""
     path = mainline_path(data_dir)
-    old = pl.read_parquet(path) if path.exists() else pl.DataFrame()
+    old = pl.read_parquet(path, glob=False) if path.exists() else pl.DataFrame()
     kept = old.filter(~((pl.col("kind") == kind) & pl.col("date").is_between(start, end))) if not old.is_empty() else old
     combined = pl.concat([kept, new_rows], how="diagonal_relaxed").sort(["date", "kind", "rank"])
     atomic_write_parquet(combined, path)
@@ -266,7 +267,7 @@ def upsert_mainline_history(data_dir: Path, new_rows: pl.DataFrame) -> None:
         return
     p = mainline_path(data_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    old = pl.read_parquet(p) if p.exists() else pl.DataFrame()
+    old = pl.read_parquet(p, glob=False) if p.exists() else pl.DataFrame()
     if old.is_empty():
         combined = new_rows
     else:

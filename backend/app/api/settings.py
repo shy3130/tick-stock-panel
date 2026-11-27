@@ -9,11 +9,12 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import secrets_store
+from app.api.auth import require_management
 from app.data_providers.custom.config import MAX_TIMEOUT
 from app.services.preferences import STOCK_PREVIEW_DAILY_BARS_MAX
 from app.services.stock_info_bar import StockInfoBarLayout
@@ -29,6 +30,7 @@ from app.tickflow.policy import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+_MANAGE = [Depends(require_management)]
 
 # 默认端点 —— endpoints.json 列表第一项,UI"当前使用"始终对齐此项。
 # 注意:Free 模式 SDK 实际走 free-api(免费数据通道),但 UI 显示统一用默认节点。
@@ -833,7 +835,7 @@ def reload_data_sources() -> dict:
     return list_data_sources()
 
 
-@router.post("/plugins/{name}/install")
+@router.post("/plugins/{name}/install", dependencies=_MANAGE)
 def install_plugin(name: str) -> dict:
     """安装指定插件的依赖 (npm install / pip install), 完成后重新扫描。
 
@@ -852,7 +854,7 @@ def install_plugin(name: str) -> dict:
     return result
 
 
-@router.delete("/plugins/{name}/install")
+@router.delete("/plugins/{name}/install", dependencies=_MANAGE)
 def uninstall_plugin(name: str) -> dict:
     """卸载指定插件的依赖 (删除 node_modules / pip uninstall), 完成后重新扫描。
 
@@ -2371,14 +2373,14 @@ class ApiTokenCreateIn(BaseModel):
     scopes: list[str]
 
 
-@router.get("/api-tokens")
+@router.get("/api-tokens", dependencies=_MANAGE)
 def api_tokens_list(request: Request) -> dict:
     from app.services import api_tokens as svc
 
     return {"tokens": svc.list_tokens(request.app.state.repo.store.data_dir)}
 
 
-@router.post("/api-tokens")
+@router.post("/api-tokens", dependencies=_MANAGE)
 def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
     """创建 Token — 明文只在本次响应出现一次, 前端弹窗提示立即保存。"""
     from app.services import api_tokens as svc
@@ -2390,7 +2392,7 @@ def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
     return {"token": record, "plaintext": plaintext}
 
 
-@router.delete("/api-tokens/{token_id}")
+@router.delete("/api-tokens/{token_id}", dependencies=_MANAGE)
 def api_tokens_revoke(token_id: str, request: Request) -> dict:
     from app.services import api_tokens as svc
 

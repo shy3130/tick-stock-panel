@@ -82,9 +82,9 @@ def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
     if not part.exists():
         return None
     try:
-        if not {"symbol", "volume", "amount"}.issubset(pl.read_parquet_schema(part)):
+        if not {"symbol", "volume", "amount"}.issubset(pl.scan_parquet(part, glob=False).collect_schema()):
             return None
-        daily = pl.read_parquet(part, columns=["symbol", "volume", "amount"])
+        daily = pl.read_parquet(part, glob=False, columns=["symbol", "volume", "amount"])
         if daily.is_empty():
             return None
         daily = daily.with_columns(pl.col(c).cast(pl.Float64, strict=False) for c in ("volume", "amount"))
@@ -99,7 +99,7 @@ def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
 
 
 def _read_minute_activity(part: Path, symbols: list[str] | None) -> pl.DataFrame:
-    frame = pl.scan_parquet(part, hive_partitioning=False)
+    frame = pl.scan_parquet(part, glob=False, hive_partitioning=False)
     columns = frame.collect_schema().names()
     if symbols is not None:
         frame = frame.filter(pl.col("symbol").is_in(symbols))

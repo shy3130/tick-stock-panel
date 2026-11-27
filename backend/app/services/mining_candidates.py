@@ -324,7 +324,7 @@ class MiningCandidateService:
         try:
             parquet = pq.ParquetFile(path)
             metadata = parquet.metadata
-            schema = pl.read_parquet_schema(path)
+            schema = pl.scan_parquet(path, glob=False).collect_schema()
         except Exception as exc:
             raise RuntimeError("failed to read mining candidates artifact") from exc
         if metadata is None or metadata.num_rows > _MAX_ARTIFACT_ROWS:
@@ -352,7 +352,7 @@ class MiningCandidateService:
             )
         try:
             return pl.read_parquet(
-                path, columns=[name for name in _ARTIFACT_SCHEMA if name in schema]
+                path, glob=False, columns=[name for name in _ARTIFACT_SCHEMA if name in schema]
             )
         except Exception as exc:
             raise RuntimeError("failed to read mining candidates artifact") from exc

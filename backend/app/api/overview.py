@@ -69,10 +69,10 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
     if not files:
         return []
     try:
-        df = pl.read_parquet(files, hive_partitioning=True)
+        df = pl.read_parquet(files, glob=False, hive_partitioning=True)
     except TypeError:
         try:
-            df = pl.read_parquet(files)
+            df = pl.read_parquet(files, glob=False)
         except Exception:  # noqa: BLE001
             return []
     except Exception:  # noqa: BLE001

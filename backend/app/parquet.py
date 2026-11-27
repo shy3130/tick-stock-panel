@@ -1,7 +1,12 @@
 """Polars parquet helpers."""
 from __future__ import annotations
 
+from contextlib import suppress
+from glob import escape
+from os.path import samestat
+from pathlib import Path, PurePath
 from typing import Any
+from unicodedata import normalize
 
 import polars as pl
 
@@ -34,6 +39,30 @@ ENRICHED_STORAGE_SCHEMA: dict[str, pl.DataType] = {
     "consecutive_limit_downs": pl.UInt32,
     "quote_ts": pl.Int64,
 }
+
+
+def parquet_glob(directory: PurePath, pattern: str = "**/*.parquet") -> str:
+    """Match a Parquet pattern beneath a literal directory on Windows and POSIX."""
+    if isinstance(directory, Path):
+        # Escaped components are still matched case-sensitively by the globber.
+        parts = list(directory.parts)
+        for index, part in enumerate(parts):
+            if part == directory.anchor or escape(part) == part:
+                continue
+            parent = Path(*parts[:index])
+            with suppress(OSError):
+                expected = (parent / part).lstat()
+                folded = normalize("NFC", part).casefold()
+                for entry in parent.iterdir():
+                    if entry.name == part:
+                        break
+                    if normalize("NFC", entry.name).casefold() == folded and samestat(
+                        entry.lstat(), expected
+                    ):
+                        parts[index] = entry.name
+                        break
+        directory = Path(*parts)
+    return f"{escape(directory.as_posix().rstrip('/'))}/{pattern}"
 
 
 def scan_parquet_compat(source: Any, **kwargs: Any) -> pl.LazyFrame:

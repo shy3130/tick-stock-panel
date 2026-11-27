@@ -242,7 +242,7 @@ def _timeseries_frame(root: Path, config, fields: list) -> pl.DataFrame:
             if not (d.is_dir() and part.exists()):
                 continue
             try:
-                raw = pl.read_parquet(part)
+                raw = pl.read_parquet(part, glob=False)
             except Exception as e:
                 logger.warning("扩展表 %s 分区 %s 读取失败, 跳过: %s", config.id, d.name, e)
                 continue
@@ -274,7 +274,7 @@ def _snapshot_frame(root: Path, config, fields: list) -> pl.DataFrame:
         cached = _frame_cache.get(key)
         if cached is not None and cached[0] == sig:
             return cached[1]
-        frame = _select_fields(pl.read_parquet(path), config, fields, with_date=None)
+        frame = _select_fields(pl.read_parquet(path, glob=False), config, fields, with_date=None)
         if not frame.is_empty():
             frame = frame.unique(subset=["symbol"], keep="last")
         _frame_cache[key] = (sig, frame)

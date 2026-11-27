@@ -52,7 +52,7 @@ def load_fundamental_snapshot(data_dir: Path | None) -> pl.DataFrame | None:
     if not path.exists():
         return None
     try:
-        frame = pl.read_parquet(path)
+        frame = pl.read_parquet(path, glob=False)
     except Exception as exc:
         logger.warning("读取财务指标快照失败: %s", exc)
         return None

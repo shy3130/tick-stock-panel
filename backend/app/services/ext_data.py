@@ -176,7 +176,7 @@ def collapse_ext_rows_at(
 class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
-        "url", "method", "headers", "body", "response_path",
+        "url", "collector", "collector_params", "method", "headers", "body", "response_path",
         "field_map", "schedule_minutes", "schedule_seconds", "enabled",
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
@@ -221,9 +221,20 @@ class PullConfig:
         schedule_trading_only: bool = False,
         since_param: str | None = None,
         granularity: str = "auto",
+        collector: str | None = None,
+        collector_params: dict | None = None,
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
+        # 扩展采集器 ID (如 "auction_scan.market_925"): 与 url 二选一,
+        # 复用同一套 PullScheduler 调度与 Parquet 存储链路。
+        self.collector = (
+            collector.strip() or None if isinstance(collector, str) else None
+        )
+        # 采集器自定义参数 (透传为 ExtCollectorContext.params), 允许同一采集器复用多套方案
+        self.collector_params = (
+            dict(collector_params) if isinstance(collector_params, dict) and collector_params else None
+        )
         self.method = method              # GET | POST
         self.headers = headers or {}
         self.body = body                  # JSON string (POST body template)
@@ -319,9 +330,15 @@ class PullConfig:
         # 决定 series 端点口径与列表迷你图形态; 手改非法值归一 auto (fail-closed)。
         self.granularity = granularity if granularity in ("auto", "intraday", "daily") else "auto"
 
+    def is_configured(self) -> bool:
+        """是否已配置拉取来源 (外部 HTTP URL 或注册的扩展采集器)。"""
+        return bool((self.url or "").strip() or self.collector)
+
     def to_dict(self) -> dict:
         return {
             "url": self.url,
+            "collector": self.collector,
+            "collector_params": self.collector_params,
             "method": self.method,
             "headers": self.headers,
             "body": self.body,
@@ -362,6 +379,8 @@ class PullConfig:
             return cls()
         return cls(
             url=d.get("url", ""),
+            collector=d.get("collector"),
+            collector_params=d.get("collector_params"),
             method=d.get("method", "GET"),
             headers=d.get("headers"),
             body=d.get("body"),
@@ -691,7 +710,7 @@ def build_code_lookup(data_dir: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
-        df = pl.read_parquet(path, columns=["code", "symbol"])
+        df = pl.read_parquet(path, glob=False, columns=["code", "symbol"])
         return dict(zip(df["code"].to_list(), df["symbol"].to_list()))
     except Exception:
         return {}
@@ -881,6 +900,18 @@ def _config_dir(config_id: str, data_dir: Path) -> Path:
     return data_dir / "ext_data" / config_id
 
 
+def empty_ext_dataframe(config: ExtConfig) -> pl.DataFrame:
+    """按配置字段构造 0 行带类型的 DataFrame (用于合法 0 命中交易日落盘占位)。"""
+    schema: dict[str, pl.DataType] = {}
+    if not config.market_level:
+        schema["symbol"] = pl.Utf8
+    for f in config.fields:
+        schema[f.name] = _POLARS_DTYPE_MAP.get(f.dtype, pl.Utf8)
+    if not schema:
+        schema["symbol"] = pl.Utf8
+    return pl.DataFrame(schema=schema)
+
+
 def write_ext_parquet(
     df: pl.DataFrame,
     config: ExtConfig,
@@ -888,6 +919,8 @@ def write_ext_parquet(
     snapshot_date: date | None = None,
     *,
     keep_strategy_cache: bool = False,
+    allow_empty: bool = False,
+    replace_partition: bool = False,
 ) -> int:
     """将 DataFrame 写入扩展数据 Parquet。
 
@@ -895,18 +928,24 @@ def write_ext_parquet(
       - snapshot:  data/ext_data/{id}/part.parquet（与 config.json 同级，覆盖写）
       - timeseries: data/ext_data/{id}/timeseries/date=xxx/part.parquet（按日分区）
 
+    allow_empty=True 时允许写入 0 行带类型分区，用于区分「当日已扫描但无命中」与「未扫描」。
+    replace_partition=True 时以本次完整结果原子覆盖当日分区（适用于每日快照型采集器，
+    避免重跑后残留旧行；不适用于带 time_field 的日内增量多盘表）。
+
     Returns:
         写入行数。
     """
     if df.is_empty():
-        return 0
+        if not allow_empty:
+            return 0
+        df = empty_ext_dataframe(config)
 
     # 缺省分区日期按北京日期, 与定时拉取 (ext_pull.fetch_and_ingest) 同口径
     snap = snapshot_date or cn_today()
     cfg_dir = _config_dir(config.id, data_dir)
 
     # 标准化 symbol 列: 用维表查找 → 准确匹配交易所
-    if "symbol" in df.columns:
+    if not df.is_empty() and "symbol" in df.columns:
         lookup = build_code_lookup(data_dir)
         df = df.with_columns(normalize_symbol(df["symbol"], lookup))
 
@@ -927,7 +966,7 @@ def write_ext_parquet(
             df = df.with_columns(pl.lit(_pull_ts_value()).alias(PLATE_TS_FIELD))
 
     tf = config.pull.time_field if config.pull and config.mode != "snapshot" else None
-    if tf and (tf not in df.columns or df[tf].null_count()):
+    if tf and not df.is_empty() and (tf not in df.columns or df[tf].null_count()):
         raise ValueError(f"扩展数据时间字段 '{tf}' 缺失或为空, 原数据保持不变")
 
     # Normalize configured types before merging: an initially empty float column
@@ -937,8 +976,8 @@ def write_ext_parquet(
     if tf and tf in df.columns and tf not in key:
         key.append(tf)
 
-    if out_path.exists():
-        existing = cast_df_to_schema(pl.read_parquet(out_path), config.fields)
+    if out_path.exists() and not (replace_partition and not tf):
+        existing = cast_df_to_schema(pl.read_parquet(out_path, glob=False), config.fields)
         old_schema, new_schema = existing.schema, df.schema
         for name in old_schema.keys() & new_schema.keys():
             old_type, new_type = old_schema[name], new_schema[name]
@@ -953,8 +992,9 @@ def write_ext_parquet(
         # atomic replacement, never fall back to discarding the existing rows.
         df = pl.concat([existing, df], how="diagonal_relaxed")
 
-    df = df.unique(subset=key, keep="last", maintain_order=True)
-    if config.mode != "snapshot":
+    if not df.is_empty():
+        df = df.unique(subset=key, keep="last", maintain_order=True)
+    if config.mode != "snapshot" and not df.is_empty():
         # 日内序列表: 分区内按 [symbol, 时间列] 升序落盘。读侧 (screener._load_ext_value_maps、
         # ext_factors 因子帧、板块资金流) 按 symbol unique(keep="last") 收敛到一行, 只认行序;
         # 上游及不同批次不保证时间序, 不排序时可能把更早的盘次当作末盘
@@ -1036,7 +1076,7 @@ def fix_symbol_format(config: ExtConfig, data_dir: Path) -> int:
     lookup = build_code_lookup(data_dir)
     for parquet_path in parquet_files:
         try:
-            df = pl.read_parquet(parquet_path)
+            df = pl.read_parquet(parquet_path, glob=False)
             if "symbol" not in df.columns:
                 continue
             old = df["symbol"].to_list()
@@ -1059,19 +1099,28 @@ def rows_to_parquet(
     snapshot_date: date | None = None,
     *,
     keep_strategy_cache: bool = False,
+    allow_empty: bool = False,
+    replace_partition: bool = False,
 ) -> int:
     """将 JSON 行列表转为 DataFrame 写入 Parquet，复用 write_ext_parquet 的存储逻辑。
 
     Returns:
         写入行数。
     """
-    # Sparse fields can first appear in later snapshots, beyond Polars' default
-    # 100-row inference window. Infer across this response so those keys survive.
-    df = pl.DataFrame(rows, infer_schema_length=None)
-    df = apply_config_mapping(df, config, data_dir)
-    if "symbol" in df.columns:
-        df = df.with_columns(pl.col("symbol").cast(pl.Utf8))
+    if not rows:
+        if not allow_empty:
+            return 0
+        df = empty_ext_dataframe(config)
+    else:
+        # Sparse fields can first appear in later snapshots, beyond Polars' default
+        # 100-row inference window. Infer across this response so those keys survive.
+        df = pl.DataFrame(rows, infer_schema_length=None)
+        df = apply_config_mapping(df, config, data_dir)
+        if "symbol" in df.columns:
+            df = df.with_columns(pl.col("symbol").cast(pl.Utf8))
     return write_ext_parquet(
         df, config, data_dir, snapshot_date=snapshot_date,
         keep_strategy_cache=keep_strategy_cache,
+        allow_empty=allow_empty,
+        replace_partition=replace_partition,
     )

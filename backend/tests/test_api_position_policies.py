@@ -20,16 +20,18 @@ from app.services import preferences
 def client(tmp_path: Path, monkeypatch) -> TestClient:
     from app.api import backtest as backtest_api
     from app.config import settings
+    from app.services import auth as auth_service
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(preferences, "load", lambda: {})
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
 
     app = FastAPI()
     app.include_router(backtest_api.router)
     app.include_router(position_policies_api.router)
     app.state.data_dir = tmp_path
     pp.invalidate_cache()
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
 def test_templates_endpoint(client: TestClient) -> None:

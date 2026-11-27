@@ -144,7 +144,7 @@ class EntryInputData:
         try:
             if _digest(path) != file.digest:
                 raise ValueError("过滤数据版本校验失败")
-            return pl.read_parquet(path)
+            return pl.read_parquet(path, glob=False)
         except (OSError, pl.exceptions.PolarsError) as exc:
             raise ValueError("无法读取已固定的过滤数据") from exc
 
@@ -245,7 +245,7 @@ class EntryInputData:
             for path in files:
                 if path.is_symlink() or path.parent.is_symlink():
                     raise ValueError(f"扩展表「{config.label}」含有无效的历史分区路径")
-                scan = pl.scan_parquet(path)
+                scan = pl.scan_parquet(path, glob=False)
                 schema = scan.collect_schema()
                 columns = []
                 if not config.market_level:

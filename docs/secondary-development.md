@@ -22,11 +22,11 @@
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
 - 自定义图表指标支持明文公式和 `tick-chart-indicators` v1 JSON，服务从 TSP 行情入口取得数据并返回绘图结果。[用户指南](custom-chart-indicators.md) · [模块接口与兼容性](custom-chart-indicators-integration.md)
-- 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
+- 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子、通知格式化器和扩展数据采集器（`ExtCollector`）。
 - 核心 AI 工具调用（已实现）：`app.services.ai_provider.generate_ai_text_with_tools` 接收调用方的工具 schema 与异步执行回调，统一支持 OpenAI Chat Completions / Responses 与 Codex CLI 结构化输出。策略迭代与可选 AI 助手共用核心适配；核心不依赖 `app.custom.assistant`，其他扩展可传入自己的工具，无需注册进助手目录。接入示例见下文「复用核心 AI 工具调用」。
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
-- 当前前端插槽（8 个，context 契约见下文 §3.2）：`layout.navigation.extra`、`layout.header.quick`、`settings.system.section`、`settings.data-sources.toolbar`、`settings.data-sources.detail-actions`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
-- 当前后端继承点：`NotificationFormatter`。
+- 当前前端插槽（9 个，context 契约见下文 §3.2；源码扩展与运行时 Page Pack 均可挂载）：`layout.navigation.extra`、`layout.header.quick`、`settings.system.section`、`settings.data-sources.toolbar`、`settings.data-sources.detail-actions`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`、`abnormal.auction.extra`。
+- 当前后端继承点：`NotificationFormatter`、`ExtCollector`（经 `registrar.register_ext_collector(collector_id, collector)` 注册，通过 `ExtCollectorContext.market` 只读行情门面与 `ExtCollectorContext.params` 接收 `PullConfig.collector_params`，支持 `params_schema` / `default_fields` 在「新建扩展数据 → 扩展采集器」界面零代码派生多张表，复用 `ext_data` 存储、查询与 `PullScheduler` 固定时刻/间隔制交易日调度；示例见 `backend/app/custom/auction_scan`）。
 - 个股详情公共入口（已实现）：源码扩展通过 `@/extensions/stockPreview` 的 `openStockPreview` / `closeStockPreview` 调用；运行时页面通过 `ctx.ui` 调用相同能力。复用原弹窗、查询和列表切股，不要求每个扩展自行挂载图表。
 - 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义目录 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
 - 因子平台与策略线的既有桥接（已实现，二开时直接复用、勿重复实现）：因子库一键生成单因子排名策略（`GenerateFactorStrategyDialog` → `custom_factor_*`）；策略触发器引用因子条件信号（`AddFactorSignalDialog`，`csg_f_*`）；自定义信号 AI 提示词含因子分组（`custom_signals_ai.py`）；策略回测因子归因（`strategy.py` 的 `factor_attribution`，覆盖 `meta.scoring` 非空的策略）。
@@ -137,6 +137,7 @@ settings.data-sources.detail-actions
 stock-preview.tabs
 stock-preview.footer
 watchlist.toolbar
+abnormal.auction.extra
 ```
 
 各插槽 context 契约（均要求 `apiVersion: 1`，定义见 `frontend/src/extensions/types.ts` 的 `FrontendSlotContextMap`）：

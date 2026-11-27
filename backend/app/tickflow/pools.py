@@ -59,7 +59,7 @@ def get_pool(pool_id: PoolId, refresh: bool = False) -> list[str]:
 
     cache = _pool_cache_path(pool_id)
     if cache.exists() and not refresh:
-        df = pl.read_parquet(cache)
+        df = pl.read_parquet(cache, glob=False)
         return df["symbol"].to_list()
 
     symbols = _fetch_pool(pool_id)
@@ -140,7 +140,7 @@ def _load_watchlist() -> list[str]:
     path = settings.data_dir / "user_data" / "watchlist.parquet"
     if not path.exists():
         return []
-    df = pl.read_parquet(path)
+    df = pl.read_parquet(path, glob=False)
     if df.is_empty() or "symbol" not in df.columns:
         return []
     return df["symbol"].to_list()

@@ -9,7 +9,7 @@ import { QK } from '@/lib/queryKeys'
 import { MinuteSyncConfig } from './MinuteSyncConfig'
 
 vi.mock('@/lib/api', () => ({ api: {
-  preferences: vi.fn(), updateMinuteSync: vi.fn(), syncMinute: vi.fn(),
+  preferences: vi.fn(), updateMinuteSync: vi.fn(), syncMinute: vi.fn(), syncMinuteRange: vi.fn(),
   clearMinute: vi.fn(), minuteGaps: vi.fn(), syncMinuteSingle: vi.fn(), repairMinuteGaps: vi.fn(), reloadMinuteDay: vi.fn(),
 } }))
 vi.mock('@/components/Toast', () => ({ toast: vi.fn() }))
@@ -42,6 +42,7 @@ beforeEach(() => {
   vi.mocked(api.updateMinuteSync).mockResolvedValue(prefs)
   vi.mocked(api.minuteGaps).mockResolvedValue(report)
   vi.mocked(api.syncMinute).mockResolvedValue({ job_id: 'minute-job', status: 'started' })
+  vi.mocked(api.syncMinuteRange).mockResolvedValue({ job_id: 'range-job', status: 'started' })
   vi.mocked(api.repairMinuteGaps).mockResolvedValue({ job_id: 'repair-job', status: 'started' })
   vi.mocked(api.reloadMinuteDay).mockResolvedValue({ job_id: 'reload-job', status: 'started' })
 })
@@ -198,9 +199,49 @@ it('手动获取仍使用分段天数并通知任务, 清空必须经过二次�
   expect(api.clearMinute).not.toHaveBeenCalled()
 })
 
+it('按日期范围拉取校验起止日期，同一天也可启动独立任务', async () => {
+  await render()
+  const form = host.querySelector('form[aria-labelledby$="-range-title"]')!
+  const start = form.querySelector<HTMLInputElement>('[name="start_date"]')!
+  const end = form.querySelector<HTMLInputElement>('[name="end_date"]')!
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
+  expect(submit.disabled).toBe(true)
+  await fill(start, '2024-09-06')
+  await fill(end, '2024-09-05')
+  expect(submit.disabled).toBe(true)
+  expect(form.textContent).toContain('结束日期须在开始日期当天或之后')
+  await fill(end, '2999-01-01')
+  expect(submit.disabled).toBe(true)
+  await fill(end, '2024-09-06')
+  expect(submit.disabled).toBe(false)
+  await click('拉取所选范围')
+  expect(api.syncMinuteRange).toHaveBeenCalledExactlyOnceWith('2024-09-06', '2024-09-06')
+  expect(api.syncMinute).not.toHaveBeenCalled()
+  expect(api.updateMinuteSync).not.toHaveBeenCalled()
+  expect(onJobStart).toHaveBeenCalledExactlyOnceWith('range-job')
+})
+
+it('按日期范围拉取遇到任务冲突时保留输入，便于重试', async () => {
+  vi.mocked(api.syncMinuteRange).mockRejectedValueOnce(new Error('已有数据任务正在运行，请等待完成后再试'))
+  await render()
+  const form = host.querySelector('form[aria-labelledby$="-range-title"]')!
+  const start = form.querySelector<HTMLInputElement>('[name="start_date"]')!
+  const end = form.querySelector<HTMLInputElement>('[name="end_date"]')!
+  await fill(start, '2024-09-02')
+  await fill(end, '2024-09-06')
+  await click('拉取所选范围')
+  expect(form.querySelector('[role="alert"]')?.textContent).toContain('已有数据任务正在运行')
+  expect(start.value).toBe('2024-09-02')
+  expect(end.value).toBe('2024-09-06')
+  await click('拉取所选范围')
+  expect(api.syncMinuteRange).toHaveBeenLastCalledWith('2024-09-02', '2024-09-06')
+  expect(onJobStart).toHaveBeenCalledExactlyOnceWith('range-job')
+})
+
 it('无分钟能力时禁用拉取和补齐, 仍能查看本地体检结果', async () => {
   await render(false)
   expect([...host.querySelectorAll('button')].find(b => b.textContent?.includes('单次获取'))?.disabled).toBe(true)
+  expect(host.querySelector<HTMLInputElement>('input[name="start_date"]')?.disabled).toBe(true)
   await click('数据体检')
   const repairs = [...host.querySelectorAll('button')].filter(b => b.textContent?.includes('尝试补齐'))
   expect(repairs.length).toBeGreaterThan(0)

@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { PluginDataSourceItem } from '@/lib/api'
 import type { BrandIconProps } from '@/components/BrandIcons'
+import type { NavItem } from '@/lib/listNav'
 
 export const FRONTEND_EXTENSION_API_VERSION = 1 as const
 
@@ -41,6 +42,10 @@ export interface FrontendSlotContextMap {
     selectedGroup: string
     /** 刷新自选增强数据 (扩展修改数据后调用) */
     refresh: () => void
+  }
+  /** 异动监控 → 竞价异动页扩展区 (盘前风向标下方) */
+  'abnormal.auction.extra': {
+    onOpenStock: (symbol: string, name?: string, navList?: NavItem[]) => void
   }
 }
 

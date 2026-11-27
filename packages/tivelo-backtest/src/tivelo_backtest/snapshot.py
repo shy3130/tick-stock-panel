@@ -162,7 +162,7 @@ class PortableSnapshotReader:
                 frame = (
                     pl.concat(chunks, rechunk=False)
                     if chunks
-                    else pl.DataFrame(schema=pl.read_parquet_schema(path))
+                    else pl.DataFrame(schema=pl.scan_parquet(path, glob=False).collect_schema())
                 )
                 if self._path(path.relative_to(self._root)) != path or _identity(path) != identity:
                     raise TiveloError(
@@ -219,7 +219,7 @@ class PortableSnapshotReader:
         fields = fact_fields(version.contents.record_type)
         expected = [(field.name, _dtype(field)) for field in fields]
         metadata = pl.read_parquet_metadata(path)
-        if list(pl.read_parquet_schema(path).items()) != expected or any(
+        if list(pl.scan_parquet(path, glob=False).collect_schema().items()) != expected or any(
             metadata.get(key) != value
             for key, value in {
                 "tivelo.schema": "2.0",

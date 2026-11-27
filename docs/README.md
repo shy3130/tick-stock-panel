@@ -1,12 +1,12 @@
 # TSP 文档导航
 
-这些入口以 `tsp-0.4.1` 候选工作区为准。安装器与公开镜像以 [Releases](https://github.com/shy3130/tick-stock-panel/releases) 中对应制品为准，本文提供当前源码的使用与扩展说明。
+这些入口以 `tsp-0.4.3` 候选工作区为准。安装器与公开镜像以 [Releases](https://github.com/shy3130/tick-stock-panel/releases) 中对应制品为准，本文提供当前源码的使用与扩展说明。
 
 ## 使用工作台
 
 | 要完成的任务 | 文档 |
 | :--- | :--- |
-| 首次部署、升级、保留原数据 | [0.4.1 版本说明](./release-v0.4.1.md) · [部署指南](./deployment.md) · [访问密码](./deploy-password.md) · [环境和数据配置](./configuration.md) |
+| 首次部署、升级、保留原数据 | [0.4.3 版本说明](./release-v0.4.3.md) · [部署指南](./deployment.md) · [访问密码](./deploy-password.md) · [环境和数据配置](./configuration.md) |
 | 使用自选、看板、监控、模拟盘等页面 | [操作说明书](../操作说明书.md) · [功能手册](./features.md) · [截图索引](../screenshots/README.md) |
 | 在个股详情配置字段、日 K 显示范围和指标 | [个股详情与自定义图表指标](./custom-chart-indicators.md) |
 | 自建策略、因子、信号或导入资源 | [策略指南](./strategy.md) · [导入与备份](./extension-packages.md) |

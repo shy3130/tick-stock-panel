@@ -33,7 +33,7 @@ from app.enriched_generation import (
     enriched_publication_incomplete,
 )
 from app.market_time import cn_today
-from app.parquet import scan_daily_parquet, scan_enriched_parquet, scan_parquet_compat
+from app.parquet import parquet_glob, scan_daily_parquet, scan_enriched_parquet, scan_parquet_compat
 from app.price_limits import (
     no_limit_window_days,
     no_limit_window_margin_days,
@@ -1152,7 +1152,7 @@ def load_benchmark_momentum(data_dir: Path) -> pl.DataFrame | None:
 
     frame: pl.DataFrame | None = None
     try:
-        index_glob = str(Path(data_dir) / "kline_index_daily" / "**" / "*.parquet")
+        index_glob = parquet_glob(Path(data_dir) / "kline_index_daily")
         wanted: list[str] = []
         bench_of: dict[str, str] = {}
         for bench_key, candidates in _BENCHMARK_PREFERENCE.items():
@@ -1526,7 +1526,7 @@ def recompute_daily_symbols(
     files = repo.daily_repair_files(asset_type)
     if not files:
         raise ValueError("没有可用于重算的原始日K")
-    raw_scan = scan_daily_parquet(files, cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
+    raw_scan = scan_daily_parquet(files, glob=False, cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
     selected = sorted(set(symbols)) if symbols is not None else raw_scan.select("symbol").unique().collect()["symbol"].to_list()
     if not selected:
         raise ValueError("没有可用于重算的股票")
@@ -1571,7 +1571,7 @@ def recompute_daily_symbols(
         publication.abandon()
         raise
     table = enriched_dirname(asset_type)
-    repo.refresh_view("kline_enriched" if asset_type == "stock" else table, str(root / table / "**/*.parquet"))
+    repo.refresh_view("kline_enriched" if asset_type == "stock" else table, parquet_glob(root / table))
     repo.invalidate_enriched_asset(asset_type)
     return written
 
@@ -1640,13 +1640,13 @@ def _run_pipeline_impl(data_dir: Path | None = None,
     daily_dir = d / "kline_daily"
     enriched_base = d / "kline_daily_enriched"
     factor_path = d / "adj_factor" / "all.parquet"
-    inst_glob = str(d / "instruments" / "**" / "*.parquet")
+    inst_glob = parquet_glob(d / "instruments")
 
     if not daily_dir.exists() or not any(daily_dir.rglob("*.parquet")):
         logger.info("无日K数据, 跳过管道")
         return 0
 
-    daily_glob = (daily_dir / "**" / "*.parquet").as_posix()
+    daily_glob = parquet_glob(daily_dir)
     _cast = pl.ScanCastOptions(integer_cast="allow-float")
     written = 0
 
@@ -1681,9 +1681,9 @@ def _run_pipeline_impl(data_dir: Path | None = None,
         if new_date_dirs:
             # 计算阶段可能持续数分钟且不写分区, 先续一次心跳再开始。
             publication.heartbeat()
-            raw_new = scan_daily_parquet(new_date_dirs[0] / "*.parquet", cast_options=_cast)
+            raw_new = scan_daily_parquet(parquet_glob(new_date_dirs[0], "*.parquet"), cast_options=_cast)
             for nd in new_date_dirs[1:]:
-                raw_new = pl.concat([raw_new, scan_daily_parquet(nd / "*.parquet", cast_options=_cast)], how="diagonal_relaxed")
+                raw_new = pl.concat([raw_new, scan_daily_parquet(parquet_glob(nd, "*.parquet"), cast_options=_cast)], how="diagonal_relaxed")
             raw_new = raw_new.sort(["symbol", "date"]).collect(streaming=True)
 
             # 增量模式: 只算新日期, 但指标需要历史窗口
@@ -1757,7 +1757,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
                     out.parent.mkdir(parents=True, exist_ok=True)
                     date_df_storage = _select_storage_cols(date_df)
                     if out.exists():
-                        existing = pl.read_parquet(out)
+                        existing = pl.read_parquet(out, glob=False)
                         existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
                         date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
                     date_df_storage = date_df_storage.sort(["symbol"])
@@ -1784,7 +1784,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
     # ── 按 symbol 分批处理: 指标全部 over("symbol") 分组, 分批不改变结果 ──
     # 文件列表只收集一次, 批间复用 (避免每批重新展开 glob)
     daily_files = sorted(str(p) for p in daily_dir.rglob("*.parquet"))
-    lf_all = scan_daily_parquet(daily_files, cast_options=_cast)
+    lf_all = scan_daily_parquet(daily_files, glob=False, cast_options=_cast)
     if symbols:
         sym_set = set(symbols)
         lf_all = lf_all.filter(pl.col("symbol").is_in(list(sym_set)))
@@ -1831,7 +1831,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
             batch_syms = all_symbols[batch_start:batch_end]
 
             # 只读取本批 symbol 的数据
-            lf_batch = scan_daily_parquet(daily_files, cast_options=_cast)
+            lf_batch = scan_daily_parquet(daily_files, glob=False, cast_options=_cast)
             lf_batch = lf_batch.filter(pl.col("symbol").is_in(batch_syms))
             raw = lf_batch.sort(["symbol", "date"]).collect(streaming=True)
 
@@ -1870,7 +1870,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
                         out.parent.mkdir(parents=True, exist_ok=True)
                         date_df_storage = _select_storage_cols(date_df)
                         if out.exists():
-                            existing = pl.read_parquet(out)
+                            existing = pl.read_parquet(out, glob=False)
                             existing = existing.filter(~pl.col("symbol").is_in(batch_syms))
                             date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
                         date_df_storage = date_df_storage.sort(["symbol"])
@@ -1913,7 +1913,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
                 if p.is_dir()
             }
             unique_dates = sorted(
-                scan_enriched_parquet(staging_files).select("date").unique()
+                scan_enriched_parquet(staging_files, glob=False).select("date").unique()
                 .collect()["date"].to_list()
             )
             rebuilt_dates = {
@@ -1944,7 +1944,7 @@ def _run_pipeline_impl(data_dir: Path | None = None,
                 lo = unique_dates[ci]
                 hi = unique_dates[min(ci + chunk, len(unique_dates)) - 1]
                 block = (
-                    scan_enriched_parquet(staging_files)
+                    scan_enriched_parquet(staging_files, glob=False)
                     .filter((pl.col("date") >= lo) & (pl.col("date") <= hi))
                     .sort(["date", "symbol"])
                     .collect(streaming=True)
@@ -1975,7 +1975,7 @@ def _load_factors(factor_path: Path) -> pl.DataFrame:
     if not factor_path.exists():
         return pl.DataFrame()
     try:
-        return pl.read_parquet(factor_path)
+        return pl.read_parquet(factor_path, glob=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("复权因子读取失败: %s", e)
         return pl.DataFrame()
@@ -1993,7 +1993,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
     try:
         lf = (
             scan_enriched_parquet(
-                str(enriched_base / "**" / "*.parquet"),
+                parquet_glob(enriched_base),
                 cast_options=cast_options,
             )
             .filter(

@@ -21,8 +21,26 @@ import { useEffect, useRef, type ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { ClassValue } from 'clsx'
 import { loadFrontendExtensions } from './registry'
-import type { FrontendExtension, FrontendExtensionModule } from './types'
+import type {
+  FrontendExtension,
+  FrontendExtensionModule,
+  FrontendSlotName,
+  FrontendSlotRegistration,
+} from './types'
 import type { StockPreviewUi } from './stockPreview'
+
+/** 运行时 Page Pack 允许挂载的受控插槽白名单 (与 FrontendSlotContextMap 同源) */
+const ALLOWED_SLOT_NAMES: ReadonlySet<FrontendSlotName> = new Set<FrontendSlotName>([
+  'settings.data-sources.toolbar',
+  'settings.data-sources.detail-actions',
+  'layout.navigation.extra',
+  'layout.header.quick',
+  'settings.system.section',
+  'stock-preview.tabs',
+  'stock-preview.footer',
+  'watchlist.toolbar',
+  'abnormal.auction.extra',
+])
 
 /** mount 挂载上下文: 宿主能力桥(window.__TSP_EXT__ 安装) + 页面卸载通知 */
 export interface PagePackCtx {
@@ -49,12 +67,31 @@ export interface PagePackNavigation {
   icon?: string
 }
 
+export type PagePackSlotHandle =
+  | void
+  | (() => void)
+  | {
+    update?: (props: Record<string, unknown>) => void
+    unmount?: () => void
+  }
+
+export interface PagePackSlot {
+  name: FrontendSlotName
+  id: string
+  order?: number
+  /** stock-preview.tabs 必填 */
+  label?: string
+  /** 挂载到局部插槽容器; 接收宿主 ctx 与当前插槽 props */
+  mount: (el: HTMLElement, ctx: PagePackCtx, props: Record<string, unknown>) => PagePackSlotHandle
+}
+
 /** 页面插件产物 default 导出契约 — apiVersion 与源码扩展同源治理 */
 export interface PagePackExtension {
   id: string
   apiVersion: 1
-  routes: PagePackRoute[]
-  navigation: PagePackNavigation[]
+  routes?: PagePackRoute[]
+  navigation?: PagePackNavigation[]
+  slots?: PagePackSlot[]
 }
 
 export interface RuntimePageMeta {
@@ -97,6 +134,59 @@ function createMountComponent(mount: PagePackRoute['mount']): ComponentType {
   return RuntimePackPage
 }
 
+function cleanupSlotHandle(handle: PagePackSlotHandle): void {
+  if (typeof handle === 'function') {
+    handle()
+  } else if (handle && typeof handle.unmount === 'function') {
+    handle.unmount()
+  }
+}
+
+/** 局部插槽 mount 包装为受控 React 组件: 透传 props，支持就地 update 或安全重挂 */
+function createSlotMountComponent(mount: PagePackSlot['mount']): ComponentType<Record<string, unknown>> {
+  function RuntimePackSlot(props: Record<string, unknown>) {
+    const ref = useRef<HTMLDivElement>(null)
+    const handleRef = useRef<PagePackSlotHandle>(undefined)
+    const skipInitialUpdateRef = useRef(true)
+    const latestPropsRef = useRef(props)
+    latestPropsRef.current = props
+
+    useEffect(() => {
+      const el = ref.current
+      if (!el) return
+      const bridge = (window as unknown as { __TSP_EXT__?: PagePackCtx }).__TSP_EXT__
+      if (!bridge) return
+      skipInitialUpdateRef.current = true
+      handleRef.current = mount(el, bridge, latestPropsRef.current)
+      return () => {
+        skipInitialUpdateRef.current = true
+        cleanupSlotHandle(handleRef.current)
+        handleRef.current = undefined
+      }
+    }, [])
+
+    useEffect(() => {
+      if (skipInitialUpdateRef.current) {
+        skipInitialUpdateRef.current = false
+        return
+      }
+      const current = handleRef.current
+      if (current && typeof current === 'object' && typeof current.update === 'function') {
+        current.update(props)
+        return
+      }
+      const el = ref.current
+      const bridge = (window as unknown as { __TSP_EXT__?: PagePackCtx }).__TSP_EXT__
+      if (!el || !bridge) return
+      cleanupSlotHandle(current)
+      handleRef.current = mount(el, bridge, props)
+    }, [props])
+
+    return <div ref={ref} />
+  }
+  return RuntimePackSlot
+}
+
 /**
  * 页面插件清单 → 注册表扩展。形态问题(缺字段/版本不符/路径非法)在此抛出,
  * 经 loader 传给 loadFrontendExtensions 记入 loadErrors —— 与源码扩展
@@ -107,28 +197,60 @@ export function packToExtension(pack: unknown): FrontendExtension {
   const p = pack as Partial<PagePackExtension>
   if (p.apiVersion !== 1) throw new Error(`apiVersion 必须为 1, 收到 ${String(p.apiVersion)}`)
   if (typeof p.id !== 'string' || !p.id.includes('.')) throw new Error('id 必须是带命名空间的字符串 (如 demo.hello)')
-  if (!Array.isArray(p.routes) || p.routes.length === 0) throw new Error('routes 不能为空')
-  if (!Array.isArray(p.navigation) || p.navigation.length === 0) throw new Error('navigation 不能为空')
-  for (const r of p.routes as PagePackRoute[]) {
+  const routes = Array.isArray(p.routes) ? p.routes : []
+  const navigation = Array.isArray(p.navigation) ? p.navigation : []
+  const slots = Array.isArray(p.slots) ? p.slots : []
+  if (routes.length === 0 && slots.length === 0) throw new Error('routes 与 slots 不能同时为空')
+  if (routes.length > 0 && navigation.length === 0) throw new Error('navigation 不能为空')
+  for (const r of routes) {
     if (typeof r?.id !== 'string' || typeof r?.path !== 'string' || !r.path.startsWith('/') || r.path === '/') {
       throw new Error(`路由 ${r?.id} 的 path 必须是非根绝对路径`)
     }
     if (typeof r?.mount !== 'function') throw new Error(`路由 ${r.id} 缺少 mount(el, ctx) 函数`)
   }
+  const resolvedSlots: FrontendSlotRegistration[] = []
+  for (const s of slots) {
+    if (!s || typeof s.name !== 'string' || !ALLOWED_SLOT_NAMES.has(s.name)) {
+      throw new Error(`插槽名不受支持: ${String(s?.name)}`)
+    }
+    if (typeof s.id !== 'string' || !s.id.trim()) {
+      throw new Error(`插槽 ${s.name} 缺少有效 id`)
+    }
+    if (typeof s.mount !== 'function') {
+      throw new Error(`插槽 ${s.id} 缺少 mount(el, ctx, props) 函数`)
+    }
+    if (s.name === 'stock-preview.tabs' && (typeof s.label !== 'string' || !s.label.trim())) {
+      throw new Error(`个股详情标签插槽 ${s.id} 缺少标题 label`)
+    }
+    const base = {
+      name: s.name,
+      id: s.id,
+      ...(typeof s.order === 'number' ? { order: s.order } : {}),
+      component: createSlotMountComponent(s.mount),
+    }
+    if (s.name === 'stock-preview.tabs') {
+      resolvedSlots.push({ ...base, name: 'stock-preview.tabs', label: s.label! } as FrontendSlotRegistration)
+    } else {
+      resolvedSlots.push(base as FrontendSlotRegistration)
+    }
+  }
   return {
     id: p.id,
     apiVersion: 1,
-    routes: (p.routes as PagePackRoute[]).map(r => ({
-      id: r.id,
-      path: r.path,
-      component: createMountComponent(r.mount),
-    })),
-    navigation: (p.navigation as PagePackNavigation[]).map(n => ({
-      id: n.id,
-      routeId: n.routeId,
-      label: n.label,
-      icon: resolvePackIcon(n.icon),
-    })),
+    ...(routes.length > 0 ? {
+      routes: routes.map(r => ({
+        id: r.id,
+        path: r.path,
+        component: createMountComponent(r.mount),
+      })),
+      navigation: navigation.map(n => ({
+        id: n.id,
+        routeId: n.routeId,
+        label: n.label,
+        icon: resolvePackIcon(n.icon),
+      })),
+    } : {}),
+    ...(resolvedSlots.length > 0 ? { slots: resolvedSlots } : {}),
   }
 }
 

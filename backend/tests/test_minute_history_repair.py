@@ -107,6 +107,59 @@ def test_targeted_repair_filters_provider_and_counts_only_new_bars(market, monke
     assert list(folder.glob("date=*")) == [out.parent]
 
 
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_manual_minute_range_persists_only_selected_dates_as_batches_arrive(market, monkeypatch, interrupt):
+    repo, caps = market
+    folder = repo.store.data_dir / "kline_minute"
+    previous, end, outside = (DAY + timedelta(days=offset) for offset in (-3, 1, 2))
+    base = priced_session()
+    other = priced_session("000001.SZ").head(1)
+    kline_sync._write_minute_partition(pl.concat([base.head(1), other, priced_session(day=previous).head(1)]), folder)
+    previous_file = folder / f"date={previous}" / "part.parquet"
+    previous_content = previous_file.read_bytes()
+    updates = []
+
+    def use_local_window(*_):
+        pytest.fail("显式窗口不应读取本地记录推算起止时间")
+
+    def fetch(symbols, *, start_time, end_time, on_segment, **_):
+        assert symbols == [SYM]
+        assert start_time == datetime(2026, 11, 2, 9, 25, tzinfo=CN_TZ)
+        assert end_time == datetime(2026, 11, 3, 15, 5, tzinfo=CN_TZ)
+        bad_price = base.slice(2, 1).with_columns(pl.lit(0.0).alias("close"))
+        on_segment(pl.concat([
+            base.head(2).with_columns(pl.lit(5.25).alias("close")), bad_price,
+            other.with_columns(pl.lit(5.25).alias("close")),
+            priced_session(day=previous).head(2), priced_session(day=outside).head(1),
+        ]))
+        assert (folder / f"date={DAY}" / "part.parquet").exists()
+        if interrupt:
+            raise ProviderRequestError("下一批分钟取数失败")
+        on_segment(priced_session(day=end).head(1))
+
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", use_local_window)
+    monkeypatch.setattr(kline_sync, "_earliest_minute_datetime", use_local_window)
+
+    def run():
+        return kline_sync.sync_and_persist_minute(
+            [SYM], repo, caps, date_range=(DAY, end), on_updated=updates.append,
+        )
+
+    if interrupt:
+        with pytest.raises(ProviderRequestError, match="下一批分钟取数失败"):
+            run()
+    else:
+        assert run() == 4
+
+    assert repo.get_minute(SYM, DAY)["close"].to_list() == [5.25, 5.25]
+    assert repo.get_minute("000001.SZ", DAY)["close"].to_list() == [5.0]
+    assert (folder / f"date={end}" / "part.parquet").exists() is not interrupt
+    assert previous_file.read_bytes() == previous_content
+    assert not (folder / f"date={outside}").exists()
+    assert updates == ["minute"]
+
+
 def test_day_reload_updates_only_valid_returned_minutes_and_preserves_local_values(market, monkeypatch):
     repo, caps = market
     folder = repo.store.data_dir / "kline_minute"

@@ -242,7 +242,7 @@ class SectorMonitorService:
         if not files:
             return pl.DataFrame()
         try:
-            return pl.read_parquet(files)
+            return pl.read_parquet(files, glob=False)
         except Exception as e:  # noqa: BLE001
             # fail-visible: ext parquet 损坏会让板块成员静默消失、sector 规则
             # 无声停摆, 不留痕则排障无线索
