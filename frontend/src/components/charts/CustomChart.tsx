@@ -17,9 +17,14 @@ const IndicatorManager = lazy(() => import('./IndicatorManager').then(m => ({ de
 const EMPTY_ROWS: object[] = []
 
 function useIndicators(symbol: string, view: IndicatorView, sourceRows: readonly object[], revision?: string | number) {
+  const queryClient = useQueryClient()
   const library = useQuery({ queryKey: QK.chartIndicatorLibrary, queryFn: loadChartIndicatorLibrary, staleTime: 10_000, retry: 1 })
   const definitions = useMemo(() => resolveChartIndicators(library.data?.library, view), [library.data?.library, view])
   const visibleIds = useMemo(() => new Set(library.data?.library.views[view].filter(s => s.visible !== false).map(s => s.id)), [library.data?.library, view])
+  const expectedSubplots = useMemo(
+    () => definitions.filter(d => visibleIds.has(d.id) && d.pane === 'sub').length,
+    [definitions, visibleIds],
+  )
   const active = definitions.length > 0
   const bars = useMemo(() => active ? indicatorBars(sourceRows, view) : [], [sourceRows, view, active])
   const program = useMemo(() => JSON.stringify(definitions), [definitions])
@@ -29,16 +34,20 @@ function useIndicators(symbol: string, view: IndicatorView, sourceRows: readonly
   }), [symbol, view, program, source, bars])
   const [ready, setReady] = useState(snapshot)
   useEffect(() => {
-    // Do not start discarded work while the user rapidly switches symbols.
-    const timer = setTimeout(() => setReady(snapshot), 120)
+    // 命中前端缓存时零延迟切入，避免来回切股时副图闪退；未缓存时保留短防抖合并快切。
+    if (queryClient.getQueryData(QK.chartIndicatorValues(snapshot.symbol, snapshot.view, snapshot.program, snapshot.source)) !== undefined) {
+      setReady(snapshot)
+      return
+    }
+    const timer = setTimeout(() => setReady(snapshot), 60)
     return () => clearTimeout(timer)
-  }, [snapshot])
+  }, [queryClient, snapshot])
   const sameContext = ready.symbol === symbol && ready.view === view && ready.program === program
   const values = useQuery({
     queryKey: QK.chartIndicatorValues(ready.symbol, ready.view, ready.program, ready.source),
     queryFn: ({ signal }) => api.evaluateChartIndicators(ready.body, signal),
     enabled: sameContext && !!symbol && ready.body.rows.length > 0 && ready.body.definitions.length > 0 && visibleIds.size > 0,
-    staleTime: Infinity, gcTime: 15_000, retry: false, refetchOnWindowFocus: false,
+    staleTime: Infinity, gcTime: 5 * 60_000, retry: false, refetchOnWindowFocus: false,
     placeholderData: (previous, query) => query?.queryKey[1] === symbol && query.queryKey[2] === view && query.queryKey[3] === program
       && previous?.times[0] === ready.body.rows[0]?.time && previous.times.length <= ready.body.rows.length ? previous : undefined,
   })
@@ -46,7 +55,7 @@ function useIndicators(symbol: string, view: IndicatorView, sourceRows: readonly
   const result = useMemo(() => sameContext && visibleIds.size > 0 && values.data ? {
     ...values.data, results: values.data.results.filter(r => visibleIds.has(r.id)), errors: values.data.errors.filter(e => visibleIds.has(e.id)),
   } : undefined, [sameContext, visibleIds, values.data])
-  return { library, definitions, visibleIds, values, result }
+  return { library, definitions, visibleIds, expectedSubplots, values, result }
 }
 
 type State = ReturnType<typeof useIndicators>
@@ -116,11 +125,14 @@ export function CustomDaily(props: DailyChartProps) {
   const state = useIndicators(props.symbol ?? '', 'daily', source, props.indicatorRevision)
   const volumeCompare = useMemo(() => Object.fromEntries((state.library.data?.library.views.daily ?? [])
     .flatMap(selection => selection.volume_compare ? [[selection.id, selection.volume_compare]] : [])), [state.library.data?.library])
+  // 画布 height 严格按已到位副图计算，保证主图蜡烛高度不拉伸；未到位副图通过底部留白占位，防止外框/滚动高度跳变。
   const subplots = state.result?.results.filter(r => r.pane === 'sub').length ?? 0
+  const reservedBottomSpace = Math.max(0, state.expectedSubplots - subplots) * CHART_LAYOUT.subPaneSlot
   return <>
     <IndicatorControls state={state} symbol={props.symbol ?? ''} view="daily" rows={source} />
     {props.data.length > 0 && <LightweightDaily {...props} mainTimeAxis showMA={false} activeIndicators={[]}
       height={(props.height ?? 480) + subplots * CHART_LAYOUT.subPaneSlot}
+      reservedBottomSpace={reservedBottomSpace}
       customVolumeCompare={volumeCompare} customIndicatorValues={state.result} />}
   </>
 }
@@ -129,7 +141,10 @@ export function CustomIntraday(props: LightweightIntradayProps) {
   const source = useMemo(() => props.sessions?.flatMap(s => s.rows) ?? props.data ?? EMPTY_ROWS, [props.sessions, props.data])
   const state = useIndicators(props.symbol, 'minute', source, props.indicatorRevision)
   const subplots = state.result?.results.filter(r => r.pane === 'sub').length ?? 0
+  const reservedBottomSpace = Math.max(0, state.expectedSubplots - subplots) * CHART_LAYOUT.subPaneSlot
   return <LightweightIntraday {...props} mainTimeAxis showVolume={false}
     indicatorControls={<IndicatorControls state={state} symbol={props.symbol} view="minute" rows={source} notice={props.chartNotice} />}
-    height={(props.height ?? 420) + subplots * CHART_LAYOUT.subPaneSlot} customIndicatorValues={state.result} />
+    height={(props.height ?? 420) + subplots * CHART_LAYOUT.subPaneSlot}
+    reservedBottomSpace={reservedBottomSpace}
+    customIndicatorValues={state.result} />
 }

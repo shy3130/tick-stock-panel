@@ -4,8 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StockPanel } from './StockPanel'
 
-const data = vi.hoisted(() => ({ rows: [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }] }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data, isSuccess: true }), useQueryClient: () => ({}) }))
+const data = vi.hoisted(() => ({ rows: [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }], isLoading: false, isSuccess: true }))
+vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: data.rows.length ? data : undefined, isLoading: data.isLoading, isPending: data.isLoading, isSuccess: data.isSuccess }), useQueryClient: () => ({}) }))
 vi.mock('@/lib/useQuoteSubscription', () => ({ useQuoteSubscription: () => {} }))
 vi.mock('@/lib/useSharedQueries', () => ({ useCapabilities: () => ({}), usePreferences: () => ({}) }))
 vi.mock('@/lib/useFinancials', () => ({ useFinancialMetrics: () => ({}), financialMetricsQueryOptions: () => ({}) }))
@@ -21,6 +21,8 @@ let host: HTMLDivElement
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   data.rows = [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }]
+  data.isLoading = false
+  data.isSuccess = true
   host = document.createElement('div'); root = createRoot(host)
 })
 afterEach(async () => { await act(async () => root.unmount()) })
@@ -74,4 +76,13 @@ it('shares the custom chart base height and releases alignment when the minute c
   expect(host.querySelector('output')?.getAttribute('data-aligned')).toBe('true')
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="收起分时图"]')!.click())
   expect(host.querySelector('[data-history]')?.getAttribute('data-aligned')).toBe('false')
+})
+
+it('keeps paired chart alignment reserved while daily data is loading for a switched stock', async () => {
+  data.rows = []
+  data.isLoading = true
+  data.isSuccess = false
+  await render('600519.SH', { renderer: 'lightweight', customIndicators: true, height: 420 })
+  expect(host.querySelector('[data-history]')?.getAttribute('data-aligned')).toBe('true')
+  expect(host.textContent).toContain('分时加载中…')
 })

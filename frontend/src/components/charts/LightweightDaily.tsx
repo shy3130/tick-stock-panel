@@ -51,7 +51,7 @@ const eventTextColor = (event: EventMarker, row: OHLC, theme: Theme) => event.ev
 
 export function LightweightDaily({ data, assetType, symbol = '', height = 480, activeIndicators = [], showMA = true, showInfoBar = true,
   markers = [], ranges, priceLines, showMarkers = true, markerStyle = 'label', volumeCompare = { enabled: true, days: 1 }, addedDate,
-  linkedPrice, onDateClick, onPriceDoubleClick, visibleBars, stockInfo, customIndicatorValues, customVolumeCompare, alignedLayout = false, mainTimeAxis = false }: DailyChartProps) {
+  linkedPrice, onDateClick, onPriceDoubleClick, visibleBars, stockInfo, customIndicatorValues, customVolumeCompare, alignedLayout = false, mainTimeAxis = false, reservedBottomSpace }: DailyChartProps) {
   const rows = useMemo(() => validDailyRows(data), [data])
   const precision = pricePrecision(assetType)
   const theme = useTheme()
@@ -191,7 +191,7 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
         {index >= 0 && previous && <span className="text-secondary">至今 <span style={{ color: rows.at(-1)!.close >= previous.close ? C.up : C.down }}>{fmtPct(rows.at(-1)!.close / previous.close - 1)}</span> · 周期 {rows.length - index}</span>}
       </div>
     </div>}
-    <FinancialPlot scope={scope} series={model} height={plotHeight} paneHeights={paneHeights} pricePrecision={precision} lockPaneHeights={alignedLayout} mainTimeAxis={mainTimeAxis}
+    <FinancialPlot scope={scope} series={model} height={plotHeight} reservedBottomSpace={reservedBottomSpace} paneHeights={paneHeights} pricePrecision={precision} lockPaneHeights={alignedLayout} mainTimeAxis={mainTimeAxis}
       markers={chartMarkers} annotations={annotations} volumeLabels={volumeLabels} paneLabels={paneLabels} paneTitles={paneTitles} paneReadouts={paneReadouts} paneDrawings={paneDrawings}
       linkedPrice={linkedPrice} visibleBars={visibleBars} currentPrice={rows.at(-1)?.close}
       onHover={time => setHover(time ? { scope, time } : null)} onSelect={onDateClick} onPriceDoubleClick={onPriceDoubleClick} />

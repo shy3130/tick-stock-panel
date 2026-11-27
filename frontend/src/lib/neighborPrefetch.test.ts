@@ -104,3 +104,17 @@ test('prefetch reuses a fresh cache entry without another network request', asyn
     assert.equal(requests, 0)
   } finally { stop(); client.clear() }
 })
+
+test('delayMs postpones initial prefetch so debounced foreground work can claim priority', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  const calls: string[] = []
+  const stop = scheduleNeighborPrefetch(client, 'current', [
+    async () => { calls.push('delayed') },
+  ], 40)
+  try {
+    await tick()
+    assert.deepEqual(calls, [])
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.deepEqual(calls, ['delayed'])
+  } finally { stop(); client.clear() }
+})

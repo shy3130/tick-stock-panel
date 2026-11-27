@@ -20,7 +20,7 @@ export function klineDailyQueryOptions(
 ) {
   return {
     queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
-    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns),
+    queryFn: ({ signal }: { signal?: AbortSignal } = {}) => api.klineDaily(symbol, undefined, dateRange, extColumns, signal),
     // 工厂无 TData 泛型, 参数用 any 以便 useQuery/prefetchQuery 共用
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
@@ -69,7 +69,7 @@ export function mergeLatestKlineRow(
 export function klineMinuteQueryOptions(symbol: string, date?: string, live?: boolean) {
   return {
     queryKey: QK.klineMinute(symbol, date ?? ''),
-    queryFn: () => api.klineMinute(symbol, date ?? undefined, live),
+    queryFn: ({ signal }: { signal?: AbortSignal } = {}) => api.klineMinute(symbol, date ?? undefined, live, signal),
   }
 }
 
@@ -140,7 +140,7 @@ export function minuteRefetchInterval(ms?: number) {
 export function klineMinuteRangeQueryOptions(symbol: string, days: number) {
   return {
     queryKey: QK.klineMinuteRange(symbol, days),
-    queryFn: () => api.klineMinuteRange(symbol, days),
+    queryFn: ({ signal }: { signal?: AbortSignal } = {}) => api.klineMinuteRange(symbol, days, signal),
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
       return prevKey?.[1] === symbol ? prev : undefined

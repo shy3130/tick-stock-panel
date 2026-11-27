@@ -68,11 +68,22 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   if (!isFormData) headers['Content-Type'] = 'application/json'
   // 合并调用方传入的 headers (此前会被整体覆盖丢弃)
   Object.assign(headers, fetchInit.headers as Record<string, string> | undefined)
-  // 自带 signal 的调用方 (上传/串行队列) 由其自行控制中止; 其余走默认超时。
-  const ctl = timeoutMs == null || fetchInit.signal ? undefined : new AbortController()
+  // 同时支持调用方主动取消 (如切股 AbortSignal) 与默认防挂起超时:
+  // 只有超时触发时才弹超时提示，调用方主动取消原样抛出 AbortError 供 TanStack Query 静默取消。
+  const callerSignal = fetchInit.signal ?? undefined
+  const ctl = timeoutMs != null ? new AbortController() : undefined
   const timeoutSeconds = Math.round((timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) / 1000)
+  let timedOut = false
   let timer: number | undefined
-  if (ctl && timeoutMs != null) timer = window.setTimeout(() => ctl.abort(), timeoutMs)
+  const onCallerAbort = () => ctl?.abort(callerSignal?.reason)
+  if (ctl) {
+    if (callerSignal?.aborted) {
+      ctl.abort(callerSignal.reason)
+    } else {
+      callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
+      timer = window.setTimeout(() => { timedOut = true; ctl.abort() }, timeoutMs!)
+    }
+  }
   let res: Response
   try {
     res = await fetch(`${BASE}${path}`, {
@@ -81,7 +92,7 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
       ...(ctl ? { signal: ctl.signal } : {}),
     })
   } catch (err) {
-    if (ctl && err instanceof DOMException && err.name === 'AbortError') {
+    if (timedOut && err instanceof DOMException && err.name === 'AbortError') {
       const msg = `请求超时（${timeoutSeconds}s）· ${path.split('?')[0]}`
       if (!quiet) toast(msg, 'error')
       throw new ApiError(msg, 0)
@@ -89,6 +100,7 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
     throw err
   } finally {
     if (timer !== undefined) window.clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', onCallerAbort)
   }
   if (!res.ok) {
     let detail = ''
@@ -3545,12 +3557,13 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string) =>
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, signal?: AbortSignal) =>
     request<KlineDailyResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''),
+      signal ? { signal } : undefined,
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -3577,7 +3590,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(symbols),
     }),
-  klineMinute: (symbol: string, date?: string, live?: boolean) =>
+  klineMinute: (symbol: string, date?: string, live?: boolean, signal?: AbortSignal) =>
     request<{
       symbol: string
       name?: string
@@ -3594,8 +3607,9 @@ export const api = {
       prev_close?: number | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}${live ? '&live=1' : ''}`,
+      signal ? { signal } : undefined,
     ),
-  klineMinuteRange: (symbol: string, days = 10) =>
+  klineMinuteRange: (symbol: string, days = 10, signal?: AbortSignal) =>
     request<{
       symbol: string
       name?: string
@@ -3605,6 +3619,7 @@ export const api = {
       source: 'local' | 'none'
     }>(
       `/api/kline/minute-range?symbol=${encodeURIComponent(symbol)}&days=${days}`,
+      signal ? { signal } : undefined,
     ),
   indexDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }) =>
     request<{
