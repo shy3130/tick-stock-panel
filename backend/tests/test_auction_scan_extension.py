@@ -159,10 +159,29 @@ def test_extension_loads_and_seeds_disabled_config_without_history(tmp_path):
 
 # ── 3. 非交易日陈旧快照 & 缺失日K基准 fail-closed ──────────────────────────
 
-def test_collector_skips_stale_non_trading_day_snapshots(tmp_path, monkeypatch):
-    _seed_kline_daily(tmp_path, [
-        {"symbol": "000001.SZ", "date": date(2026, 4, 14), "volume": 24_000.0},
-    ])
+class _StubMarket:
+    def __init__(self, snapshots, vol_ma5=None, names=None, excluded=None, partial_errors=()):
+        self._snapshots = snapshots
+        self._vol_ma5 = vol_ma5 or {}
+        self._names = names or {}
+        self._excluded = excluded or set()
+        self._partial_errors = tuple(partial_errors)
+
+    def get_realtime_stocks(self):
+        return self._snapshots, self._partial_errors
+
+    def get_vol_ma5_baseline(self, _target_date, *, lookback_days=5):
+        del lookback_days
+        return self._vol_ma5
+
+    def get_name_map(self, _symbols=None):
+        return self._names
+
+    def get_excluded_non_stock_symbols(self):
+        return self._excluded
+
+
+def test_collector_skips_stale_non_trading_day_snapshots(tmp_path):
     stale_snaps = [
         {
             "symbol": "000001.SZ",
@@ -173,20 +192,19 @@ def test_collector_skips_stale_non_trading_day_snapshots(tmp_path, monkeypatch):
             "timestamp": _ts_ms(date(2026, 4, 14), 15, 0, 0),  # 昨日收盘旧快照
         }
     ]
-    monkeypatch.setattr(auction_scan, "_fetch_market_snapshots", lambda: (stale_snaps, ()))
-
     collector = auction_scan.AuctionScanCollector()
     res = collector.collect(ExtCollectorContext(
         api_version=BACKEND_EXTENSION_API_VERSION,
         data_dir=tmp_path,
         target_date=date(2026, 4, 15),
         config_id=auction_scan.EXT_CONFIG_ID,
+        market=_StubMarket(stale_snaps, vol_ma5={"000001.SZ": 24_000.0}),
     ))
     assert res.skipped_reason is not None
     assert res.rows == ()
 
 
-def test_collector_fails_closed_when_local_kline_baseline_missing(tmp_path, monkeypatch):
+def test_collector_fails_closed_when_local_kline_baseline_missing(tmp_path):
     snaps = [
         {
             "symbol": "000001.SZ",
@@ -197,8 +215,6 @@ def test_collector_fails_closed_when_local_kline_baseline_missing(tmp_path, monk
             "timestamp": _ts_ms(date(2026, 4, 15), 9, 25, 1),
         }
     ]
-    monkeypatch.setattr(auction_scan, "_fetch_market_snapshots", lambda: (snaps, ()))
-
     collector = auction_scan.AuctionScanCollector()
     with pytest.raises(RuntimeError, match="基准"):
         collector.collect(ExtCollectorContext(
@@ -206,7 +222,48 @@ def test_collector_fails_closed_when_local_kline_baseline_missing(tmp_path, monk
             data_dir=tmp_path,
             target_date=date(2026, 4, 15),
             config_id=auction_scan.EXT_CONFIG_ID,
+            market=_StubMarket(snaps, vol_ma5={}),
         ))
+
+
+def test_collector_supports_custom_threshold_params(tmp_path):
+    """同一采集器可通过 collector_params 复用不同高开/量比阈值方案。"""
+    target = date(2026, 4, 15)
+    # 4% 高开 + 6x 量比：默认阈值 (5%, 10x) 不命中，放宽参数 (3%, 5x) 命中
+    snaps = [
+        {
+            "symbol": "000001.SZ",
+            "open": 10.40,
+            "last_price": 10.40,
+            "prev_close": 10.00,
+            "volume": 600,
+            "timestamp": _ts_ms(target, 9, 25, 2),
+        }
+    ]
+    market = _StubMarket(snaps, vol_ma5={"000001.SZ": 24_000.0}, names={"000001.SZ": "平安银行"})
+    collector = auction_scan.AuctionScanCollector()
+
+    default_res = collector.collect(ExtCollectorContext(
+        api_version=BACKEND_EXTENSION_API_VERSION,
+        data_dir=tmp_path,
+        target_date=target,
+        config_id="ext_default",
+        market=market,
+    ))
+    assert default_res.rows == ()
+
+    relaxed_res = collector.collect(ExtCollectorContext(
+        api_version=BACKEND_EXTENSION_API_VERSION,
+        data_dir=tmp_path,
+        target_date=target,
+        config_id="ext_relaxed",
+        params={"min_open_gap_pct": 0.03, "min_auction_vol_ratio": 5.0},
+        market=market,
+    ))
+    assert len(relaxed_res.rows) == 1
+    assert relaxed_res.rows[0]["symbol"] == "000001.SZ"
+    assert relaxed_res.rows[0]["open_gap_pct"] == pytest.approx(0.04)
+    assert relaxed_res.rows[0]["auction_vol_ratio"] == pytest.approx(6.0)
 
 
 # ── 4. 端到端: 部分批次失败保留结果 + 重复触发幂等 + 多日倒序积累 ───────────

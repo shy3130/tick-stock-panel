@@ -38,6 +38,30 @@ describe('packToExtension: 契约校验与转换', () => {
     expect(() => packToExtension({ ...pack(), navigation: [] })).toThrow('navigation')
     expect(() => packToExtension({ ...pack(), routes: [{ id: 'x', path: 'relative', mount: () => {} }] })).toThrow('绝对路径')
     expect(() => packToExtension({ ...pack(), routes: [{ id: 'x', path: '/x' }] as never })).toThrow('mount')
+    expect(() => packToExtension({
+      id: 'demo.slot', apiVersion: 1, slots: [{ name: 'invalid.slot' as never, id: 's1', mount: () => {} }],
+    })).toThrow('插槽名不受支持')
+    expect(() => packToExtension({
+      id: 'demo.slot', apiVersion: 1, slots: [{ name: 'stock-preview.tabs', id: 'tab1', mount: () => {} }],
+    })).toThrow('label')
+  })
+
+  it('支持纯插槽 Page Pack（无需 routes/navigation）与混合包', () => {
+    const pureSlot = packToExtension({
+      id: 'demo.slot-only',
+      apiVersion: 1,
+      slots: [
+        { name: 'abnormal.auction.extra', id: 's1', order: 20, mount: () => {} },
+        { name: 'stock-preview.tabs', id: 't1', label: '自定义标签', mount: () => {} },
+      ],
+    })
+    expect(pureSlot.routes).toBeUndefined()
+    expect(pureSlot.navigation).toBeUndefined()
+    expect(pureSlot.slots).toHaveLength(2)
+    expect(pureSlot.slots?.[0].name).toBe('abnormal.auction.extra')
+    expect(pureSlot.slots?.[0].order).toBe(20)
+    expect(typeof pureSlot.slots?.[0].component).toBe('function')
+    expect((pureSlot.slots?.[1] as { label?: string }).label).toBe('自定义标签')
   })
 })
 
