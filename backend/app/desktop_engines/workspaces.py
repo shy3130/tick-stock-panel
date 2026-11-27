@@ -132,6 +132,46 @@ def draft_reader(draft):
         yield
 
 
+def _can_adopt_inplace_upgrade(anchor, db, state):
+    return (
+        state["original"] is not None
+        and state["original"] == state["active"]
+        and state["revision"] == 0
+        and len(state["hosts"]) == 1
+        and state["hosts"][state["original"]]["slot"] is None
+        and state["hosts"][state["original"]]["image"] is None
+        and not (anchor.root / "workspaces").exists()
+        and db.execute("SELECT 1 FROM active LIMIT 1").fetchone() is None
+        and db.execute("SELECT 1 FROM history LIMIT 1").fetchone() is None
+        and db.execute("SELECT 1 FROM wheels LIMIT 1").fetchone() is None
+    )
+
+
+def _adopt_inplace_upgrade(anchor):
+    """Re-bind an un-migrated desktop workspace after an in-place overwrite upgrade.
+
+    Standard desktop upgrades (Windows Inno Setup overwrite, macOS .app replacement,
+    Linux tarball update) replace the shipped executable in place while preserving
+    ``data/``. When the workspace has never forked into managed copies and has no
+    standalone installed engine overrides, promote the original host baseline once
+    research queues are idle.
+    """
+    with anchor.guard(maintenance=True, coordinator=True) as db:
+        state = current_workspace(anchor, db)
+        if state["active"] == anchor.baseline_id:
+            return
+        if not _can_adopt_inplace_upgrade(anchor, db, state):
+            raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
+        anchor.require_idle_jobs()
+        previous = state["original"]
+        db.execute("DELETE FROM workspace_hosts WHERE baseline=?", (previous,))
+        db.execute("INSERT INTO workspace_hosts VALUES(?,NULL,NULL)", (anchor.baseline_id,))
+        db.execute(
+            "UPDATE workspace_selection SET original=?,active=? WHERE singleton=1",
+            (anchor.baseline_id, anchor.baseline_id),
+        )
+
+
 @contextmanager
 def route(anchor, requested=None):
     if draft_installation(anchor.data_dir) is not None:
@@ -144,7 +184,15 @@ def route(anchor, requested=None):
         if state["active"] is None:
             raise ValueError("旧工作区尚未登记宿主，请用 workspace migrate 指定原桌面程序")
         if state["active"] != anchor.baseline_id:
-            raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
+            if not _can_adopt_inplace_upgrade(anchor, db, state):
+                raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
+            # Release the shared read lock before upgrading to an exclusive transaction.
+            locks.close()
+            _adopt_inplace_upgrade(anchor)
+            db = locks.enter_context(anchor.guard(coordinator=True))
+            state = current_workspace(anchor, db)
+            if state["active"] != anchor.baseline_id:
+                raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
         physical = _physical(anchor, state, state["active"])
         if requested is not None and Path(requested).resolve() not in (anchor.data_dir, physical):
             raise ValueError("指定的工作区副本当前未启用")
