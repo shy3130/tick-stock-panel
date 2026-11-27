@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from tivelo_contracts import API_MAJOR
 
+import app.desktop_engines.workspaces as workspaces_mod
 from app.desktop_engines.bundle import DISTRIBUTIONS, ENGINES, digest, target
 from app.desktop_engines.launcher import engine_cli
 from app.desktop_engines.store import DesktopStore
 from app.desktop_engines.workspaces import current_workspace, route
+from app.services.mining_process_lock import MiningProcessLock
 
 
 def _write_bundle(folder: Path, workbench_version: str, *, wheel_tag: str | None = None) -> Path:
@@ -90,6 +93,8 @@ def test_inplace_upgrade_adopts_unmigrated_original_workspace(tmp_path: Path) ->
         assert state["revision"] == 0
 
     assert user_pref.read_text(encoding="utf-8") == '{"onboarding_completed": true}'
+    # Adoption must not create research/engine directories when absent.
+    assert not (data_dir / "research").exists()
 
 
 def test_inplace_upgrade_still_fences_migrated_multi_workspace(tmp_path: Path) -> None:
@@ -184,5 +189,121 @@ def test_inplace_upgrade_blocks_when_research_job_active(tmp_path: Path) -> None
         pass
 
     # Database remained bound to v0.4.1 untouched.
+    with anchor_41.guard(coordinator=True) as db:
+        assert current_workspace(anchor_41, db)["active"] == anchor_41.baseline_id
+
+
+def test_inplace_upgrade_still_fences_when_staging_dir_exists(tmp_path: Path) -> None:
+    """An interrupted workspace-staging directory blocks silent adoption."""
+    data_dir = tmp_path / "data"
+    b041 = _write_bundle(tmp_path / "b041", "0.4.1")
+    b042 = _write_bundle(tmp_path / "b042", "0.4.2")
+
+    anchor_41 = DesktopStore(b041, data_dir)
+    anchor_42 = DesktopStore(b042, data_dir)
+    with route(anchor_41, data_dir):
+        pass
+
+    (anchor_41.root / "workspace-staging").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="当前可执行文件与活动工作区不匹配"), route(anchor_42, data_dir):
+        pass
+
+
+def test_inplace_upgrade_blocks_when_research_owner_lock_held(tmp_path: Path) -> None:
+    """A running source-mode EngineJobManager holding research/engine/owner lock blocks adoption."""
+    data_dir = tmp_path / "data"
+    b041 = _write_bundle(tmp_path / "b041", "0.4.1")
+    b042 = _write_bundle(tmp_path / "b042", "0.4.2")
+
+    anchor_41 = DesktopStore(b041, data_dir)
+    anchor_42 = DesktopStore(b042, data_dir)
+    with route(anchor_41, data_dir):
+        pass
+
+    owner = MiningProcessLock(data_dir / "research" / "engine" / "owner")
+    owner.acquire(role="engine-scheduler")
+    try:
+        with pytest.raises(ValueError, match="研究工作区正在被其他进程使用"), route(anchor_42, data_dir):
+            pass
+    finally:
+        owner.release()
+
+    # Still bound to v0.4.1 until the external holder exits; succeeds afterwards.
+    with anchor_41.guard(coordinator=True) as db:
+        assert current_workspace(anchor_41, db)["active"] == anchor_41.baseline_id
+    with route(anchor_42, data_dir) as store:
+        assert store.data_dir == data_dir.resolve()
+
+
+def test_inplace_upgrade_tolerates_concurrent_adoption_while_peer_holds_read_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rapid double-click after upgrade must not pop SQLITE_BUSY once peer already adopted."""
+    data_dir = tmp_path / "data"
+    b041 = _write_bundle(tmp_path / "b041", "0.4.1")
+    b042 = _write_bundle(tmp_path / "b042", "0.4.2")
+
+    anchor_41 = DesktopStore(b041, data_dir)
+    anchor_42 = DesktopStore(b042, data_dir)
+    with route(anchor_41, data_dir):
+        pass
+
+    # Deterministic race: peer adopts v0.4.2 and enters its GUI lifetime read lock
+    # right between this caller's initial read and its _adopt_inplace_upgrade call.
+    real_adopt = workspaces_mod._adopt_inplace_upgrade
+    holder = {"ctx": None}
+
+    def racing_adopt(anchor):
+        if holder["ctx"] is None:
+            real_adopt(anchor)
+            ctx = anchor.guard()
+            ctx.__enter__()
+            holder["ctx"] = ctx
+        return real_adopt(anchor)
+
+    monkeypatch.setattr(workspaces_mod, "_adopt_inplace_upgrade", racing_adopt)
+    try:
+        with route(anchor_42, data_dir) as store:
+            assert store.data_dir == data_dir.resolve()
+    finally:
+        if holder["ctx"] is not None:
+            holder["ctx"].__exit__(None, None, None)
+
+    # Also exercise real multi-thread concurrent startup against a fresh upgrade.
+    b043 = _write_bundle(tmp_path / "b043", "0.4.3")
+    monkeypatch.setattr(workspaces_mod, "_adopt_inplace_upgrade", real_adopt)
+
+    def worker() -> Path:
+        anchor = DesktopStore(b043, data_dir)
+        with route(anchor, data_dir) as store, store.guard():
+            return store.data_dir
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: worker(), range(4)))
+    assert results == [data_dir.resolve()] * 4
+
+
+def test_inplace_upgrade_reports_busy_when_old_instance_holds_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If an old v0.4.1 process is genuinely still running, v0.4.2 reports busy cleanly."""
+    data_dir = tmp_path / "data"
+    b041 = _write_bundle(tmp_path / "b041", "0.4.1")
+    b042 = _write_bundle(tmp_path / "b042", "0.4.2")
+
+    anchor_41 = DesktopStore(b041, data_dir)
+    anchor_42 = DesktopStore(b042, data_dir)
+    with route(anchor_41, data_dir):
+        pass
+
+    monkeypatch.setattr(workspaces_mod, "_ADOPT_RETRY_DELAYS", (0.01,))
+    with (
+        anchor_41.guard(),
+        pytest.raises(ValueError, match="当前组合正在使用或维护"),
+        route(anchor_42, data_dir),
+    ):
+        pass
+
     with anchor_41.guard(coordinator=True) as db:
         assert current_workspace(anchor_41, db)["active"] == anchor_41.baseline_id

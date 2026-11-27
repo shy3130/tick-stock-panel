@@ -6,6 +6,7 @@ import os
 import secrets
 import sqlite3
 import sys
+import time
 from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
@@ -132,7 +133,21 @@ def draft_reader(draft):
         yield
 
 
+_ADOPT_RETRY_DELAYS = (0.05, 0.1, 0.2)
+
+
+def _is_busy_error(exc):
+    cause = exc.__cause__
+    return isinstance(cause, sqlite3.OperationalError) and (
+        getattr(cause, "sqlite_errorcode", 0) & 255 in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    )
+
+
 def _can_adopt_inplace_upgrade(anchor, db, state):
+    for folder in ("workspaces", "workspace-staging"):
+        path = anchor.root / folder
+        if path.exists() or path.is_symlink():
+            return False
     return (
         state["original"] is not None
         and state["original"] == state["active"]
@@ -140,7 +155,6 @@ def _can_adopt_inplace_upgrade(anchor, db, state):
         and len(state["hosts"]) == 1
         and state["hosts"][state["original"]]["slot"] is None
         and state["hosts"][state["original"]]["image"] is None
-        and not (anchor.root / "workspaces").exists()
         and db.execute("SELECT 1 FROM active LIMIT 1").fetchone() is None
         and db.execute("SELECT 1 FROM history LIMIT 1").fetchone() is None
         and db.execute("SELECT 1 FROM wheels LIMIT 1").fetchone() is None
@@ -156,12 +170,26 @@ def _adopt_inplace_upgrade(anchor):
     standalone installed engine overrides, promote the original host baseline once
     research queues are idle.
     """
-    with anchor.guard(maintenance=True, coordinator=True) as db:
+    from app.services.mining_process_lock import MiningProcessLockError
+
+    with anchor.guard(maintenance=True, coordinator=True) as db, ExitStack() as locks:
         state = current_workspace(anchor, db)
         if state["active"] == anchor.baseline_id:
             return
         if not _can_adopt_inplace_upgrade(anchor, db, state):
             raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
+        research = anchor.data_dir / "research/engine"
+        if research.exists() or research.is_symlink():
+            if (
+                research.is_symlink()
+                or research.parent.is_symlink()
+                or (research / "owner").is_symlink()
+            ):
+                raise ValueError("研究工作区路径无效")
+            try:
+                _owner(research / "owner", locks)
+            except MiningProcessLockError as exc:
+                raise ValueError("研究工作区正在被其他进程使用，请退出后重试") from exc
         anchor.require_idle_jobs()
         previous = state["original"]
         db.execute("DELETE FROM workspace_hosts WHERE baseline=?", (previous,))
@@ -170,6 +198,7 @@ def _adopt_inplace_upgrade(anchor):
             "UPDATE workspace_selection SET original=?,active=? WHERE singleton=1",
             (anchor.baseline_id, anchor.baseline_id),
         )
+        db.commit()
 
 
 @contextmanager
@@ -188,7 +217,23 @@ def route(anchor, requested=None):
                 raise ValueError("当前可执行文件与活动工作区不匹配，请用 workspace status 查看配套宿主")
             # Release the shared read lock before upgrading to an exclusive transaction.
             locks.close()
-            _adopt_inplace_upgrade(anchor)
+            for delay in (*_ADOPT_RETRY_DELAYS, None):
+                try:
+                    _adopt_inplace_upgrade(anchor)
+                    break
+                except ValueError as exc:
+                    if not _is_busy_error(exc):
+                        raise
+                    try:
+                        with anchor.guard(coordinator=True) as check_db:
+                            if current_workspace(anchor, check_db)["active"] == anchor.baseline_id:
+                                break
+                    except ValueError as check_exc:
+                        if not _is_busy_error(check_exc):
+                            raise
+                    if delay is None:
+                        raise
+                    time.sleep(delay)
             db = locks.enter_context(anchor.guard(coordinator=True))
             state = current_workspace(anchor, db)
             if state["active"] != anchor.baseline_id:
