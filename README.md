@@ -49,7 +49,7 @@
     <td>提供 A 股实时行情和历史 K 线数据。</td>
   </tr>
   <tr>
-    <td width="124" align="center"><a href="https://laojuelv.com/kh/?utm_source=tmp2"><img src="docs/sponsors/laojuelv-logo-web.svg" width="96" alt="老倔驴"></a></td>
+    <td width="124" align="center"><a href="https://laojuelv.com/kh/?utm_source=tsp"><img src="docs/sponsors/laojuelv-logo-web.svg" width="96" alt="老倔驴"></a></td>
     <td>聚合十多家券商优惠费率，帮你降低交易成本，已帮助千人。</td>
   </tr>
 </table>
