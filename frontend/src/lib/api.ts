@@ -4542,7 +4542,7 @@ export const api = {
     ),
 
   extDataPullConfig: (id: string, body: {
-    url: string; method?: string; headers?: Record<string, string>; body?: string;
+    url: string; collector?: string | null; method?: string; headers?: Record<string, string>; body?: string;
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
     /** 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes; null=沿用分钟值 */
@@ -4589,7 +4589,7 @@ export const api = {
     ),
 
   extDataPullRun: (id: string, timeoutSeconds?: number) =>
-    request<{ status: string; rows: number; date: string }>(
+    request<{ status: string; rows: number; date: string; message?: string; partial_errors?: string[] }>(
       `/api/ext-data/${id}/pull/run`,
       { method: 'POST', timeoutMs: extPullTimeoutMs(timeoutSeconds) },
     ),
@@ -5567,6 +5567,8 @@ export interface ExtPullAuth {
 
 export interface PullConfig {
   url: string
+  /** 扩展采集器 ID (如 "auction_scan.market_925"); 与 url 二选一 */
+  collector?: string | null
   method: string
   headers?: Record<string, string>
   body?: string | null
@@ -5698,6 +5700,8 @@ export interface ExtDataConfig {
   plate?: { date: string; plates: number; from: string; to: string; granularity: 'intraday' | 'daily' } | null
   /** 生效序列粒度 (显式声明 > 数据形态判断): intraday | daily; snapshot 表为 null */
   granularity_effective?: 'intraday' | 'daily' | null
+  /** 当前是否处于采集中 (服务端内存状态，重启归零) */
+  running?: boolean
   pull?: PullConfig | null
 }
 
@@ -5720,6 +5724,8 @@ export interface ExtDataRowsResult {
   label: string
   mode: 'snapshot' | 'timeseries'
   date: string | null
+  /** 时序表已有分区日期列表 (按日期倒序 YYYY-MM-DD) */
+  dates?: string[]
   total: number
   limit: number
   fields: ExtDataField[]
