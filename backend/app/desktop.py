@@ -503,15 +503,17 @@ def main() -> int:
 
 if __name__ == "__main__":
     import multiprocessing
+    import sqlite3
 
     if getattr(sys, "frozen", False):
         from app.desktop_engines.launcher import launch
 
         try:
             sys.exit(launch(main))
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
             if len(sys.argv) == 1:
                 _show_crash("TSP 引擎启动失败", f"{exc}\n\n可使用 TSP --engine status 检查当前组合。")
+                sys.exit(1)
             raise
     multiprocessing.freeze_support()
     sys.exit(main())

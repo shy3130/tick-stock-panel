@@ -399,6 +399,17 @@ jobs:
                       path.parent.mkdir(parents=True, exist_ok=True)
                       path.write_bytes(content)
 
+                  if (destination / "_internal/tivelo-release/compatibility-lock.json").is_file():
+                      old_report = report.with_name("previous-engine-status.json")
+                      old_env = {k: v for k, v in os.environ.items() if k.upper() != "DATA_DIR"}
+                      subprocess.run(
+                          [executable, "--engine", "--report", old_report, "status"],
+                          env=old_env,
+                          check=True,
+                          timeout=120,
+                      )
+                      assert (data / "tivelo-desktop/combinations.sqlite3").is_file()
+
                   # 让 Inno 按已安装版本的记录选择目录；启动也用原安装目录中的 data。
                   install(installer)
                   os.environ.pop("DATA_DIR", None)
