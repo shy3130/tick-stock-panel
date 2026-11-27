@@ -15,7 +15,7 @@
 
 [![TSP 工作台 MIT](https://img.shields.io/badge/TSP_Workbench-MIT-7C65A8?style=flat-square)](./LICENSE) [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![Node 20+](https://img.shields.io/badge/Node.js-20+-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![React 18](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/) [![Polars 1.44](https://img.shields.io/badge/Polars-1.44-6f42c1?style=flat-square)](./backend/pyproject.toml)
 
-[核心功能](#features)　 **[快速开始](#quick-start)**　 [界面预览](#screenshots)　 [整体架构](#architecture)　 [扩展与导入](#extensions)　 [AI 接入](./docs/ai-integration.md)　 [交流群](#community-group)
+[赞助支持](#sponsors)　 [为什么做 TSP](#why-tsp)　 [核心功能](#features)　 **[快速开始](#quick-start)**　 [界面预览](#screenshots)　 [整体架构](#architecture)　 [扩展与导入](#extensions)　 [AI 接入](./docs/ai-integration.md)　 [交流群](#community-group)
 
 </div>
 
@@ -23,7 +23,7 @@
 
 <a id="sponsors"></a>
 
-## 特别赞助
+## 赞助支持
 
 <p align="center">
   <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC" target="_blank" rel="noopener noreferrer">
@@ -41,10 +41,39 @@
 
 ---
 
+<a id="project-sponsors"></a>
+
+<table aria-label="项目赞助商">
+  <tr>
+    <td width="124" align="center"><a href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"><img src="docs/sponsors/tickflow-logo.svg" width="104" alt="TickFlow"></a></td>
+    <td>提供 A 股实时行情和历史 K 线数据。</td>
+  </tr>
+  <tr>
+    <td width="124" align="center"><a href="https://laojuelv.com/kh/?utm_source=tmp2"><img src="docs/sponsors/laojuelv-logo-web.svg" width="96" alt="老倔驴"></a></td>
+    <td>聚合十多家券商优惠费率，帮你降低交易成本，已帮助千人。</td>
+  </tr>
+</table>
+
+---
+
 <a id="project-scope"></a>
 
 > [!IMPORTANT]
 > **TSP 面向本地量化学习与研究。** 项目走独立的研究工作台路线，不对标同花顺、通达信等投资及看盘软件。AI 助手用于取数、分析和策略研究，产品范围不含 AI 荐股与涨停预测。行情数据可通过插件接入第三方来源。
+
+<a id="why-tsp"></a>
+<a id="-为什么做-tsp"></a>
+
+## 为什么做 TSP
+
+| 做本地量化时常遇到的问题 | TSP 的做法 |
+| --- | --- |
+| 换行情源要重写取数脚本 | 日 K、分钟 K、实时行情和除权因子可分别切换数据源。 |
+| 策略筛选、回测和监控分散在多个工具里 | 在同一个工作台定义策略、复核回测结果，并把策略用于监控。 |
+| 盘中异动要靠人一直盯 | 集中查看竞价和盘中异动，规则命中时可通过弹窗、语音或飞书收到提醒。 |
+| 查数据、写策略要在多个页面间来回切换 | 用 AI 助手查本地行情、起草策略和运行回测，工具调用记录可展开核对。 |
+| 想把工作台接进自己的脚本或 AI 工具 | 通过 Open API 或 MCP，按权限访问行情、策略和回测。 |
+| 想把研究数据和策略留在自己的机器上 | Docker 可部署整套工作台，行情、策略和配置存放在本地。 |
 
 <a id="screenshots"></a>
 <a id="-界面预览"></a>
@@ -83,8 +112,6 @@
 <a id="-核心功能"></a>
 <a id="工作台能力"></a>
 <a id="在工作台做什么"></a>
-<a id="why-tsp"></a>
-<a id="-为什么做-tsp"></a>
 
 ## 核心功能
 
@@ -256,28 +283,11 @@ docker run -d --name tsp -p 3018:3018 \
 <a id="community-group"><img src="./community-qr-code.jpg" alt="TSP 交流群二维码" width="163" height="180"></a>
 <img src="./assets/support/wechat-appreciation.jpg" alt="TSP 微信赞赏码" width="180" height="180">
 
+赞助用于 TSP 的日常维护，包括修复问题、审查 PR、完善测试和文档，以及支付持续集成和网站托管等基础设施费用。感谢支持让开源可持续。
+
 </details>
 
 联系邮箱 shy3130@qq.com。[项目网站](https://tsp.shy313.com/)　 [LINUX DO 社区](https://linux.do)
-
-<a id="project-sponsors"></a>
-
-## 项目赞助商
-
-<table aria-label="项目赞助商">
-  <tr>
-    <td width="124" align="center"><a href="https://tickflow.org/auth/register?ref=V3KDGXPEA"><img src="docs/sponsors/tickflow-logo.svg" width="104" alt="TickFlow"></a></td>
-    <td>提供 A 股实时行情和历史 K 线数据。</td>
-  </tr>
-  <tr>
-    <td width="124" align="center"><a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC"><img src="docs/sponsors/modelflare-logo.svg" width="104" alt="Modelflare"></a></td>
-    <td>通过统一 API 接入 GPT、Claude、Gemini 等模型。</td>
-  </tr>
-  <tr>
-    <td width="124" align="center"><a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c"><img src="docs/sponsors/runninghub-logo.svg" width="104" alt="RunningHub"></a></td>
-    <td>提供大模型、图像与视频生成及工作流 API。</td>
-  </tr>
-</table>
 
 <a id="license"></a>
 <a id="-license"></a>
