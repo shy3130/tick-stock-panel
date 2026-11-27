@@ -57,6 +57,8 @@ TickFlow 是内置默认数据源;同时支持插件化接入第三方数据源(
 
 **Modelflare** 是「自定义」后的第一个预设。选择后填入 `https://modelflare.dev/v1`，采用 Chat Completions，并以 `gpt-5.6-sol` 为示例模型。填入支持该模型的 Modelflare API Key，测试连接后保存。模型可按 Key 所在分组修改。[Modelflare 快速开始](https://docs.modelflare.dev/zh/quickstart/)
 
+**OpenDesign Go** 作为可选预设提供 OpenAI Chat Completions 兼容接口，选择后自动预置 `https://amr-link.open-design.ai/v1` 与默认示例模型 `deepseek-v4.1-flash`（可按账号可用模型修改）。在 [OpenDesign Go](https://go.open-design.ai/) 订阅并参考 [OpenDesign Cloud API 文档](https://open-design.ai/help/cloud-api/) 创建工作区 API Key 后填入测试并保存即可。
+
 ```ini
 AI_PROVIDER=openai_compat              # openai_compat | ollama
 AI_BASE_URL=https://api.deepseek.com/v1
