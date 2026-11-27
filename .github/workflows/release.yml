@@ -401,7 +401,7 @@ jobs:
 
                   if (destination / "_internal/tivelo-release/compatibility-lock.json").is_file():
                       old_report = report.with_name("previous-engine-status.json")
-                      old_env = {k: v for k, v in os.environ.items() if k != "DATA_DIR"}
+                      old_env = {k: v for k, v in os.environ.items() if k.upper() != "DATA_DIR"}
                       subprocess.run(
                           [executable, "--engine", "--report", old_report, "status"],
                           env=old_env,
