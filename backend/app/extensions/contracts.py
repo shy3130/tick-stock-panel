@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -50,3 +51,47 @@ class DefaultNotificationFormatter(NotificationFormatter):
     ) -> str:
         del context
         return str(event.get("message") or "")
+
+
+@dataclass(frozen=True)
+class ExtCollectorContext:
+    """Read-oriented execution context passed to an ExtCollector."""
+
+    api_version: int
+    data_dir: Path
+    target_date: date
+    config_id: str
+    repository: RepositoryAccess | None = None
+    is_test: bool = False
+
+
+@dataclass(frozen=True)
+class ExtCollectorResult:
+    """Structured output of an ExtCollector run.
+
+    - ``allow_empty=True`` allows writing an empty typed partition so daily
+      timeseries tables distinguish "scanned with 0 hits" from "not scanned".
+    - ``partial_errors`` preserves succeeded rows while recording failure
+      details (status ``"partial"``) rather than reporting a clean empty run.
+    - ``skipped_reason`` skips writing any partition and records ``"skipped"``.
+    """
+
+    rows: tuple[dict[str, Any], ...] = ()
+    message: str = ""
+    allow_empty: bool = True
+    partial_errors: tuple[str, ...] = ()
+    skipped_reason: str | None = None
+    replace_partition: bool = True
+
+
+class ExtCollector(ABC):
+    """Scheduled or on-demand data collector plugged into ext_data PullScheduler."""
+
+    api_version = BACKEND_EXTENSION_API_VERSION
+    label: str = ""
+    description: str = ""
+
+    @abstractmethod
+    def collect(self, context: ExtCollectorContext) -> ExtCollectorResult:
+        """Collect rows for ``context.target_date`` (executed in a worker thread)."""
+        raise NotImplementedError
