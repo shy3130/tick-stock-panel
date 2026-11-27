@@ -23,6 +23,7 @@ pnpm install && pnpm build      # → dist/extension.js
 const extension = {
   id: 'demo.hello',            // 带命名空间且全局唯一; 冲突时整个包被拒
   apiVersion: 1 as const,
+  // routes + navigation 与 slots 至少提供一个；支持纯插槽扩展（不占侧栏菜单）
   routes: [{
     id: 'hello',
     path: '/demo-hello',       // 非根绝对路径、静态(不支持 :param/通配), 不得覆盖核心或已有页面
@@ -34,6 +35,18 @@ const extension = {
   }],
   navigation: [{
     id: 'hello', routeId: 'hello', label: '页面插件演示', icon: 'Sparkles',
+  }],
+  slots: [{                    // 可选：免重建挂载到宿主开放插槽（如 abnormal.auction.extra / stock-preview.tabs）
+    name: 'abnormal.auction.extra',
+    id: 'hello-card',
+    order: 20,
+    mount: (el, ctx, props) => {
+      el.textContent = '运行时插槽卡片'
+      return {
+        update: (_nextProps) => {}, // 可选：插槽 props 变化时就地更新
+        unmount: () => { el.textContent = '' },
+      }
+    },
   }],
 }
 export default extension
@@ -47,7 +60,7 @@ export default extension
 
 | 能力 | 说明 |
 | --- | --- |
-| `ctx.api` | 宿主完整 API 封装（同源 fetch、自动携带登录态、统一错误处理） |
+| `ctx.api` | 宿主完整 API 封装（同源 fetch、自动携带登录态、统一错误处理；含 `extDataList`/`extDataRows`/`extDataSeries`/`extDataCollectors` 与跨扩展调用 `extensionRequest(extId, path)`） |
 | `ctx.QK` | 集中查询键（若你自行使用 TanStack Query 可作 key 规范） |
 | `ctx.cn` | 样式类合并工具（clsx + tailwind-merge） |
 | `ctx.format` | 数值/日期格式化工具集 |

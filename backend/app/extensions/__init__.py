@@ -1,6 +1,10 @@
 from app.extensions.contracts import (
     BACKEND_EXTENSION_API_VERSION,
+    ExtCollector,
+    ExtCollectorContext,
+    ExtCollectorResult,
     ExtensionContext,
+    MarketAccess,
     NotificationFormatContext,
     NotificationFormatter,
 )
@@ -10,7 +14,11 @@ __all__ = [
     "BACKEND_EXTENSION_API_VERSION",
     "BackendExtensionRegistrar",
     "BackendExtensionRegistry",
+    "ExtCollector",
+    "ExtCollectorContext",
+    "ExtCollectorResult",
     "ExtensionContext",
+    "MarketAccess",
     "NotificationFormatContext",
     "NotificationFormatter",
 ]

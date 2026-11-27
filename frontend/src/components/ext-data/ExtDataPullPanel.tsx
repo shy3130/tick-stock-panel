@@ -78,6 +78,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
     return {
       url: pull.url,
       collector: pull.collector ?? null,
+      collector_params: pull.collector_params ?? null,
       method: pull.method,
       headers: pull.headers,
       body: pull.body ?? undefined,
@@ -360,7 +361,7 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
     // 双写分钟值，版本回滚到旧版时仍能读到最接近的频率。
     const effSeconds = scheduleUnit === 'seconds' ? schedule : null
     return {
-      url, collector: pull?.collector ?? null, method, headers, body: body || undefined,
+      url, collector: pull?.collector ?? null, collector_params: pull?.collector_params ?? null, method, headers, body: body || undefined,
       response_path: responsePath, field_map, auth,
       schedule_minutes: effSeconds != null ? Math.ceil(effSeconds / 60) : schedule,
       schedule_seconds: effSeconds,

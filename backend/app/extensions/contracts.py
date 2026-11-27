@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 BACKEND_EXTENSION_API_VERSION = 1
 
@@ -16,11 +17,34 @@ class RepositoryAccess(Protocol):
     def get_name_map(self, symbols: list[str] | None = None) -> dict[str, str]: ...
 
 
+class MarketAccess(Protocol):
+    """Read-oriented market data facade routed through active provider capabilities.
+
+    Extensions and ``ExtCollector`` implementations use this surface instead of
+    importing internal ``app.services`` or ``app.plugins`` modules directly.
+    """
+
+    def get_realtime_stocks(self) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+        """Fetch full-market realtime snapshots and any partial batch errors."""
+        ...
+
+    def get_vol_ma5_baseline(
+        self, target_date: date, *, lookback_days: int = 5,
+    ) -> dict[str, float]:
+        """Load average daily volume (in lots/手) strictly prior to ``target_date``."""
+        ...
+
+    def get_name_map(self, symbols: list[str] | None = None) -> dict[str, str]: ...
+
+    def get_excluded_non_stock_symbols(self) -> set[str]: ...
+
+
 @dataclass(frozen=True)
 class ExtensionContext:
     api_version: int
     data_dir: Path
     repository: RepositoryAccess
+    market: MarketAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +87,8 @@ class ExtCollectorContext:
     config_id: str
     repository: RepositoryAccess | None = None
     is_test: bool = False
+    params: Mapping[str, Any] = field(default_factory=dict)
+    market: MarketAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +116,9 @@ class ExtCollector(ABC):
     api_version = BACKEND_EXTENSION_API_VERSION
     label: str = ""
     description: str = ""
+    default_mode: str = "timeseries"
+    default_fields: tuple[dict[str, str], ...] = ()
+    params_schema: ClassVar[Mapping[str, Any]] = {}
 
     @abstractmethod
     def collect(self, context: ExtCollectorContext) -> ExtCollectorResult:
