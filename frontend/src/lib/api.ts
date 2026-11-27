@@ -4293,6 +4293,24 @@ export const api = {
   extDataList: () =>
     request<{ items: ExtDataConfig[] }>('/api/ext-data'),
 
+  extDataCollectors: () =>
+    request<{ items: ExtCollectorItem[] }>('/api/ext-data/collectors'),
+
+  /**
+   * 跨扩展调用已注册后端扩展路由 (`/api/extensions/<extensionId>/<path>`),
+   * 供源码扩展与运行时 Page Pack 通过 `ctx.api` 复用同源鉴权、超时与错误处理。
+   */
+  extensionRequest: <T = unknown>(extensionId: string, path: string, init?: RequestOptions) => {
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(extensionId)) {
+      return Promise.reject(new ApiError(`非法扩展 ID: ${extensionId}`, 400))
+    }
+    const cleanPath = path.replace(/^\/+/, '')
+    if (!cleanPath || cleanPath.includes('..') || /^[a-z]+:/i.test(cleanPath)) {
+      return Promise.reject(new ApiError(`非法扩展路径: ${path}`, 400))
+    }
+    return request<T>(`/api/extensions/${encodeURIComponent(extensionId)}/${cleanPath}`, init)
+  },
+
   extDataRows: (id: string, opts?: { date?: string; limit?: number; columns?: string[] }) => {
     const qs = new URLSearchParams()
     if (opts?.date) qs.set('date', opts.date)
@@ -4542,7 +4560,7 @@ export const api = {
     ),
 
   extDataPullConfig: (id: string, body: {
-    url: string; collector?: string | null; method?: string; headers?: Record<string, string>; body?: string;
+    url: string; collector?: string | null; collector_params?: Record<string, unknown> | null; method?: string; headers?: Record<string, string>; body?: string;
     response_path?: string; field_map?: Record<string, string>;
     schedule_minutes?: number; enabled?: boolean;
     /** 间隔秒数 (10~2592000): 配置后优先于 schedule_minutes; null=沿用分钟值 */
@@ -5565,10 +5583,30 @@ export interface ExtPullAuth {
   key_ref?: string
 }
 
+export interface ExtCollectorParamSchema {
+  type?: 'float' | 'int' | 'string' | 'bool' | string
+  label?: string
+  default?: unknown
+  min?: number
+  max?: number
+}
+
+export interface ExtCollectorItem {
+  id: string
+  extension_id: string
+  label: string
+  description: string
+  default_mode: 'snapshot' | 'timeseries'
+  default_fields: ExtDataField[]
+  params_schema: Record<string, ExtCollectorParamSchema>
+}
+
 export interface PullConfig {
   url: string
   /** 扩展采集器 ID (如 "auction_scan.market_925"); 与 url 二选一 */
   collector?: string | null
+  /** 扩展采集器自定义参数 (透传给后端 ExtCollectorContext.params) */
+  collector_params?: Record<string, unknown> | null
   method: string
   headers?: Record<string, string>
   body?: string | null

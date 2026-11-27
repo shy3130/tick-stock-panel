@@ -176,7 +176,7 @@ def collapse_ext_rows_at(
 class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
-        "url", "collector", "method", "headers", "body", "response_path",
+        "url", "collector", "collector_params", "method", "headers", "body", "response_path",
         "field_map", "schedule_minutes", "schedule_seconds", "enabled",
         "last_run", "last_status", "last_message", "last_rows",
         "next_run", "time_window_start", "time_window_end", "date_param",
@@ -222,6 +222,7 @@ class PullConfig:
         since_param: str | None = None,
         granularity: str = "auto",
         collector: str | None = None,
+        collector_params: dict | None = None,
     ) -> None:
         self.fanout = fanout or None       # 两级拉取配方 (见 fanout.py), None=单请求
         self.url = url
@@ -229,6 +230,10 @@ class PullConfig:
         # 复用同一套 PullScheduler 调度与 Parquet 存储链路。
         self.collector = (
             collector.strip() or None if isinstance(collector, str) else None
+        )
+        # 采集器自定义参数 (透传为 ExtCollectorContext.params), 允许同一采集器复用多套方案
+        self.collector_params = (
+            dict(collector_params) if isinstance(collector_params, dict) and collector_params else None
         )
         self.method = method              # GET | POST
         self.headers = headers or {}
@@ -333,6 +338,7 @@ class PullConfig:
         return {
             "url": self.url,
             "collector": self.collector,
+            "collector_params": self.collector_params,
             "method": self.method,
             "headers": self.headers,
             "body": self.body,
@@ -374,6 +380,7 @@ class PullConfig:
         return cls(
             url=d.get("url", ""),
             collector=d.get("collector"),
+            collector_params=d.get("collector_params"),
             method=d.get("method", "GET"),
             headers=d.get("headers"),
             body=d.get("body"),

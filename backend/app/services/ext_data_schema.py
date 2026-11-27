@@ -1,7 +1,7 @@
 """扩展数据创建与拉取配置的共享校验契约。"""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -42,6 +42,8 @@ class PullConfigReq(BaseModel):
     # 扩展采集器 ID (如 "auction_scan.market_925"); 与 url 二选一;
     # 缺省 (None) 时 PUT /pull 会保留已有 collector (与 fanout/auth 同口径)
     collector: str | None = Field(None, max_length=128)
+    # 采集器参数字典; 缺省 (None) 时 PUT /pull 保留已有配置
+    collector_params: dict[str, Any] | None = None
     method: str = "GET"
     headers: dict[str, str] | None = None
     body: str | None = None

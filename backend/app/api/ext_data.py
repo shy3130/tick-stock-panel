@@ -543,6 +543,13 @@ def list_collectors(request: Request):
                 "extension_id": item.extension_id,
                 "label": item.implementation.label or item.implementation_id,
                 "description": item.implementation.description,
+                "default_mode": (
+                    item.implementation.default_mode
+                    if item.implementation.default_mode in ("snapshot", "timeseries")
+                    else "timeseries"
+                ),
+                "default_fields": list(item.implementation.default_fields or ()),
+                "params_schema": dict(item.implementation.params_schema or {}),
             }
             for item in registry.ext_collectors()
         ]
@@ -1202,9 +1209,14 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         body.collector if body.collector is not None
         else (old_pull.collector if old_pull else None)
     )
+    collector_params = (
+        body.collector_params if body.collector_params is not None
+        else (old_pull.collector_params if old_pull else None)
+    )
     config.pull = PullConfig(
         url=body.url,
         collector=collector_id,
+        collector_params=collector_params,
         method=body.method,
         headers=body.headers,
         body=body.body,

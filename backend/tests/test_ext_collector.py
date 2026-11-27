@@ -5,6 +5,7 @@ import asyncio
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import polars as pl
 import pytest
@@ -28,6 +29,9 @@ from app.services.ext_data_schema import PullConfigReq
 class _StubCollector(ExtCollector):
     label = "Stub Collector"
     description = "Unit test stub collector"
+    default_mode = "timeseries"
+    default_fields = ({"name": "score", "dtype": "float", "label": "分值"},)
+    params_schema: ClassVar[dict[str, Any]] = {"threshold": {"type": "float", "label": "阈值", "default": 1.5}}
 
     def __init__(self, fn) -> None:
         self._fn = fn
@@ -353,10 +357,14 @@ def test_collector_api_empty_day_partial_error_and_desc_dates(tmp_path, monkeypa
 
     client = TestClient(app)
 
-    # 1. collectors 元数据发现
+    # 1. collectors 元数据发现 (含 default_mode / default_fields / params_schema)
     col_resp = client.get("/api/ext-data/collectors")
     assert col_resp.status_code == 200
-    assert col_resp.json()["items"][0]["id"] == "test.collector"
+    col_meta = col_resp.json()["items"][0]
+    assert col_meta["id"] == "test.collector"
+    assert col_meta["default_mode"] == "timeseries"
+    assert col_meta["default_fields"] == [{"name": "score", "dtype": "float", "label": "分值"}]
+    assert col_meta["params_schema"]["threshold"]["default"] == 1.5
 
     # 2. test_pull 预览不写盘
     monkeypatch.setattr(ext_pull, "cn_today", lambda: date(2026, 4, 13))
@@ -418,3 +426,59 @@ def test_collector_api_empty_day_partial_error_and_desc_dates(tmp_path, monkeypa
     assert len(listing) == 1
     assert listing[0]["running"] is False
     assert listing[0]["pull"]["last_status"] == "skipped"
+
+
+def test_collector_params_roundtrip_and_context_injection(tmp_path, monkeypatch):
+    seen: dict = {}
+
+    def collect_fn(ctx: ExtCollectorContext) -> ExtCollectorResult:
+        seen["params"] = dict(ctx.params)
+        seen["has_market"] = ctx.market is not None
+        seen["name_map"] = ctx.market.get_name_map() if ctx.market else {}
+        return ExtCollectorResult(rows=({"symbol": "000001.SZ", "score": float(ctx.params.get("threshold", 0))},))
+
+    app = _build_test_app(tmp_path, _StubCollector(collect_fn))
+    store = ExtConfigStore(tmp_path)
+    store.create(ExtConfig(
+        id="ext_param",
+        label="参数化采集",
+        mode="timeseries",
+        fields=[ExtField("score", "float", "分值")],
+        pull=PullConfig(
+            url="",
+            collector="test.collector",
+            collector_params={"threshold": 9.5},
+            enabled=False,
+        ),
+    ))
+
+    # PullConfig 序列化/反序列化
+    assert store.get("ext_param").pull.collector_params == {"threshold": 9.5}
+
+    client = TestClient(app)
+    monkeypatch.setattr(ext_pull, "cn_today", lambda: date(2026, 4, 20))
+
+    # PUT /pull 不传 collector_params 时保留原值; 显式传入则更新
+    monkeypatch.setattr(ext_pull.pull_scheduler, "refresh", lambda _d: None)
+    r_keep = client.put(
+        "/api/ext-data/ext_param/pull",
+        json={"url": "", "collector": "test.collector", "enabled": False},
+    )
+    assert r_keep.status_code == 200
+    assert r_keep.json()["pull"]["collector_params"] == {"threshold": 9.5}
+
+    r_upd = client.put(
+        "/api/ext-data/ext_param/pull",
+        json={"url": "", "collector": "test.collector", "collector_params": {"threshold": 7.25}, "enabled": False},
+    )
+    assert r_upd.status_code == 200
+    assert r_upd.json()["pull"]["collector_params"] == {"threshold": 7.25}
+
+    # run_pull 注入 ctx.params 与 ctx.market
+    r_run = client.post("/api/ext-data/ext_param/pull/run")
+    assert r_run.status_code == 200
+    assert seen["params"] == {"threshold": 7.25}
+    assert seen["has_market"] is True
+    assert seen["name_map"]["000001.SZ"] == "平安银行"
+    rows = client.get("/api/ext-data/ext_param/rows").json()["rows"]
+    assert rows[0]["score"] == pytest.approx(7.25)
