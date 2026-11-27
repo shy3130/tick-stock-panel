@@ -384,33 +384,40 @@ export function AuctionScanCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.map(row => (
-                  <tr
-                    key={row.symbol}
-                    onClick={() => onOpenStock(row.symbol, row.name || undefined, navItems)}
-                    className="cursor-pointer border-b border-border/40 transition-colors last:border-b-0 hover:bg-elevated/50"
-                  >
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-foreground">{row.name || row.symbol}</span>
-                        <span className="text-[10px] text-muted">{row.symbol}</span>
-                        {boardTag(row.symbol)}
-                      </div>
-                    </td>
-                    <td className={`py-2 px-2 text-right font-medium ${priceColorClass(row.open_gap_pct)}`}>
-                      {fmtPct(row.open_gap_pct)}
-                    </td>
-                    <td className="py-2 px-2 text-right font-medium text-foreground">
-                      {row.auction_vol_ratio != null ? `${row.auction_vol_ratio.toFixed(1)}x` : '—'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-secondary">
-                      {fmtPrice(row.auction_price)} / {fmtPrice(row.prev_close)}
-                    </td>
-                    <td className="py-2 pl-2 text-right text-secondary">
-                      {fmtVolume(row.auction_volume)}
-                    </td>
-                  </tr>
-                ))}
+                {rows.map(row => {
+                  const tag = boardTag(row.symbol)
+                  return (
+                    <tr
+                      key={row.symbol}
+                      onClick={() => onOpenStock(row.symbol, row.name || undefined, navItems)}
+                      className="cursor-pointer border-b border-border/40 transition-colors last:border-b-0 hover:bg-elevated/50"
+                    >
+                      <td className="py-2 pr-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-foreground">{row.name || row.symbol}</span>
+                          <span className="text-[10px] text-muted">{row.symbol}</span>
+                          {tag && (
+                            <span className={`rounded border px-1 py-px text-[9px] leading-tight ${tag.color}`}>
+                              {tag.label}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className={`py-2 px-2 text-right font-medium ${priceColorClass(row.open_gap_pct)}`}>
+                        {fmtPct(row.open_gap_pct)}
+                      </td>
+                      <td className="py-2 px-2 text-right font-medium text-foreground">
+                        {row.auction_vol_ratio != null ? `${row.auction_vol_ratio.toFixed(1)}x` : '—'}
+                      </td>
+                      <td className="py-2 px-2 text-right text-secondary">
+                        {fmtPrice(row.auction_price)} / {fmtPrice(row.prev_close)}
+                      </td>
+                      <td className="py-2 pl-2 text-right text-secondary">
+                        {fmtVolume(row.auction_volume)}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
