@@ -512,6 +512,7 @@ if __name__ == "__main__":
         except (OSError, RuntimeError, ValueError) as exc:
             if len(sys.argv) == 1:
                 _show_crash("TSP 引擎启动失败", f"{exc}\n\n可使用 TSP --engine status 检查当前组合。")
+                sys.exit(1)
             raise
     multiprocessing.freeze_support()
     sys.exit(main())
