@@ -2,7 +2,7 @@
 import { act, type ComponentType } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { installTspExtBridge, packToExtension } from './runtime'
+import { installTspExtBridge, packToExtension, type PagePackExtension } from './runtime'
 import { api } from '@/lib/api'
 
 let host: HTMLDivElement
@@ -25,7 +25,7 @@ afterEach(() => {
 it('运行时 Page Pack 插槽透传 props、支持就地 update 并在卸载时清理', async () => {
   const onUpdate = vi.fn()
   const onUnmount = vi.fn()
-  const ext = packToExtension({
+  const pack: PagePackExtension = {
     id: 'demo.runtime-slot',
     apiVersion: 1,
     slots: [{
@@ -42,7 +42,8 @@ it('运行时 Page Pack 插槽透传 props、支持就地 update 并在卸载时
         }
       },
     }],
-  })
+  }
+  const ext = packToExtension(pack)
   const SlotComp = ext.slots![0].component as ComponentType<Record<string, unknown>>
 
   await act(async () => {
