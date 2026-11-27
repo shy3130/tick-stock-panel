@@ -444,22 +444,34 @@ class TdxQuantProvider:
     def get_realtime(self) -> list[dict]:
         """全市场实时快照 → 内部 realtime records。失败软返回空列表(不阻断轮询)。"""
         client = self._get_client()
+        self.last_realtime_meta: dict | None = None
         try:
             universe = client.stock_universe()
         except TdxQuantError as e:
             logger.warning("TdxQuant 股票池枚举失败: %s", e)
+            self.last_realtime_meta = {
+                "requested": 0,
+                "received": 0,
+                "failed_batches": 1,
+                "total_batches": 1,
+                "errors": [f"股票池枚举失败: {e}"],
+            }
             return []
 
         fallback_ms = int(time.time() * 1000)
         records: list[dict] = []
         dropped = failed_batches = 0
+        total_batches = math.ceil(len(universe) / _SNAPSHOT_BATCH) if universe else 0
+        batch_errors: list[str] = []
         for i in range(0, len(universe), _SNAPSHOT_BATCH):
             codes = universe[i : i + _SNAPSHOT_BATCH]
             try:
                 rows = client.snapshot_batch(codes)
             except TdxQuantError as e:
                 failed_batches += 1
-                logger.warning("TdxQuant 快照批次失败(%d 只, 第 %d 批): %s", len(codes), i // _SNAPSHOT_BATCH + 1, e)
+                batch_no = i // _SNAPSHOT_BATCH + 1
+                batch_errors.append(f"第{batch_no}批({len(codes)}只): {e}")
+                logger.warning("TdxQuant 快照批次失败(%d 只, 第 %d 批): %s", len(codes), batch_no, e)
                 continue
             for code, row in rows.items():
                 rec = _map_snapshot_row(code, row, fallback_ms)
@@ -467,9 +479,16 @@ class TdxQuantProvider:
                     records.append(rec)
                 else:
                     dropped += 1
+        self.last_realtime_meta = {
+            "requested": len(universe),
+            "received": len(records),
+            "failed_batches": failed_batches,
+            "total_batches": total_batches,
+            "errors": batch_errors,
+        }
         if failed_batches:
             logger.warning("TdxQuant 快照 %d/%d 批失败, 本轮仅返回 %d 条",
-                           failed_batches, math.ceil(len(universe) / _SNAPSHOT_BATCH), len(records))
+                           failed_batches, total_batches, len(records))
         if not records and universe:
             logger.warning("TdxQuant 实时行情本轮 0 条(请求 %d 只), 疑似连接或协议异常", len(universe))
         elif dropped:

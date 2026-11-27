@@ -328,6 +328,7 @@ async def _application_lifespan(app: FastAPI):
 
     # 扩展数据定时拉取: 在预设配置就绪后启动, 自动调度 enabled 的预设。
     from app.services.ext_pull import pull_scheduler
+    pull_scheduler.set_app_state(app.state)
     pull_scheduler.start(store.data_dir)
     pull_scheduler.refresh(store.data_dir)
     app.state.pull_scheduler = pull_scheduler
@@ -495,6 +496,7 @@ async def _application_lifespan(app: FastAPI):
         current_extension_context(data_dir=store.data_dir, repository=repo),
         extension_registry,
     )
+    pull_scheduler.refresh(store.data_dir)
     from app.services.engine_jobs.manager import EngineJobManager
 
     try:
