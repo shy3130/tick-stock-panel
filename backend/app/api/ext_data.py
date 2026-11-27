@@ -39,7 +39,12 @@ from app.services.ext_data import (
 )
 from app.services.ext_data_schema import CreateExtReq, FieldDef, PullConfigReq
 from app.services.ext_data_schema import PullAuthReq as PullAuthReq
-from app.services.ext_pull import _request_json, fetch_and_ingest, pull_scheduler
+from app.services.ext_pull import (
+    _request_json,
+    execute_and_record_pull,
+    pull_scheduler,
+    run_collector,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ext-data", tags=["ext-data"])
@@ -411,6 +416,22 @@ def _latest_sync_from_partitions(base: Path) -> str | None:
     return latest_date
 
 
+def _list_partition_dates_desc(config: ExtConfig, data_dir: Path) -> list[str]:
+    """返回时序表已有分区的日期列表 (按日期倒序 YYYY-MM-DD); 快照表返回空列表。"""
+    if config.mode != "timeseries":
+        return []
+    base = _ext_data_dir(config, data_dir)
+    if not base.exists():
+        return []
+    dates = [
+        d.name[5:]
+        for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    ]
+    dates.sort(reverse=True)
+    return dates
+
+
 def _date_range(config: ExtConfig, data_dir: Path) -> list[str] | None:
     """返回时序型扩展数据的日期范围 [最早, 最新]。"""
     if config.mode != "timeseries":
@@ -509,6 +530,25 @@ def _granularity_effective(config: ExtConfig, data_dir: Path) -> str | None:
     return stats["granularity"]
 
 
+@router.get("/collectors")
+def list_collectors(request: Request):
+    """列出已注册的扩展采集器 (ExtCollector) 元数据。"""
+    registry = getattr(request.app.state, "extension_registry", None)
+    if registry is None:
+        return {"items": []}
+    return {
+        "items": [
+            {
+                "id": item.implementation_id,
+                "extension_id": item.extension_id,
+                "label": item.implementation.label or item.implementation_id,
+                "description": item.implementation.description,
+            }
+            for item in registry.ext_collectors()
+        ]
+    }
+
+
 @router.get("")
 def list_configs(request: Request):
     """列出所有扩展数据配置。"""
@@ -521,6 +561,7 @@ def list_configs(request: Request):
         d["date_range"] = _date_range(c, data_dir)
         d["plate"] = _plate_stats(c, data_dir)
         d["granularity_effective"] = _granularity_effective(c, data_dir)
+        d["running"] = pull_scheduler.is_running(c.id)
         items.append(d)
     return {"items": items}
 
@@ -682,6 +723,7 @@ def list_rows(
         "label": config.label,
         "mode": config.mode,
         "date": active_date,
+        "dates": _list_partition_dates_desc(config, data_dir),
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -1156,8 +1198,13 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         rejected = session_cookie_rejection(new_auth, get_ext_api_key(config_id))
         if rejected:
             raise HTTPException(400, rejected)
+    collector_id = (
+        body.collector if body.collector is not None
+        else (old_pull.collector if old_pull else None)
+    )
     config.pull = PullConfig(
         url=body.url,
+        collector=collector_id,
         method=body.method,
         headers=body.headers,
         body=body.body,
@@ -1244,18 +1291,36 @@ def set_pull_api_key(request: Request, config_id: str, body: ApiKeyReq):
 
 @router.post("/{config_id}/pull/test")
 async def test_pull(request: Request, config_id: str):
-    """测试拉取：请求外部 API 并返回预览数据，不写入。"""
+    """测试拉取：请求外部 API 或运行扩展采集器并返回预览数据，不写入。"""
     store = _store(request)
     config = store.get(config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
-    if not config.pull or not config.pull.url:
-        raise HTTPException(400, "拉取未配置或 URL 为空")
+    if not config.pull or not config.pull.is_configured():
+        raise HTTPException(400, "拉取未配置或 URL/采集器为空")
+
+    pull = config.pull
+    if pull.collector:
+        try:
+            result = await run_collector(
+                config, cn_today(), _data_dir(request),
+                app_state=request.app.state, is_test=True,
+            )
+            rows = list(result.rows)
+            return {
+                "status": "skipped" if result.skipped_reason else ("partial" if result.partial_errors else "ok"),
+                "total_rows": len(rows),
+                "preview": rows[:5],
+                "has_symbol": bool(rows and "symbol" in rows[0]),
+                "message": result.skipped_reason or result.message,
+                "partial_errors": list(result.partial_errors),
+            }
+        except Exception as e:
+            raise HTTPException(400, f"测试失败: {e}") from e
 
     # 复用正式拉取的请求实现 (UA 标识头 + 鉴权注入同一套口径), 不带日期参数
     from app.services.ext_pull import _apply_field_map, _extract_rows
 
-    pull = config.pull
     try:
         data = await _request_json(pull, config.id)
         rows = _extract_rows(data, pull.response_path)
@@ -1277,31 +1342,30 @@ async def run_pull(request: Request, config_id: str):
     config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
-    if not config.pull or not config.pull.url:
-        raise HTTPException(400, "拉取未配置或 URL 为空")
+    if not config.pull or not config.pull.is_configured():
+        raise HTTPException(400, "拉取未配置或 URL/采集器为空")
 
     try:
-        n, d = await fetch_and_ingest(config, _data_dir(request))
-        await run_ext_data_io(_refresh_views, request)
-        # 写回执行状态, 让前端"上次执行"面板立即反映
-        updated = await run_ext_data_io(store.get, config_id)
-        if updated and updated.pull:
-            from datetime import datetime, timezone
-            updated.pull.last_run = datetime.now(timezone.utc).isoformat()
-            updated.pull.last_status = "success"
-            updated.pull.last_message = f"{n} rows @ {d}"
-            updated.pull.last_rows = n
-            await run_ext_data_io(store.upsert, updated)
-        return {"status": "ok", "rows": n, "date": d}
+        outcome = await execute_and_record_pull(
+            config,
+            _data_dir(request),
+            store=store,
+            keep_strategy_cache=False,
+            app_state=request.app.state,
+            refresh_views=lambda: _refresh_views(request),
+        )
+        n, d = outcome
+        resp = {
+            "status": "ok" if outcome.status == "success" else outcome.status,
+            "rows": n,
+            "date": d,
+        }
+        if outcome.status != "success":
+            resp["message"] = outcome.message
+        if outcome.partial_errors:
+            resp["partial_errors"] = list(outcome.partial_errors)
+        return resp
     except Exception as e:
-        # 失败也写回状态, 记录错误信息
-        failed = await run_ext_data_io(store.get, config_id)
-        if failed and failed.pull:
-            from datetime import datetime, timezone
-            failed.pull.last_run = datetime.now(timezone.utc).isoformat()
-            failed.pull.last_status = "error"
-            failed.pull.last_message = str(e)[:200]
-            await run_ext_data_io(store.upsert, failed)
         raise HTTPException(400, f"拉取失败: {e}") from e
 
 
