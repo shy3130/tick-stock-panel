@@ -53,6 +53,38 @@ def torn_write(monkeypatch: pytest.MonkeyPatch):
     return _arm
 
 
+@pytest.mark.parametrize("failed_sync", [1, 2])
+def test_durable_write_distinguishes_precommit_and_postcommit_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_sync: int
+) -> None:
+    import os
+
+    from app.services.fs_utils import atomic_write_text
+
+    if failed_sync == 2 and os.name == "nt":
+        pytest.skip("directory fsync is POSIX only")
+    target = tmp_path / "manifest.json"
+    target.write_text('"original"', encoding="utf-8")
+    real_sync = os.fsync
+    calls = 0
+
+    def fail_sync(descriptor):
+        nonlocal calls
+        calls += 1
+        if calls == failed_sync:
+            raise OSError(28, "No space left on device")
+        real_sync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_sync)
+    with pytest.raises(OSError):
+        atomic_write_text(target, '"committed"', durable=True)
+
+    assert calls == failed_sync
+    assert json.loads(target.read_text(encoding="utf-8")) == (
+        "original" if failed_sync == 1 else "committed"
+    )
+
+
 def test_preferences_survive_a_torn_write(data_dir: Path, torn_write) -> None:
     preferences.save({"theme": "dark", "kline_compress": True})
     assert preferences.load()["theme"] == "dark"

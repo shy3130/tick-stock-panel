@@ -1,0 +1,502 @@
+{
+  "format": "tivelo-reader-conformance-v1",
+  "knowledge_basis": "historical_versions",
+  "records": {
+    "bars": {
+      "a-original": {
+        "instrument_id": "fixture.asset-a",
+        "timeframe": "1d",
+        "bar_start": "2025-01-02T01:30:00Z",
+        "bar_end": "2025-01-02T07:00:00Z",
+        "trading_date": "2025-01-02",
+        "session_id": "sample.day",
+        "open": "10",
+        "high": "11",
+        "low": "10",
+        "close": "10.25",
+        "volume": "1200",
+        "turnover": null,
+        "quantity_unit": "share",
+        "quote_currency": "CNY",
+        "price_basis": "raw",
+        "available_at": "2025-01-02T07:00:00Z",
+        "ingested_at": "2025-01-02T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      },
+      "a-revised": {
+        "instrument_id": "fixture.asset-a",
+        "timeframe": "1d",
+        "bar_start": "2025-01-02T01:30:00Z",
+        "bar_end": "2025-01-02T07:00:00Z",
+        "trading_date": "2025-01-02",
+        "session_id": "sample.day",
+        "open": "10",
+        "high": "11",
+        "low": "10",
+        "close": "10.75",
+        "volume": "1200",
+        "turnover": null,
+        "quantity_unit": "share",
+        "quote_currency": "CNY",
+        "price_basis": "raw",
+        "available_at": "2025-01-03T07:00:00Z",
+        "ingested_at": "2025-01-03T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r2"
+      },
+      "b-original": {
+        "instrument_id": "fixture.asset-b",
+        "timeframe": "1d",
+        "bar_start": "2025-01-02T01:30:00Z",
+        "bar_end": "2025-01-02T07:00:00Z",
+        "trading_date": "2025-01-02",
+        "session_id": "sample.day",
+        "open": "20",
+        "high": "22",
+        "low": "19",
+        "close": "20.5",
+        "volume": "1200",
+        "turnover": null,
+        "quantity_unit": "share",
+        "quote_currency": "CNY",
+        "price_basis": "raw",
+        "available_at": "2025-01-02T07:00:00Z",
+        "ingested_at": "2025-01-02T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      }
+    },
+    "instruments": {
+      "a-listed": {
+        "instrument_id": "fixture.asset-a",
+        "venue_id": "XSHG",
+        "market_id": "cn.equity",
+        "asset_class": "equity",
+        "instrument_type": "common_stock",
+        "display_symbol": "TEST",
+        "name": "Synthetic A",
+        "quote_currency": "CNY",
+        "settlement_currency": "CNY",
+        "calendar_id": "sample.cn",
+        "timezone": "Asia/Shanghai",
+        "listing_date": {
+          "state": "unknown"
+        },
+        "delisting_date": {
+          "state": "not_yet"
+        },
+        "tradable": true,
+        "spec_revision": "spec-1",
+        "valid_from": "2025-01-01T00:00:00Z",
+        "available_at": "2025-01-01T00:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      },
+      "a-delisting-known": {
+        "instrument_id": "fixture.asset-a",
+        "venue_id": "XSHG",
+        "market_id": "cn.equity",
+        "asset_class": "equity",
+        "instrument_type": "common_stock",
+        "display_symbol": "TEST",
+        "name": "Synthetic A",
+        "quote_currency": "CNY",
+        "settlement_currency": "CNY",
+        "calendar_id": "sample.cn",
+        "timezone": "Asia/Shanghai",
+        "listing_date": {
+          "state": "unknown"
+        },
+        "delisting_date": {
+          "state": "known",
+          "value": "2025-01-04"
+        },
+        "tradable": true,
+        "spec_revision": "spec-2",
+        "valid_from": "2025-01-01T00:00:00Z",
+        "available_at": "2025-01-03T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r2",
+        "valid_to": "2025-01-04T07:00:00Z"
+      },
+      "b-listed": {
+        "instrument_id": "fixture.asset-b",
+        "venue_id": "XSHE",
+        "market_id": "cn.equity",
+        "asset_class": "equity",
+        "instrument_type": "common_stock",
+        "display_symbol": "TEST",
+        "name": "Synthetic B",
+        "quote_currency": "CNY",
+        "settlement_currency": "CNY",
+        "calendar_id": "sample.cn",
+        "timezone": "Asia/Shanghai",
+        "listing_date": {
+          "state": "unknown"
+        },
+        "delisting_date": {
+          "state": "not_yet"
+        },
+        "tradable": true,
+        "spec_revision": "spec-1",
+        "valid_from": "2025-01-01T00:00:00Z",
+        "available_at": "2025-01-01T00:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      }
+    },
+    "actions": {
+      "split-announced": {
+        "action_id": "split-1",
+        "instrument_id": "fixture.asset-a",
+        "action_type": "split",
+        "effective_at": "2025-01-03T01:30:00Z",
+        "available_at": "2025-01-02T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1",
+        "quantity_ratio": "2"
+      },
+      "split-cancelled": {
+        "action_id": "split-1",
+        "instrument_id": "fixture.asset-a",
+        "action_type": "split",
+        "effective_at": "2025-01-03T01:30:00Z",
+        "available_at": "2025-01-04T07:00:00Z",
+        "source_id": "fixture",
+        "revision_id": "r2",
+        "quantity_ratio": "2",
+        "cancelled": true
+      }
+    },
+    "factors": {
+      "factor-original": {
+        "factor_id": "factor-1",
+        "instrument_id": "fixture.asset-a",
+        "effective_at": "2025-01-03T01:30:00Z",
+        "available_at": "2025-01-02T07:00:00Z",
+        "value": "2",
+        "definition_id": "sample.cumulative",
+        "factor_kind": "cumulative_forward",
+        "baseline_id": "sample.listing",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      },
+      "factor-revised": {
+        "factor_id": "factor-1",
+        "instrument_id": "fixture.asset-a",
+        "effective_at": "2025-01-03T01:30:00Z",
+        "available_at": "2025-01-04T07:00:00Z",
+        "value": "1.5",
+        "definition_id": "sample.cumulative",
+        "factor_kind": "cumulative_forward",
+        "baseline_id": "sample.listing",
+        "source_id": "fixture",
+        "revision_id": "r2"
+      }
+    },
+    "openings": {
+      "a-open": {
+        "instrument_id": "fixture.asset-a",
+        "trading_date": "2025-01-02",
+        "session_id": "sample.day",
+        "event_at": "2025-01-02T01:30:00Z",
+        "state": "tradable",
+        "raw_open": "10",
+        "quote_currency": "CNY",
+        "available_at": "2025-01-02T01:30:00Z",
+        "ingested_at": "2025-01-02T01:30:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      },
+      "b-halted": {
+        "instrument_id": "fixture.asset-b",
+        "trading_date": "2025-01-02",
+        "session_id": "sample.day",
+        "event_at": "2025-01-02T01:30:00Z",
+        "state": "suspended",
+        "raw_open": null,
+        "quote_currency": "CNY",
+        "available_at": "2025-01-02T01:30:00Z",
+        "ingested_at": "2025-01-02T01:30:00Z",
+        "source_id": "fixture",
+        "revision_id": "r1"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "bar-before-publication",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-02T01:30:00Z",
+        "price_basis": "raw"
+      },
+      "expected": []
+    },
+    {
+      "id": "bar-at-publication",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-02T07:00:00Z",
+        "price_basis": "raw"
+      },
+      "expected": [
+        "a-original",
+        "b-original"
+      ]
+    },
+    {
+      "id": "bar-later-revision",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-03T07:00:00Z",
+        "price_basis": "raw"
+      },
+      "expected": [
+        "a-revised",
+        "b-original"
+      ]
+    },
+    {
+      "id": "bar-instrument-isolation",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-04T07:00:00Z",
+        "price_basis": "raw"
+      },
+      "expected": [
+        "b-original"
+      ]
+    },
+    {
+      "id": "bar-end-exclusive",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-02T01:30:00Z",
+        "as_of": "2025-01-02T07:00:00Z",
+        "price_basis": "raw"
+      },
+      "expected": []
+    },
+    {
+      "id": "bar-basis-isolation",
+      "method": "bars",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "timeframe": "1d",
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-02T07:00:00Z",
+        "price_basis": "qfq"
+      },
+      "expected": []
+    },
+    {
+      "id": "instrument-reused-display-code",
+      "method": "instruments",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "effective_at": "2025-01-02T07:00:00Z",
+        "as_of": "2025-01-02T07:00:00Z"
+      },
+      "expected": [
+        "a-listed",
+        "b-listed"
+      ]
+    },
+    {
+      "id": "instrument-new-revision",
+      "method": "instruments",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "effective_at": "2025-01-03T07:00:00Z",
+        "as_of": "2025-01-03T07:00:00Z"
+      },
+      "expected": [
+        "a-delisting-known",
+        "b-listed"
+      ]
+    },
+    {
+      "id": "instrument-at-delisting",
+      "method": "instruments",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "effective_at": "2025-01-04T07:00:00Z",
+        "as_of": "2025-01-04T07:00:00Z"
+      },
+      "expected": [
+        "b-listed"
+      ]
+    },
+    {
+      "id": "action-before-effective",
+      "method": "actions",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-02T07:00:00Z",
+        "as_of": "2025-01-02T07:00:00Z"
+      },
+      "expected": []
+    },
+    {
+      "id": "action-visible",
+      "method": "actions",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-03T01:30:00Z",
+        "as_of": "2025-01-03T01:30:00Z"
+      },
+      "expected": [
+        "split-announced"
+      ]
+    },
+    {
+      "id": "action-cancelled",
+      "method": "actions",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-03T01:30:00Z",
+        "as_of": "2025-01-04T07:00:00Z"
+      },
+      "expected": []
+    },
+    {
+      "id": "factor-before-effective",
+      "method": "factors",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-02T07:00:00Z",
+        "as_of": "2025-01-02T07:00:00Z"
+      },
+      "expected": []
+    },
+    {
+      "id": "factor-visible",
+      "method": "factors",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-03T01:30:00Z",
+        "as_of": "2025-01-03T01:30:00Z"
+      },
+      "expected": [
+        "factor-original"
+      ]
+    },
+    {
+      "id": "factor-revised",
+      "method": "factors",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a"
+        ],
+        "effective_at": "2025-01-03T01:30:00Z",
+        "as_of": "2025-01-04T07:00:00Z"
+      },
+      "expected": [
+        "factor-revised"
+      ]
+    },
+    {
+      "id": "opening-before-publication",
+      "method": "openings",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-01T00:00:00Z"
+      },
+      "expected": []
+    },
+    {
+      "id": "opening-halt-and-trade",
+      "method": "openings",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-07T00:00:00Z",
+        "as_of": "2025-01-02T01:30:00Z"
+      },
+      "expected": [
+        "a-open",
+        "b-halted"
+      ]
+    },
+    {
+      "id": "opening-right-boundary",
+      "method": "openings",
+      "query": {
+        "instrument_ids": [
+          "fixture.asset-a",
+          "fixture.asset-b"
+        ],
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-02T01:30:00Z",
+        "as_of": "2025-01-02T01:30:00Z"
+      },
+      "expected": []
+    }
+  ]
+}

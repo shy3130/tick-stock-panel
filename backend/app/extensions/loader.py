@@ -104,8 +104,11 @@ def start_backend_extensions(
 
 
 def current_extension_context(*, data_dir, repository) -> ExtensionContext:
+    from app.extensions.market_access import CoreMarketAccess
+
     return ExtensionContext(
         api_version=BACKEND_EXTENSION_API_VERSION,
         data_dir=data_dir,
         repository=repository,
+        market=CoreMarketAccess(data_dir, repository),
     )

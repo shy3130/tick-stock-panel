@@ -16,9 +16,11 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    chart_indicators,
     config_backup,
     data,
     definitions,
+    engine_jobs,
     events,
     ext_data,
     ext_pages,
@@ -326,6 +328,7 @@ async def _application_lifespan(app: FastAPI):
 
     # 扩展数据定时拉取: 在预设配置就绪后启动, 自动调度 enabled 的预设。
     from app.services.ext_pull import pull_scheduler
+    pull_scheduler.set_app_state(app.state)
     pull_scheduler.start(store.data_dir)
     pull_scheduler.refresh(store.data_dir)
     app.state.pull_scheduler = pull_scheduler
@@ -493,9 +496,20 @@ async def _application_lifespan(app: FastAPI):
         current_extension_context(data_dir=store.data_dir, repository=repo),
         extension_registry,
     )
+    pull_scheduler.refresh(store.data_dir)
+    from app.services.engine_jobs.manager import EngineJobManager
+
+    try:
+        app.state.engine_job_manager = EngineJobManager(store.data_dir)
+    except Exception:  # noqa: BLE001 — optional engine service failure must not disable the host
+        app.state.engine_job_manager = None
+        logger.error("独立引擎任务服务启动失败，已有功能继续运行", exc_info=False)
     try:
         yield
     finally:
+        engine_manager = getattr(app.state, "engine_job_manager", None)
+        if engine_manager and not engine_manager.shutdown():
+            logger.warning("独立引擎任务进程尚未退出，保留执行锁")
         repo._on_refresh_done = None  # noqa: SLF001
         wd = getattr(app.state, "watchdog", None)
         if wd:
@@ -575,16 +589,14 @@ async def shared_work_busy_handler(request: Request, exc: WorkBusyError) -> JSON
                         headers={"Retry-After": "3"})
 
 
-# CORS: 允许局域网访问 (自托管场景, 放开所有来源)
-# 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
-# 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS 允许来源白名单: 默认为空 (仅同源访问, 防止任意恶意网页跨域读/写本机面板)。
+# 生产/桌面/Docker/Vite 代理均天然同源; 确有独立外部前端需求时通过 CORS_ALLOW_ORIGINS 配置。
+_CORS_ALLOW_ORIGINS = tuple(
+    origin.strip().rstrip("/")
+    for origin in settings.cors_allow_origins.split(",")
+    if origin.strip() and origin.strip() != "*"
 )
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 # ================================================================
@@ -636,12 +648,19 @@ async def auth_middleware(request: Request, call_next):
     # CORS 预检不带凭据, 直接放行 (CORSMiddleware 在外层应答)
     if request.method == "OPTIONS":
         return await call_next(request)
+    # 防跨站写请求 (CSRF / 恶意网页直打本机面板): 非 Bearer 写操作拒绝跨站 Origin / Sec-Fetch-Site
+    authz = request.headers.get("authorization", "")
+    if (
+        request.method in _MUTATING_METHODS
+        and not authz.startswith("Bearer ")
+        and auth_api.is_cross_origin_request(request, _CORS_ALLOW_ORIGINS)
+    ):
+        return JSONResponse(status_code=403, content={"detail": "拒绝跨站写请求"})
     # 白名单放行(设密码/登录/探活本身不拦)
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
 
     # ── API Token 通道 (外部调用方; 与密码会话并行, 见 open-platform-plan §4) ──
-    authz = request.headers.get("authorization", "")
     if authz.startswith("Bearer "):
         from app.services import api_gateway
         # 网络门禁先行: 默认仅本机/内网可调 Token 通道 (API_TOKEN_LOCAL_ONLY=0 放开);
@@ -687,10 +706,21 @@ async def auth_middleware(request: Request, call_next):
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
 
+if _CORS_ALLOW_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(_CORS_ALLOW_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
 # 路由
 app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
+app.include_router(chart_indicators.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
@@ -713,6 +743,7 @@ app.include_router(data.router)
 app.include_router(ext_data.router)
 app.include_router(ext_pages.router)
 app.include_router(task_registry.router)
+app.include_router(engine_jobs.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)

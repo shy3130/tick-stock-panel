@@ -210,11 +210,12 @@ def audit_matrix(
 
 
 def _perturb_frame(frame: pl.DataFrame, time_col: str, cutoff) -> pl.DataFrame:
-    future = pl.col(time_col) > cutoff
+    future, scale = frame.select(
+        (pl.col(time_col) > cutoff).alias("future"),
+        (1.5 + pl.col(time_col).rank("dense") * 0.03).alias("scale"),
+    ).get_columns()
     return frame.with_columns([
-        pl.when(future).then(
-            pl.col(name) * (1.5 + pl.col(time_col).rank("dense") * 0.03) + (pl.col(name) == 0)
-        )
+        pl.when(future).then(pl.col(name) * scale + (pl.col(name) == 0))
         .otherwise(pl.col(name)).cast(dtype).alias(name)
         for name, dtype in frame.schema.items()
         if dtype.is_numeric() and name != time_col
@@ -225,11 +226,17 @@ def _compare_frames(baseline, actual, time_col, start, cutoff):
     keys = ["symbol", time_col]
     bounds = (pl.col(time_col) >= start) & (pl.col(time_col) <= cutoff)
     left, right = baseline.filter(bounds), actual.filter(bounds)
-    if left.select(keys).is_duplicated().any() or right.select(keys).is_duplicated().any():
+    left_keys, right_keys = left.select(keys), right.select(keys)
+    aligned = left_keys.schema == right_keys.schema and left_keys.equals(right_keys)
+    if left_keys.is_duplicated().any() or (not aligned and right_keys.is_duplicated().any()):
         raise ValueError("检查输出包含重复时间和标的")
     names = [name for name, dtype in left.schema.items() if name not in keys and (dtype.is_numeric() or dtype == pl.Boolean)]
     if any(name not in right.columns for name in names):
         raise ValueError("重算输出缺少字段")
+    if aligned and all(not left_keys[name].has_nulls() for name in keys) and all(
+        left[name].equals(right[name], check_dtypes=True) for name in names
+    ):
+        return {"differences": 0, "compared_values": left.height * (len(names) + 1), "examples": []}
     # full join 能发现消失或新增的历史信号，而不只检查两边都存在的行。
     joined = (
         left.select(*keys, *names).with_columns(pl.lit(True).alias("_present"))
@@ -383,6 +390,7 @@ def runtime_version() -> dict:
     root = Path(__file__).resolve().parents[1]
     paths = [
         "backtest/evidence.py", "backtest/engine.py", "backtest/strategy.py",
+        "backtest/dynamic_daily.py",
         "backtest/matrix.py", "backtest/fundamentals.py", "backtest/minute_replay.py",
         "strategy/engine.py", "strategy/scoring.py", "indicators/pipeline.py",
     ]
@@ -516,7 +524,8 @@ class EvidenceRecorder:
             "strategy": strategy,
             "data": {
                 "sha256": data_digest, "origin": "local_normalized_snapshot",
-                "asset_type": self.config.asset_type, "daily_price_basis": "qfq",
+                "asset_type": self.config.asset_type,
+                "daily_price_basis": effective_config.get("price_basis", "qfq"),
                 "datasets": self.datasets,
             },
             "reproducibility_sha256": json_digest({

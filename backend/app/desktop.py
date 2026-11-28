@@ -297,20 +297,30 @@ def _current_pid() -> int:
     return os.getpid()
 
 
-def _find_free_port(start: int, count: int = _PORT_PROBE_RANGE) -> int:
-    """从 start 起找第一个可用端口。全部被占则返回 start (交给 uvicorn 报错)。"""
+def _reserve_listener(start: int, count: int = _PORT_PROBE_RANGE) -> socket.socket:
+    """保留桌面服务的监听端口，直至 uvicorn 接手。"""
     for port in range(start, start + count):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    return start
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                if port:
+                    # Winsock may let the same user bind loopback over a wildcard
+                    # listener. Probe all interfaces while keeping Uvicorn local.
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                        probe.bind(("0.0.0.0", port))
+            listener.bind(("127.0.0.1", port))
+            # macOS 可允许在通配地址已监听时绑定具体地址；监听成功才算占用成功。
+            listener.listen(socket.SOMAXCONN)
+        except OSError:
+            listener.close()
+            continue
+        return listener
+    raise OSError(f"桌面服务未找到空闲端口 ({start}–{start + count - 1})")
 
 
-def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
+def _run_uvmicorn(listener: socket.socket, ready_event: threading.Event) -> None:
     """后台线程: 启动 uvicorn 服务。ready_event 在线程退出时置位 (通知主线程)。"""
     import uvicorn
 
@@ -324,9 +334,10 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
         ready_event.set()
         return
 
+    host, port = listener.getsockname()
     config = uvicorn.Config(
         app,
-        host="127.0.0.1",  # 仅本机, 不暴露外网 (桌面版无需远程访问)
+        host=host,
         port=port,
         log_level="info",
         access_log=False,    # 桌面版不需要访问日志
@@ -345,7 +356,7 @@ def _run_uvmicorn(port: int, ready_event: threading.Event) -> None:
     server.config.callback_notify = None  # 不用 notify 机制
 
     try:
-        server.run()
+        server.run(sockets=[listener])
     except Exception:
         # server.run() 内部跑 lifespan 启动链, 任一步抛异常都会冒到这里。
         # 不捕获则线程静默死亡, 主线程 _wait_for_server 傻等满 60s 后报「超时」,
@@ -449,6 +460,7 @@ def main() -> int:
         return run_worker()
 
     instance_acquired = False
+    listener = None
     try:
         if not _webview2_runtime_available():
             logger.error("未检测到 Microsoft Edge WebView2 运行时, 桌面版无法渲染界面")
@@ -469,22 +481,25 @@ def main() -> int:
 
         # Restore before app.main imports or its startup log reads Key/prefs.
         from app.config import settings
+        from app.desktop_engines.workspaces import logical_root
         from app.services.data_dir_upgrade import recover_desktop_data
 
-        recover_desktop_data(settings.data_dir)
+        if logical_root(settings.data_dir) == settings.data_dir.resolve():
+            recover_desktop_data(settings.data_dir)
 
         # 撞挖掘锁只降级, 其他预检异常必须同样落盘、弹框并释放桌面锁。
         conflict = _precheck_mining_lock()
         if conflict is not None:
             logger.warning("启动预检: %s", conflict.replace("\n", " "))
 
-        port = _find_free_port(_BASE_PORT)
+        listener = _reserve_listener(_BASE_PORT)
+        port = listener.getsockname()[1]
         logger.info("桌面版后端将监听 127.0.0.1:%d", port)
 
         # 后台线程起 uvicorn
         ready = threading.Event()
         server_thread = threading.Thread(
-            target=_run_uvmicorn, args=(port, ready), daemon=True,
+            target=_run_uvmicorn, args=(listener, ready), daemon=True,
             name="uvicorn",
         )
         server_thread.start()
@@ -524,12 +539,25 @@ def main() -> int:
         _show_crash("TSP 启动失败", traceback.format_exc())
         return 1
     finally:
+        if listener is not None:
+            listener.close()
         if instance_acquired:
             _release_single_instance()
 
 
 if __name__ == "__main__":
     import multiprocessing
+    import sqlite3
 
+    if getattr(sys, "frozen", False):
+        from app.desktop_engines.launcher import launch
+
+        try:
+            sys.exit(launch(main))
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            if len(sys.argv) == 1:
+                _show_crash("TSP 引擎启动失败", f"{exc}\n\n可使用 TSP --engine status 检查当前组合。")
+                sys.exit(1)
+            raise
     multiprocessing.freeze_support()
     sys.exit(main())

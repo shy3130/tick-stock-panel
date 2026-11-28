@@ -4,23 +4,25 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StockPanel } from './StockPanel'
 
-const data = vi.hoisted(() => ({ rows: [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }] }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data, isSuccess: true }), useQueryClient: () => ({}) }))
+const data = vi.hoisted(() => ({ rows: [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }], isLoading: false, isSuccess: true }))
+vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: data.rows.length ? data : undefined, isLoading: data.isLoading, isPending: data.isLoading, isSuccess: data.isSuccess }), useQueryClient: () => ({}) }))
 vi.mock('@/lib/useQuoteSubscription', () => ({ useQuoteSubscription: () => {} }))
-vi.mock('@/lib/useSharedQueries', () => ({ useCapabilities: () => ({}) }))
+vi.mock('@/lib/useSharedQueries', () => ({ useCapabilities: () => ({}), usePreferences: () => ({}) }))
 vi.mock('@/lib/useFinancials', () => ({ useFinancialMetrics: () => ({}), financialMetricsQueryOptions: () => ({}) }))
 vi.mock('./StockInfoBar', () => ({ StockInfoBar: () => null }))
 vi.mock('./StockDailyKChart', () => ({
   getDefaultRange: () => ({ start: '2026-05-06', end: '2026-11-06' }),
   toOHLC: (rows: unknown) => rows,
-  StockDailyKChart: ({ onDateClick }: any) => <button data-history onClick={() => onDateClick('2026-11-05')}>查看历史</button>,
+  StockDailyKChart: ({ onDateClick, height, alignedLayout }: any) => <button data-history data-height={height} data-aligned={alignedLayout} onClick={() => onDateClick('2026-11-05')}>查看历史</button>,
 }))
-vi.mock('./StockIntradayChart', () => ({ StockIntradayChart: ({ date, prevClose }: { date: string; prevClose?: number }) => <output data-prev-close={prevClose}>{date}</output> }))
+vi.mock('./StockIntradayChart', () => ({ StockIntradayChart: ({ date, prevClose, height, alignedLayout }: { date: string; prevClose?: number; height?: number; alignedLayout?: boolean }) => <output data-prev-close={prevClose} data-height={height} data-aligned={alignedLayout}>{date}</output> }))
 let root: Root
 let host: HTMLDivElement
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   data.rows = [{ date: '2026-11-05', close: 10, open: 10, high: 10, low: 10 }]
+  data.isLoading = false
+  data.isSuccess = true
   host = document.createElement('div'); root = createRoot(host)
 })
 afterEach(async () => { await act(async () => root.unmount()) })
@@ -65,4 +67,22 @@ it('a controlled intraday close leaves visibility to the caller so the pane can 
   expect(host.querySelector('output')).toBeNull()
   await render('600000.SH', { selectedDate: '2026-11-05', onIntradayClose, showIntraday: true })
   expect(host.querySelector('output')?.textContent).toBe('2026-11-05')
+})
+
+it('shares the custom chart base height and releases alignment when the minute column closes', async () => {
+  await render('A', { renderer: 'lightweight', customIndicators: true, height: 420 })
+  expect(host.querySelector('output')?.getAttribute('data-height')).toBe('420')
+  expect(host.querySelector('[data-history]')?.getAttribute('data-aligned')).toBe('true')
+  expect(host.querySelector('output')?.getAttribute('data-aligned')).toBe('true')
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="收起分时图"]')!.click())
+  expect(host.querySelector('[data-history]')?.getAttribute('data-aligned')).toBe('false')
+})
+
+it('keeps paired chart alignment reserved while daily data is loading for a switched stock', async () => {
+  data.rows = []
+  data.isLoading = true
+  data.isSuccess = false
+  await render('600519.SH', { renderer: 'lightweight', customIndicators: true, height: 420 })
+  expect(host.querySelector('[data-history]')?.getAttribute('data-aligned')).toBe('true')
+  expect(host.textContent).toContain('分时加载中…')
 })

@@ -1,15 +1,12 @@
-<!-- Tick Stock Panel · 方案 0 正式主标 — 亮紫渐变 · 透明底 · 全直角
-     变体: 渐变·深底 (终端 / 暗色 UI)
-     与 logo.svg 同几何, 仅渐变换为深底优化亮度 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 57.6" fill="none" role="img" aria-label="Tick Stock Panel">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 55.5" width="64" height="55.5"
+     role="img" aria-label="Tick Stock Panel">
   <defs>
-    <linearGradient id="tsp-grad-dark" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+    <linearGradient id="tsp-title-dark" x1="8.5" y1="32" x2="55.5" y2="32" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset=".5" stop-color="#A78BFA"/>
       <stop offset="1" stop-color="#8B5CF6"/>
     </linearGradient>
   </defs>
-  <path d="M20 9 H11 V55 H20" stroke="url(#tsp-grad-dark)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
-  <path d="M44 9 H53 V55 H44" stroke="url(#tsp-grad-dark)" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt"/>
-  <line x1="32" y1="15" x2="32" y2="49" stroke="url(#tsp-grad-dark)" stroke-width="3.5" stroke-linecap="butt" stroke-opacity="0.55"/>
-  <rect x="26.5" y="19.5" width="11" height="17" fill="url(#tsp-grad-dark)"/>
+  <path fill="url(#tsp-title-dark)" d="M8.5 32.5C8.5 19.25 15.75 10.5 27.5 10.5H35.875L29.875 16.5V21.5H26.125V40H29.875V46.5L20.875 55.5H8.5Z"/>
+  <path fill="url(#tsp-title-dark)" d="M34.125 17.5L43.125 8.5H55.5V31.5C55.5 44.75 48.25 53.5 36.5 53.5H28.125L34.125 47.5V40H37.875V21.5H34.125Z"/>
 </svg>

@@ -1,9 +1,8 @@
 # 模拟仓策略执行扩展
 
-基于 `c63ee7648cc6c3b42c3a85e73212705d96d25b9d` 的 L2 组合式扩展。
-前端位于 `frontend/src/custom/paper/`，复用已有 `/paper` 页面；后端经
-`BackendExtensionRegistrar.include_router` 和 APIRouter lifespan 自动接入。
-核心引擎、主应用、核心 API 和账务均无修改，无新增第三方依赖。
+该扩展负责模拟盘的策略绑定与执行。前端位于 `frontend/src/custom/paper/`，使用 `/paper` 页面。后端通过 `BackendExtensionRegistrar.include_router` 注册接口，并复用账户账务和策略运行能力。
+
+调试入口见 [后端扩展工作流](../../../../docs/secondary-development.md#4-后端扩展规范)。外部 AI 接入以 [Open API 契约](../../../../docs/ai-integration.md#通过-open-api-核对契约)为准。
 
 使用：创建独立账户 → 展开账户 →「策略买卖点跟单」→ 从回测候选、最近完成的回测、
 配置/结果 JSON 或当前策略配置预览参数 → 确认绑定。回测配置须与账户初始资金一致。

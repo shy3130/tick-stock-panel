@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.market_time import CN_TZ, cn_today
+from app.parquet import parquet_glob
 from app.services import ext_config_transfer
 from app.services.ext_data import (
     ExtConfig,
@@ -38,7 +39,12 @@ from app.services.ext_data import (
 )
 from app.services.ext_data_schema import CreateExtReq, FieldDef, PullConfigReq
 from app.services.ext_data_schema import PullAuthReq as PullAuthReq
-from app.services.ext_pull import _request_json, fetch_and_ingest, pull_scheduler
+from app.services.ext_pull import (
+    _request_json,
+    execute_and_record_pull,
+    pull_scheduler,
+    run_collector,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ext-data", tags=["ext-data"])
@@ -215,8 +221,8 @@ def _parquet_glob(config: ExtConfig, data_dir: Path) -> str:
     """
     cfg_dir = data_dir / "ext_data" / config.id
     if config.mode == "snapshot":
-        return str(cfg_dir / "*.parquet")
-    return str(cfg_dir / "timeseries" / "**" / "*.parquet")
+        return parquet_glob(cfg_dir, "*.parquet")
+    return parquet_glob(cfg_dir / "timeseries")
 
 
 def _safe_json_value(value):
@@ -277,7 +283,7 @@ def _read_ext_dataframe(
         path = cfg_dir / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), None
-        return collect(pl.scan_parquet(path)), _latest_sync_date(config, data_dir)
+        return collect(pl.scan_parquet(path, glob=False)), _latest_sync_date(config, data_dir)
 
     base = cfg_dir / "timeseries"
     if not base.exists():
@@ -288,7 +294,7 @@ def _read_ext_dataframe(
         path = base / f"date={day}" / "part.parquet"
         if not path.exists():
             return pl.DataFrame(), day
-        return collect(pl.scan_parquet(path)), day
+        return collect(pl.scan_parquet(path, glob=False)), day
 
     partitions = sorted(
         d for d in base.iterdir()
@@ -313,7 +319,7 @@ def _read_ext_dataframe(
         # 没有它, 范围合并后消费方无法区分行来自哪一天。
         frames = []
         for d in selected:
-            f = pl.scan_parquet(d / "part.parquet")
+            f = pl.scan_parquet(d / "part.parquet", glob=False)
             names = f.collect_schema().names()
             day = d.name[5:]
             if "date" not in names:
@@ -328,7 +334,7 @@ def _read_ext_dataframe(
 
     latest = partitions[-1]
     latest_date = latest.name[5:]
-    return collect(pl.scan_parquet(latest / "part.parquet")), latest_date
+    return collect(pl.scan_parquet(latest / "part.parquet", glob=False)), latest_date
 
 
 def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
@@ -340,7 +346,7 @@ def _with_instrument_name(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
     if not path.exists():
         return df
     try:
-        inst = pl.read_parquet(path)
+        inst = pl.read_parquet(path, glob=False)
         if "symbol" in inst.columns and "name" in inst.columns:
             inst = inst.select(["symbol", "name"]).unique(subset=["symbol"], keep="last")
             if "name" in df.columns:
@@ -410,6 +416,22 @@ def _latest_sync_from_partitions(base: Path) -> str | None:
     return latest_date
 
 
+def _list_partition_dates_desc(config: ExtConfig, data_dir: Path) -> list[str]:
+    """返回时序表已有分区的日期列表 (按日期倒序 YYYY-MM-DD); 快照表返回空列表。"""
+    if config.mode != "timeseries":
+        return []
+    base = _ext_data_dir(config, data_dir)
+    if not base.exists():
+        return []
+    dates = [
+        d.name[5:]
+        for d in base.iterdir()
+        if d.is_dir() and d.name.startswith("date=") and (d / "part.parquet").exists()
+    ]
+    dates.sort(reverse=True)
+    return dates
+
+
 def _date_range(config: ExtConfig, data_dir: Path) -> list[str] | None:
     """返回时序型扩展数据的日期范围 [最早, 最新]。"""
     if config.mode != "timeseries":
@@ -453,7 +475,7 @@ def _plate_stats(config: ExtConfig, data_dir: Path) -> dict | None:
         return None
     try:
         col = pl.read_parquet(
-            base / f"date={parts[-1]}" / "part.parquet", columns=[tf]
+            base / f"date={parts[-1]}" / "part.parquet", glob=False, columns=[tf]
         )[tf].cast(pl.Utf8)
     except Exception:  # noqa: BLE001 — 列缺失/文件损坏 → 无多盘信息, 不阻断列表
         return None
@@ -508,6 +530,32 @@ def _granularity_effective(config: ExtConfig, data_dir: Path) -> str | None:
     return stats["granularity"]
 
 
+@router.get("/collectors")
+def list_collectors(request: Request):
+    """列出已注册的扩展采集器 (ExtCollector) 元数据。"""
+    registry = getattr(request.app.state, "extension_registry", None)
+    if registry is None:
+        return {"items": []}
+    return {
+        "items": [
+            {
+                "id": item.implementation_id,
+                "extension_id": item.extension_id,
+                "label": item.implementation.label or item.implementation_id,
+                "description": item.implementation.description,
+                "default_mode": (
+                    item.implementation.default_mode
+                    if item.implementation.default_mode in ("snapshot", "timeseries")
+                    else "timeseries"
+                ),
+                "default_fields": list(item.implementation.default_fields or ()),
+                "params_schema": dict(item.implementation.params_schema or {}),
+            }
+            for item in registry.ext_collectors()
+        ]
+    }
+
+
 @router.get("")
 def list_configs(request: Request):
     """列出所有扩展数据配置。"""
@@ -520,6 +568,7 @@ def list_configs(request: Request):
         d["date_range"] = _date_range(c, data_dir)
         d["plate"] = _plate_stats(c, data_dir)
         d["granularity_effective"] = _granularity_effective(c, data_dir)
+        d["running"] = pull_scheduler.is_running(c.id)
         items.append(d)
     return {"items": items}
 
@@ -681,6 +730,7 @@ def list_rows(
         "label": config.label,
         "mode": config.mode,
         "date": active_date,
+        "dates": _list_partition_dates_desc(config, data_dir),
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -840,7 +890,7 @@ def _prev_daily_close(data_dir: Path, target_date: str) -> pl.DataFrame | None:
     path = daily / f"date={prevs[-1]}" / "part.parquet"
     if not path.exists():
         return None
-    df = pl.read_parquet(path, columns=["symbol", "close"])
+    df = pl.read_parquet(path, glob=False, columns=["symbol", "close"])
     return (
         df.with_columns(_bare_symbol_expr().alias("_bare"))
         .select([pl.col("_bare"), pl.col("close").cast(pl.Float64).alias("prev_close")])
@@ -889,7 +939,7 @@ def _dimension_intraday_compute(
 
     try:
         bars = pl.read_parquet(
-            minute_dir / f"date={target}" / "part.parquet",
+            minute_dir / f"date={target}" / "part.parquet", glob=False,
             columns=["symbol", "datetime", "close"],
         )
     except Exception as exc:  # noqa: BLE001
@@ -1155,8 +1205,18 @@ def configure_pull(request: Request, config_id: str, body: PullConfigReq):
         rejected = session_cookie_rejection(new_auth, get_ext_api_key(config_id))
         if rejected:
             raise HTTPException(400, rejected)
+    collector_id = (
+        body.collector if body.collector is not None
+        else (old_pull.collector if old_pull else None)
+    )
+    collector_params = (
+        body.collector_params if body.collector_params is not None
+        else (old_pull.collector_params if old_pull else None)
+    )
     config.pull = PullConfig(
         url=body.url,
+        collector=collector_id,
+        collector_params=collector_params,
         method=body.method,
         headers=body.headers,
         body=body.body,
@@ -1243,18 +1303,36 @@ def set_pull_api_key(request: Request, config_id: str, body: ApiKeyReq):
 
 @router.post("/{config_id}/pull/test")
 async def test_pull(request: Request, config_id: str):
-    """测试拉取：请求外部 API 并返回预览数据，不写入。"""
+    """测试拉取：请求外部 API 或运行扩展采集器并返回预览数据，不写入。"""
     store = _store(request)
     config = store.get(config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
-    if not config.pull or not config.pull.url:
-        raise HTTPException(400, "拉取未配置或 URL 为空")
+    if not config.pull or not config.pull.is_configured():
+        raise HTTPException(400, "拉取未配置或 URL/采集器为空")
+
+    pull = config.pull
+    if pull.collector:
+        try:
+            result = await run_collector(
+                config, cn_today(), _data_dir(request),
+                app_state=request.app.state, is_test=True,
+            )
+            rows = list(result.rows)
+            return {
+                "status": "skipped" if result.skipped_reason else ("partial" if result.partial_errors else "ok"),
+                "total_rows": len(rows),
+                "preview": rows[:5],
+                "has_symbol": bool(rows and "symbol" in rows[0]),
+                "message": result.skipped_reason or result.message,
+                "partial_errors": list(result.partial_errors),
+            }
+        except Exception as e:
+            raise HTTPException(400, f"测试失败: {e}") from e
 
     # 复用正式拉取的请求实现 (UA 标识头 + 鉴权注入同一套口径), 不带日期参数
     from app.services.ext_pull import _apply_field_map, _extract_rows
 
-    pull = config.pull
     try:
         data = await _request_json(pull, config.id)
         rows = _extract_rows(data, pull.response_path)
@@ -1276,31 +1354,30 @@ async def run_pull(request: Request, config_id: str):
     config = await run_ext_data_io(store.get, config_id)
     if not config:
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
-    if not config.pull or not config.pull.url:
-        raise HTTPException(400, "拉取未配置或 URL 为空")
+    if not config.pull or not config.pull.is_configured():
+        raise HTTPException(400, "拉取未配置或 URL/采集器为空")
 
     try:
-        n, d = await fetch_and_ingest(config, _data_dir(request))
-        await run_ext_data_io(_refresh_views, request)
-        # 写回执行状态, 让前端"上次执行"面板立即反映
-        updated = await run_ext_data_io(store.get, config_id)
-        if updated and updated.pull:
-            from datetime import datetime, timezone
-            updated.pull.last_run = datetime.now(timezone.utc).isoformat()
-            updated.pull.last_status = "success"
-            updated.pull.last_message = f"{n} rows @ {d}"
-            updated.pull.last_rows = n
-            await run_ext_data_io(store.upsert, updated)
-        return {"status": "ok", "rows": n, "date": d}
+        outcome = await execute_and_record_pull(
+            config,
+            _data_dir(request),
+            store=store,
+            keep_strategy_cache=False,
+            app_state=request.app.state,
+            refresh_views=lambda: _refresh_views(request),
+        )
+        n, d = outcome
+        resp = {
+            "status": "ok" if outcome.status == "success" else outcome.status,
+            "rows": n,
+            "date": d,
+        }
+        if outcome.status != "success":
+            resp["message"] = outcome.message
+        if outcome.partial_errors:
+            resp["partial_errors"] = list(outcome.partial_errors)
+        return resp
     except Exception as e:
-        # 失败也写回状态, 记录错误信息
-        failed = await run_ext_data_io(store.get, config_id)
-        if failed and failed.pull:
-            from datetime import datetime, timezone
-            failed.pull.last_run = datetime.now(timezone.utc).isoformat()
-            failed.pull.last_status = "error"
-            failed.pull.last_message = str(e)[:200]
-            await run_ext_data_io(store.upsert, failed)
         raise HTTPException(400, f"拉取失败: {e}") from e
 
 
@@ -1470,7 +1547,7 @@ def ext_series(
             return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
         path = None
 
-    df = pl.read_parquet(path) if path else df_all
+    df = pl.read_parquet(path, glob=False) if path else df_all
     if df.is_empty() or field not in df.columns or time_field not in df.columns:
         return {"config_id": config_id, "field": field, "granularity": "intraday", "date": day, "items": {}}
 
@@ -1647,7 +1724,8 @@ def _describe_parquet_columns(glob: str) -> list[tuple[str, str]]:
     # hive_partitioning=false: 时序表目录名形如 date=YYYY-MM-DD, DuckDB 默认据此
     # 推断分区并在真实列之外多出一个 date 列, 污染列选择器里的扩展字段。
     rel = duckdb.query(
-        f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)"
+        "DESCRIBE SELECT * FROM read_parquet(?, union_by_name=true, hive_partitioning=false)",
+        params=[glob],
     )
     names = rel.columns
     type_idx = names.index("column_type" if "column_type" in names else "data_type")
@@ -1719,25 +1797,16 @@ def discover_all_schemas(request: Request):
 def _refresh_views(request: Request) -> None:
     """重新注册 DuckDB 视图以包含新的扩展数据。"""
     repo = request.app.state.repo
-    db = repo.store.db
-    d = repo.store.data_dir.as_posix()
+    data_dir = repo.store.data_dir
 
     # 注册旧路径视图（兼容）
-    for name, subdir in [("instruments_ext", "instruments_ext"), ("kline_ext", "kline_ext")]:
-        old_glob = f"{d}/{subdir}/**/*.parquet"
-        old_dir = Path(d) / subdir
-        if old_dir.exists():
-            sql = (
-                f"CREATE OR REPLACE VIEW {name} AS "
-                f"SELECT * FROM read_parquet('{old_glob}', union_by_name=true)"
-            )
-            try:
-                db.execute(sql)
-            except Exception:
-                pass
+    for name in ("instruments_ext", "kline_ext"):
+        old_dir = data_dir / name
+        if next(old_dir.rglob("*.parquet"), None) is not None:
+            repo.refresh_view(name, parquet_glob(old_dir))
 
     # 注册新路径视图：每个扩展表一个视图 ext_{config_id}
-    ext_base = Path(d) / "ext_data"
+    ext_base = data_dir / "ext_data"
     if ext_base.exists():
         for cfg_dir in ext_base.iterdir():
             if not cfg_dir.is_dir():
@@ -1754,15 +1823,11 @@ def _refresh_views(request: Request) -> None:
                     view_name = f"ext_{cfg_id}"
                     # snapshot: part.parquet 在 cfg_dir/ 根下; timeseries: 在 timeseries/ 子目录
                     mode = raw.get("mode", "snapshot")
-                    if mode == "snapshot":
-                        glob_pattern = f"{cfg_dir.as_posix()}/*.parquet"
-                    else:
-                        glob_pattern = f"{cfg_dir.as_posix()}/timeseries/**/*.parquet"
-                    sql = (
-                        f"CREATE OR REPLACE VIEW {view_name} AS "
-                        f"SELECT * FROM read_parquet('{glob_pattern}', union_by_name=true)"
+                    glob_pattern = (
+                        parquet_glob(cfg_dir, "*.parquet") if mode == "snapshot"
+                        else parquet_glob(cfg_dir / "timeseries")
                     )
-                    db.execute(sql)
+                    repo.refresh_view(view_name, glob_pattern)
             except Exception:
                 pass
 

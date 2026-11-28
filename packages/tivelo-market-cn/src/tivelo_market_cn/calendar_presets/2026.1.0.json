@@ -1,0 +1,682 @@
+{
+  "preset_format": "tivelo-cn-calendar-preset-v1",
+  "version_id": "a621c11f613c020ba2d8062301715d63689d87c75b2d797599d239a6b2201c9e",
+  "contents": {
+    "schema_version": "1.0",
+    "preset_id": "cn.equity.auction-calendar",
+    "preset_version": "2026.1.0",
+    "timezone": "Asia/Shanghai",
+    "scope": "announced_regular_equity_auctions",
+    "bar_convention_id": "cn.equity.regular-auction.daily.v1",
+    "verified_on": "2026-11-18",
+    "sources": [
+      {
+        "source_id": "registration-start-2023",
+        "title": "沪深交易所主板注册制首批企业上市仪式举行",
+        "publisher": "SZSE",
+        "document_number": null,
+        "url": "https://www.szse.cn/aboutus/trends/news/t20230411_599874.html",
+        "sha256": "5e16041071039738db3521dcd4d99f74e643923f838fac0821439f5cdd40ff91",
+        "byte_size": 18189,
+        "published_on": "2023-04-10",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:10:06.599890Z"
+      },
+      {
+        "source_id": "sse-deferred-2023",
+        "title": "上海证券交易所交易规则（2023年修订）暂缓实施条文",
+        "publisher": "SSE",
+        "document_number": "上证发〔2023〕32号附件4",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/repeal/rules/c/10824490/files/3f0cc77bae0543c795a42731398bc8e0.docx",
+        "sha256": "13cd6f14fdc5b8ecb5fad1876c6ecb05bf6c163d5217a2f2d687029ffa5bf4e2",
+        "byte_size": 17995,
+        "published_on": "2023-02-17",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:12:30.234543Z"
+      },
+      {
+        "source_id": "sse-deferred-2026",
+        "title": "上海证券交易所交易规则（2026年修订）暂缓实施条文",
+        "publisher": "SSE",
+        "document_number": "上证发〔2026〕41号附件3",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/10816492/files/7476908baade49b8b14881439d2f89b6.docx",
+        "sha256": "f4a0d0976a01e3e95f82460170900993824b70d91183e42d09e13ba10a9958c5",
+        "byte_size": 16476,
+        "published_on": "2026-04-24",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:17:16.274088Z"
+      },
+      {
+        "source_id": "sse-holidays-2024",
+        "title": "关于上海证券交易所2024年部分节假日休市安排的通知",
+        "publisher": "SSE",
+        "document_number": "上证公告〔2023〕47号",
+        "url": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20231226_5733939.shtml",
+        "sha256": "f614daa5a6a53916e47ee1ac8e7682d2f15369f0f7d0f90611819a6daad92263",
+        "byte_size": 27754,
+        "published_on": "2023-12-26",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.257244Z"
+      },
+      {
+        "source_id": "sse-holidays-2025",
+        "title": "关于上海证券交易所2025年部分节假日休市安排的通知",
+        "publisher": "SSE",
+        "document_number": "上证公告〔2024〕38号",
+        "url": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20241223_10767108.shtml",
+        "sha256": "d403c40f29bbf1fe7f39b02b7fb93c9a0bfbd71f8f04c6350c3b5050921bf889",
+        "byte_size": 27766,
+        "published_on": "2024-12-23",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.555863Z"
+      },
+      {
+        "source_id": "sse-holidays-2026",
+        "title": "关于上海证券交易所2026年部分节假日休市安排的通知",
+        "publisher": "SSE",
+        "document_number": "上证公告〔2025〕45号",
+        "url": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20251222_10802507.shtml",
+        "sha256": "ff188c710b8904758c185eb955e9eaa2c9bd7c2061af984d4f1d743f899c12a4",
+        "byte_size": 28038,
+        "published_on": "2025-12-22",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:17:16.288749Z"
+      },
+      {
+        "source_id": "sse-notice-2023",
+        "title": "上海证券交易所交易规则（2023年修订）发布通知",
+        "publisher": "SSE",
+        "document_number": "上证发〔2023〕32号",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/repeal/rules/c/c_20250612_10824490.shtml",
+        "sha256": "41674dd8ae45aa79628c5a298c9b90f3a50e8b7a2f0a5df96cc146870ca13b46",
+        "byte_size": 34499,
+        "published_on": "2023-02-17",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.488008Z"
+      },
+      {
+        "source_id": "sse-notice-2026",
+        "title": "上海证券交易所交易规则（2026年修订）发布通知",
+        "publisher": "SSE",
+        "document_number": "上证发〔2026〕41号",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml",
+        "sha256": "1607a6841cb962ccea0936afc3bb5afbe51766960a4bfad691567a123fa74a54",
+        "byte_size": 33580,
+        "published_on": "2026-04-24",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:21:39.692887Z"
+      },
+      {
+        "source_id": "sse-rules-2023",
+        "title": "上海证券交易所交易规则（2023年修订）附件正文",
+        "publisher": "SSE",
+        "document_number": "上证发〔2023〕32号附件1",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/repeal/rules/c/10824490/files/dcbe58edb194451d93f19b1f7dd8fb4c.docx",
+        "sha256": "7aa2319f6dcf597be1e86b3b69d7c2ad0e6acb2a5d0cc6be48a01af602fded40",
+        "byte_size": 51948,
+        "published_on": "2023-02-17",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:08:21.693680Z"
+      },
+      {
+        "source_id": "sse-rules-2026",
+        "title": "上海证券交易所交易规则（2026年修订）附件正文",
+        "publisher": "SSE",
+        "document_number": "上证发〔2026〕41号附件1",
+        "url": "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/10816492/files/58bd5ce4dfc94b57a5391f60eb2719ab.docx",
+        "sha256": "fc922c433438b2636cb631eab25cca405209712acbb6aaded768c45456ff8888",
+        "byte_size": 65302,
+        "published_on": "2026-04-24",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:17:16.401951Z"
+      },
+      {
+        "source_id": "szse-holidays-2024",
+        "title": "关于2024年部分节假日休市安排的通知",
+        "publisher": "SZSE",
+        "document_number": "深证会〔2023〕409号",
+        "url": "https://www.szse.cn/disclosure/notice/t20231226_605108.html",
+        "sha256": "2c9906bac2116f3bc6190f0d0a74e0be40f1e4307f71e34cc12007d411e88b13",
+        "byte_size": 27332,
+        "published_on": "2023-12-26",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.486147Z"
+      },
+      {
+        "source_id": "szse-holidays-2025",
+        "title": "关于2025年部分节假日休市安排的通知",
+        "publisher": "SZSE",
+        "document_number": "深证会〔2024〕413号",
+        "url": "https://www.szse.cn/disclosure/notice/general/t20241223_611283.html",
+        "sha256": "1c5da711eadf27308c84f12b5908ef461fa9dc739d1476512da2754249c90c1f",
+        "byte_size": 33553,
+        "published_on": "2024-12-23",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.485877Z"
+      },
+      {
+        "source_id": "szse-holidays-2026",
+        "title": "关于2026年部分节假日休市安排的通知",
+        "publisher": "SZSE",
+        "document_number": "深证会〔2025〕481号",
+        "url": "https://www.szse.cn/disclosure/notice/t20251222_618087.html",
+        "sha256": "adfcdc1c285121a58ad3a55060a7125812d542cf9fdb92058aac1b1bc99c8243",
+        "byte_size": 24892,
+        "published_on": "2025-12-22",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:17:16.402240Z"
+      },
+      {
+        "source_id": "szse-notice-2023",
+        "title": "深圳证券交易所交易规则（2023年修订）发布通知",
+        "publisher": "SZSE",
+        "document_number": "深证上〔2023〕98号",
+        "url": "https://www.szse.cn/lawrules/rule/repeal/rules/t20230217_598773.html",
+        "sha256": "7f4405a3e7021976db2d4ecbb1b02434f603110b2de46233f5a8b71f2059794a",
+        "byte_size": 15560,
+        "published_on": "2023-02-17",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:07:49.344587Z"
+      },
+      {
+        "source_id": "szse-notice-2026",
+        "title": "关于发布深圳证券交易所交易规则（2026年修订）的通知",
+        "publisher": "SZSE",
+        "document_number": "深证上〔2026〕551号",
+        "url": "https://www.szse.cn/lawrules/rule/trade/current/t20260424_620190.html",
+        "sha256": "08d05a9d3f9c7dac31e8ac33712bac26b3995585718031e99a953e9128eec2d2",
+        "byte_size": 19374,
+        "published_on": "2026-04-24",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:21:39.650890Z"
+      },
+      {
+        "source_id": "szse-rules-2023",
+        "title": "深圳证券交易所交易规则（2023年修订）附件正文",
+        "publisher": "SZSE",
+        "document_number": "深证上〔2023〕98号附件1",
+        "url": "https://docs.static.szse.cn/www/lawrules/rule/repeal/rules/W020230217564423808793.pdf",
+        "sha256": "7018114a6e11deb239c2a72e71e49defc6e8841b3e2c093b3bbf809282c67222",
+        "byte_size": 620843,
+        "published_on": "2023-02-17",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T21:08:21.548663Z"
+      },
+      {
+        "source_id": "szse-rules-2026",
+        "title": "深圳证券交易所交易规则（2026年修订）附件正文",
+        "publisher": "SZSE",
+        "document_number": "深证上〔2026〕551号附件1",
+        "url": "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf",
+        "sha256": "9b66f8b0db70f84a25ef1ccb4ee2351001724e408117552d75f6d8993483c586",
+        "byte_size": 282084,
+        "published_on": "2026-04-24",
+        "publication_precision": "date",
+        "knowledge_policy": "next_cn_midnight",
+        "retrieved_at": "2026-11-17T20:17:16.135983Z"
+      }
+    ],
+    "schedules": [
+      {
+        "schedule_id": "xshe-equity-2023",
+        "venue_id": "XSHE",
+        "effective_from": "2023-04-10",
+        "source_ids": [
+          "registration-start-2023",
+          "szse-notice-2023",
+          "szse-rules-2023"
+        ],
+        "clauses": [
+          "2.3.1",
+          "2.3.2"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sessions": [
+          {
+            "session_id": "opening-auction",
+            "kind": "auction",
+            "start": "09:15",
+            "end": "09:25"
+          },
+          {
+            "session_id": "morning",
+            "kind": "continuous",
+            "start": "09:30",
+            "end": "11:30"
+          },
+          {
+            "session_id": "afternoon",
+            "kind": "continuous",
+            "start": "13:00",
+            "end": "14:57"
+          },
+          {
+            "session_id": "closing-auction",
+            "kind": "auction",
+            "start": "14:57",
+            "end": "15:00"
+          }
+        ]
+      },
+      {
+        "schedule_id": "xshe-equity-2026",
+        "venue_id": "XSHE",
+        "effective_from": "2026-07-06",
+        "source_ids": [
+          "szse-notice-2026",
+          "szse-rules-2026"
+        ],
+        "clauses": [
+          "2.3.1",
+          "2.3.2"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sessions": [
+          {
+            "session_id": "opening-auction",
+            "kind": "auction",
+            "start": "09:15",
+            "end": "09:25"
+          },
+          {
+            "session_id": "morning",
+            "kind": "continuous",
+            "start": "09:30",
+            "end": "11:30"
+          },
+          {
+            "session_id": "afternoon",
+            "kind": "continuous",
+            "start": "13:00",
+            "end": "14:57"
+          },
+          {
+            "session_id": "closing-auction",
+            "kind": "auction",
+            "start": "14:57",
+            "end": "15:00"
+          }
+        ]
+      },
+      {
+        "schedule_id": "xshg-equity-2023",
+        "venue_id": "XSHG",
+        "effective_from": "2023-04-10",
+        "source_ids": [
+          "registration-start-2023",
+          "sse-deferred-2023",
+          "sse-notice-2023",
+          "sse-rules-2023"
+        ],
+        "clauses": [
+          "2.4.1",
+          "2.4.2"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sessions": [
+          {
+            "session_id": "opening-auction",
+            "kind": "auction",
+            "start": "09:15",
+            "end": "09:25"
+          },
+          {
+            "session_id": "morning",
+            "kind": "continuous",
+            "start": "09:30",
+            "end": "11:30"
+          },
+          {
+            "session_id": "afternoon",
+            "kind": "continuous",
+            "start": "13:00",
+            "end": "14:57"
+          },
+          {
+            "session_id": "closing-auction",
+            "kind": "auction",
+            "start": "14:57",
+            "end": "15:00"
+          }
+        ]
+      },
+      {
+        "schedule_id": "xshg-equity-2026",
+        "venue_id": "XSHG",
+        "effective_from": "2026-07-06",
+        "source_ids": [
+          "sse-deferred-2026",
+          "sse-notice-2026",
+          "sse-rules-2026"
+        ],
+        "clauses": [
+          "2.4.1",
+          "2.4.2"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sessions": [
+          {
+            "session_id": "opening-auction",
+            "kind": "auction",
+            "start": "09:15",
+            "end": "09:25"
+          },
+          {
+            "session_id": "morning",
+            "kind": "continuous",
+            "start": "09:30",
+            "end": "11:30"
+          },
+          {
+            "session_id": "afternoon",
+            "kind": "continuous",
+            "start": "13:00",
+            "end": "14:57"
+          },
+          {
+            "session_id": "closing-auction",
+            "kind": "auction",
+            "start": "14:57",
+            "end": "15:00"
+          }
+        ]
+      }
+    ],
+    "years": [
+      {
+        "venue_id": "XSHE",
+        "year": 2024,
+        "source_ids": [
+          "szse-holidays-2024"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2023-12-30",
+            "end": "2024-01-01"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2024-02-09",
+            "end": "2024-02-17"
+          },
+          {
+            "reason": "qingming",
+            "start": "2024-04-04",
+            "end": "2024-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2024-05-01",
+            "end": "2024-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2024-06-10",
+            "end": "2024-06-10"
+          },
+          {
+            "reason": "mid-autumn",
+            "start": "2024-09-15",
+            "end": "2024-09-17"
+          },
+          {
+            "reason": "national-day",
+            "start": "2024-10-01",
+            "end": "2024-10-07"
+          }
+        ]
+      },
+      {
+        "venue_id": "XSHE",
+        "year": 2025,
+        "source_ids": [
+          "szse-holidays-2025"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2025-01-01",
+            "end": "2025-01-01"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2025-01-28",
+            "end": "2025-02-04"
+          },
+          {
+            "reason": "qingming",
+            "start": "2025-04-04",
+            "end": "2025-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2025-05-01",
+            "end": "2025-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2025-05-31",
+            "end": "2025-06-02"
+          },
+          {
+            "reason": "national-day-mid-autumn",
+            "start": "2025-10-01",
+            "end": "2025-10-08"
+          }
+        ]
+      },
+      {
+        "venue_id": "XSHE",
+        "year": 2026,
+        "source_ids": [
+          "szse-holidays-2026"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2026-01-01",
+            "end": "2026-01-03"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2026-02-15",
+            "end": "2026-02-23"
+          },
+          {
+            "reason": "qingming",
+            "start": "2026-04-04",
+            "end": "2026-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2026-05-01",
+            "end": "2026-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2026-06-19",
+            "end": "2026-06-21"
+          },
+          {
+            "reason": "mid-autumn",
+            "start": "2026-09-25",
+            "end": "2026-09-27"
+          },
+          {
+            "reason": "national-day",
+            "start": "2026-10-01",
+            "end": "2026-10-07"
+          }
+        ]
+      },
+      {
+        "venue_id": "XSHG",
+        "year": 2024,
+        "source_ids": [
+          "sse-holidays-2024"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2023-12-30",
+            "end": "2024-01-01"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2024-02-09",
+            "end": "2024-02-17"
+          },
+          {
+            "reason": "qingming",
+            "start": "2024-04-04",
+            "end": "2024-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2024-05-01",
+            "end": "2024-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2024-06-10",
+            "end": "2024-06-10"
+          },
+          {
+            "reason": "mid-autumn",
+            "start": "2024-09-15",
+            "end": "2024-09-17"
+          },
+          {
+            "reason": "national-day",
+            "start": "2024-10-01",
+            "end": "2024-10-07"
+          }
+        ]
+      },
+      {
+        "venue_id": "XSHG",
+        "year": 2025,
+        "source_ids": [
+          "sse-holidays-2025"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2025-01-01",
+            "end": "2025-01-01"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2025-01-28",
+            "end": "2025-02-04"
+          },
+          {
+            "reason": "qingming",
+            "start": "2025-04-04",
+            "end": "2025-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2025-05-01",
+            "end": "2025-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2025-05-31",
+            "end": "2025-06-02"
+          },
+          {
+            "reason": "national-day-mid-autumn",
+            "start": "2025-10-01",
+            "end": "2025-10-08"
+          }
+        ]
+      },
+      {
+        "venue_id": "XSHG",
+        "year": 2026,
+        "source_ids": [
+          "sse-holidays-2026"
+        ],
+        "closures": [
+          {
+            "reason": "new-year",
+            "start": "2026-01-01",
+            "end": "2026-01-03"
+          },
+          {
+            "reason": "spring-festival",
+            "start": "2026-02-15",
+            "end": "2026-02-23"
+          },
+          {
+            "reason": "qingming",
+            "start": "2026-04-04",
+            "end": "2026-04-06"
+          },
+          {
+            "reason": "labour-day",
+            "start": "2026-05-01",
+            "end": "2026-05-05"
+          },
+          {
+            "reason": "dragon-boat",
+            "start": "2026-06-19",
+            "end": "2026-06-21"
+          },
+          {
+            "reason": "mid-autumn",
+            "start": "2026-09-25",
+            "end": "2026-09-27"
+          },
+          {
+            "reason": "national-day",
+            "start": "2026-10-01",
+            "end": "2026-10-07"
+          }
+        ]
+      }
+    ]
+  }
+}

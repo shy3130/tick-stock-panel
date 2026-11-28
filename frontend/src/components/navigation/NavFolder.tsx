@@ -1,7 +1,6 @@
 import { useLayoutEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react'
-import { cn } from '@/lib/cn'
+import { ChevronRight, Folder, FolderOpen } from 'lucide-react'
 
 export function NavFolder({ label, active, expanded, rail, popupOpen, onToggle, onPopupChange, children, indicators }: {
   label: string; active: boolean; expanded: boolean; rail: boolean; popupOpen: boolean
@@ -47,23 +46,49 @@ export function NavFolder({ label, active, expanded, rail, popupOpen, onToggle, 
   }, [rail, popupOpen])
   const open = rail ? popupOpen : expanded
   const Icon = open ? FolderOpen : Folder
-  return <div>
-    <button ref={trigger} type="button" aria-label={label} aria-expanded={open} aria-controls={id}
-      aria-haspopup={rail ? 'dialog' : undefined}
-      title={rail ? label : undefined} onClick={() => rail ? onPopupChange(!popupOpen) : onToggle()}
-      className={cn('group flex w-full items-center gap-3 rounded-btn py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
-        rail ? 'justify-center px-0' : 'px-3', active ? 'bg-elevated text-accent font-medium' : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground')}>
-      <Icon className="h-4 w-4 shrink-0" />
-      {!rail && <><span className="min-w-0 flex-1 truncate text-left">{label}</span>{indicators}
-        {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />}</>}
-    </button>
-    {!rail && expanded && <div id={id} className="relative mt-0.5 space-y-0.5 pl-6">
-      <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 border-l border-border/60" />{children}
-    </div>}
-    {rail && popupOpen && createPortal(<div ref={panel} id={id} role="dialog" aria-label={`${label}子菜单`} tabIndex={-1}
-      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) onPopupChange(false) }}
-      style={position} className="fixed z-[100] w-60 max-h-[min(70vh,32rem)] overflow-y-auto rounded-xl border border-border bg-surface p-2 shadow-xl">
-      <div className="px-3 py-2 text-xs font-medium text-muted">{label}</div>{children}
-    </div>, document.body)}
-  </div>
+  return (
+    <div>
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        aria-haspopup={rail ? 'dialog' : undefined}
+        title={label}
+        onClick={() => rail ? onPopupChange(!popupOpen) : onToggle()}
+        data-active={active}
+        data-rail={rail}
+        className="tsp-nav-row"
+      >
+        <span className="tsp-nav-icon" aria-hidden="true"><Icon className="h-4 w-4" /></span>
+        {!rail && (
+          <>
+            <span className="tsp-nav-label">{label}</span>
+            {indicators}
+            <ChevronRight className="tsp-nav-chevron" aria-hidden="true" />
+          </>
+        )}
+      </button>
+      {!rail && expanded && <div id={id} className="tsp-nav-children">{children}</div>}
+      {rail && popupOpen && createPortal(
+        <div
+          ref={panel}
+          id={id}
+          role="dialog"
+          aria-label={`${label}子菜单`}
+          tabIndex={-1}
+          onBlur={event => {
+            const next = event.relatedTarget as Node | null
+            if (next !== trigger.current && !event.currentTarget.contains(next)) onPopupChange(false)
+          }}
+          style={position}
+          className="tsp-nav-flyout tsp-nav-folder-panel"
+        >
+          <div className="tsp-nav-folder-label">{label}</div>
+          {children}
+        </div>, document.body,
+      )}
+    </div>
+  )
 }

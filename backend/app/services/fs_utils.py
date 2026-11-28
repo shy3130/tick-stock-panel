@@ -13,21 +13,35 @@ if TYPE_CHECKING:  # 只做类型标注; JSON 原子写的调用方 (preferences
     import polars as pl
 
 
-def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None:
+def atomic_write_text(path: Path, text: str, *, mode: int | None = None, durable: bool = False) -> None:
     """临时文件 + os.replace 原子替换, 避免读侧读到半截 JSON。
 
     `mode` 在替换*之前*打到临时文件上。凭证类文件如果先落盘再 chmod, 中间有一段
     以默认权限存在的窗口; 先改临时文件就没有这个窗口。Windows 上 chmod 只影响
     只读位, 失败不该让写入失败, 所以吞掉 OSError, 与原调用处的处理一致。
+    `durable=True` 先同步临时文件，再替换；POSIX 下同时同步父目录。
+    同步失败上抛，替换后的完整文件可能仍存在，调用方应核对提交标记。
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    if durable:
+        with tmp.open("w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    else:
+        tmp.write_text(text, encoding="utf-8")
     if mode is not None:
         try:
             os.chmod(tmp, mode)
         except OSError:
             pass
     os.replace(tmp, path)
+    if durable and os.name != "nt":
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def atomic_write_parquet(df: pl.DataFrame, path: Path) -> None:

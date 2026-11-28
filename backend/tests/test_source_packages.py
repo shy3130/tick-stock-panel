@@ -102,6 +102,7 @@ def test_plugin_link_labels_and_markdown_survive_install_and_restart(isolated):
     fields = {
         "homepage": "https://example.com/docs", "homepage_label": "使用文档",
         "key_manage_url": "https://example.com/account", "key_manage_label": "获取个人 Key",
+        "register_url": "https://example.com/register",
         "description": "## 连接说明\n使用 **个人 Key**。",
         "usage_notes": ["阅读 [文档](https://example.com/docs)。"],
     }
@@ -124,6 +125,11 @@ def test_plugin_link_labels_and_markdown_survive_install_and_restart(isolated):
 def test_plugin_link_labels_require_short_text(isolated, field, value):
     with pytest.raises(ValueError, match=field):
         packages.inspect_archive(bundle(**{field: value}))
+
+
+def test_plugin_registration_link_requires_https(isolated):
+    with pytest.raises(ValueError, match="register_url 必须使用 HTTPS"):
+        packages.inspect_archive(bundle(register_url="http://example.com/register"))
 
 
 def test_key_first_probe_then_save_and_only_refresh_target(isolated):
@@ -192,10 +198,11 @@ def test_manifest_contract_and_dependency_compatibility(isolated):
     for changes in ({"plugin_api_version": 9}, {"entry": "app.other:Provider"}, {"datasets": ["invented"]}):
         with pytest.raises(ValueError):
             packages.inspect_archive(bundle(**changes))
-    preview, _ = packages.inspect_archive(bundle(requires_python=">=99"))
+    data = bundle(requires_python=">=99")
+    preview, _ = packages.inspect_archive(data)
     assert preview["errors"]
     with pytest.raises(ValueError, match="requires_python"):
-        packages.install(bundle(requires_python=">=99"), preview["digest"])
+        packages.install(data, preview["digest"])
 
 
 def test_name_conflict_and_yaml_mutation_rejected(isolated):

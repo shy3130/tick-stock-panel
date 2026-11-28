@@ -18,11 +18,19 @@ on:
       version:
         description: '版本号 (如 v0.1.33, 用作 Release tag 和标题; 必须与 frontend/package.json 的 version 一致, 否则流水线直接失败)'
         required: true
-        default: 'v0.3.17'
+        default: 'v0.4.3'
       platforms:
         description: '要构建的平台 (逗号分隔: windows,macos,linux)'
         required: true
         default: 'windows'
+      verify_only:
+        description: '仅构建和验证，不创建或更新 Release'
+        type: boolean
+        default: false
+      upgrade_from:
+        description: 'Windows 仅验证模式下用于覆盖安装验收的旧版本 (如 v0.3.37)'
+        type: string
+        default: ''
       prerelease:
         description: '是否为预发布 (勾选则标记为 Pre-release)'
         type: boolean
@@ -60,7 +68,7 @@ jobs:
           #   2) 项目依赖 polars, 而 polars 自 1.33 起移除了 macOS x86_64 原生 wheel
           #      (改 py3-none-any), 在 arm64 runner 上经 Rosetta 无法产出可运行的 x64 包。
           #   runner 用 macos-26 (2026-02 GA, 免费, arm64 原生, SDK 更新)。
-          ALL='[{"os":"windows-latest","artifact":"TSP-Setup-x64.exe","platform":"windows"},{"os":"macos-26","artifact":"TSP-macos-arm64.dmg","platform":"macos","arch":"arm64"},{"os":"ubuntu-latest","artifact":"TSP-linux-x64.tar.gz","platform":"linux"}]'
+          ALL='[{"os":"windows-latest","artifact":"TSP-Setup-x64.exe","platform":"windows"},{"os":"macos-26","artifact":"TSP-macos-arm64.dmg","platform":"macos","arch":"arm64"},{"os":"ubuntu-24.04","artifact":"TSP-linux-x64.tar.gz","platform":"linux"}]'
           # 按 input 过滤平台 (macos → arm64 单项)
           python3 -c "
           import json, sys
@@ -86,6 +94,18 @@ jobs:
               f.write('matrix=' + json.dumps({'include': selected}) + '\n')
               f.write('ver=' + ver + '\n')
           "
+
+      - uses: astral-sh/setup-uv@v3
+      - name: 构建五份公开引擎 wheel
+        run: |
+          for package in tivelo-contracts tivelo-data tivelo-market-cn tivelo-backtest tivelo-extensions; do
+            uv build --wheel --out-dir dist/tivelo-public-wheels "packages/$package"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tivelo-public-wheels
+          path: dist/tivelo-public-wheels/*.whl
+          if-no-files-found: error
 
   # 第二步: 各平台并行构建
   build:
@@ -129,15 +149,14 @@ jobs:
       - name: 设置 Python
         run: uv python install 3.12
 
-      - name: 安装后端依赖 (含 desktop + legacy-cpu, 不含 backtest)
+      - name: 安装后端依赖 (含 desktop + legacy-cpu)
         working-directory: backend
         # --no-dev 排除 pytest/ruff/mypy; --extra desktop 装 pywebview
         # --extra legacy-cpu 装 polars[rtcompat] 运行时兼容内核:
         #   让安装包同时兼容 AVX2 新 CPU 和无 AVX2 的老 CPU (NAS/老服务器/国产 CPU)。
         #   rtcompat 会在运行时自动探测 CPU 能力 —— 有 AVX2 用 AVX2, 没有则回退,
         #   对新 CPU 性能几乎无损 (Polars 1.x 官方推荐方案)。
-        # 不加 --extra backtest, 主包不含 vectorbt/numba/llvmlite
-        run: uv sync --no-dev --extra desktop --extra legacy-cpu
+        run: uv sync --frozen --no-editable --no-dev --extra desktop --extra legacy-cpu --python 3.12
 
       - name: 安装 PyInstaller
         # 必须装进 backend 的 uv 环境 (pywebview/polars 等依赖都在那里),
@@ -146,7 +165,26 @@ jobs:
         # --project 的 venv 自动发现不可靠 (报 "No virtual environment found")。
         # 用 working-directory 进 backend 目录, 与上面 uv sync 的环境一致。
         working-directory: backend
-        run: uv pip install pyinstaller
+        run: uv pip install "pyinstaller==6.22.3"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tivelo-public-wheels
+          path: ${{ runner.temp }}/tivelo-public-wheels
+      - name: 安装发布用的公开引擎包
+        working-directory: backend
+        env:
+          WHEELHOUSE: ${{ runner.temp }}/tivelo-public-wheels
+        run: >-
+          uv run --no-sync python -c
+          "import os, pathlib, subprocess, sys; wheels = sorted(pathlib.Path(os.environ['WHEELHOUSE']).glob('*.whl'));
+          assert len(wheels) == 5; subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, '--no-deps', '--reinstall', *map(str, wheels)], check=True)"
+
+      - name: 安装 GTK 和 WebKit (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-webkit2-4.1 xvfb xauth xdotool
 
       - name: 打包 (PyInstaller)
         # 在 backend 目录跑 (用该目录的 venv: pywebview/polars 等依赖)。
@@ -155,23 +193,40 @@ jobs:
         # SPECPATH 由 spec 文件位置决定 (packaging/tsp.spec → 项目根),
         # 与 cwd 无关, 故 frontend/dist、tiers.yaml 等相对路径仍正确。
         working-directory: backend
-        run: uv run pyinstaller ../packaging/tsp.spec --noconfirm
+        env:
+          TIVELO_DESKTOP_WHEELHOUSE: ${{ runner.temp }}/tivelo-public-wheels
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # 只提供 GTK 的 Python 绑定，避免 PyInstaller 收进 Ubuntu 的 pkg_resources 等模块。
+            gtk_bindings="$RUNNER_TEMP/tsp-gtk-bindings"
+            mkdir -p "$gtk_bindings"
+            gtk_system=/usr/lib/python3/dist-packages
+            # PyInstaller 的 GI hook 读取 PyGObject 发行包版本来选择隐藏导入。
+            ln -s "$gtk_system/gi" "$gtk_system/cairo" "$gtk_system"/PyGObject-*.egg-info "$gtk_bindings/"
+            export PYTHONPATH="$gtk_bindings"
+            uv run --no-sync python -c 'from importlib.metadata import version; from webview.platforms import gtk; print(version("PyGObject"), gtk.webkit_ver)'
+          fi
+          uv run --no-sync pyinstaller ../packaging/tsp.spec --noconfirm
 
       - name: 校验策略提示词并生成升级保护清单
-        # 二次开发升级对比基线: 对打包产出的 _internal 全量文件做 sha256。
-        # 相对路径与运行时 _MEIPASS 布局一致, 清单落 _internal/app/ 后随
-        # Inno/DMG/tar 一起分发, 运行时由 upgrade_guard 读取。
+        # 清单以实际交付的程序目录为基准，macOS 的可定制文件位于 .app/Contents/Resources。
         # uv run --no-project: 跨平台用 uv 管的 Python; 版本号唯一权威 =
         # frontend/package.json (与 app/__init__._load_version 同源)。
         # shell: bash —— Windows runner 默认是 pwsh, 不认识 FOO=$(...) 语法;
         # 三平台 runner 均自带 bash, 显式指定即可统一。
         shell: bash
         run: |
-          uv run --no-project python - <<'PY'
+          package_root=backend/dist/TSP/_internal
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            package_root=backend/dist/TSP.app/Contents/Resources
+          fi
+          uv run --no-project python - "$package_root" <<'PY'
+          import sys
           from pathlib import Path
 
           source = Path("backend/app/strategy/prompts")
-          packaged = Path("backend/dist/TSP/_internal/app/strategy/prompts")
+          packaged = Path(sys.argv[1]) / "app/strategy/prompts"
           if not (source / "strategy-guide-compact.md").is_file():
               raise SystemExit("Missing strategy generation guide")
           for prompt in source.glob("*.md"):
@@ -181,7 +236,12 @@ jobs:
           print("Strategy prompt packaging check passed")
           PY
           APP_VER=$(node -p "require('./frontend/package.json').version")
-          uv run --no-project python scripts/generate_manifest.py --root backend/dist/TSP/_internal --output backend/dist/TSP/_internal/app/upgrade_manifest.json --version "$APP_VER"
+          uv run --no-project python scripts/generate_manifest.py --root "$package_root" --output "$package_root/app/upgrade_manifest.json" --version "$APP_VER"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # 清单加入后重签外层 .app，嵌套二进制沿用 PyInstaller 的签名。
+            codesign --force --sign - backend/dist/TSP.app
+            codesign --verify --deep --strict backend/dist/TSP.app
+          fi
 
       - name: 检查 Polars 兼容内核 (仅 Windows)
         if: matrix.platform == 'windows'
@@ -228,6 +288,7 @@ jobs:
           brew install create-dmg
           create-dmg \
             --volname "Tick Stock Panel" \
+            --volicon "brand/icon.icns" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
@@ -245,6 +306,150 @@ jobs:
           cd backend/dist
           tar -czf ../../${{ matrix.artifact }} TSP
 
+      - name: 验证安装包中的引擎
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          DESKTOP_ARTIFACT: ${{ matrix.artifact }}
+          DESKTOP_VERSION: ${{ needs.prepare.outputs.ver }}
+          WINDOWS_UPGRADE_FROM: ${{ inputs.verify_only && inputs.upgrade_from || '' }}
+        run: |
+          set -euo pipefail
+          verification=$(mktemp -d)
+          case "$TARGET_PLATFORM" in
+            macos)
+              volume="$verification/volume"
+              mkdir "$volume"
+              hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$DESKTOP_ARTIFACT"
+              trap 'hdiutil detach "$volume"' EXIT
+              cmp brand/icon.icns "$volume/.VolumeIcon.icns"
+              cmp brand/icon.icns "$volume/TSP.app/Contents/Resources/icon.icns"
+              ditto "$volume/TSP.app" "$verification/TSP.app"
+              hdiutil detach "$volume"
+              trap - EXIT
+              test -s "$verification/TSP.app/Contents/Resources/app/upgrade_manifest.json"
+              codesign --verify --deep --strict "$verification/TSP.app"
+              executable="$verification/TSP.app/Contents/MacOS/TSP" ;;
+            windows)
+              executable="$verification/installed/TSP.exe" ;;
+            linux)
+              tar -C "$verification" -xzf "$DESKTOP_ARTIFACT"
+              executable="$verification/TSP/TSP" ;;
+          esac
+          data_dir="$verification/data"
+          report="$verification/engine-status.json"
+          env_file="$verification/empty.env"
+          if [[ "$TARGET_PLATFORM" == "windows" ]]; then
+            executable=$(cygpath -w "$executable")
+            data_dir=$(cygpath -w "$data_dir")
+            report=$(cygpath -w "$report")
+            env_file=$(cygpath -w "$env_file")
+          fi
+          DATA_DIR="$data_dir" TICKFLOW_ENV_FILE="$env_file" NUMBA_NUM_THREADS=4 \
+            uv run --no-project --python 3.12 python - "$executable" "$report" <<'PY'
+          import hashlib, json, os, re, shutil, subprocess, sys
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          def install(artifact, directory=None):
+              options = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART", "/NOICONS"]
+              if directory is not None:
+                  options.append(f"/DIR={directory}")
+              subprocess.run([artifact, *options], check=True, timeout=240)
+
+          def installed_version(directory):
+              manifest = directory / "_internal/app/upgrade_manifest.json"
+              return json.loads(manifest.read_text(encoding="utf-8"))["version"]
+
+          executable, report = map(Path, sys.argv[1:])
+          desktop_version = os.environ["DESKTOP_VERSION"]
+          protected = {}
+          if os.environ["TARGET_PLATFORM"] == "windows":
+              destination = executable.parent
+              previous_tag = os.environ["WINDOWS_UPGRADE_FROM"]
+              installer = Path(os.environ["DESKTOP_ARTIFACT"]).resolve()
+              if previous_tag:
+                  if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", previous_tag):
+                      raise SystemExit("upgrade_from must be a version tag such as v0.3.37")
+                  previous_version = previous_tag[1:]
+                  if tuple(map(int, previous_version.split("."))) >= tuple(map(int, desktop_version.split("."))):
+                      raise SystemExit("upgrade_from must be older than the candidate")
+                  repo = os.environ["GITHUB_REPOSITORY"]
+                  url = f"https://github.com/{repo}/releases/download/{previous_tag}"
+                  old_name = f"TSP-Setup-x64-{previous_version}.exe"
+                  with urlopen(f"{url}/latest.json", timeout=60) as source:
+                      published = json.load(source)
+                  asset = published["channels"]["windows"]
+                  assert published["tag"] == previous_tag and asset["name"] == old_name
+                  old_installer = report.parent / old_name
+                  with urlopen(f"{url}/{old_name}", timeout=60) as source, old_installer.open("wb") as target:
+                      shutil.copyfileobj(source, target)
+                  with old_installer.open("rb") as source:
+                      sha = hashlib.file_digest(source, "sha256").hexdigest()
+                  assert old_installer.stat().st_size == asset["size"] and sha == asset["sha256"], "Old installer checksum mismatch"
+                  install(old_installer, destination)
+                  assert installed_version(destination) == previous_version
+
+                  data = destination / "data"
+                  protected = {
+                      data / "user_data/preferences.json": b'{"onboarding_completed":true,"nav_hidden":["/watchlist"]}',
+                      data / "strategies/custom/trend_breakout.py": Path("backend/app/strategy/seeds/trend_breakout.py").read_bytes(),
+                  }
+                  for path, content in protected.items():
+                      path.parent.mkdir(parents=True, exist_ok=True)
+                      path.write_bytes(content)
+
+                  if (destination / "_internal/tivelo-release/compatibility-lock.json").is_file():
+                      old_report = report.with_name("previous-engine-status.json")
+                      old_env = {k: v for k, v in os.environ.items() if k.upper() != "DATA_DIR"}
+                      subprocess.run(
+                          [executable, "--engine", "--report", old_report, "status"],
+                          env=old_env,
+                          check=True,
+                          timeout=120,
+                      )
+                      assert (data / "tivelo-desktop/combinations.sqlite3").is_file()
+
+                  # 让 Inno 按已安装版本的记录选择目录；启动也用原安装目录中的 data。
+                  install(installer)
+                  os.environ.pop("DATA_DIR", None)
+              else:
+                  install(installer, destination)
+              assert installed_version(destination) == desktop_version
+
+          subprocess.run([executable, "--engine", "--report", report, "status"], check=True, timeout=120)
+          status = json.loads(report.read_text(encoding="utf-8"))
+          assert status["compatibility_lock"]["workbench"] == desktop_version
+          assert {wheel["name"] for wheel in status["engines"]} == {"tivelo-data", "tivelo-backtest"}
+
+          report = report.with_name("engine-check.json")
+          subprocess.run([executable, "--engine", "--report", report, "check"], check=True, timeout=240)
+          result = json.loads(report.read_text(encoding="utf-8"))
+          assert set(result["prices"]) == {"qfq", "hfq"}
+          assert all(price["filled_orders"] > 0 for price in result["prices"].values())
+          assert "daily.report" in result["workbench"]["stages"]
+          print("Packaged data engine, both free price views and the workbench run passed")
+          if protected:
+              assert (executable.parent / "data/tivelo-desktop/combinations.sqlite3").is_file()
+              assert all(path.read_bytes() == content for path, content in protected.items()), "Installed upgrade changed legacy data"
+              print("Windows installer reused the old installation and preserved legacy data")
+          PY
+
+          if [[ "$TARGET_PLATFORM" == "linux" ]]; then
+            DATA_DIR="$verification/window-data" TICKFLOW_ENV_FILE="$env_file" \
+              xvfb-run -a bash -e -c '
+                "$1" &
+                desktop_pid=$!
+                close_desktop() {
+                  kill "$desktop_pid" 2>/dev/null || true
+                  wait "$desktop_pid" 2>/dev/null || true
+                }
+                trap close_desktop EXIT
+                timeout 75 xdotool search --sync --onlyvisible --name "^TSP$"
+                kill -0 "$desktop_pid"
+              ' desktop-window-check "$executable"
+          fi
+
       - name: 上传产物为构建产物 (备查)
         uses: actions/upload-artifact@v4
         with:
@@ -252,6 +457,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
       - name: 上传到 GitHub Release
+        if: ${{ !inputs.verify_only }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
@@ -276,10 +482,10 @@ jobs:
             ### 📋 使用说明
             - **Windows**: 下载后双击运行, 按安装向导操作(无需管理员权限), 自动创建桌面/开始菜单快捷方式
             - **macOS**: 双击 dmg 打开, 将 TSP 拖入 Applications 文件夹; 首次启动需右键→打开(绕过 Gatekeeper)
-            - **Linux**: 解压后运行可执行文件
+            - **Linux**: Ubuntu 24.04 x64 桌面环境需安装 `gir1.2-gtk-3.0` 和 `gir1.2-webkit2-4.1`，解压后运行 `TSP`
             - 数据存储: Windows 在安装目录的 `data/` 子文件夹 (卸载重装不丢); macOS 在 `~/Library/Application Support/TSP` (替换 App 升级不丢)
             - 内置 Polars 兼容内核, 新老 CPU (无 AVX2) 均可运行
-            - 含纯 Polars 回测引擎; 不含 vectorbt 回测(为控制体积)
+            - 内置 Tivelo 回测引擎，支持策略回测和信号回测
             - 系统通知: 设置 → 实时监控 → 系统通知
             - 检查更新: 设置 → 系统设置 → 关于
 
@@ -289,7 +495,7 @@ jobs:
     # fail-fast: false 时部分平台失败会让 build 整体标红, 但已成功的平台资产
     # 依然有效 — 清单照样生成 (以 Release 上实际存在的资产为准, 天然支持
     # "今天发 Windows, 明天补 mac" 的分批发布: 每次按当前 Release 全量重建)。
-    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    if: ${{ !inputs.verify_only && !cancelled() && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - name: 生成并上传 latest.json

@@ -48,7 +48,7 @@ def financial_status(request: Request):
         path = data_dir / "financials" / table / "part.parquet"
         if path.exists():
             try:
-                df = pl.read_parquet(path, columns=["symbol"])
+                df = pl.read_parquet(path, glob=False, columns=["symbol"])
                 tables[table] = {
                     "rows": len(df),
                     "symbols": df["symbol"].n_unique() if not df.is_empty() else 0,

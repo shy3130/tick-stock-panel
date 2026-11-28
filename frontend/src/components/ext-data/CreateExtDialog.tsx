@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
   X,
@@ -12,11 +12,12 @@ import {
   Link2,
   FileText,
   Keyboard,
+  Puzzle,
   RefreshCw,
   Database,
   Check,
 } from 'lucide-react'
-import { api, type ExtDataDetectUrlResult, type ExtDataField } from '@/lib/api'
+import { api, type ExtCollectorItem, type ExtDataDetectUrlResult, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import {
@@ -24,7 +25,7 @@ import {
   MIN_PULL_INTERVAL_SECONDS, MAX_PULL_INTERVAL_SECONDS, validatePullInterval,
 } from './dialogShared'
 
-type SourceMode = 'url' | 'file' | 'manual'
+type SourceMode = 'url' | 'file' | 'collector' | 'manual'
 
 type MappingChoice = {
   fields: { name: string; dtype: string; label: string }[]
@@ -77,6 +78,40 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
   const [importNow, setImportNow] = useState(true)
   const [enablePull, setEnablePull] = useState(false)
   const [urlPreview, setUrlPreview] = useState<ExtDataDetectUrlResult | null>(null)
+  const [selectedCollectorId, setSelectedCollectorId] = useState('')
+  const [collectorParams, setCollectorParams] = useState<Record<string, string | number | boolean>>({})
+
+  const collectorsQuery = useQuery({
+    queryKey: ['ext-data', 'collectors'],
+    queryFn: () => api.extDataCollectors(),
+    enabled: sourceMode === 'collector',
+    staleTime: 30_000,
+  })
+  const collectors: ExtCollectorItem[] = collectorsQuery.data?.items ?? []
+  const selectedCollector = collectors.find(c => c.id === selectedCollectorId) ?? null
+
+  const applyCollectorSelection = (collectorId: string) => {
+    setSelectedCollectorId(collectorId)
+    const item = collectors.find(c => c.id === collectorId)
+    if (!item) return
+    setMode(item.default_mode)
+    setFields(item.default_fields.map(f => ({ name: f.name, dtype: f.dtype, label: f.label })))
+    setDetectedSourceNames(item.default_fields.map(f => f.name))
+    if (!marketLevel) {
+      setSymbolMap({ type: 'mapped', col: 'symbol' })
+      setCodeMap({ type: 'computed', from: 'symbol', method: 'strip_exchange' })
+      setMatchStatus('full')
+    }
+    const defaults: Record<string, string | number | boolean> = {}
+    for (const [k, spec] of Object.entries(item.params_schema ?? {})) {
+      if (spec.default !== undefined && spec.default !== null) {
+        defaults[k] = spec.default as string | number | boolean
+      }
+    }
+    setCollectorParams(defaults)
+    if (!label.trim()) setLabel(item.label)
+    if (!description.trim() && item.description) setDescription(item.description)
+  }
 
   const userFields = fields.filter(f => f.name !== 'symbol' && f.name !== 'code')
 
@@ -129,10 +164,15 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
       if (scheduleMode === 'fixed' && !scheduleTime) {
         throw new Error('固定时刻模式请先选择时刻（或切回「按间隔」）')
       }
-      const shouldSavePull = sourceMode === 'url' && (savePull || importNow || enablePull)
-      if (shouldSavePull) {
+      const shouldSavePull =
+        (sourceMode === 'url' && (savePull || importNow || enablePull))
+        || sourceMode === 'collector'
+      if (shouldSavePull && sourceMode === 'url') {
         const intervalError = validatePullInterval(schedule, scheduleUnit)
         if (intervalError) throw new Error(intervalError)
+      }
+      if (sourceMode === 'collector' && !selectedCollectorId) {
+        throw new Error('请先选择一个已注册的扩展采集器')
       }
       const userF = fields.filter((f) => f.name.trim() && f.name !== 'symbol' && f.name !== 'code')
       const pullFieldMap = sourceMode === 'url' ? buildPullFieldMap() : {}
@@ -156,7 +196,35 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
         market_level: marketLevel,
       })
 
-      if (shouldSavePull) {
+      if (shouldSavePull && sourceMode === 'collector') {
+        const parsedParams: Record<string, unknown> = {}
+        const schema = selectedCollector?.params_schema ?? {}
+        for (const [k, rawVal] of Object.entries(collectorParams)) {
+          const typ = schema[k]?.type
+          if (typ === 'float' || typ === 'int') {
+            const num = Number(rawVal)
+            if (Number.isFinite(num)) parsedParams[k] = typ === 'int' ? Math.trunc(num) : num
+          } else if (typ === 'bool') {
+            parsedParams[k] = Boolean(rawVal)
+          } else if (String(rawVal).trim() !== '') {
+            parsedParams[k] = String(rawVal)
+          }
+        }
+        await api.extDataPullConfig(config.id, {
+          url: '',
+          collector: selectedCollectorId,
+          collector_params: Object.keys(parsedParams).length ? parsedParams : null,
+          method: 'GET',
+          schedule_minutes: scheduleUnit === 'seconds' ? Math.ceil(schedule / 60) : schedule,
+          schedule_seconds: scheduleUnit === 'seconds' ? schedule : null,
+          schedule_time: scheduleMode === 'fixed' ? scheduleTime : null,
+          schedule_period: scheduleMode === 'fixed' ? schedulePeriod : null,
+          schedule_day: scheduleMode === 'fixed' && schedulePeriod !== 'daily' ? scheduleDay : null,
+          schedule_trading_only: scheduleTradingOnly,
+          enabled: enablePull,
+          timeout_seconds: Number.isFinite(timeoutSec) && timeoutSec >= 5 && timeoutSec <= 300 ? timeoutSec : 60,
+        })
+      } else if (shouldSavePull) {
         const headers = parseJsonObject(headerStr, 'Headers')
         const finalFieldMap = Object.keys(pullFieldMap).length ? pullFieldMap : undefined
         await api.extDataPullConfig(config.id, {
@@ -173,7 +241,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
           schedule_time: scheduleMode === 'fixed' ? scheduleTime : null,
           schedule_period: scheduleMode === 'fixed' ? schedulePeriod : null,
           schedule_day: scheduleMode === 'fixed' && schedulePeriod !== 'daily' ? scheduleDay : null,
-          schedule_trading_only: scheduleMode === 'fixed' ? scheduleTradingOnly : false,
+          schedule_trading_only: scheduleTradingOnly,
           enabled: enablePull,
           timeout_seconds: Number.isFinite(timeoutSec) && timeoutSec >= 5 && timeoutSec <= 300 ? timeoutSec : 30,
         })
@@ -212,7 +280,8 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
       && label.trim()
       && fields.some((f) => f.name.trim())
       && (marketLevel || matchStatus !== 'none')
-      && (sourceMode !== 'url' || url.trim()),
+      && (sourceMode !== 'url' || url.trim())
+      && (sourceMode !== 'collector' || selectedCollectorId),
   )
 
   const processDetection = (
@@ -336,10 +405,12 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
       setMatchStatus('none')
       setSelectMapping(null)
       setUrlPreview(null)
+      setSelectedCollectorId('')
+      setCollectorParams({})
     }
     setSourceMode(next)
     setError('')
-    if (next === 'manual') {
+    if (next === 'manual' || next === 'collector') {
       setSymbolMap({ type: 'mapped', col: 'symbol' })
       setCodeMap({ type: 'computed', from: 'symbol', method: 'strip_exchange' })
       setMatchStatus('full')
@@ -394,10 +465,11 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
           {/* 01 接入方式 */}
           <section>
             <SectionHead num="01" title="接入方式" />
-            <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-elevated/40 p-1 border border-border/40">
+            <div className="grid grid-cols-4 gap-1.5 rounded-xl bg-elevated/40 p-1 border border-border/40">
               {([
                 ['url', '接口 URL', Link2],
                 ['file', '数据文件', FileText],
+                ['collector', '扩展采集器', Puzzle],
                 ['manual', '手动定义', Keyboard],
               ] as const).map(([key, text, Icon]) => {
                 const active = sourceMode === key
@@ -521,6 +593,88 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
               />
             </div>
           </section>
+
+          {/* 扩展采集器配置 */}
+          {sourceMode === 'collector' && (
+            <section className="rounded-xl border border-border/60 bg-elevated/20 p-4 space-y-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Puzzle className="h-3.5 w-3.5 text-amber-500" />
+                <span>扩展采集器</span>
+                <span className="ml-1 text-[10px] font-normal text-muted">选用已注册的后端采集器，可配不同参数派生多张表</span>
+              </div>
+              {collectorsQuery.isLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted py-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  加载已注册采集器…
+                </div>
+              ) : collectors.length === 0 ? (
+                <div className="text-xs text-muted py-2">
+                  当前未检测到已注册的扩展采集器，可先通过「设置 → 导入与备份」安装扩展包。
+                </div>
+              ) : (
+                <>
+                  <select
+                    aria-label="选择扩展采集器"
+                    value={selectedCollectorId}
+                    onChange={(e) => applyCollectorSelection(e.target.value)}
+                    className={`${INPUT_CLS} font-mono`}
+                  >
+                    <option value="">请选择扩展采集器…</option>
+                    {collectors.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.label} ({c.id})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedCollector?.description && (
+                    <p className="text-[11px] text-muted leading-relaxed">{selectedCollector.description}</p>
+                  )}
+                  {selectedCollector && Object.keys(selectedCollector.params_schema ?? {}).length > 0 && (
+                    <div className="rounded-lg border border-border/50 bg-base/40 p-3 space-y-2.5">
+                      <div className="text-[10px] font-medium text-secondary">采集器参数</div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {Object.entries(selectedCollector.params_schema).map(([key, spec]) => (
+                          <div key={key}>
+                            <div className="text-[10px] text-muted mb-1">{spec.label || key}</div>
+                            {spec.type === 'bool' ? (
+                              <label className="inline-flex items-center gap-1.5 text-xs text-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(collectorParams[key])}
+                                  onChange={(e) => setCollectorParams(prev => ({ ...prev, [key]: e.target.checked }))}
+                                  className="h-3.5 w-3.5 accent-amber-500"
+                                />
+                                <span>启用</span>
+                              </label>
+                            ) : (
+                              <input
+                                type={spec.type === 'float' || spec.type === 'int' ? 'number' : 'text'}
+                                step={spec.type === 'float' ? 'any' : spec.type === 'int' ? 1 : undefined}
+                                min={spec.min}
+                                max={spec.max}
+                                value={String(collectorParams[key] ?? '')}
+                                onChange={(e) => setCollectorParams(prev => ({ ...prev, [key]: e.target.value }))}
+                                className={`${INPUT_SM_CLS} font-mono tabular-nums`}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 text-[11px] text-secondary cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enablePull}
+                      onChange={(e) => setEnablePull(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-amber-500"
+                    />
+                    <span>建表后立即开启定时采集（可在表卡片「拉取设置」中精细调整时刻与窗口）</span>
+                  </label>
+                </>
+              )}
+            </section>
+          )}
 
           {/* URL 请求配置 */}
           {sourceMode === 'url' && (
@@ -856,6 +1010,11 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
               <div className="rounded-xl border border-dashed border-border/40 bg-elevated/20 py-6 flex flex-col items-center gap-1.5">
                 <RefreshCw className="h-4 w-4 text-muted/50" />
                 <span className="text-[11px] text-muted">填写 URL 后点击「测试识别」，按返回数据自动生成字段</span>
+              </div>
+            ) : sourceMode === 'collector' && fields.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/40 bg-elevated/20 py-6 flex flex-col items-center gap-1.5">
+                <Puzzle className="h-4 w-4 text-muted/50" />
+                <span className="text-[11px] text-muted">选择上方已注册的扩展采集器后自动填充字段结构</span>
               </div>
             ) : sourceMode === 'manual' && fields.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border/40 bg-elevated/20 py-6 flex flex-col items-center gap-2.5">

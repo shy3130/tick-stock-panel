@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -270,6 +271,11 @@ def _resolve_required_features(meta: dict, mod, filter_history_fn, path: Path) -
     return inferred
 
 
+@lru_cache(maxsize=32)
+def _validate_dependency_source(source, validate):
+    validate(source, extra_allowed_import_modules=frozenset({"collections.abc", "types", "typing"}))
+
+
 class StrategyEngine:
     """策略引擎 — 策略加载 + 执行 + 评分"""
 
@@ -417,8 +423,8 @@ class StrategyEngine:
         return None
 
     @staticmethod
-    def _load_file(path: Path) -> StrategyDef:
-        """从 Python 文件加载策略定义"""
+    def _validate_file(path: Path) -> tuple[str, frozenset[str]]:
+        """校验策略及同目录依赖，返回源码和可导入的依赖名称。"""
         # 纵深防御: 执行前再跑一次 AST 安全校验, 防止策略文件被直接篡改
         # 绕过 API 校验后, 在 exec_module 时执行恶意代码。
         dependency_paths = [
@@ -435,13 +441,12 @@ class StrategyEngine:
                 extra_allowed_import_modules=dependency_names,
             )
             for dependency_path in dependency_paths:
-                AIStrategyGenerator._validate_safety(
+                # Local helpers can be shared by dozens of strategies. Read
+                # their actual content each time and cache only a successful
+                # check of that exact source.
+                _validate_dependency_source(
                     dependency_path.read_text(encoding="utf-8"),
-                    extra_allowed_import_modules=frozenset({
-                        "collections.abc",
-                        "types",
-                        "typing",
-                    }),
+                    AIStrategyGenerator._validate_safety,
                 )
         except ValueError:
             raise
@@ -451,6 +456,12 @@ class StrategyEngine:
             # fail-closed: 文件读不到/读不懂时不得放行到 exec_module,
             # 否则异常输入即可让校验静默跳过 (GH #475 同类逃逸)。
             raise ValueError(f"策略安全校验失败: {e}") from e
+        return code, dependency_names
+
+    @staticmethod
+    def _load_file(path: Path) -> StrategyDef:
+        """从 Python 文件加载策略定义"""
+        _, dependency_names = StrategyEngine._validate_file(path)
 
         spec = importlib.util.spec_from_file_location(path.stem, path)
         if spec is None or spec.loader is None:

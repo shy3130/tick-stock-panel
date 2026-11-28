@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
@@ -733,13 +734,15 @@ function filterTiers(tiers: LimitLadderTier[], keys: Set<FilterKey>, bf?: Broken
 
 // ===== 过滤持久化 =====
 
-const DEFAULT_FILTERS = new Set<FilterKey>(['limit_up', 'main', 'chinext', 'star', 'bj'])
+function defaultFilterKeys(direction: Direction): Set<FilterKey> {
+  return new Set([direction === 'down' ? 'limit_down' : 'limit_up', 'main', 'chinext', 'star', 'bj'])
+}
 
 function loadFilterKeys(): Set<FilterKey> {
   const arr = storage.limitLadderBoard.get([])
   const allTabs = [...STATUS_TABS_UP, ...BOARD_TABS]
   const valid = arr.filter((k): k is FilterKey => allTabs.some(t => t.key === k))
-  return valid.length > 0 ? new Set(valid) : new Set(DEFAULT_FILTERS)
+  return valid.length > 0 ? new Set(valid) : defaultFilterKeys('up')
 }
 
 // ===== 梯队颜色 =====
@@ -1462,10 +1465,19 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
 // ===== 主页面 =====
 
 export function LimitUpLadder() {
-  const [asOf, setAsOf] = useState('')
-  const [direction, setDirection] = useState<Direction>(() => storage.limitLadderDirection.get('up'))
+  const { search } = useLocation()
+  return <LimitLadderView key={search} search={search} />
+}
+
+function LimitLadderView({ search }: { search: string }) {
+  const params = new URLSearchParams(search)
+  const requestedDate = params.get('date') ?? ''
+  const requestedDirection = params.get('direction')
+  const entryDirection = requestedDirection === 'up' || requestedDirection === 'down' ? requestedDirection : undefined
+  const [asOf, setAsOf] = useState(/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : '')
+  const [direction, setDirection] = useState<Direction>(() => entryDirection ?? storage.limitLadderDirection.get('up'))
   const [sealMode, setSealMode] = useState<'vol' | 'amount'>(() => storage.limitLadderSealMode.get('vol'))
-  const [filterKeys, setFilterKeys] = useState<Set<FilterKey>>(loadFilterKeys)
+  const [filterKeys, setFilterKeys] = useState<Set<FilterKey>>(() => entryDirection ? defaultFilterKeys(entryDirection) : loadFilterKeys())
   const [extFields, setExtFields] = useState<ExtFieldConfig>(loadExtFields)
   const [showExtConfig, setShowExtConfig] = useState(false)
   const [showConcept, setShowConcept] = useState(() => storage.limitLadderShowExt.get({ concept: true, industry: true }).concept)
@@ -1493,13 +1505,9 @@ export function LimitUpLadder() {
     setDirection(d)
     storage.limitLadderDirection.set(d)
     // 切换方向时重置状态筛选为该方向默认集(避免涨跌状态键错配)
-    const defaultKeys = d === 'down'
-      ? ['limit_down', 'main', 'chinext', 'star', 'bj']
-      : ['limit_up', 'main', 'chinext', 'star', 'bj']
-    const allTabs = [...statusTabs(d), ...BOARD_TABS]
-    const valid = defaultKeys.filter(k => allTabs.some(t => t.key === k)) as FilterKey[]
-    setFilterKeys(new Set(valid))
-    storage.limitLadderBoard.set(valid)
+    const defaults = defaultFilterKeys(d)
+    setFilterKeys(defaults)
+    storage.limitLadderBoard.set([...defaults])
   }, [])
 
   const toggleConcept = useCallback(() => {

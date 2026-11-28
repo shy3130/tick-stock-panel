@@ -15,11 +15,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from app.api.auth import require_management
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.services import strategy_pool
 from app.services.ndjson_heartbeat import with_heartbeat
@@ -39,6 +40,7 @@ from app.strategy.scoring import (
 )
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+_MANAGE = [Depends(require_management)]
 logger = logging.getLogger(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1016,7 +1018,7 @@ async def inspect_strategy_bundle(file: UploadFile = _BUNDLE_FILE):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/bundle/apply")
+@router.post("/bundle/apply", dependencies=_MANAGE)
 async def apply_strategy_bundle(
     request: Request, file: UploadFile = _BUNDLE_FILE, allow_overwrite: bool = Form(False)
 ):
@@ -1205,7 +1207,7 @@ def validate_strategy_code(req: StrategyCodeValidateRequest, request: Request):
         return {"valid": False, "error": str(e), "code": req.code, "meta": {}}
 
 
-@router.post("/code/save")
+@router.post("/code/save", dependencies=_MANAGE)
 def save_strategy_code(req: StrategyCodeSaveRequest, request: Request):
     try:
         return _save_strategy_code(req, request)
@@ -1342,7 +1344,7 @@ def save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request)
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/ai/save")
+@router.post("/ai/save", dependencies=_MANAGE)
 async def ai_save(req: AISaveRequest, request: Request):
     try:
         save_req = StrategyCodeSaveRequest(
@@ -1402,7 +1404,7 @@ def publish_ai_strategy(strategy_id: str, request: Request):
     return {"ok": True, "strategy_id": sid}
 
 
-@router.delete("/{strategy_id}")
+@router.delete("/{strategy_id}", dependencies=_MANAGE)
 def delete_strategy(strategy_id: str, request: Request):
     """删除自定义策略 — 清除源文件、运行时注册和关联状态。"""
 

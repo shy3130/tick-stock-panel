@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Clock, X } from 'lucide-react'
 import { StockPanel } from '@/components/StockPanel'
 import { NavPager, NavWrapToast } from '@/components/NavPager'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/lib/chart-types'
-import type { StrategyBacktestTrade } from '@/lib/api'
+import type { BacktestPriceBasis, StrategyBacktestTrade } from '@/lib/api'
+import { klineDailyQueryOptions } from '@/lib/kline'
 import { useListNav } from '@/lib/useListNav'
 import { tradeNavKey, type TradeNavItem } from '../tradeNav'
 import { fmtPct, fmtPrice, priceColorClass, pricePrecision } from '@/lib/format'
@@ -16,6 +18,8 @@ export type TradeNavSource = 'daily' | 'trades'
 interface Props {
   trade: StrategyBacktestTrade | null
   assetType?: 'stock' | 'etf'
+  priceBasis?: BacktestPriceBasis
+  isSnapshotRun?: boolean
   /** 交易回放链 (与当前表格同序): 提供后支持左右键/顶栏按钮切交易 */
   navItems?: TradeNavItem[]
   /** 当前交易在链中的 key (取自链中对应项的 key) */
@@ -46,7 +50,7 @@ function fmtSignedMoney(v: number | null | undefined): string {
   return `${prefix}${fmtMoney(v)}`
 }
 
-export function TradeKlineModal({ trade, assetType, navItems, currentKey, onNavigate, onClose }: Props) {
+export function TradeKlineModal({ trade, assetType, priceBasis, isSnapshotRun, navItems, currentKey, onNavigate, onClose }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const [selection, setSelection] = useState<{ key: string; date: string } | null>(null)
   const [resolvedAsset, setResolvedAsset] = useState<{ symbol: string; type: string } | null>(null)
@@ -106,6 +110,12 @@ export function TradeKlineModal({ trade, assetType, navItems, currentKey, onNavi
     }
   }, [trade])
 
+  const hasRawFills = priceBasis === 'hfq' || priceBasis === 'dynamic'
+  const replayBars = useQuery({
+    ...klineDailyQueryOptions(tradeSymbol ?? '', dateRange ?? { start: '', end: '' }),
+    enabled: hasRawFills && !!tradeSymbol && !!dateRange,
+  }).data?.rows
+
   const ranges = useMemo<ChartRange[]>(() => {
     if (!trade) return []
     return [{
@@ -123,28 +133,27 @@ export function TradeKlineModal({ trade, assetType, navItems, currentKey, onNavi
 
   const priceLines = useMemo<ChartPriceLine[]>(() => {
     if (!trade) return []
-    const start = String(trade.entry_date).slice(0, 10)
-    const end = String(trade.exit_date).slice(0, 10)
-    if (Number(trade.entry_price) === Number(trade.exit_price)) {
-      return [{ value: Number(trade.entry_price), label: `买卖价 ${fmtPrice(trade.entry_price, precision)}`, color: '#3B82F6', start, end }]
+    const chartPrice = (day: string, fill: number) => {
+      if (!hasRawFills) return Number(fill)
+      // 原始成交价投影到回放图的前复权坐标。
+      const bar = replayBars?.find(row => row.date === day)
+      return bar && bar.raw_close && bar.raw_close > 0 ? fill * bar.close / bar.raw_close : undefined
     }
-    return [
-      {
-        value: Number(trade.entry_price),
-        label: `买入价 ${fmtPrice(trade.entry_price, precision)}`,
-        color: '#C74040',
-        start,
-        end,
-      },
-      {
-        value: Number(trade.exit_price),
-        label: `卖出价 ${fmtPrice(trade.exit_price, precision)}`,
-        color: '#2D9B65',
-        start,
-        end,
-      },
-    ]
-  }, [trade, precision])
+    const entry = chartPrice(entryDay, trade.entry_price)
+    const exit = chartPrice(exitDay, trade.exit_price)
+    const bounds = { start: entryDay, end: exitDay }
+    if (entry !== undefined && entry === exit) {
+      return [{ value: entry, label: `买卖价 ${fmtPrice(entry, precision)}`, color: '#3B82F6', ...bounds }]
+    }
+    const lines: ChartPriceLine[] = []
+    if (entry !== undefined) lines.push({
+      value: entry, label: `买入价 ${fmtPrice(entry, precision)}`, color: '#C74040', ...bounds,
+    })
+    if (exit !== undefined) lines.push({
+      value: exit, label: `卖出价 ${fmtPrice(exit, precision)}`, color: '#2D9B65', ...bounds,
+    })
+    return lines
+  }, [trade, hasRawFills, entryDay, exitDay, precision, replayBars])
 
   return (
     <AnimatePresence>
@@ -174,6 +183,8 @@ export function TradeKlineModal({ trade, assetType, navItems, currentKey, onNavi
                   <span className="font-mono text-sm font-semibold text-foreground">{trade.symbol}</span>
                   <span className="truncate text-sm text-foreground">{trade.name || '交易回放'}</span>
                   <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">交易回放</span>
+
+                  {isSnapshotRun && <span className="text-xs text-secondary">图表使用当前工作区行情</span>}
 
                   {/* 切交易: 上一笔 / n·N / 下一笔 */}
                   <NavPager nav={nav} prevLabel="上一笔" nextLabel="下一笔" />

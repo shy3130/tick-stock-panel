@@ -1,0 +1,49 @@
+[project]
+name = "tivelo-data"
+version = "0.1.0a1"
+description = "Independent versioned market data engine and immutable snapshot storage"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "PolyForm-Noncommercial-1.0.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-MIT", "NOTICE"]
+dependencies = [
+    "tivelo-contracts>=0.1.0a1,<0.2",
+    "pyarrow>=24,<25",
+    "duckdb>=1.5,<2",
+    "polars>=1.44,<1.45",
+]
+
+[project.scripts]
+tivelo-data = "tivelo_data.cli:main"
+
+[project.optional-dependencies]
+extensions = ["tivelo-extensions>=0.1.0a1,<0.2"]
+cn-repository = ["tivelo-market-cn>=0.1.0a1,<0.2"]
+cn-http = ["httpx>=0.27,<1", "PyYAML>=6,<7", "tivelo-market-cn>=0.1.0a1,<0.2"]
+cn-fuyao = ["httpx>=0.27,<1", "tivelo-market-cn>=0.1.0a1,<0.2"]
+cn-tdxquant = ["tdxaidata==1.2.2", "tivelo-market-cn>=0.1.0a1,<0.2"]
+cn-tickflow = ["tickflow==0.1.25", "httpx>=0.27,<1", "tivelo-market-cn>=0.1.0a1,<0.2"]
+test = ["pytest>=8,<10"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tivelo_data"]
+
+[tool.uv.sources]
+tivelo-extensions = { path = "../tivelo-extensions", editable = true }
+tivelo-contracts = { path = "../tivelo-contracts", editable = true }
+tivelo-market-cn = { path = "../tivelo-market-cn", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

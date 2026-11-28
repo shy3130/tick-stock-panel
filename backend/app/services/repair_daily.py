@@ -13,6 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app.market_time import CN_TZ, cn_today
+from app.parquet import parquet_glob
 from app.tickflow.capabilities import CapabilitySet
 from app.tickflow.repository import KlineRepository
 
@@ -116,7 +117,7 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
         for i, target in enumerate(targets):
             emit("sync_daily", 45 + int(10 * i / max(len(targets), 1)), f"写入已校验的 {target.day} 修补日K")
             table = daily_dirname(target.asset_type)
-            frame = pl.read_parquet(staging / table / f"date={target.day}/part.parquet")
+            frame = pl.read_parquet(staging / table / f"date={target.day}/part.parquet", glob=False)
             repo.replace_daily_rows(target.asset_type, target.day, frame,
                                     symbols=list(target.symbols) if target.symbols is not None else None,
                                     backup_dir=backup_dir / table / f"date={target.day}",
@@ -127,7 +128,7 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
             if remaining is not None:
                 raise ValueError(f"{target.day} 日K仍未通过校验, 未进入指标计算")
             daily_health.record_scan(root, [], assets=[target.asset_type], start=target.day, end=target.day)
-            repo.refresh_view(table, str(root / table / "**/*.parquet"))
+            repo.refresh_view(table, parquet_glob(root / table))
 
         # 每只股票各自的最早异常日起点; 只有无法定位的整日异常才扩大到整类资产。
         handled = {(data_integrity.TABLE_FAMILY[i.table], i.day.isoformat()) for i in issues}

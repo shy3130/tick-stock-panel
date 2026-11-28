@@ -12,6 +12,7 @@ V2 用短期票据解决)、watchlist/监控规则管理、数据同步、设置
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import threading
 import time
@@ -87,26 +88,57 @@ def rate_limit_per_min() -> int:
 
 # ── 网络门禁: Token 通道默认仅本机/内网 (auth.setup 端点的同源判据) ──
 
+_RFC1918_NETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_IPV6_ULA_NET = ipaddress.ip_network("fc00::/7")
+
+
+def _parse_ip(host: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    if not host:
+        return None
+    raw = host.strip()
+    if not raw:
+        return None
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
+def is_loopback(host: str | None) -> bool:
+    """是否本机回环地址: localhost / 127.0.0.0/8 / ::1 (含 ::ffff:127.x)。"""
+    if not host:
+        return False
+    if host.strip().lower() == "localhost":
+        return True
+    addr = _parse_ip(host)
+    return addr is not None and addr.is_loopback
+
+
 def is_local_network(host: str | None) -> bool:
-    """是否本机或内网地址: 127.0.0.1 / ::1 / localhost、10.x、172.16-31.x、192.168.x。
+    """是否本机或内网地址: localhost / 回环 / RFC1918 / IPv6 ULA (含 IPv4-mapped IPv6)。
 
     反向代理(Nginx)场景下 request.client.host 是代理本身(127.0.0.1),
-    真实客户端由 _client_ip 经 X-Forwarded-For 还原(仅当直连 peer 可信时采信)。
+    真实客户端由 _client_ip 经 X-Forwarded-For 从右向左还原(仅当直连 peer 可信时采信)。
     """
     if not host:
         return False
-    if host in ("127.0.0.1", "::1", "localhost"):
+    if host.strip().lower() == "localhost":
         return True
-    if host.startswith("10.") or host.startswith("192.168."):
+    addr = _parse_ip(host)
+    if addr is None:
+        return False
+    if addr.is_loopback:
         return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
+    if isinstance(addr, ipaddress.IPv4Address):
+        return any(addr in net for net in _RFC1918_NETS)
+    return addr in _IPV6_ULA_NET
 
 
 def token_channel_local_only() -> bool:

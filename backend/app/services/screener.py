@@ -15,7 +15,7 @@ from pathlib import Path
 
 import polars as pl
 
-from app.parquet import scan_enriched_parquet
+from app.parquet import parquet_glob, scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ class ScreenerService:
             return pl.DataFrame()
 
         try:
-            df = pl.read_parquet(target_parquet)
+            df = pl.read_parquet(target_parquet, glob=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("load_enriched_for_date failed: %s", e)
             return pl.DataFrame()
@@ -175,7 +175,7 @@ class ScreenerService:
             if not target_parquet.exists():
                 continue
             try:
-                lf = pl.scan_parquet(target_parquet)
+                lf = pl.scan_parquet(target_parquet, glob=False)
                 cols = lf.collect_schema().names()
             except Exception as e:  # noqa: BLE001
                 logger.warning("load_prior_consecutive scan failed for %s: %s", candidate, e)
@@ -240,7 +240,7 @@ class ScreenerService:
 
         try:
             lf = (
-                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(parquet_glob(enriched_dir))
                 .filter(
                     (pl.col("date") >= start)
                     & (pl.col("date") <= target_date)
@@ -327,7 +327,7 @@ class ScreenerService:
 
         try:
             lf = (
-                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(parquet_glob(enriched_dir))
                 .filter((pl.col("date") >= start) & (pl.col("date") <= target_date))
                 .sort(["symbol", "date"])
             )

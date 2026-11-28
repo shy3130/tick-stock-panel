@@ -7,17 +7,22 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
+from app.api.auth import require_management
 from app.data_providers.custom import loader as custom_loader
 from app.services import config_backup
 from app.strategy import monitor_rules
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/config-backup", tags=["config-backup"])
+router = APIRouter(
+    prefix="/api/config-backup",
+    tags=["config-backup"],
+    dependencies=[Depends(require_management)],
+)
 
 # B008: FastAPI 要求参数默认值为 File(...) 调用, 提为模块级单例复用。
 _UPLOAD_FILE = File(...)

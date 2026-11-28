@@ -1,0 +1,12 @@
+name: example_archive
+version: 1.0.0
+plugin_api_version: 1
+display_name: 双端日线演示源
+author: Tivelo examples
+runtime: none
+entry: provider:Provider
+requires_app: '>=0.3.24'
+requires_python: '>=3.11'
+platforms: [any]
+datasets: [daily]
+description: 两个交易日的一只合成沪市股票。与独立引擎示例使用同一份版本化观察数据。

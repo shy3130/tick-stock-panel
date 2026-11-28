@@ -1,10 +1,16 @@
 [project]
 name = "tickflow-stock-panel-backend"
-version = "0.3.37"
+version = "0.4.3"
 description = "A 股策略 + 监控 + 回测面板 — TickFlow 适配"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "tivelo-extensions>=0.1.0a1,<0.2",
+    "tivelo-contracts[signatures]>=0.1.0a1,<0.2",
+    "tivelo-data[cn-fuyao,cn-tdxquant,cn-tickflow]>=0.1.0a1,<0.2",
+    "tivelo-market-cn>=0.1.0a1,<0.2",
+    "tivelo-backtest>=0.1.0a1,<0.2",
+    "keyring>=25,<27; sys_platform == 'darwin' or sys_platform == 'win32'",
     # Web
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -18,7 +24,6 @@ dependencies = [
     "polars>=1.44,<1.45",
     "duckdb>=1.0",
     "pyarrow>=16.0",
-    "pandas>=2.2",                # 仅在 BacktestService 边界使用,见 §7.4 / ADR-19
     "psutil>=5.9",                # 独立回测 worker 的峰值 RSS 与退出后内存指标
     # llvmlite 不再提供 macOS Intel wheel；该平台使用 Matrix 纯 Python fallback。
     "numba>=0.65.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
@@ -53,17 +58,14 @@ legacy-cpu = [
     "polars[rtcompat]>=1.44,<1.45",
 ]
 
-# vectorbt 还会引入绘图、交互组件等完整分析栈，仍保持为可选 extras。
-# Matrix 引擎只直接依赖上面的 numba/llvmlite 编译内核。
-# 启用:`uv sync --extra backtest`
-backtest = [
-    "vectorbt>=0.26",
-]
+# 兼容旧部署脚本，回测引擎已包含在基础依赖中。
+backtest = []
 
 # 桌面客户端依赖: pywebview 桌面窗口。打包用 (PyInstaller), 生产/Docker 不需要。
 # 启用:`uv sync --extra desktop`
 desktop = [
     "pywebview>=5.0",
+    "tivelo-extensions[linux-desktop]>=0.1.0a1,<0.2; sys_platform == 'linux'",
 ]
 
 dev = [
@@ -76,6 +78,13 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+tivelo-extensions = { path = "../packages/tivelo-extensions", editable = true }
+tivelo-contracts = { path = "../packages/tivelo-contracts", editable = true }
+tivelo-data = { path = "../packages/tivelo-data", editable = true }
+tivelo-market-cn = { path = "../packages/tivelo-market-cn", editable = true }
+tivelo-backtest = { path = "../packages/tivelo-backtest", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

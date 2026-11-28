@@ -20,6 +20,7 @@ import logging
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
+from app.parquet import parquet_glob
 from app.services import kline_sync
 from app.services.pipeline_jobs import job_store
 from app.tickflow.capabilities import Cap, CapabilitySet
@@ -54,7 +55,7 @@ def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
     inst_path = Path(settings.data_dir) / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
-            inst = pl.read_parquet(inst_path, columns=["symbol"])
+            inst = pl.read_parquet(inst_path, glob=False, columns=["symbol"])
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments 维表读取失败, 标的池仅剩自选: %s", e)
@@ -65,13 +66,13 @@ def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
 
 def _refresh_single_view(repo: KlineRepository, name: str) -> None:
     """刷新单个 DuckDB 视图。"""
-    d = repo.store.data_dir.as_posix()
+    d = repo.store.data_dir
     paths = {
-        "kline_daily": f"{d}/kline_daily/**/*.parquet",
-        "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
-        "kline_minute": f"{d}/kline_minute/**/*.parquet",
-        "adj_factor": f"{d}/adj_factor/**/*.parquet",
-        "instruments": f"{d}/instruments/**/*.parquet",
+        "kline_daily": parquet_glob(d / "kline_daily"),
+        "kline_enriched": parquet_glob(d / "kline_daily_enriched"),
+        "kline_minute": parquet_glob(d / "kline_minute"),
+        "adj_factor": parquet_glob(d / "adj_factor"),
+        "instruments": parquet_glob(d / "instruments"),
     }
     path = paths.get(name)
     if not path:

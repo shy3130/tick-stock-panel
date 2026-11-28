@@ -1,0 +1,36 @@
+[project]
+name = "tivelo-extensions"
+version = "0.1.0a1"
+description = "Local signed package, installation and release management for Tivelo engines"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "PolyForm-Noncommercial-1.0.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-MIT", "NOTICE"]
+dependencies = [
+    "tivelo-contracts[signatures]>=0.1.0a1,<0.2",
+    "keyring>=25,<27; sys_platform == 'darwin' or sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+linux-desktop = ["keyring>=25,<27; sys_platform == 'linux'"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+tivelo-extensions = "tivelo_extensions.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tivelo_extensions"]
+
+[tool.uv.sources]
+tivelo-contracts = { path = "../tivelo-contracts", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

@@ -53,6 +53,11 @@ def _base_url() -> str | None:
     return secrets_store.load().get("tickflow_base_url") or None
 
 
+def paid_endpoint() -> str:
+    """Configured paid server, including accounts with individually granted capabilities."""
+    return (_base_url() or PAID_ENDPOINT).rstrip("/")
+
+
 def get_client() -> TickFlow:
     """同步客户端。能力探测、盘后管道用。"""
     global _sync_client
@@ -131,7 +136,4 @@ def current_endpoint() -> str:
     if _should_use_free_server():
         return FREE_ENDPOINT
     # 自定义端点(付费模式测速切换后):优先返回
-    base = _base_url()
-    if base:
-        return base.rstrip("/")
-    return PAID_ENDPOINT
+    return paid_endpoint()

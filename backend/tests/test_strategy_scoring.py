@@ -1,12 +1,19 @@
+import math
+from dataclasses import replace
 from datetime import date, timedelta
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
+from app.backtest.matrix import MatrixComputeCache, build_market_data_matrix, matrix_feature
 from app.backtest.strategy import StrategyBacktestService
 from app.strategy.engine import StrategyEngine
-from app.strategy.scoring import effective_scoring
+from app.strategy.scoring import (
+    effective_scoring,
+    materialize_scoring_columns,
+    scoring_dependencies,
+)
 
 
 def _candidates() -> pl.DataFrame:
@@ -17,6 +24,38 @@ def _candidates() -> pl.DataFrame:
         "ma20": [10.0, 10.0],
         "vol_ratio_5d": [2.0, 1.0],
     })
+
+
+@pytest.mark.parametrize(("factor", "expected", "fallback"), [
+    ("vwap_bias", 0.0, -0.5),
+    ("log_float_mv", 2.302585093, 1.609437912),
+])
+def test_quote_factors_match_across_frame_matrix_and_cache(factor, expected, fallback):
+    frame = _candidates().with_columns(
+        pl.lit(5.0).alias("close"), pl.lit(5.0).alias("open"),
+        pl.lit(5.0).alias("high"), pl.lit(5.0).alias("low"),
+        pl.Series("raw_close", [10.0, None]),
+        pl.lit(1.0).alias("volume"), pl.lit(1000.0).alias("amount"),
+        pl.lit(1.0).alias("turnover_rate"),
+    )
+    fields = {"raw_close", "amount", "turnover_rate"}
+    market = build_market_data_matrix(frame, field_columns=fields)
+    legacy = build_market_data_matrix(frame.drop("raw_close"), field_columns=fields - {"raw_close"})
+    revised = replace(market, fields={**market.fields, "raw_close": market.field("raw_close") * 2})
+    cache = MatrixComputeCache(max_bytes=1024 * 1024)
+
+    results = materialize_scoring_columns(frame, {factor})[factor].to_list()
+    assert results[0] == pytest.approx(expected)
+    assert results[1] is None
+    with cache.activate(market):
+        values = matrix_feature(market, factor)
+        assert values[0, 0] == pytest.approx(expected)
+        assert math.isnan(values[0, 1])
+        assert matrix_feature(market, factor) is values
+        assert matrix_feature(revised, factor)[0, 0] != pytest.approx(expected)
+    assert matrix_feature(legacy, factor)[0, 0] == pytest.approx(fallback)
+    assert "raw_close" in scoring_dependencies({factor: 1.0})
+    assert "raw_close" not in scoring_dependencies({"rsi_14": 1.0})
 
 
 def test_virtual_scoring_is_shared_and_does_not_add_virtual_column():

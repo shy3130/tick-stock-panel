@@ -62,9 +62,10 @@ LZMAUseSeparateProcess=yes
 WizardStyle=modern
 DisableWelcomePage=no
 DisableReadyPage=no
-; 安装向导/卸载图标: 直接引用品牌资产唯一来源 (brand/README 接入指引),
-; 不再使用 packaging/icon.ico 的旧手绘版本, 避免两处漂移
+; 安装向导图标使用品牌目录的源文件
 SetupIconFile=..\brand\icon.ico
+WizardSmallImageFile=..\brand\png\logo-128.png
+WizardImageFile=..\brand\png\installer-wizard.png
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 ; 卸载相关

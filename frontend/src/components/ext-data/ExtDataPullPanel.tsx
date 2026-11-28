@@ -69,12 +69,16 @@ export function ExtDataPullPanel({ config, onSaved }: {
     } ${pull.schedule_time}${pull.schedule_trading_only ? ' · 仅交易日' : ''}`
     : formatIntervalSummary(pull?.schedule_seconds, pull?.schedule_minutes)
 
+  const hasSource = Boolean(pull?.url?.trim() || pull?.collector?.trim())
+
   // 从已保存配置原样重建 payload 仅切换 enabled — 不掺入设置弹窗里未保存的草稿;
-  // page_start / fanout / auth.key_ref 等 UI 不暴露的字段透传保留
+  // page_start / fanout / collector / auth.key_ref 等 UI 不暴露的字段透传保留
   const buildTogglePayload = (next: boolean) => {
     if (!pull) return null
     return {
       url: pull.url,
+      collector: pull.collector ?? null,
+      collector_params: pull.collector_params ?? null,
       method: pull.method,
       headers: pull.headers,
       body: pull.body ?? undefined,
@@ -108,7 +112,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
   // 开关 toggle: 自动保存全量配置 (切换 enabled), 后端 refresh 后立即首次拉取
   const handleToggle = (next: boolean) => {
     if (toggling) return
-    if (next && !pull?.url?.trim()) {
+    if (next && !hasSource) {
       toast('请先在「拉取设置」中填写 URL', 'error')
       return
     }
@@ -205,7 +209,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
       <div className="grid grid-cols-2 gap-1.5">
         <button
           onClick={handleRun}
-          disabled={running || !pull?.url}
+          disabled={running || !hasSource}
           className="inline-flex items-center justify-center gap-1 h-9 rounded-lg bg-accent/15 border border-accent/25 text-accent text-xs font-medium hover:bg-accent/20 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 transition-colors"
         >
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
@@ -213,8 +217,8 @@ export function ExtDataPullPanel({ config, onSaved }: {
         </button>
         <button
           onClick={() => setShowConfig(true)}
-          disabled={!pull?.url}
-          title={pull?.url ? undefined : '请先通过「新建扩展数据 → URL」创建拉取配置'}
+          disabled={!hasSource}
+          title={hasSource ? undefined : '请先通过「新建扩展数据 → URL」创建拉取配置'}
           className="inline-flex items-center justify-center gap-1 h-9 rounded-lg border border-border bg-elevated text-xs text-foreground hover:bg-border/30 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 transition-colors"
         >
           <Settings2 className="h-3.5 w-3.5" />
@@ -357,7 +361,7 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
     // 双写分钟值，版本回滚到旧版时仍能读到最接近的频率。
     const effSeconds = scheduleUnit === 'seconds' ? schedule : null
     return {
-      url, method, headers, body: body || undefined,
+      url, collector: pull?.collector ?? null, collector_params: pull?.collector_params ?? null, method, headers, body: body || undefined,
       response_path: responsePath, field_map, auth,
       schedule_minutes: effSeconds != null ? Math.ceil(effSeconds / 60) : schedule,
       schedule_seconds: effSeconds,
@@ -365,7 +369,7 @@ function ExtPullConfigDialog({ config, onSaved, onClose }: {
       schedule_time: scheduleMode === 'fixed' ? scheduleTime : null,
       schedule_period: scheduleMode === 'fixed' ? schedulePeriod : null,
       schedule_day: scheduleMode === 'fixed' && schedulePeriod !== 'daily' ? scheduleDay : null,
-      schedule_trading_only: scheduleMode === 'fixed' ? scheduleTradingOnly : false,
+      schedule_trading_only: scheduleTradingOnly,
       time_window_start: timeWindowStart || null,
       time_window_end: timeWindowEnd || null,
       date_param: dateParam.trim() || null,

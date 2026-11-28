@@ -114,7 +114,11 @@ def _portable_config(raw: dict, *, secrets: set[str] | None = None) -> tuple[dic
             auth = {k: v for k, v in (pull.get("auth") or {}).items() if k in {"type", "header", "param"}}
             if (pull.get("auth") or {}).get("key_ref"):
                 warnings.append("原设备凭据引用已移除，请填写本表自己的 API Key。")
-            pull["url"] = _clean_url(pull.get("url", ""), auth, warnings)
+            raw_url = str(pull.get("url") or "").strip()
+            if raw_url or not pull.get("collector"):
+                pull["url"] = _clean_url(raw_url, auth, warnings)
+            else:
+                pull["url"] = ""
             headers = {}
             for name, value in (pull.get("headers") or {}).items():
                 if (_credential_name(name)

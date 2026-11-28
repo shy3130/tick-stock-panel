@@ -82,6 +82,86 @@ def test_repair_deduplicates_symbols_and_forces_historical_window(repair_env):
     env.invalidate.assert_called()
 
 
+def test_manual_minute_range_runs_the_market_pool_for_the_requested_dates(repair_env, monkeypatch):
+    env = repair_env
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    env.pool.return_value = ["000001.SH", "600519.SH", "510300.SH"]
+    instruments = env.repo.store.data_dir / "instruments" / "instruments.parquet"
+    instruments.parent.mkdir()
+    pl.DataFrame({"symbol": ["600000.SH", "600519.SH"]}).write_parquet(instruments)
+
+    response = env.client.post("/api/kline/sync_minute", json={
+        "start_date": "2026-10-19", "end_date": "2026-10-20",
+    })
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    wait_for(lambda: env.store.get(job_id)["status"] == "succeeded")
+    args, kwargs = env.sync.call_args
+    assert args[0] == ["510300.SH", "600000.SH", "600519.SH"]
+    assert kwargs["date_range"] == (date(2026, 10, 19), date(2026, 10, 20))
+    env.pool.assert_called_once_with("watchlist")
+    job = env.store.get(job_id)
+    assert job["result"] == {"minute_rows": 480, "universe_size": 3}
+    assert "2026-10-19 至 2026-10-20 分钟 K 拉取完成" in job["log"][-1]["msg"]
+
+
+@pytest.mark.parametrize("body", [
+    {"start_date": "2026-10-19"},
+    {"start_date": "20261019", "end_date": "2026-10-20"},
+    {"start_date": "2026-10-21", "end_date": "2026-10-20"},
+    {"start_date": "2026-10-20", "end_date": "2026-10-22"},
+    {"start_date": "2026-10-20", "end_date": "2026-10-21", "days": 5},
+])
+def test_manual_minute_range_rejects_invalid_dates_before_creating_a_job(repair_env, monkeypatch, body):
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    response = repair_env.client.post("/api/kline/sync_minute", json=body)
+    assert response.status_code == 400
+    assert repair_env.store.active_id() is None
+    repair_env.sync.assert_not_called()
+
+
+def test_day_reload_routes_selected_assets_and_reports_progress(repair_env, monkeypatch):
+    env = repair_env
+
+    def reload(repo, capset, day, groups, *, on_chunk_done, before_write, on_updated):
+        assert repo is env.repo
+        assert day == date(2026, 10, 20)
+        assert groups == {"stock": ["600000.SH"], "etf": ["510300.SH"]}
+        on_chunk_done(1, 2, day.isoformat())
+        before_write()
+        return {"minute_rows": 3, "minute_added": 1, "minute_updated": 2,
+                "minute_received": 10, "minute_missing": 7}
+
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    monkeypatch.setattr(kline.kline_sync, "reload_minute_day", reload)
+    response = env.client.post("/api/kline/reload_minute_day", json={
+        "date": "2026-10-20", "symbols": [" 600000.sh ", "510300.SH", "600000.SH"],
+    })
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    wait_for(lambda: env.store.get(job_id)["status"] == "succeeded")
+    job = env.store.get(job_id)
+    assert job["result"] == {"minute_rows": 3, "minute_added": 1, "minute_updated": 2,
+                             "minute_received": 10, "minute_missing": 7, "universe_size": 2}
+    assert any(entry["msg"] == "正在重拉 2026-10-20 的分钟K…" for entry in job["log"])
+    assert "预计仍缺 7 根" in job["log"][-1]["msg"]
+    env.sync.assert_not_called()
+    env.pool.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [
+    {"date": "20261020", "symbols": ["600000.SH"]},
+    {"date": "2026-10-22", "symbols": ["600000.SH"]},
+    {"date": "2026-10-20", "symbols": []},
+    {"date": "2026-10-20", "symbols": ["000001.SH"]},
+])
+def test_day_reload_rejects_invalid_targets(repair_env, monkeypatch, body):
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 10, 21))
+    response = repair_env.client.post("/api/kline/reload_minute_day", json=body)
+    assert response.status_code == 400
+    assert repair_env.store.active_id() is None
+
+
 @pytest.mark.parametrize("symbols", [None, [], "600000.SH", [None], [""], [" "], [123],
                                          ["600000.SH"] * 2001, ["000001.SH"], ["510300.SH"]])
 def test_repair_rejects_invalid_scope_before_creating_job(repair_env, symbols):
@@ -100,10 +180,14 @@ def test_repair_requires_usable_minute_provider(repair_env, monkeypatch):
     repair_env.sync.assert_not_called()
 
 
-def test_repair_does_not_reuse_unrelated_pending_job(repair_env):
+@pytest.mark.parametrize(("route", "body"), [
+    ("repair_minute_gaps", {"symbols": ["600000.SH"]}),
+    ("sync_minute", {"start_date": "2024-09-06", "end_date": "2024-09-06"}),
+])
+def test_explicit_minute_requests_do_not_reuse_unrelated_pending_jobs(repair_env, route, body):
     env = repair_env
     existing_id, _ = env.store.create()
-    response = env.client.post("/api/kline/repair_minute_gaps", json={"symbols": ["600000.SH"]})
+    response = env.client.post(f"/api/kline/{route}", json=body)
     assert response.status_code == 409
     assert env.store.active_id() == existing_id
     env.sync.assert_not_called()

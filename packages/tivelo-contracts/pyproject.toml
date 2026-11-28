@@ -1,0 +1,35 @@
+[project]
+name = "tivelo-contracts"
+version = "0.1.0a1"
+description = "Versioned data, research and execution contracts for Tivelo engines"
+requires-python = ">=3.11"
+license = "PolyForm-Noncommercial-1.0.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-MIT", "NOTICE"]
+# 2.7 passes model tests but emits shared decimal defaults into unrelated JSON
+# Schema fields. The supported floor is the version verified with the artifact.
+dependencies = ["pydantic>=2.13.4,<3", "tzdata>=2024.1"]
+
+[project.optional-dependencies]
+signatures = ["cryptography>=46,<51", "rfc8785>=0.1.4,<0.2", "packaging>=24,<27"]
+test = ["pytest>=8,<10", "jsonschema>=4,<5"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tivelo_contracts"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas/contracts-v2.schema.json" = "tivelo_contracts/wire/contracts-v2.schema.json"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

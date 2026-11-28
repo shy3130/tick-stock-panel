@@ -8,7 +8,7 @@
 
 ## 方式 A:GHCR 现成镜像(免本地构建,多数用户推荐)
 
-GitHub Actions 每次推送都会自动构建多架构镜像(linux/amd64 · arm64)并发布到 GHCR,直接拉取运行,本地无需 Python / Node,也不用现场 build:
+Docker 镜像工作流在推送到 `main`、推送 `v*` 标签或手动运行时构建多架构镜像（`linux/amd64`、`linux/arm64`）并发布到 GHCR。手动选择候选分支构建时会上传提交 SHA 对应的镜像标签。按目标版本选择镜像标签后即可直接拉取运行。[构建工作流](../.github/workflows/docker.yml)
 
 ```bash
 docker run -d --name tsp -p 3018:3018 -e DATA_DIR=/app/data -v "${PWD}/data:/app/data" ghcr.io/shy3130/tick-stock-panel:latest
@@ -18,7 +18,7 @@ docker run -d --name tsp -p 3018:3018 -e DATA_DIR=/app/data -v "${PWD}/data:/app
 - 需要配置时:从 `.env.example` 复制出 `.env`,命令里加 `--env-file .env`,保留 `-e DATA_DIR=/app/data` 与数据挂载,避免旧镜像把 `DATA_DIR=./data` 解析到未挂载的 `/data`。
 - 自定义绝对数据路径会原样保留,需要把宿主机目录挂载到相同目标。Compose 用户需要同时调整 `environment` 和 `volumes`,仅修改 `.env` 不会覆盖 Compose 中明确指定的路径。
 - 自定义数据源等服务跑在宿主机、容器内需通过 `host.docker.internal` 访问时,Linux 的 `docker run` 要在命令里加 `--add-host=host.docker.internal:host-gateway`(Docker Desktop 的 macOS/Windows 默认已可解析;方式 B 的 compose 已在 `extra_hosts` 配好),否则报 `Name or service not known`。
-- 镜像默认不含 `legacy-cpu` / `backtest` extras —— 老 CPU(无 AVX2)或需要 vectorbt 回测时,请用方式 B 通过 `BACKEND_EXTRAS` 自构建。
+- 镜像默认包含 Tivelo 回测引擎。老 CPU（无 AVX2）请用方式 B 通过 `BACKEND_EXTRAS=legacy-cpu` 自构建。
 - 跑自己改过的代码:fork 后到仓库 Actions 页启用 workflow(fork 默认禁用),构建出的 `ghcr.io/<你的用户名>/tick-stock-panel` 用法相同。
 - 想要 compose 全套挂载(`.env` / `tiers.yaml` / 数据卷):参考根目录 `docker-compose.yml`,把 `build:` 段换成 `image: ghcr.io/shy3130/tick-stock-panel:latest`。
 
@@ -56,14 +56,16 @@ docker compose up --build -d
 
 ## 方式 C:本机 AI 代部署(小白推荐)
 
-装一个本机 AI 编程助手(Trae / Codex / OpenCode / ZCode / WorkBuddy 等,任选其一),把 [README · 快速开始](../README.md#-快速开始) 里方式 C 的提示词原样发给它,AI 会自动完成克隆、装依赖、启动服务。适合完全不想碰命令行的用户;AI 最终执行的仍是方式 A / B / D 之一。
+把 [快速开始的部署任务](../README.md#install-ai)交给本机 AI 编程助手，并说明要运行已发布制品还是当前源码工作区。验证候选分支时，选择本地 Compose 构建或源码模式。
+
+请同时提供预期端口和持久化的数据目录。AI 完成后应报告实际运行的版本、访问地址、数据目录及所需凭据。已有实例时先核对监听端口与数据挂载。需要接上 AI 客户端时，继续阅读 [AI 接入指南](./ai-integration.md)。
 
 ---
 
 
 ## 方式 D:Dev 模式(二次开发推荐)
 
-由于刚开源近期更新频繁,推荐开发模式运行,可随时 `git pull` 同步最新代码。
+开发模式使用当前检出的源码、工作区默认配置与锁定依赖。验证本地候选分支前，先确认工作区和实际启动目录一致。
 
 ```bash
 git clone https://github.com/shy3130/tick-stock-panel.git
@@ -72,7 +74,7 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
-`dev.sh` 自动检查 / 下载依赖、释放端口、同时起前后端,Ctrl-C 一并关闭。默认:
+`dev.sh` 检查依赖、释放所用端口并启动前后端，Ctrl-C 一并关闭。有其他开发实例时，可显式使用另一组端口。默认地址如下。
 
 - 后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>
 - 自定义端口:`BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh`
@@ -81,9 +83,8 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 
 ```bash
 # 后端
-cd backend && uv sync --extra backtest   # 含回测依赖
-# 老 CPU: uv sync --extra legacy-cpu
-# 老 CPU + 回测: uv sync --extra legacy-cpu --extra backtest
+cd backend && uv sync --frozen
+# 老 CPU: uv sync --frozen --extra legacy-cpu
 uv run uvicorn app.main:app --reload --port 3018
 
 # 前端
@@ -101,18 +102,19 @@ cd frontend && pnpm install && pnpm dev   # http://localhost:3011
 
 ```ini
 BACKEND_EXTRAS=legacy-cpu          # 兼容老 CPU
-BACKEND_EXTRAS=legacy-cpu backtest # 兼容老 CPU + 回测依赖
 ```
 
 手动启动源码时，也可以在 `backend/` 目录直接执行 `uv sync --extra legacy-cpu`。不要设置 `POLARS_SKIP_CPU_CHECK`，它只会隐藏警告，实际执行不支持的指令时仍可能崩溃。
 
 ### 回测依赖说明
 
-vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
+默认安装包含 Tivelo 回测引擎，策略回测和信号回测可直接使用。旧部署脚本里的 `backtest` extra 是兼容别名。
 
 ---
 
 ## 更新代码(已部署用户必读)
+
+升级到 0.4.3 时，先按[版本说明](./release-v0.4.3.md#升级与回滚)确认当前运行版本、数据目录和备份。
 
 拉取新版本只需一条命令(Dev / Compose 本地构建用户):
 
@@ -123,6 +125,8 @@ git pull
 > 用方式 A 镜像直跑(无本地仓库)的用户:`docker pull ghcr.io/shy3130/tick-stock-panel:latest` 后删除旧容器重跑;compose 换 `image:` 的用户执行 `docker compose pull && docker compose up -d`。
 
 > ⚠️ **方式 A 重建容器时必须保留 `-e DATA_DIR=/app/data` 与原有的宿主机数据目录挂载。** 更换启动目录时,相对的 `${PWD}/data` 也会指向另一份数据;建议使用固定宿主机绝对路径。自定义容器数据目录时,环境变量和挂载目标须一致。
+
+升级后先查看「设置 → 导入与备份 → 已安装扩展」的运行状态，再确认已有页面、数据源和资源可用。对第三方包可使用该包的原始安装文件做预检。[扩展升级步骤](./extension-packages.md#升级与迁移)
 
 ### Docker 升级前核对数据目录
 

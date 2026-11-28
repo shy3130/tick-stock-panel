@@ -54,6 +54,39 @@ def test_disabled_without_manifest(tmp_path: Path) -> None:
     assert status["reason"] == "manifest_missing"
 
 
+
+def test_macos_bundle_backs_up_resources_instead_of_framework_links(tmp_path, monkeypatch):
+    contents = tmp_path / "TSP.app" / "Contents"
+    resources = contents / "Resources"
+    frameworks = contents / "Frameworks"
+    (resources / "app" / "custom").mkdir(parents=True)
+    frameworks.mkdir()
+    extension = resources / "app" / "custom" / "local.py"
+    extension.write_text("ORIGINAL\n", encoding="utf-8")
+    native = frameworks / "native.dylib"
+    native.write_bytes(b"native code")
+    try:
+        (frameworks / "app").symlink_to(resources / "app", target_is_directory=True)
+        (resources / "native.dylib").symlink_to(native)
+    except OSError:
+        pytest.skip("当前系统不允许创建符号链接")
+
+    _write_manifest(resources, "v1.0.0")
+    monkeypatch.setattr(upgrade_guard.sys, "platform", "darwin")
+    monkeypatch.setattr(upgrade_guard.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(upgrade_guard.sys, "_MEIPASS", str(frameworks), raising=False)
+    monkeypatch.setattr(upgrade_guard, "__version__", "v1.0.0")
+    guard = upgrade_guard.UpgradeGuard(tmp_path / "data")
+    assert guard.root == resources
+    assert set(guard.manifest) == {"app/custom/local.py"}
+    status = guard.scan()
+    assert status["modified"] == status["added"] == []
+
+    extension.write_text("USER\n", encoding="utf-8")
+    assert guard.scan()["modified"] == ["app/custom/local.py"]
+    assert (guard.live_dir / "app" / "custom" / "local.py").read_text(encoding="utf-8") == "USER\n"
+
+
 def test_scan_classifies_and_backs_up(prog: Path, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(upgrade_guard, "__version__", "v1.0.0")
     data = tmp_path / "data"

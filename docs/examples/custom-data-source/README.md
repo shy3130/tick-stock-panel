@@ -25,7 +25,7 @@ http://127.0.0.1:3021
 
 ## 接入项目
 
-复制示例 YAML 到运行数据目录:
+运行 mock 后，另开终端从仓库根目录复制 YAML。下面假定后端使用默认 `data/`，也可复制到隔离环境的 `DATA_DIR/data_sources/`。
 
 ```bash
 mkdir -p data/data_sources
@@ -38,6 +38,6 @@ cp docs/examples/custom-data-source/mock_source.yaml data/data_sources/mock_sour
 设置 -> 数据源 -> 重新加载
 ```
 
-选择 `mock_source` 后,可用「试拉测试」验证 `daily`、`adj_factor` 和 `realtime`。
+选择 `mock_source` 后，用「试拉测试」分别核对 `daily`、`adj_factor` 和 `realtime`。只有实际切换路由后，模拟响应才会进入工作台同步。使用 Docker 时，YAML 中的主机名应指向容器能访问的 mock 服务。
 
 完整说明见 [../../custom-data-source.md](../../custom-data-source.md)。

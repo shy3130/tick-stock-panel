@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import asdict
+from multiprocessing import current_process
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,7 +27,12 @@ from app.data_providers.custom.config import (
     load_config,
 )
 from app.data_providers.custom.managed import ManagedProvider
-from app.data_providers.custom.provider import GenericHTTPProvider, _token_from_env
+from app.data_providers.custom.provider import (
+    RESEARCH_PROFILES,
+    GenericHTTPProvider,
+    _token_from_env,
+)
+from app.services.engine_jobs import ENGINE_NODE_PROCESS_NAME
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -50,7 +56,7 @@ def data_sources_dir() -> Path:
     return settings.data_dir / "data_sources"
 
 
-def load_all(path: Path | None = None) -> None:
+def load_all(path: Path | None = None, *, include_plugins: bool = True) -> None:
     """Load all custom provider YAML files into process memory."""
     global _PROVIDERS, _LOAD_ERRORS
     retained = {name: provider for name, provider in _PROVIDERS.items()
@@ -78,7 +84,8 @@ def load_all(path: Path | None = None) -> None:
             _LOAD_ERRORS.append({"path": str(file), "errors": [str(e)]})
 
     # 内置可选插件 (plugins/ 目录)。与用户 YAML 源独立, 缺依赖只记状态不报错。
-    _load_builtin_plugins()
+    if include_plugins:
+        _load_builtin_plugins()
 
 
 def list_sources() -> list[dict]:
@@ -412,6 +419,7 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
             **({"asset_type_param": ds.asset_type_param} if ds_name == "minute" and ds.asset_type_param else {}),
             **({"freq_param": ds.freq_param} if ds_name == "minute" and ds.freq_param else {}),
             **({"pct_unit": ds.pct_unit} if ds_name == "realtime" and ds.pct_unit else {}),
+            **({"research_profile": ds.research_profile} if ds.research_profile else {}),
         }
     return out
 
@@ -428,6 +436,20 @@ def save_config(name: str, config: dict) -> Path:
     if not path.is_relative_to(base.resolve()):
         raise ValueError("invalid data source name: path escape detected")
     cleaned = _sanitize_for_yaml(config)
+    # Static request data can contain credentials and is not returned to the settings editor.
+    # A profile edit must preserve those values for the same endpoint and HTTP method.
+    if path.is_file():
+        try:
+            previous = load_config(path)
+        except (ValueError, TypeError, AttributeError, yaml.YAMLError):
+            previous = None
+        for dataset, current in cleaned.get("datasets", {}).items():
+            old = previous.datasets.get(dataset) if previous else None
+            if old and (old.url, old.method) == (current["url"], current["method"]):
+                if old.params:
+                    current["params"] = old.params
+                if old.body:
+                    current["body"] = old.body
     atomic_write_text(path, yaml.safe_dump(cleaned, allow_unicode=True, sort_keys=False))
     return path
 
@@ -535,6 +557,11 @@ def _sanitize_dataset(ds_name: str, ds_cfg: dict) -> dict:
             out["start_param"] = start_param
         if end_param:
             out["end_param"] = end_param
+    profile = ds_cfg.get("research_profile")
+    if profile:
+        if profile not in RESEARCH_PROFILES.get(ds_name, ()):
+            raise ValueError(f"Unknown {ds_name} research profile")
+        out["research_profile"] = profile
     pct_unit = str(ds_cfg.get("pct_unit") or "").strip().lower()
     if pct_unit:
         if ds_name != "realtime":
@@ -583,18 +610,23 @@ def _load_builtin_plugins() -> None:
                       if info.get("origin") == "external"}
     pdir = plugins_dir()
     for plugin_dir in sorted(pdir.iterdir()) if pdir.exists() else []:
-        if not plugin_dir.is_dir():
-            continue
-        manifest_path = plugin_dir / "plugin.yaml"
-        if not manifest_path.exists():
-            continue
-        try:
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-            _register_one_plugin(manifest)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("插件 %s 清单解析失败: %s", plugin_dir.name, e)
+        if plugin_dir.is_dir():
+            load_bundled_manifest(plugin_dir.name)
     from . import packages
     packages.discover()
+
+
+def load_bundled_manifest(name: str) -> None:
+    """Register one shipped provider without importing or upgrading any external plugins."""
+    if not name or Path(name).name != name or name in (".", ".."):
+        return
+    path = plugins_dir() / name / "plugin.yaml"
+    if path.is_file():
+        try:
+            manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            _register_one_plugin(manifest)
+        except Exception as exc:  # noqa: BLE001 — match normal discovery of optional manifests
+            logger.warning("插件 %s 清单解析失败: %s", name, exc)
 
 
 def _manifest_status(manifest, available, reason, origin="builtin"):
@@ -623,6 +655,7 @@ def _manifest_status(manifest, available, reason, origin="builtin"):
         # Key/账务管理页 (可选): 设置页插件详情展示入口
         "key_manage_url": manifest.get("key_manage_url", ""),
         "key_manage_label": manifest.get("key_manage_label", ""),
+        "register_url": manifest.get("register_url", ""),
     }
 
 
@@ -785,5 +818,7 @@ def refresh_plugin(name, *, manifest_doc=None, strict=False):
     publish_external(doc, provider, reason)
 
 
-# 模块导入时即扫描一次, 保证 names()/_allowed_data_providers() 在 startup 前可用。
-_load_builtin_plugins()
+# TSP exposes providers before startup. A spawned research node only loads its
+# locked inputs. Discovering TSP plugins here would also apply pending upgrades.
+if current_process().name not in {ENGINE_NODE_PROCESS_NAME, "tivelo-native-probe", "tivelo-data-provider"}:
+    _load_builtin_plugins()

@@ -41,7 +41,7 @@ export function SettingsSystemPanel() {
   const [extTpl, setExtTpl] = useState(() => loadStockExternalTemplate())
   const [clearing, setClearing] = useState(false)
 
-  // ===== 界面缩放 (桌面客户端无浏览器缩放快捷键, CSS zoom 作用于 <html>) =====
+  // ===== 界面缩放 (桌面客户端无浏览器缩放快捷键, transform 作用于 #root) =====
   const [pageZoom, setPageZoomState] = useState(() => getPageZoom())
   const changeZoom = useCallback((delta: number) => {
     setPageZoomState(setPageZoom(getPageZoom() + delta))

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import os
+import socket
 import sys
 import threading
 import time
@@ -31,6 +32,29 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path, raising=False)
     yield tmp_path
     desktop._release_single_instance()
+
+
+@pytest.fixture()
+def reserved_listener(monkeypatch):
+    listener = SimpleNamespace(getsockname=lambda: ("127.0.0.1", 59998), close=lambda: None)
+    monkeypatch.setattr(desktop, "_reserve_listener", lambda _: listener)
+    return listener
+
+
+def test_desktop_reserves_a_different_port_from_an_existing_wildcard_server():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as existing:
+        existing.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        existing.bind(("0.0.0.0", 0))
+        existing.listen(1)
+        occupied = existing.getsockname()[1]
+        with pytest.raises(OSError, match="未找到空闲端口"):
+            desktop._reserve_listener(occupied, count=1)
+        with desktop._reserve_listener(0, count=1) as reserved:
+            address = reserved.getsockname()
+            assert address[0] == "127.0.0.1" and address[1] != occupied
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competing, pytest.raises(OSError):
+                competing.bind(address)
+                competing.listen(1)
 
 
 def test_single_instance_ignores_unlocked_file_with_live_pid(data_dir):
@@ -134,14 +158,15 @@ def test_wait_for_server_times_out_when_alive_but_not_ready():
     assert time.monotonic() - start >= 0.5
 
 
-def test_main_timeout_records_stalled_backend_stack(data_dir, monkeypatch, caplog):
+def test_main_timeout_records_stalled_backend_stack(data_dir, reserved_listener, monkeypatch, caplog):
     """慢启动时记录真正阻塞的后端调用, 不能只有笼统的 60 秒超时。"""
     entered = threading.Event()
     release = threading.Event()
     stopped = threading.Event()
     opened = []
 
-    def _slow_backend_import(port, done):
+    def _slow_backend_import(listener, done):
+        assert listener is reserved_listener
         entered.set()
         try:
             release.wait(timeout=5)
@@ -157,7 +182,6 @@ def test_main_timeout_records_stalled_backend_stack(data_dir, monkeypatch, caplo
     monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
     monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
     monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
-    monkeypatch.setattr(desktop, "_find_free_port", lambda _: 59998)
     monkeypatch.setattr(desktop, "_run_uvmicorn", _slow_backend_import)
     monkeypatch.setattr(desktop, "_wait_for_server", timeout)
     monkeypatch.setattr(desktop, "_open_static_window", opened.append)
@@ -200,7 +224,7 @@ def test_precheck_mining_lock_detects_conflict(data_dir):
 # ---------- main() 预检冲突路径 ----------
 
 def test_main_proceeds_when_mining_lock_precheck_conflicts(
-    tmp_path, monkeypatch, caplog
+    tmp_path, reserved_listener, monkeypatch, caplog
 ):
     """预检撞锁只降级: 留 WARNING 日志并继续启动, 不再提前退出失败页。
 
@@ -215,7 +239,6 @@ def test_main_proceeds_when_mining_lock_precheck_conflicts(
     monkeypatch.setattr(
         desktop, "_precheck_mining_lock", lambda: "另一个后端实例正在占用数据目录"
     )
-    monkeypatch.setattr(desktop, "_find_free_port", lambda base: 59998)
     monkeypatch.setattr(
         desktop, "_wait_for_server",
         lambda port, timeout, done_event: True,
@@ -223,7 +246,8 @@ def test_main_proceeds_when_mining_lock_precheck_conflicts(
     opened = []
     monkeypatch.setattr(desktop, "_open_window", lambda url: opened.append(url))
 
-    def _fake_uvmicorn(port, ready):
+    def _fake_uvmicorn(listener, ready):
+        assert listener is reserved_listener
         ready.set()
 
     monkeypatch.setattr(desktop, "_run_uvmicorn", _fake_uvmicorn)

@@ -762,7 +762,7 @@ def _listing_dates(repo: Any) -> dict[str, date]:
         path = Path(data_dir) / "instruments" / "instruments.parquet"
         if not path.exists():
             return {}
-        df = pl.read_parquet(path, columns=["symbol", "listing_date"])
+        df = pl.read_parquet(path, glob=False, columns=["symbol", "listing_date"])
         out: dict[str, date] = {}
         for row in df.drop_nulls(subset=["listing_date"]).iter_rows(named=True):
             val = row.get("listing_date")

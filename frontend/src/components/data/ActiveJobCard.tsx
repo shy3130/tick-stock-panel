@@ -123,7 +123,14 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
         if (job.result.adj_factor_symbols != null) pills.push({ label: '除权因子', value: cell('sync_adj', `${job.result.adj_factor_symbols} 只`) })
         if (job.result.enriched_days != null) pills.push({ label: 'enriched', value: cell(null, `${job.result.enriched_days} 行`) })
         if (job.result.remaining_gaps != null) pills.push({ label: '剩余缺口', value: `${job.result.remaining_gaps} 条` })
-        if (job.result.minute_rows != null) pills.push({ label: job.result.requested_gaps != null ? '新增分钟K' : '分钟K', value: cell('sync_minute', `${job.result.minute_rows} 行`) })
+        if (job.result.minute_added != null) {
+          pills.push({ label: '新增分钟', value: `${job.result.minute_added} 根` })
+        } else if (job.result.minute_rows != null) {
+          pills.push({ label: job.result.requested_gaps != null ? '新增分钟K' : '分钟K', value: cell('sync_minute', `${job.result.minute_rows} 行`) })
+        }
+        if (job.result.minute_updated != null) pills.push({ label: '更新分钟', value: `${job.result.minute_updated} 根` })
+        if (job.result.minute_received != null) pills.push({ label: '上游有效分钟', value: `${job.result.minute_received} 根` })
+        if (job.result.minute_missing != null) pills.push({ label: '预计仍缺', value: `${job.result.minute_missing} 根` })
         if (pills.length === 0) return null
         return (
           <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">

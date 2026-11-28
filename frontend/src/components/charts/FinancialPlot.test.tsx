@@ -11,19 +11,24 @@ import { LightweightIntraday } from './LightweightIntraday'
 import { minuteTime, type PlotSeries } from '@/lib/lightweight-model'
 import { CHART_LAYOUT, dailyChartHeight } from '@/lib/chart-layout'
 import { ChartAnnotations } from './ChartAnnotations'
+import { ChartTimeAxis } from './ChartTimeAxis'
+import { type IndicatorEvaluation, type VolumeCompareSettings } from '@/lib/custom-chart-indicators'
+import { legacyChartIndicator as newChartIndicator } from '@/lib/chart-indicator-fixtures'
 
 const native = vi.hoisted(() => {
   const appearance = { theme: 'dark' }
   const handlers: Record<string, (event: any) => void> = {}
   const series: any[] = []
   const stretch = vi.fn()
+  const axisPane = { attachPrimitive: vi.fn(), detachPrimitive: vi.fn(), paneIndex: () => 1 }
   const timeScale = { width: () => 500, applyOptions: vi.fn(), getVisibleLogicalRange: vi.fn(() => ({ from: 0, to: 10 })),
     setVisibleLogicalRange: vi.fn(), fitContent: vi.fn(),
     subscribeSizeChange: vi.fn((cb: any) => { handlers.resize = cb }), unsubscribeSizeChange: vi.fn(),
     subscribeVisibleLogicalRangeChange: vi.fn((cb: any) => { handlers.zoom = cb }), unsubscribeVisibleLogicalRangeChange: vi.fn() }
   const chart = {
     applyOptions: vi.fn(), remove: vi.fn(), removeSeries: vi.fn(), addCustomSeries: vi.fn(), timeScale: () => timeScale,
-    panes: () => Array.from({ length: 5 }, (_, pane) => ({ setStretchFactor: (value: number) => stretch(pane, value) })),
+    addPane: vi.fn(() => axisPane), removePane: vi.fn(),
+    panes: () => Array.from({ length: 5 }, (_, pane) => ({ setStretchFactor: (value: number) => stretch(pane, value), setPreserveEmptyPane: vi.fn() })),
     addSeries: vi.fn((_type: any, options: any, pane: number) => {
       const priceScale = { applyOptions: vi.fn() }
       const api = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn(), attachPrimitive: vi.fn(),
@@ -38,7 +43,7 @@ const native = vi.hoisted(() => {
     subscribeDblClick: vi.fn((cb: any) => { handlers.double = cb }), unsubscribeDblClick: vi.fn(),
   }
   const markers = { setMarkers: vi.fn(), detach: vi.fn() }
-  return { appearance, handlers, series, chart, timeScale, markers, stretch, createChart: vi.fn((_host: HTMLElement, _options: unknown) => chart) }
+  return { appearance, handlers, series, chart, timeScale, markers, stretch, axisPane, createChart: vi.fn((_host: HTMLElement, _options: unknown) => chart) }
 })
 vi.mock('lightweight-charts', () => ({
   createChart: native.createChart, createSeriesMarkers: () => native.markers,
@@ -64,6 +69,37 @@ afterEach(async () => {
 })
 const data = [{ time: '2026-11-04', value: 10 }, { time: '2026-11-05', value: 11 }]
 const model: PlotSeries[] = [{ id: 'price', type: 'Line', pane: 0, data }]
+
+it('places one shared time axis between price and all subpanes, preserving the viewport on indicator changes', async () => {
+  const volume: PlotSeries = { id: 'volume', type: 'Histogram', pane: 1, data }
+  const render = (extra = false) => act(async () => root.render(<FinancialPlot scope="daily" mainTimeAxis
+    series={[...model, volume, ...(extra ? [{ id: 'rsi', type: 'Line' as const, pane: 2, data }] : [])]}
+    height={extra ? 507 : 411} paneHeights={extra ? [288, 95, 95] : [288, 95]} />))
+  await render()
+  expect(native.createChart.mock.calls[0][1]).toMatchObject({ timeScale: { visible: false } })
+  expect(native.axisPane.attachPrimitive).toHaveBeenCalledOnce()
+  expect(native.chart.addSeries.mock.calls.map(call => call[2])).toEqual([0, 2])
+  expect(native.stretch.mock.calls).toEqual([[0, 288], [1, 27], [2, 95]])
+  await render(true)
+  expect(native.chart.addSeries.mock.calls.at(-1)?.[2]).toBe(3)
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 0, to: 10 })
+  expect(native.axisPane.attachPrimitive).toHaveBeenCalledOnce()
+  expect(native.createChart).toHaveBeenCalledOnce()
+})
+
+it('shows subpane hover time in the shared axis and clears it on symbol changes', async () => {
+  const hover = vi.spyOn(ChartTimeAxis.prototype, 'setHoverTime')
+  try {
+    const render = (scope: string) => act(async () => root.render(<FinancialPlot scope={scope} mainTimeAxis
+      series={model} height={400} paneHeights={[372]} />))
+    await render('A')
+    await act(async () => native.handlers.hover({ time: '2026-11-05', paneIndex: 2, point: { x: 10, y: 20 } }))
+    expect(hover).toHaveBeenLastCalledWith('2026-11-05')
+    await render('B')
+    expect(hover).toHaveBeenLastCalledWith(undefined)
+    expect(native.axisPane.attachPrimitive).toHaveBeenCalledOnce()
+  } finally { hover.mockRestore() }
+})
 
 it('preserves the replay time range when opening intraday or resizing the window', async () => {
   const render = (visibleBars?: 'all') => act(async () => root.render(<FinancialPlot
@@ -253,6 +289,79 @@ it('shows every indicator readout at the hovered date, including MACD histogram 
   } finally { updates.mockRestore() }
 })
 
+it('renders per-indicator volume multiples with matching hovered readouts and no ratio curve or duplicate legacy labels', async () => {
+  const updates = vi.spyOn(ChartAnnotations.prototype, 'update')
+  try {
+    const rows = [100, 200, 300, 600].map((volume, index) => ({ date: `2026-11-0${index + 3}`, open: 10, high: 12, low: 9, close: 11, volume }))
+    const volume = { ...newChartIndicator('blank'), id: 'custom_volume', name: '我的成交量', format: 'volume' as const,
+      outputs: [{ key: 'BARS', label: '量', formula: 'V*2', style: 'volume' as const, color: '#C74040' }] }
+    const evaluation: IndicatorEvaluation = { times: rows.map(row => row.date),
+      results: [{ ...volume, outputs: volume.outputs.map(output => ({ ...output, values: rows.map(row => row.volume * 2) })) }],
+      errors: [], warnings: [], elapsed_ms: 1, cache_hit: false }
+    const render = (settings: VolumeCompareSettings) => act(async () => root.render(<LightweightDaily symbol="A" data={rows}
+      mainTimeAxis activeIndicators={[]} showMA={false} customIndicatorValues={evaluation} volumeCompare={{ enabled: false, days: 1 }}
+      customVolumeCompare={{ custom_volume: settings }} />))
+    const annotation = () => updates.mock.calls.map(([value]) => value).filter(value => value.title === volume.name).at(-1)!
+    await render({ days: 2, show_labels: true, show_readout: true })
+    expect(annotation().labels).toEqual([
+      { time: rows[2].date, value: 600, text: '2.0x' }, { time: rows[3].date, value: 1200, text: '2.4x' },
+    ])
+    expect(annotation().readouts?.map(item => item.text)).toEqual(['量 1200.00', '量比2 2.40x'])
+    expect(native.chart.addSeries.mock.calls.map(call => call[0])).toEqual(['Candlestick', 'Volume'])
+    expect(native.series[1].priceScale().applyOptions).toHaveBeenLastCalledWith(expect.objectContaining({ scaleMargins: { top: 0.38, bottom: 0 } }))
+    await act(async () => native.handlers.hover({ time: rows[2].date, paneIndex: 2 }))
+    expect(annotation().readouts?.map(item => item.text)).toEqual(['量 600.00', '量比2 2.00x'])
+    await render({ days: 1, show_labels: false, show_readout: true })
+    expect(annotation().labels).toEqual([])
+    expect(native.series[1].priceScale().applyOptions).toHaveBeenLastCalledWith(expect.objectContaining({ scaleMargins: { top: 0.3, bottom: 0 } }))
+    expect(annotation().readouts?.at(-1)?.text).toBe('量比1 1.50x')
+    await render({ days: 2, show_labels: true, show_readout: false })
+    expect(annotation().labels).toHaveLength(2)
+    expect(annotation().readouts?.map(item => item.text)).toEqual(['量 600.00'])
+  } finally { updates.mockRestore() }
+})
+
+it.each(['preset_volume', 'builtin_volume'])('shows only three-color minute volume bars for %s and preserves other indicators', async id => {
+  const date = '2026-11-05'
+  const bars: MinuteKlineRow[] = [11, 11, 10].map((close, index) => ({
+    datetime: `${date} 09:${30 + index}:00`, open: 12, high: 13, low: 10, close, volume: 10 * (index + 1), amount: null,
+  }))
+  const volume = { ...newChartIndicator('blank'), id, name: '成交量', format: 'volume' as const, outputs: [
+      { key: 'VOLBAR', label: '量', style: 'volume' as const, color: '#C74040', values: [10, 20, 30] },
+      { key: 'VOL5', label: 'VOL5', style: 'line' as const, color: '#f59e0b', values: [10, 15, 20] },
+      { key: 'VOL10', label: 'VOL10', style: 'line' as const, color: '#a855f7', values: [10, 15, 20] },
+    ] }
+  const custom = { ...newChartIndicator('blank'), name: '我的副图',
+    outputs: [{ key: 'LINE', label: '自定义', style: 'line' as const, color: '#3B82F6', values: [1, 2, 3] }] }
+  const evaluation: IndicatorEvaluation = { times: bars.map(row => row.datetime), results: [volume, custom],
+    errors: [], warnings: [], elapsed_ms: 1, cache_hit: false }
+  const updates = vi.spyOn(ChartAnnotations.prototype, 'update')
+  try {
+    await act(async () => root.render(<LightweightIntraday symbol="A" date={date} prevClose={10} showVolume={false}
+      data={bars} customIndicatorValues={evaluation} />))
+    const volumeReadouts = () => updates.mock.calls.map(([value]) => value).filter(value => value.title === '成交量').at(-1)?.readouts
+    expect(native.chart.addSeries.mock.calls.filter(call => call[2] === 1).map(call => call[0])).toEqual(['Volume'])
+    expect(native.series.find(series => series.pane === 1).setData.mock.calls[0][0].slice(0, 3)).toEqual([
+      { time: minuteTime(bars[0].datetime), value: 10, color: 'rgba(199,64,64,0.55)' },
+      { time: minuteTime(bars[1].datetime), value: 20, color: 'rgba(161,161,170,0.45)' },
+      { time: minuteTime(bars[2].datetime), value: 30, color: 'rgba(45,155,101,0.55)' },
+    ])
+    expect(volumeReadouts()).toEqual([{ text: '量 30' }])
+    await act(async () => native.handlers.hover({ time: minuteTime(bars[1].datetime), paneIndex: 1 }))
+    expect(volumeReadouts()).toEqual([{ text: '量 20' }])
+    expect(native.chart.addSeries.mock.calls.filter(call => call[2] === 2).map(call => call[0])).toEqual(['Line'])
+  } finally { updates.mockRestore() }
+})
+
+it('keeps label headroom on the shared volume scale when moving-average lines follow the volume bars', async () => {
+  const series: PlotSeries[] = [...model, { id: 'bars', type: 'Volume', pane: 1, data }, { id: 'mean', type: 'Line', pane: 1, data }]
+  await act(async () => root.render(<FinancialPlot scope="volume" series={series} height={411} paneHeights={[288, 95]}
+    paneLabels={[undefined, [{ time: '2026-11-05', value: 11, text: '1.1x' }]]} />))
+  for (const api of native.series.filter(s => s.pane === 1)) {
+    expect(api.priceScale().applyOptions).toHaveBeenLastCalledWith(expect.objectContaining({ scaleMargins: { top: 0.38, bottom: 0 } }))
+  }
+})
+
 it('preserves missing and invalid indicator values instead of showing zero or an older date', async () => {
   const updates = vi.spyOn(ChartAnnotations.prototype, 'update')
   try {
@@ -380,6 +489,13 @@ it('aligns daily and minute price/volume panes using the same geometry, with att
   })
 })
 
+it('locks paired pane heights while retaining resizing for independent daily charts', async () => {
+  await act(async () => root.render(<FinancialPlot scope="pair" series={model} height={400} paneHeights={[300]} lockPaneHeights />))
+  expect(native.createChart.mock.calls[0][1]).toMatchObject({ layout: { panes: { enableResize: false } } })
+  await act(async () => root.render(<FinancialPlot scope="pair" series={model} height={400} paneHeights={[300]} />))
+  expect(native.chart.applyOptions).toHaveBeenCalledWith(expect.objectContaining({ layout: { panes: { enableResize: true } } }))
+})
+
 it('bounds daily scrolling at the latest bar while keeping the intraday session timeline', async () => {
   const render = async (intraday: boolean) => act(async () => root.render(<FinancialPlot
     scope={intraday ? 'minute' : 'daily'} series={model} height={400} paneHeights={[300]} intraday={intraday} />))
@@ -504,6 +620,73 @@ it('starts daily candles at a readable density and keeps the viewport when chang
   await render()
   expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 0, to: 10 })
   expect(native.chart.addCustomSeries).toHaveBeenCalledTimes(2)
+})
+
+it('keeps the initial 60 bars when indicators update before the first draw', async () => {
+  const frames = new Map<number, FrameRequestCallback>()
+  let nextFrame = 0
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    frames.set(++nextFrame, callback)
+    return nextFrame
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+  const rows = Array.from({ length: 100 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 6, i + 1)).toISOString().slice(0, 10),
+    open: 10, high: 12, low: 9, close: 11, volume: 10,
+  }))
+  const render = (activeIndicators: string[]) => act(async () => root.render(
+    <LightweightDaily symbol="A" data={rows} visibleBars={60} activeIndicators={activeIndicators} />))
+
+  await render([])
+  await render(['vol'])
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 40, to: 99 })
+
+  for (const frame of frames.values()) frame(0)
+  frames.clear()
+  native.timeScale.getVisibleLogicalRange.mockReturnValueOnce({ from: 20, to: 39 })
+  await render([])
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 20, to: 39 })
+})
+
+it('opens a fixed 60-bar daily window and fits the available history when there are fewer bars', async () => {
+  const rows = Array.from({ length: 100 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 6, i + 1)).toISOString().slice(0, 10),
+    open: 10, high: 12, low: 9, close: 11, volume: 10,
+  }))
+  const render = (symbol: string, data: typeof rows, visibleBars = 60) => act(async () => root.render(
+    <LightweightDaily symbol={symbol} data={data} visibleBars={visibleBars} />))
+
+  await render('A', rows)
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 40, to: 99 })
+  expect(native.createChart.mock.calls[0][1]).toMatchObject({ timeScale: { lockVisibleTimeRangeOnResize: true } })
+  expect(native.chart.applyOptions).toHaveBeenCalledWith(expect.objectContaining({
+    timeScale: expect.objectContaining({ lockVisibleTimeRangeOnResize: true }),
+  }))
+
+  await render('A', rows, 85)
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 15, to: 99 })
+  await render('B', rows.slice(0, 12), 85)
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 0, to: 11 })
+})
+
+it('refits a full daily range when its end date changes and keeps manual zoom on quote updates', async () => {
+  const rows = [
+    { date: '2026-11-04', open: 10, high: 11, low: 9, close: 10, volume: 100 },
+    { date: '2026-11-05', open: 10, high: 12, low: 10, close: 11, volume: 120 },
+    { date: '2026-11-06', open: 11, high: 12, low: 10, close: 11, volume: 100 },
+  ]
+  const render = async (data: typeof rows) => act(async () => root.render(
+    <LightweightDaily symbol="600000.SH" data={data} visibleBars="all" />))
+
+  await render(rows.slice(0, 2))
+  expect(native.timeScale.fitContent).toHaveBeenCalledOnce()
+  await render(rows.slice(0, 2).map(row => ({ ...row, volume: row.volume + 1 })))
+  expect(native.timeScale.fitContent).toHaveBeenCalledOnce()
+  expect(native.timeScale.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 0, to: 10 })
+
+  await render(rows)
+  expect(native.timeScale.fitContent).toHaveBeenCalledTimes(2)
+  expect(native.createChart).toHaveBeenCalledOnce()
 })
 
 it('switches text labels and candle-body colors while preserving strategy markers and source OHLC', async () => {

@@ -22,6 +22,7 @@ vi.mock('@/components/dashboard/useDashboardLayout', () => ({
   useDashboardLayout: () => ({ items: [], setItems: () => {} }),
 }))
 vi.mock('@/components/dashboard/DashboardGrid', () => ({ DashboardGrid: () => null }))
+vi.mock('@/extensions/registry', () => ({ getFrontendExtensionRoutes: () => [] }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: () => null }))
 vi.mock('@/components/DimensionMembersDialog', () => ({ DimensionMembersDialog: () => null }))
 vi.mock('@/components/AdjFactorSyncGate', () => ({

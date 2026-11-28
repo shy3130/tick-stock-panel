@@ -4,6 +4,8 @@
 
 修改任何代码前，仍须先完整阅读根目录的 [`CONTRIBUTING.md`](../CONTRIBUTING.md)。金融数据口径、缓存、并发、数据源和测试要求以该文档为准。
 
+外部 AI 调用已有 TSP、使用工作台助手或制作可导入文件时，可从 [AI 接入指南](ai-integration.md)和[统一导入](extension-packages.md)开始。本文集中说明仓库内的扩展与兼容验证。
+
 ## 1. 文档状态
 
 本文同时描述现有能力和后续按需建设的代码扩展契约。两者不能混用：
@@ -19,13 +21,14 @@
 - 数据源 Provider 与 `plugin.yaml` 机制：详见 [`plugin-development.md`](plugin-development.md)。
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
-- 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
+- 自定义图表指标支持明文公式和 `tick-chart-indicators` v1 JSON，服务从 TSP 行情入口取得数据并返回绘图结果。[用户指南](custom-chart-indicators.md) · [模块接口与兼容性](custom-chart-indicators-integration.md)
+- 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子、通知格式化器和扩展数据采集器（`ExtCollector`）。
 - 核心 AI 工具调用（已实现）：`app.services.ai_provider.generate_ai_text_with_tools` 接收调用方的工具 schema 与异步执行回调，统一支持 OpenAI Chat Completions / Responses 与 Codex CLI 结构化输出。策略迭代与可选 AI 助手共用核心适配；核心不依赖 `app.custom.assistant`，其他扩展可传入自己的工具，无需注册进助手目录。接入示例见下文「复用核心 AI 工具调用」。
 - 外部后端扩展包及配套页面安装：`data/extensions/<id>/versions/<version>/`，复用现有注册契约，静态预览、重启生效、失败保留旧版本。入口为「设置 → 导入与备份」，见 [统一导入与外部后端扩展包](extension-packages.md)。
-- 当前前端插槽（8 个，context 契约见下文 §3.2）：`layout.navigation.extra`、`layout.header.quick`、`settings.system.section`、`settings.data-sources.toolbar`、`settings.data-sources.detail-actions`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`。
-- 当前后端继承点：`NotificationFormatter`。
+- 当前前端插槽（9 个，context 契约见下文 §3.2；源码扩展与运行时 Page Pack 均可挂载）：`layout.navigation.extra`、`layout.header.quick`、`settings.system.section`、`settings.data-sources.toolbar`、`settings.data-sources.detail-actions`、`stock-preview.tabs`、`stock-preview.footer`、`watchlist.toolbar`、`abnormal.auction.extra`。
+- 当前后端继承点：`NotificationFormatter`、`ExtCollector`（经 `registrar.register_ext_collector(collector_id, collector)` 注册，通过 `ExtCollectorContext.market` 只读行情门面与 `ExtCollectorContext.params` 接收 `PullConfig.collector_params`，支持 `params_schema` / `default_fields` 在「新建扩展数据 → 扩展采集器」界面零代码派生多张表，复用 `ext_data` 存储、查询与 `PullScheduler` 固定时刻/间隔制交易日调度；示例见 `backend/app/custom/auction_scan`）。
 - 个股详情公共入口（已实现）：源码扩展通过 `@/extensions/stockPreview` 的 `openStockPreview` / `closeStockPreview` 调用；运行时页面通过 `ctx.ui` 调用相同能力。复用原弹窗、查询和列表切股，不要求每个扩展自行挂载图表。
-- 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
+- 自定义仓位策略（`PositionSizingPolicy`，已实现）：`data/user_data/position_policies/*.py`，在「设置 → 定义目录 → 仓位策略」创建（表单 META + 只写一个 `def compute(ctx)` 函数，模板起步）。契约见 `app/backtest/position_sizing.py`：ctx 只含当日及以前信息（候选评分/近 60 日收益/已平仓快照/组合状态/参数），输出 weights + budget_scale，引擎侧单仓上限/现金/敞口钳制不变。保存/备份导入均过「AST 安全校验 → 结构解析 → 合成冒烟」三关；回测在「买入权重 → 自定义策略」选用，引用失效 400 拒绝、运行期异常当日回退等权并计入统计。
 - 因子平台与策略线的既有桥接（已实现，二开时直接复用、勿重复实现）：因子库一键生成单因子排名策略（`GenerateFactorStrategyDialog` → `custom_factor_*`）；策略触发器引用因子条件信号（`AddFactorSignalDialog`，`csg_f_*`）；自定义信号 AI 提示词含因子分组（`custom_signals_ai.py`）；策略回测因子归因（`strategy.py` 的 `factor_attribution`，覆盖 `meta.scoring` 非空的策略）。
 - 旧策略包格式与接口（兼容保留）：按依赖闭包打包策略 `.py` + 引用的自定义信号/因子定义 + 用户调参（叠加策略含子策略）。`app/services/strategy_bundle.py` 只保留兼容入口，实际实现统一位于 `app/services/resource_bundle.py`；新旧接口共用依赖闭包、ZIP 安全校验、打包与资源预检，旧导入复用 `config_backup.apply_archive` 的校验/逐条写盘/冒烟管线，缺失依赖在旧预览中只作预警。包内仅允许策略/调参/信号/因子四类，其他路径 400 拒绝。API：`GET /api/strategies/{id}/bundle`、`POST /api/strategies/bundle/inspect|apply`；当前页面入口使用下述统一资源传输。
 - 统一资源传输（已实现）：策略、因子、信号页各使用一个 `ResourceTransferButton` 图标，进入「设置 → 导入与备份」；`kind` 透传资源选择上下文，依赖统一展示并自动携带，批量导出复用 `ResourceTransferDialog`。多文件识别后优先选择同类型原始项，没有此类型原始项时允许从混合包提取该类型定义；确认冲突后只提交所选项及其依赖。`StrategyExportButton` 与弹窗共用 `downloadResourceBundle`，单个策略和批量导出均下载 ZIP，包含所需因子、信号与已保存调参。处理期间禁用关闭，关闭后重开重置临时状态。服务层 `app/services/resource_bundle.py` 统一收集多资源依赖闭包，复用备份路径/原子写与定义编译；新包格式 `tick-resource-bundle` v1，兼容旧策略包。预览通过 `registry.isolated_registry()` 在请求上下文副本内检查同包因子，不向实时线程泄漏定义；新导入链路预检后整批提交，写入/注册/重载失败回滚，区别于旧备份接口的逐条容错语义。API 位于 `/api/definitions/resources`，详见 [策略文档](strategy.md#资源导入与批量导出)。
@@ -134,6 +137,7 @@ settings.data-sources.detail-actions
 stock-preview.tabs
 stock-preview.footer
 watchlist.toolbar
+abnormal.auction.extra
 ```
 
 各插槽 context 契约（均要求 `apiVersion: 1`，定义见 `frontend/src/extensions/types.ts` 的 `FrontendSlotContextMap`）：
@@ -236,17 +240,16 @@ function StockLink() {
 
 后端允许二开类继承稳定、职责单一的抽象基类，再通过注册表或依赖注入接入。不要继承并覆盖大型编排服务。
 
-当前已经实现的继承点：
+二次开发可使用以下已实现的接入点。
 
-- `NotificationFormatter`：在监控规则完成评估后统一调整通知文案，不改变事件结构和触发语义。
+- `NotificationFormatter` 在监控规则完成评估后统一调整通知文案，沿用现有事件结构和触发语义。
+- 自定义仓位策略通过用户定义中的 `compute(ctx)` 函数按建仓日计算资金权重和预算。契约见 `app/backtest/position_sizing.py`。
 
 下列是可能适合的小粒度接口，但目前没有实现，不能直接导入：
 
 - `CandidateFilter`：候选池过滤。
 - `ScoringPolicy`：评分计算。
-- `PositionSizingPolicy`：仓位计算。
 - `RiskPolicy`：风险约束。
-- `NotificationFormatter`：通知文案。
 - `StrategyProvider`：策略发现。
 - `MonitorConditionEvaluator`：自定义监控条件。
 - `BacktestCostModel`：手续费和滑点模型。
@@ -389,6 +392,20 @@ AI 必须按以下顺序工作：
 7. 先补能证明行为的测试，再实施必要改动。
 8. 执行对应验证矩阵，检查最终 diff 和兼容性。
 
+### 扩展数据与供应商接入
+
+TSP 现有外置数据源继续使用 `plugin.yaml` 和原有 Provider 接口。AI 可参考[数据源开发](plugin-development.md)、[声明式数据源](custom-data-source.md)和[外置插件安装](external-data-source-packages.md)，根据供应商的字段、单位、时间和分页规则生成配置，再用设置页面试拉和原接口核对结果。
+
+独立数据引擎使用 `tivelo-data` 库或命令行采集、发布和读取数据。已有 TSP 数据源与独立引擎可分别接入同一家供应商，凭据沿用各自的配置入口。扩展表可先按原工作台方式写入，再按需固定为历史研究输入。[数据引擎接口和示例](../packages/tivelo-data/README.md) · [同源双端示例](../examples/dual-host-data-source/README.md)
+
+独立回测通过 `tivelo-backtest` 接收准备好的数据和策略。接入前复权或后复权时，应明确数据价格口径、因子和锚点，并用固定样本核对回测结果。[回测引擎接口](../packages/tivelo-backtest/README.md)
+
+从工作台的管理会话提交引擎研究任务时，AI 可先读取 `GET /api/engine-jobs/schema`，再调用 `POST /api/engine-jobs/preview` 检查输入，最后通过 `POST /api/engine-jobs` 提交。任务状态和结果通过相同前缀的任务接口读取。归档研究通过价格视图指定口径，使用已授权的动态复权视图时须提供匹配的归档和快照。[引擎研究使用说明](engine-platform/workbench-research-jobs.md#使用现有归档切换价格口径)
+
+普通策略回测通过 `price_basis="dynamic"` 调用启用且已授权的 Tivelo Pro 0.1.0a2 或更高版本，使用工作台保存的原始日线和除权数据。[动态复权使用流程](engine-platform/workbench-research-jobs.md#动态复权扩展)
+
+测试数据源时同时覆盖正常数据、空响应、来源失败和单位转换。真实凭据由用户通过现有配置填写，示例和测试使用脱敏数据。
+
 ### 6.1 可直接使用的任务模板
 
 ```text
@@ -480,7 +497,7 @@ python3 scripts/upgrade_check.py <目标Tag或分支>
 
 ### 8.1 安装包升级保护（非 Git 用户）
 
-桌面安装包与 Docker 镜像的发布携带全量程序文件清单（`app/upgrade_manifest.json`，构建时生成）。后端每次启动会扫描程序目录并与清单对比，把用户「修改/新增」的程序文件备份到 `data/upgrade_guard/snapshots/`。**自动快照只保留最近一次成功备份**：先完整写入新副本，再原子更新状态指向新副本，最后删除旧副本。复制、报告生成或状态写入失败时保留上一份完整备份，不推进版本记录，可修复问题后重新扫描。旧版 `live/` 目录会在首次成功备份后迁入此机制。
+桌面安装包与 Docker 镜像的发布携带程序文件清单（`app/upgrade_manifest.json`，构建时生成）。macOS 的清单覆盖 `TSP.app/Contents/Resources` 中的程序资源，包括扩展源码、策略提示词和前端文件。后端每次启动会扫描程序目录并与清单对比，把用户「修改/新增」的程序文件备份到 `data/upgrade_guard/snapshots/`。**自动快照只保留最近一次成功备份**：先完整写入新副本，再原子更新状态指向新副本，最后删除旧副本。复制、报告生成或状态写入失败时保留上一份完整备份，不推进版本记录，可修复问题后重新扫描。旧版 `live/` 目录会在首次成功备份后迁入此机制。
 
 检测到版本变化（上次运行版本 ≠ 当前版本）时生成升级对比报告，在「设置 → 系统设置 → 升级保护」展示：
 

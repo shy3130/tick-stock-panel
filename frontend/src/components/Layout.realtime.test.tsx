@@ -7,9 +7,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Layout } from './Layout'
 import { api, type Preferences } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
+import type { ColumnConfig } from '@/lib/stock-info-fields'
 import { toast } from '@/components/Toast'
 
-const layoutMocks = vi.hoisted(() => ({ desktop: true, prefs: {} as Partial<Preferences> }))
+const layoutMocks = vi.hoisted(() => ({
+  desktop: true,
+  prefs: {} as Partial<Preferences>,
+  latestVersion: null as string | null,
+}))
 
 vi.mock('@/lib/api', () => ({ api: {
   dataSources: vi.fn(async () => ({
@@ -29,18 +35,23 @@ vi.mock('@/lib/api', () => ({ api: {
   })),
   miningRuns: vi.fn(async () => ({ items: [] })),
   intradayRefresh: vi.fn(async () => ({})),
+  updateStockInfoBarLayout: vi.fn(),
 } }))
 vi.mock('@/lib/useSharedQueries', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/useSharedQueries')>(),
   useSettings: () => ({ data: { onboarding_completed: true } }),
   useCapabilityMatrix: () => ({ data: { capabilities: [] } }),
   usePreferences: () => ({ data: layoutMocks.prefs }),
-  useVersion: () => ({ data: { version: '0.3.20' } }),
+  useVersion: () => ({ data: { version: '0.4.1' } }),
 }))
 vi.mock('@/lib/useQuoteStream', () => ({
   useQuoteStream: () => {}, useQuoteStreamStatus: () => 'connected',
 }))
-vi.mock('@/lib/updateCheck', () => ({ useUpdateCheck: () => ({ status: 'latest' }) }))
+vi.mock('@/lib/updateCheck', () => ({
+  useUpdateCheck: () => layoutMocks.latestVersion
+    ? { status: 'found', info: { latest: layoutMocks.latestVersion } }
+    : { status: 'latest', info: null },
+}))
 vi.mock('@/lib/useMediaQuery', () => ({ useIsDesktop: () => layoutMocks.desktop }))
 vi.mock('@/extensions/registry', () => ({ getFrontendExtensionNavigation: () => [] }))
 vi.mock('@/extensions/ExtensionSlot', () => ({ ExtensionSlot: () => null }))
@@ -59,6 +70,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.clearAllMocks()
   layoutMocks.desktop = true
+  layoutMocks.latestVersion = null
   layoutMocks.prefs = { realtime_data_provider: 'fuyao', realtime_quotes_enabled: false }
   vi.mocked(api.quoteStatus).mockResolvedValue({ enabled: false, running: false, paused: false,
     is_trading_hours: false, mode: 'none', realtime_allowed: false } as Awaited<ReturnType<typeof api.quoteStatus>>)
@@ -86,6 +98,25 @@ async function mountGrouped(path = '/watchlist') {
     <Layout />
   </QueryClientProvider></MemoryRouter>))
 }
+
+it.each([false, true])('migrates old information fields and their default layout only if no server layout exists (saved=%s)', async serverSaved => {
+  const ext: ColumnConfig = {
+    id: 'ext:sector:theme', label: '题材', visible: true, standalone: true,
+    source: { type: 'ext', configId: 'sector', fieldName: 'theme' },
+  }
+  const fields = [{ ...ext, visible: false }]
+  const baseline = [ext]
+  storage.stockInfoBarFields.set(fields)
+  storage.stockInfoBarFieldsBaseline.set(baseline)
+  layoutMocks.prefs = { ...layoutMocks.prefs, stock_info_bar_layout: serverSaved ? { fields: [], baseline: null } : null }
+  vi.mocked(api.updateStockInfoBarLayout).mockResolvedValue({ stock_info_bar_layout: { fields, baseline } })
+  await mountGrouped()
+
+  if (serverSaved) expect(api.updateStockInfoBarLayout).not.toHaveBeenCalled()
+  else expect(api.updateStockInfoBarLayout).toHaveBeenCalledExactlyOnceWith({ fields, baseline }, true)
+  expect(storage.stockInfoBarFields.get([])).toEqual(fields)
+  expect(storage.stockInfoBarFieldsBaseline.get(null)).toEqual(baseline)
+})
 
 it('expands the active folder, preserves watchlist groups and stops hidden group-stat queries', async () => {
   await mountGrouped()
@@ -116,9 +147,61 @@ it.each(['expanded', 'rail', 'mobile'])('keeps settings in the fixed footer with
   const settings = host.querySelectorAll<HTMLAnchorElement>('aside a[href="/settings"]')
   expect(settings).toHaveLength(1)
   expect(host.querySelector('aside nav')?.contains(settings[0])).toBe(false)
+  const theme = settings[0].closest('.tsp-sidebar-footer')?.querySelector('button[title="切换到亮色模式"]')
+  expect(theme?.compareDocumentPosition(settings[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   if (mode === 'rail') expect(settings[0].title).toBe('设置')
-  else expect(settings[0].textContent).toContain('设置')
+  else {
+    expect(settings[0].textContent).toContain('设置')
+    expect(settings[0].textContent).toContain('0.4.1')
+  }
+  expect(host.querySelector('aside a[href="/settings?tab=about&autoupdate=1"]')).toBeNull()
   expect(host.querySelector('a[href="/settings?tab=pages&section=menus"]')).toBeNull()
+})
+
+it.each(['expanded', 'rail', 'mobile'])('shows the previous update affordance in %s mode', async mode => {
+  layoutMocks.latestVersion = 'v0.4.2'
+  layoutMocks.desktop = mode !== 'mobile'
+  if (mode === 'rail') localStorage.setItem('tf-nav-state', 'rail')
+  await mountGrouped('/')
+  if (mode === 'mobile') await act(async () => host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!.click())
+
+  const settings = host.querySelector('aside a[href="/settings"]')!
+  const update = host.querySelector<HTMLAnchorElement>('aside a[href="/settings?tab=about&autoupdate=1"]')
+  if (mode === 'rail') {
+    expect(settings.querySelector('[title="发现新版本"]')).not.toBeNull()
+    expect(update).toBeNull()
+  } else {
+    expect(update?.title).toContain('v0.4.2')
+    expect(update?.parentElement).toBe(settings.parentElement)
+    expect(settings.contains(update)).toBe(false)
+  }
+})
+
+it.each(['expanded', 'mobile', 'rail'])('labels extension menus in visible %s navigation', async mode => {
+  const analysisPath = '/analysis/market-summary'
+  layoutMocks.desktop = mode !== 'mobile'
+  if (mode === 'rail') localStorage.setItem('tf-nav-state', 'rail')
+  layoutMocks.prefs.nav_layout = { v: 1, items: [
+    { type: 'page', id: '/' },
+    mode === 'rail'
+      ? { type: 'group', id: 'group:analysis', label: '分析工具', children: [{ type: 'page', id: analysisPath }] }
+      : { type: 'page', id: analysisPath },
+  ] }
+  client.setQueryData(QK.analysisMenus, { items: [{ id: 'market-summary', label: '市场明细', visible: true }] })
+  await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}>
+    <Layout />
+  </QueryClientProvider></MemoryRouter>))
+
+  if (mode === 'mobile') {
+    await act(async () => host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!.click())
+  }
+  if (mode === 'rail') {
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="分析工具"]')!.click())
+  }
+  const scope = mode === 'rail' ? document.querySelector('[aria-label="分析工具子菜单"]')! : host
+  const extension = scope.querySelector(`a[href="${analysisPath}"]`)
+  expect(extension?.querySelector('.tsp-nav-tag')?.textContent).toBe('EXT')
+  expect(host.querySelector('nav a[href="/"] .tsp-nav-tag')).toBeNull()
 })
 
 it('opens folder links in a portal in rail mode and closes with Escape', async () => {
@@ -181,12 +264,37 @@ it('shows a saved empty category and explains that it has no child menus', async
 it('keeps grouped pages reachable in the mobile drawer', async () => {
   layoutMocks.desktop = false
   await mountGrouped('/')
-  await act(async () => host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!.click())
+  const opener = host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!
+  const sidebar = host.querySelector('aside')!
+  expect(sidebar.hasAttribute('inert')).toBe(true)
+  await act(async () => opener.click())
+  expect(sidebar.hasAttribute('inert')).toBe(false)
+  expect(document.activeElement?.getAttribute('title')).toBe('关闭菜单')
   const folder = host.querySelector<HTMLButtonElement>('button[aria-label="交易工作台"]')!
   await act(async () => folder.click())
   expect(folder.getAttribute('aria-expanded')).toBe('true')
   await act(async () => host.querySelector<HTMLAnchorElement>('a[href="/data"]')!.click())
-  expect(host.querySelector('aside')?.className).toContain('-translate-x-full')
+  expect(sidebar.hasAttribute('inert')).toBe(true)
+  expect(document.activeElement).toBe(opener)
+})
+
+it('closes the mobile drawer on the current page and restores focus after Escape', async () => {
+  layoutMocks.desktop = false
+  await mountGrouped('/')
+  const opener = host.querySelector<HTMLButtonElement>('button[title="打开菜单"]')!
+  await act(async () => opener.click())
+  await act(async () => host.querySelector<HTMLAnchorElement>('nav a[href="/"]')!.click())
+  expect(opener.getAttribute('aria-expanded')).toBe('false')
+  await act(async () => opener.click())
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+  expect(opener.getAttribute('aria-expanded')).toBe('false')
+  expect(document.activeElement).toBe(opener)
+})
+
+it('marks only the current watchlist group as the current page', async () => {
+  await mountGrouped('/watchlist?group=short')
+  expect(host.querySelector('nav a[href="/watchlist"]')?.hasAttribute('aria-current')).toBe(false)
+  expect(host.querySelector('nav a[href="/watchlist?group=short"]')?.getAttribute('aria-current')).toBe('page')
 })
 
 it('restores saved folder expansion without overwriting a later manual collapse', async () => {

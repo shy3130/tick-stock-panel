@@ -1,3 +1,5 @@
+import type { IndicatorEvaluation, VolumeCompareSettings } from './custom-chart-indicators'
+
 export interface OHLC {
   date: string
   open: number
@@ -65,12 +67,21 @@ export interface VolumeCompareConfig {
 }
 
 export interface DailyChartProps {
+  alignedLayout?: boolean
+  mainTimeAxis?: boolean
+  indicatorRows?: readonly object[]
+  /** Successful quote refreshes also invalidate offscreen indicator warmup. */
+  indicatorRevision?: string | number
+  customIndicatorValues?: IndicatorEvaluation
+  customVolumeCompare?: Record<string, VolumeCompareSettings>
   data: OHLC[]
   assetType?: 'stock' | 'etf' | 'index'
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   height?: number
+  /** 等待自定义副图评估期间在画布下方预留的像素高度（不拉伸主图） */
+  reservedBottomSpace?: number
   showMA?: boolean
   showInfoBar?: boolean
   showMarkers?: boolean
@@ -81,7 +92,7 @@ export interface DailyChartProps {
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
-  /** 初始可见根数；ECharts 默认 60，新详情按窗口宽度适配；'all' 显示全部。 */
+  /** 初始可见根数；'all' 适配已加载的完整日期区间。 */
   visibleBars?: number | 'all'
   /** 已激活的子图 key 列表 (含 vol, 按点击顺序) */
   activeIndicators?: string[]

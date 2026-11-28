@@ -82,9 +82,9 @@ def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
     if not part.exists():
         return None
     try:
-        if not {"symbol", "volume", "amount"}.issubset(pl.read_parquet_schema(part)):
+        if not {"symbol", "volume", "amount"}.issubset(pl.scan_parquet(part, glob=False).collect_schema()):
             return None
-        daily = pl.read_parquet(part, columns=["symbol", "volume", "amount"])
+        daily = pl.read_parquet(part, glob=False, columns=["symbol", "volume", "amount"])
         if daily.is_empty():
             return None
         daily = daily.with_columns(pl.col(c).cast(pl.Float64, strict=False) for c in ("volume", "amount"))
@@ -99,7 +99,7 @@ def _daily_active_symbols(daily_dir: Path, date_str: str) -> set[str] | None:
 
 
 def _read_minute_activity(part: Path, symbols: list[str] | None) -> pl.DataFrame:
-    frame = pl.scan_parquet(part, hive_partitioning=False)
+    frame = pl.scan_parquet(part, glob=False, hive_partitioning=False)
     columns = frame.collect_schema().names()
     if symbols is not None:
         frame = frame.filter(pl.col("symbol").is_in(symbols))
@@ -144,6 +144,32 @@ def count_remaining_gaps(minute_dir: Path, trade_date: _date, symbols: list[str]
     expected = _expected_bars_for(trade_date, now.date(), (now.hour, now.minute))
     bad, _ = incomplete_minute_groups(df, minute_dir.parent / "kline_daily", trade_date.isoformat(), expected)
     return len(symbols) - df["symbol"].n_unique() + bad.height
+
+
+def estimate_missing_bars(frame: pl.DataFrame, trade_date: _date, symbols: list[str], now: datetime) -> int:
+    """逐标的、逐交易时段估算缺根，兼容分钟源对开盘边界的不同标记。"""
+    if trade_date.weekday() >= 5:
+        return 0
+    expected = _expected_bars_for(trade_date, now.date(), (now.hour, now.minute))
+    if frame.is_empty():
+        return expected * len(symbols)
+    timestamp = pl.col("datetime")
+    time = timestamp.dt.time()
+    minute = timestamp.dt.truncate("1m")
+    selected = frame.filter(
+        pl.col("symbol").is_in(symbols) & (timestamp.dt.date() == trade_date)
+        & (timestamp <= now.replace(tzinfo=None))
+    )
+    counts = selected.group_by("symbol").agg(
+        minute.filter(time.is_between(pl.time(9, 30), pl.time(11, 30))).n_unique().alias("morning"),
+        minute.filter(time.is_between(pl.time(13), pl.time(15))).n_unique().alias("afternoon"),
+    )
+    morning = min(expected, FULL_DAY_BARS // 2)
+    afternoon = expected - morning
+    covered = counts.select(
+        (pl.col("morning").clip(upper_bound=morning) + pl.col("afternoon").clip(upper_bound=afternoon)).sum()
+    ).item()
+    return expected * len(symbols) - int(covered or 0)
 
 
 def scan_minute_gaps(

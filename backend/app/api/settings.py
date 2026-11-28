@@ -9,12 +9,15 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import secrets_store
+from app.api.auth import require_management
 from app.data_providers.custom.config import MAX_TIMEOUT
+from app.services.preferences import STOCK_PREVIEW_DAILY_BARS_MAX
+from app.services.stock_info_bar import StockInfoBarLayout
 from app.tickflow import client as tf_client
 from app.tickflow.policy import (
     detect_capabilities,
@@ -27,6 +30,7 @@ from app.tickflow.policy import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+_MANAGE = [Depends(require_management)]
 
 # 默认端点 —— endpoints.json 列表第一项,UI"当前使用"始终对齐此项。
 # 注意:Free 模式 SDK 实际走 free-api(免费数据通道),但 UI 显示统一用默认节点。
@@ -589,6 +593,10 @@ class DatasetConfigIn(BaseModel):
     batch: int | None = None
     rpm: int | None = None
     response_path: str = ""
+    research_profile: Literal[
+        "cn.equity.regular.raw.lot100.v1", "cn.equity.ex-factor.events.v1",
+        "cn.equity.regular.1m.raw.lot100.start.v1", "cn.equity.regular.1m.raw.lot100.end.v1",
+    ] | None = None
     field_map: dict[str, str] = {}
     transforms: dict[str, str] = {}
     symbols_param: str = "symbols"
@@ -692,6 +700,8 @@ def get_preferences() -> dict:
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
         "webhook_default_channels": preferences.get_webhook_default_channels(),
         "minute_intraday_refresh": preferences.get_minute_intraday_refresh(),
+        "stock_preview_daily_bars": preferences.get_stock_preview_daily_bars(),
+        "stock_info_bar_layout": preferences.load().get("stock_info_bar_layout"),
         "minute_intraday_refresh_interval": preferences.get_minute_intraday_refresh_interval(),
         "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
@@ -825,7 +835,7 @@ def reload_data_sources() -> dict:
     return list_data_sources()
 
 
-@router.post("/plugins/{name}/install")
+@router.post("/plugins/{name}/install", dependencies=_MANAGE)
 def install_plugin(name: str) -> dict:
     """安装指定插件的依赖 (npm install / pip install), 完成后重新扫描。
 
@@ -844,7 +854,7 @@ def install_plugin(name: str) -> dict:
     return result
 
 
-@router.delete("/plugins/{name}/install")
+@router.delete("/plugins/{name}/install", dependencies=_MANAGE)
 def uninstall_plugin(name: str) -> dict:
     """卸载指定插件的依赖 (删除 node_modules / pip uninstall), 完成后重新扫描。
 
@@ -1105,6 +1115,36 @@ def get_screener_result_columns() -> dict:
     from app.services import preferences
     cols = preferences.get_screener_result_columns()
     return {"columns": cols}
+
+
+class StockPreviewPrefsIn(BaseModel):
+    stock_preview_daily_bars: int = Field(strict=True, ge=1, le=STOCK_PREVIEW_DAILY_BARS_MAX)
+
+
+@router.put("/preferences/stock-preview")
+def update_stock_preview_preferences(req: StockPreviewPrefsIn) -> dict:
+    """保存个股详情的日 K 首屏根数。"""
+    from app.services import preferences
+
+    updates = req.model_dump()
+    preferences.save(updates)
+    return updates
+
+
+@router.put("/preferences/stock-info-bar")
+def update_stock_info_bar_layout(layout: StockInfoBarLayout, only_if_unset: bool = False) -> dict:
+    """保存个股信息条与默认方案。浏览器旧配置仅在服务端未配置时迁入。"""
+    from app.services import preferences
+
+    key = "stock_info_bar_layout"
+    with preferences.mutation():
+        if only_if_unset:
+            current = preferences.load().get(key)
+            if current is not None:
+                return {key: current}
+        updates = {key: layout.model_dump(by_alias=True, exclude_unset=True)}
+        preferences.save(updates)
+    return updates
 
 
 class UiPrefsIn(BaseModel):
@@ -2333,14 +2373,14 @@ class ApiTokenCreateIn(BaseModel):
     scopes: list[str]
 
 
-@router.get("/api-tokens")
+@router.get("/api-tokens", dependencies=_MANAGE)
 def api_tokens_list(request: Request) -> dict:
     from app.services import api_tokens as svc
 
     return {"tokens": svc.list_tokens(request.app.state.repo.store.data_dir)}
 
 
-@router.post("/api-tokens")
+@router.post("/api-tokens", dependencies=_MANAGE)
 def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
     """创建 Token — 明文只在本次响应出现一次, 前端弹窗提示立即保存。"""
     from app.services import api_tokens as svc
@@ -2352,7 +2392,7 @@ def api_tokens_create(body: ApiTokenCreateIn, request: Request) -> dict:
     return {"token": record, "plaintext": plaintext}
 
 
-@router.delete("/api-tokens/{token_id}")
+@router.delete("/api-tokens/{token_id}", dependencies=_MANAGE)
 def api_tokens_revoke(token_id: str, request: Request) -> dict:
     from app.services import api_tokens as svc
 

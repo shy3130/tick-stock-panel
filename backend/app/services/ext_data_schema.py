@@ -1,9 +1,9 @@
 """扩展数据创建与拉取配置的共享校验契约。"""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FieldDef(BaseModel):
@@ -38,7 +38,12 @@ class PullAuthReq(BaseModel):
 
 class PullConfigReq(BaseModel):
     """定时拉取配置请求。"""
-    url: str = Field(..., min_length=1)
+    url: str = ""
+    # 扩展采集器 ID (如 "auction_scan.market_925"); 与 url 二选一;
+    # 缺省 (None) 时 PUT /pull 会保留已有 collector (与 fanout/auth 同口径)
+    collector: str | None = Field(None, max_length=128)
+    # 采集器参数字典; 缺省 (None) 时 PUT /pull 保留已有配置
+    collector_params: dict[str, Any] | None = None
     method: str = "GET"
     headers: dict[str, str] | None = None
     body: str | None = None
@@ -90,3 +95,9 @@ class PullConfigReq(BaseModel):
     max_pages: int = Field(20, ge=1, le=200)
     # 两级拉取配方 (目录 → 逐条目明细); 缺省 (None) = 保留现有配置
     fanout: dict | None = None
+
+    @model_validator(mode="after")
+    def _require_source(self) -> PullConfigReq:
+        if not (self.url or "").strip() and not (self.collector or "").strip():
+            raise ValueError("必须配置拉取 URL 或扩展采集器 collector")
+        return self

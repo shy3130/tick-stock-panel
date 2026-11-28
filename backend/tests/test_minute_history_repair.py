@@ -5,8 +5,10 @@ from datetime import date, datetime, timedelta
 import polars as pl
 import pytest
 
+from app.data_providers.base import ProviderRequestError
 from app.market_time import CN_TZ
 from app.services import kline_sync, minute_gaps
+from app.services.shared_work import WorkBusyError
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import DataStore, KlineRepository
 
@@ -29,6 +31,12 @@ def session(symbol=SYM, day=DAY):
             "volume": [100.0] * 240,
             "amount": [500.0] * 240,
         }
+    )
+
+
+def priced_session(symbol=SYM, day=DAY):
+    return session(symbol, day).with_columns(
+        pl.lit(5.0).alias("open"), pl.lit(5.5).alias("high"), pl.lit(4.5).alias("low"),
     )
 
 
@@ -97,6 +105,185 @@ def test_targeted_repair_filters_provider_and_counts_only_new_bars(market, monke
     )
     assert repo.get_minute("000001.SZ", DAY).height == 2
     assert list(folder.glob("date=*")) == [out.parent]
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_manual_minute_range_persists_only_selected_dates_as_batches_arrive(market, monkeypatch, interrupt):
+    repo, caps = market
+    folder = repo.store.data_dir / "kline_minute"
+    previous, end, outside = (DAY + timedelta(days=offset) for offset in (-3, 1, 2))
+    base = priced_session()
+    other = priced_session("000001.SZ").head(1)
+    kline_sync._write_minute_partition(pl.concat([base.head(1), other, priced_session(day=previous).head(1)]), folder)
+    previous_file = folder / f"date={previous}" / "part.parquet"
+    previous_content = previous_file.read_bytes()
+    updates = []
+
+    def use_local_window(*_):
+        pytest.fail("显式窗口不应读取本地记录推算起止时间")
+
+    def fetch(symbols, *, start_time, end_time, on_segment, **_):
+        assert symbols == [SYM]
+        assert start_time == datetime(2026, 11, 2, 9, 25, tzinfo=CN_TZ)
+        assert end_time == datetime(2026, 11, 3, 15, 5, tzinfo=CN_TZ)
+        bad_price = base.slice(2, 1).with_columns(pl.lit(0.0).alias("close"))
+        on_segment(pl.concat([
+            base.head(2).with_columns(pl.lit(5.25).alias("close")), bad_price,
+            other.with_columns(pl.lit(5.25).alias("close")),
+            priced_session(day=previous).head(2), priced_session(day=outside).head(1),
+        ]))
+        assert (folder / f"date={DAY}" / "part.parquet").exists()
+        if interrupt:
+            raise ProviderRequestError("下一批分钟取数失败")
+        on_segment(priced_session(day=end).head(1))
+
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", use_local_window)
+    monkeypatch.setattr(kline_sync, "_earliest_minute_datetime", use_local_window)
+
+    def run():
+        return kline_sync.sync_and_persist_minute(
+            [SYM], repo, caps, date_range=(DAY, end), on_updated=updates.append,
+        )
+
+    if interrupt:
+        with pytest.raises(ProviderRequestError, match="下一批分钟取数失败"):
+            run()
+    else:
+        assert run() == 4
+
+    assert repo.get_minute(SYM, DAY)["close"].to_list() == [5.25, 5.25]
+    assert repo.get_minute("000001.SZ", DAY)["close"].to_list() == [5.0]
+    assert (folder / f"date={end}" / "part.parquet").exists() is not interrupt
+    assert previous_file.read_bytes() == previous_content
+    assert not (folder / f"date={outside}").exists()
+    assert updates == ["minute"]
+
+
+def test_day_reload_updates_only_valid_returned_minutes_and_preserves_local_values(market, monkeypatch):
+    repo, caps = market
+    folder = repo.store.data_dir / "kline_minute"
+    base = priced_session()
+    old = pl.concat([base.head(2), base.tail(1)]).with_columns(pl.lit("history").alias("origin"))
+    other = priced_session("000001.SZ").head(2).with_columns(pl.lit("other").alias("origin"))
+    tomorrow = priced_session(day=DAY + timedelta(days=1)).head(2)
+    kline_sync._write_minute_partition(pl.concat([old, other]), folder)
+    kline_sync._write_minute_partition(tomorrow, folder)
+    next_path = folder / f"date={DAY + timedelta(days=1)}" / "part.parquet"
+    next_contents = next_path.read_bytes()
+
+    corrected = base.slice(1, 1).with_columns(pl.lit(5.25).alias("close"))
+    invalid = base.slice(3, 1).with_columns(pl.lit(-10.0).alias("volume"))
+    lunch = base.slice(4, 1).with_columns(pl.lit(datetime(2026, 11, 2, 12)).alias("datetime"))
+    messy = pl.concat([base.head(1), corrected, base.slice(2, 1), invalid, lunch,
+                       other.drop("origin"), tomorrow]).drop("amount")
+
+    def fetch(symbols, *, start_time, end_time, on_segment, **_):
+        assert symbols == [SYM]
+        assert start_time == datetime(2026, 11, 2, 9, 25, tzinfo=CN_TZ)
+        assert end_time == datetime(2026, 11, 2, 15, 5, tzinfo=CN_TZ)
+        on_segment(messy)
+        on_segment(corrected.drop("amount"))
+
+    updates = []
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+
+    def reload():
+        return kline_sync.reload_minute_day(
+            repo, caps, DAY, {"stock": [SYM]}, on_chunk_done=lambda *_: None,
+            before_write=lambda: None, on_updated=updates.append,
+        )
+
+    assert reload() == {
+        "minute_rows": 2, "minute_added": 1, "minute_updated": 1,
+        "minute_received": 3, "minute_missing": 236,
+    }
+    path = folder / f"date={DAY}" / "part.parquet"
+    result = pl.read_parquet(path)
+    selected = result.filter(pl.col("symbol") == SYM)
+    assert selected["datetime"].to_list() == base.head(3)["datetime"].to_list() + base.tail(1)["datetime"].to_list()
+    assert selected["close"].to_list() == [5.0, 5.25, 5.0, 5.0]
+    assert selected["amount"].to_list() == [500.0, 500.0, None, 500.0]
+    assert selected["origin"].to_list() == ["history", "history", None, "history"]
+    assert result.filter(pl.col("symbol") == "000001.SZ").equals(other.select(result.columns))
+    assert next_path.read_bytes() == next_contents
+    before = path.stat().st_mtime_ns
+    assert reload()["minute_rows"] == 0 and path.stat().st_mtime_ns == before
+    assert updates == ["minute"]
+
+
+def test_day_reload_buffers_frames_until_source_finishes(market, monkeypatch):
+    repo, caps = market
+
+    def fetch(_symbols, *, on_segment, **_):
+        on_segment(priced_session())
+        raise ProviderRequestError("分钟源中途失败")
+
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+    with pytest.raises(ProviderRequestError, match="分钟源中途失败"):
+        kline_sync.reload_minute_day(
+            repo, caps, DAY, {"stock": [SYM]}, on_chunk_done=lambda *_: None, before_write=lambda: None,
+        )
+    assert not (repo.store.data_dir / "kline_minute" / f"date={DAY}" / "part.parquet").exists()
+
+
+@pytest.mark.parametrize(("days_before", "expected_missing"), [(0, 230), (1, 0)])
+def test_day_reload_reports_empty_source_and_keeps_existing_partition(market, monkeypatch, days_before, expected_missing):
+    repo, caps = market
+    folder = repo.store.data_dir / "kline_etf_minute"
+    symbol = "510300.SH"
+    day = DAY - timedelta(days=days_before)
+    kline_sync._write_minute_partition(priced_session(symbol, day=day).head(10), folder)
+    path = folder / f"date={day}" / "part.parquet"
+    previous = path.read_bytes()
+
+    def fetch(symbols, *, asset_type, **_):
+        assert symbols == [symbol] and asset_type == "etf"
+
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+    result = kline_sync.reload_minute_day(
+        repo, caps, day, {"etf": [symbol]}, on_chunk_done=lambda *_: None, before_write=lambda: None,
+    )
+    assert result == {"minute_rows": 0, "minute_added": 0, "minute_updated": 0,
+                      "minute_received": 0, "minute_missing": expected_missing}
+    assert path.read_bytes() == previous
+    assert not (repo.store.data_dir / "kline_minute" / f"date={day}").exists()
+
+
+def test_day_reload_includes_legacy_symbol_partitions(market, monkeypatch):
+    repo, caps = market
+    legacy = repo.store.data_dir / "kline_minute" / f"symbol={SYM}" / "all.parquet"
+    legacy.parent.mkdir(parents=True)
+    next_day = DAY + timedelta(days=1)
+    old = pl.concat([priced_session().tail(1), priced_session(day=next_day).head(2)])
+    old.drop("symbol").write_parquet(legacy)
+    monkeypatch.setattr(kline_sync, "sync_minute_batch",
+                        lambda _symbols, *, on_segment, **_: on_segment(priced_session().head(1)))
+
+    result = kline_sync.reload_minute_day(
+        repo, caps, DAY, {"stock": [SYM]}, on_chunk_done=lambda *_: None, before_write=lambda: None,
+    )
+    assert result["minute_added"] == 1
+    assert repo.get_minute(SYM, DAY)["datetime"].to_list() == [
+        priced_session()["datetime"][0], priced_session()["datetime"][-1],
+    ]
+    assert repo.get_minute(SYM, next_day)["close"].to_list() == [5.0, 5.0]
+
+
+def test_day_reload_refuses_data_after_source_configuration_changes(market, monkeypatch):
+    repo, caps = market
+    source = kline_sync.minute_source_stamp()
+
+    def fetch(_symbols, *, on_segment, **_):
+        on_segment(priced_session().head(1))
+        monkeypatch.setattr(kline_sync, "minute_source_stamp", lambda: source._replace(fingerprint=b"other"))
+
+    monkeypatch.setattr(kline_sync, "sync_minute_batch", fetch)
+    with pytest.raises(WorkBusyError, match="分钟数据源或价格基准已变化"):
+        kline_sync.reload_minute_day(
+            repo, caps, DAY, {"stock": [SYM]}, on_chunk_done=lambda *_: None, before_write=lambda: None,
+        )
+    assert not (repo.store.data_dir / "kline_minute" / f"date={DAY}").exists()
 
 
 def test_legacy_migration_keeps_published_bars_and_unreadable_source(market):

@@ -388,8 +388,10 @@ def test_api_env_key_backup_restores_on_new_device(src_env, tmp_path_factory, mo
     from app.api.config_backup import router
     from app.config import settings
     from app.data_providers.custom import loader
+    from app.services import auth as auth_service
     from app.services.ext_data import get_ext_api_key
 
+    monkeypatch.setattr(auth_service, "is_configured", lambda: False)
     (src_env / "user_data" / "secrets.json").unlink()
     monkeypatch.setattr(settings, "ai_api_key", "test-env-ai")
     monkeypatch.setattr(settings, "tickflow_api_key", "test-env-tickflow")
@@ -402,7 +404,7 @@ def test_api_env_key_backup_restores_on_new_device(src_env, tmp_path_factory, mo
     monkeypatch.setenv("EXT_EXT1_API_KEY", "test-env-ext")
     app = FastAPI()
     app.include_router(router)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         for params in ({}, {"categories": "preferences"}, {"categories": "auth"}):
             response = client.get("/api/config-backup/export", params=params)
             assert response.status_code == 200
@@ -585,6 +587,127 @@ def test_apply_preferences_merges_not_replaces(src_env):
     assert after["local_only_key"] == "keep"  # 本地新增键保留 (merge 而非整替)
     # 备份导出时已脱敏 → 导入不清掉本地已有敏感键, 也不写入新的
     assert after["feishu_webhook_secret"] == "s3cret"
+
+
+def test_stock_preview_bars_persist_and_roundtrip_in_config_backup(src_env, tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import settings as settings_api
+    from app.config import settings
+    from app.services import preferences
+
+    monkeypatch.setattr(settings_api, "_realtime_allowed", lambda: False)
+    monkeypatch.setattr(settings_api, "_minute_history_days", lambda: None)
+    app = FastAPI()
+    app.include_router(settings_api.router)
+    path = "/api/settings/preferences"
+    field = "stock_preview_daily_bars"
+    old_backup, _ = config_backup.build_backup(categories=["preferences"])
+    source_stamp = preferences.data_source_stamp()
+    with TestClient(app) as client:
+        assert client.get(path).json()[field] == 60
+        response = client.put(f"{path}/stock-preview", json={field: 85})
+        assert response.status_code == 200
+        assert response.json() == {field: 85}
+        for invalid in (0, True, 5.5, "85", 2**53):
+            assert client.put(f"{path}/stock-preview", json={field: invalid}).status_code == 422
+        assert preferences.data_source_stamp() == source_stamp
+        preferences._invalidate_cache()
+        assert client.get(path).json()[field] == 85
+
+        archive, _ = config_backup.build_backup(categories=["preferences"])
+        backed_up = json.loads(_zip_entries(archive)["user_data/preferences.json"])
+        assert backed_up[field] == 85
+
+        monkeypatch.setattr(settings, "data_dir", tmp_path / "restored")
+        preferences._invalidate_cache()
+        assert client.get(path).json()[field] == 60
+        assert config_backup.apply_archive(archive)["preferences_merged"] is True
+        assert client.get(path).json()[field] == 85
+        config_backup.apply_archive(old_backup)
+        assert client.get(path).json()[field] == 85
+
+
+def test_stock_preview_bars_reject_invalid_backup_before_merging(src_env):
+    from app.services import preferences
+
+    preferences.save({"stock_preview_daily_bars": 0, "quote_interval": 99})
+    archive, _ = config_backup.build_backup(categories=["preferences"])
+    preferences.save({"stock_preview_daily_bars": 85, "quote_interval": 5})
+    with pytest.raises(config_backup.ConfigBackupError, match="日 K 默认显示根数"):
+        config_backup.apply_archive(archive)
+    assert preferences.get_stock_preview_daily_bars() == 85
+    assert preferences.load()["quote_interval"] == 5
+
+
+def test_stock_info_bar_migration_and_backup_roundtrip(src_env, tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import settings as settings_api
+    from app.config import settings
+    from app.services import preferences
+
+    monkeypatch.setattr(settings_api, "_realtime_allowed", lambda: False)
+    monkeypatch.setattr(settings_api, "_minute_history_days", lambda: None)
+    app = FastAPI()
+    app.include_router(settings_api.router)
+    path = "/api/settings/preferences"
+    update = f"{path}/stock-info-bar"
+    key = "stock_info_bar_layout"
+    size = {
+        "id": "builtin:market_cap", "source": {"type": "builtin", "key": "market_cap"},
+        "label": "市值", "visible": True,
+    }
+    sector = {
+        "id": "ext:sector:theme",
+        "source": {"type": "ext", "configId": "sector", "fieldName": "theme", "fieldType": "STRING"},
+        "label": "题材", "visible": True, "standalone": True,
+        "extDisplay": {"displayMode": "tag", "separator": "、", "maxTags": 6, "hiddenIndices": [1]},
+    }
+    legacy = {"fields": [size, sector], "baseline": [size, sector]}
+    edited = {"fields": [{**sector, "visible": False}, size], "baseline": legacy["baseline"]}
+    old_archive, _ = config_backup.build_backup(categories=["preferences"])
+    source_stamp = preferences.data_source_stamp()
+
+    with TestClient(app) as client:
+        assert client.get(path).json()[key] is None
+        assert client.put(f"{update}?only_if_unset=true", json=legacy).json() == {key: legacy}
+        assert client.put(update, json=edited).json() == {key: edited}
+        assert client.put(f"{update}?only_if_unset=true", json=legacy).json() == {key: edited}
+        invalid = {**edited, "fields": [{**sector, "source": {"type": "ext"}}]}
+        assert client.put(update, json=invalid).status_code == 422
+        assert preferences.data_source_stamp() == source_stamp
+        preferences._invalidate_cache()
+        assert client.get(path).json()[key] == edited
+
+        archive, _ = config_backup.build_backup(categories=["preferences"])
+        backed_up = json.loads(_zip_entries(archive)["user_data/preferences.json"])
+        assert backed_up[key] == edited
+
+        monkeypatch.setattr(settings, "data_dir", tmp_path / "info-layout-restored")
+        preferences._invalidate_cache()
+        assert client.get(path).json()[key] is None
+        assert config_backup.apply_archive(archive)["preferences_merged"] is True
+        assert client.get(path).json()[key] == edited
+        config_backup.apply_archive(old_archive)
+        assert client.get(path).json()[key] == edited
+        assert client.get(path).json()["stock_preview_daily_bars"] == 60
+
+
+def test_stock_info_bar_rejects_malformed_backup_before_merging(src_env):
+    from app.services import preferences
+
+    key = "stock_info_bar_layout"
+    preferences.save({key: {"fields": [None], "baseline": []}, "quote_interval": 99})
+    archive, _ = config_backup.build_backup(categories=["preferences"])
+    layout = {"fields": [], "baseline": None}
+    preferences.save({key: layout, "quote_interval": 5})
+    with pytest.raises(config_backup.ConfigBackupError, match="个股信息条配置无效"):
+        config_backup.apply_archive(archive)
+    assert preferences.load()[key] == layout
+    assert preferences.load()["quote_interval"] == 5
 
 
 def test_apply_secrets_via_store(src_env, tmp_path_factory, monkeypatch):

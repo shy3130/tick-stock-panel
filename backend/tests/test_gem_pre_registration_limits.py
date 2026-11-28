@@ -71,8 +71,7 @@ def test_backtest_lock_matrix_marks_pre_registration_gem_ten_percent_limit_up():
     nan = np.array([np.nan])
     up, down = _limit_lock_matrices(
         close, close.copy(), seen, dates, ["300750.SZ"], ["宁德时代"],
-        {"limit_up": nan, "limit_down": nan},
-        apply_latest_limits=False,
+        {"limit_up": nan, "limit_down": nan, "as_of": np.zeros(1, dtype=np.int32)},
     )
     assert up[1, 0] == 1
     assert down[1, 0] == 0

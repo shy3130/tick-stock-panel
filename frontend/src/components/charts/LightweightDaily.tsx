@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
 import type { SeriesMarker, Time } from 'lightweight-charts'
 import type { ChartMarker, DailyChartProps, OHLC } from '@/lib/chart-types'
-import { SUB_CHART_META, volMaN, volumeRatioAt } from '@/lib/chart-indicators'
+import { SUB_CHART_META, volMaN, volumeRatioAt, volumeRatioLabels, volumeRatioReadout } from '@/lib/chart-indicators'
 import { CHART_COLORS as C, lineData, validDailyRows, type PlotSeries } from '@/lib/lightweight-model'
 import { fmtVolume, fmtPct, pricePrecision } from '@/lib/format'
 import { CHART_LAYOUT, plotPaneHeights } from '@/lib/chart-layout'
 import { useTheme, type Theme } from '@/lib/theme'
 import { FinancialPlot } from './FinancialPlot'
 import type { AnnotationData } from './ChartAnnotations'
+import { indicatorPaneDrawings, indicatorPlotSeries, indicatorReadouts } from '@/lib/custom-chart-indicators'
 
 const fields = {
   macd: [['macd_dif', 'DIF', 'yellow'], ['macd_dea', 'DEA', 'purple']],
@@ -50,13 +51,15 @@ const eventTextColor = (event: EventMarker, row: OHLC, theme: Theme) => event.ev
 
 export function LightweightDaily({ data, assetType, symbol = '', height = 480, activeIndicators = [], showMA = true, showInfoBar = true,
   markers = [], ranges, priceLines, showMarkers = true, markerStyle = 'label', volumeCompare = { enabled: true, days: 1 }, addedDate,
-  linkedPrice, onDateClick, onPriceDoubleClick, visibleBars, stockInfo }: DailyChartProps) {
+  linkedPrice, onDateClick, onPriceDoubleClick, visibleBars, stockInfo, customIndicatorValues, customVolumeCompare, alignedLayout = false, mainTimeAxis = false, reservedBottomSpace }: DailyChartProps) {
   const rows = useMemo(() => validDailyRows(data), [data])
   const precision = pricePrecision(assetType)
   const theme = useTheme()
   const color = (key: keyof typeof LINE_COLORS) => LINE_COLORS[key][theme]
   const volumeMAs = useMemo(() => ({ 5: volMaN(rows, 5), 10: volMaN(rows, 10) }), [rows])
-  const scope = `${symbol}:${rows[0]?.date ?? ''}:${ranges?.map(range => `${range.start}:${range.end}`).join(';') ?? ''}`
+  // 完整区间的截止日改变时重新适配，同一交易日的实时更新保留用户视口。
+  const fitEnd = visibleBars === 'all' ? rows.at(-1)?.date ?? '' : ''
+  const scope = `${symbol}:${rows[0]?.date ?? ''}:${fitEnd}:${visibleBars ?? ''}:${ranges?.map(range => `${range.start}:${range.end}`).join(';') ?? ''}`
   const [hover, setHover] = useState<{ scope: string; time: string } | null>(null)
   const index = hover?.scope === scope ? rows.findIndex(d => d.date === hover.time) : -1
   const i = index >= 0 ? index : rows.length - 1
@@ -71,6 +74,8 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
   }, [markers])
   const currentEvent = showMarkers && markerStyle === 'candle' && current ? events.get(current.date) : undefined
   const selected = useMemo(() => activeIndicators.filter(key => SUB_CHART_META.some(d => d.key === key)), [activeIndicators])
+  const customSubs = customIndicatorValues?.results.filter(r => r.pane === 'sub') ?? []
+  const customMain = indicatorReadouts(customIndicatorValues, current?.date, 'main')
   const model = useMemo(() => {
     const series: PlotSeries[] = [{ id: 'price', type: 'Candlestick', pane: 0, data: rows.map(r => {
       const event = showMarkers && markerStyle === 'candle' ? events.get(r.date) : undefined
@@ -103,10 +108,11 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
         }) })
       }
     })
+    series.push(...indicatorPlotSeries(customIndicatorValues, 'daily', selected.length + 1))
     return series
-  }, [rows, showMA, selected, activeIndicators, events, markerStyle, showMarkers, theme, volumeMAs])
+  }, [rows, showMA, selected, activeIndicators, events, markerStyle, showMarkers, theme, volumeMAs, customIndicatorValues])
   const plotHeight = Math.max(260, height - (showInfoBar ? CHART_LAYOUT.readout : 0))
-  const paneHeights = useMemo(() => plotPaneHeights(plotHeight, selected.length), [plotHeight, selected.length])
+  const paneHeights = useMemo(() => plotPaneHeights(plotHeight, selected.length + customSubs.length), [plotHeight, selected.length, customSubs.length])
   const chartMarkers = useMemo<SeriesMarker<Time>[]>(() => showMarkers ? markers
     .filter(m => rows.some(r => r.date === m.date) && !(isEvent(m) && markerStyle === 'candle'))
     .sort((a, b) => a.date.localeCompare(b.date)).map(m => {
@@ -120,17 +126,22 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
         text: m.label ?? '', ...appearance,
       }
     }) : [], [markers, showMarkers, rows, markerStyle, theme])
+  const paneDrawings = useMemo(() => indicatorPaneDrawings(customIndicatorValues, 'daily', selected.length + 1), [customIndicatorValues, selected.length])
   const annotations = useMemo(() => {
     const addedRow = addedDate ? rows.filter(r => r.date <= addedDate).at(-1) : null
-    return { dates: rows.map(r => r.date), ranges, priceLines,
+    return { dates: rows.map(r => r.date), ranges, priceLines, drawings: paneDrawings[0],
       verticals: addedRow ? [{ time: addedRow.date, label: '自选', color: '#3B82F6' }] : [],
     }
-  }, [rows, ranges, priceLines, addedDate])
-  const volumeLabels = useMemo(() => volumeCompare.enabled ? rows.flatMap((row, idx) => {
+  }, [rows, ranges, priceLines, addedDate, paneDrawings])
+  const volumeLabels = useMemo(() => selected.includes('vol') && volumeCompare.enabled ? rows.flatMap((row, idx) => {
     const ratio = volumeRatioAt(rows, idx, volumeCompare.days)
     return ratio == null ? [] : [{ time: row.date, value: row.volume ?? 0, text: `${ratio.toFixed(1)}x` }]
-  }) : [], [rows, volumeCompare.enabled, volumeCompare.days])
-  const paneTitles = useMemo(() => ['', ...selected.map(key => SUB_CHART_META.find(d => d.key === key)!.label)], [selected])
+  }) : [], [rows, selected, volumeCompare.enabled, volumeCompare.days])
+  const paneTitles = useMemo(() => ['', ...selected.map(key => SUB_CHART_META.find(d => d.key === key)!.label), ...customSubs.map(d => d.name)], [selected, customIndicatorValues])
+  const paneLabels = useMemo(() => [undefined, ...selected.map(() => undefined), ...customSubs.map(indicator => {
+    const settings = customVolumeCompare?.[indicator.id]
+    return settings ? volumeRatioLabels(rows, customIndicatorValues!.times, indicator, settings) : undefined
+  })], [selected, rows, customIndicatorValues, customVolumeCompare])
   const paneReadouts = useMemo(() => [[], ...selected.map(key => {
     const result: NonNullable<AnnotationData['readouts']> = []
     if (key === 'vol') {
@@ -146,12 +157,18 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
         color: current?.macd_hist == null || !Number.isFinite(current.macd_hist) ? undefined : color(current.macd_hist >= 0 ? 'up' : 'down') })
     }
     return result
-  })], [selected, current, rows, i, volumeCompare.days, volumeCompare.enabled, theme, volumeMAs])
+  }), ...indicatorReadouts(customIndicatorValues, current?.date).map((items, index) => {
+    const settings = customVolumeCompare?.[customSubs[index]?.id]
+    if (settings && customSubs[index]?.outputs.some(o => o.style === 'volume' && !o.hidden)) {
+      return [...items, ...volumeRatioReadout(rows, i, settings)]
+    }
+    return items
+  })], [selected, current, rows, i, volumeCompare.days, volumeCompare.enabled, theme, volumeMAs, customIndicatorValues, customVolumeCompare])
   const change = previous?.close ? current.close / previous.close - 1 : null
   const turnover = stockInfo?.float_shares && current?.volume != null ? current.volume * 100 / stockInfo.float_shares : null
 
-  return <div className="min-w-0" data-testid="lightweight-daily">
-    {showInfoBar && <div className="min-h-16 border-b border-border/50 px-3 py-2 text-[11px] font-mono tabular-nums xl:h-16">
+  return <div className={`min-w-0 ${alignedLayout ? 'stock-chart-contents' : ''}`} data-testid="lightweight-daily">
+    {showInfoBar && <div className={`min-h-16 border-b border-border/50 px-3 py-2 text-[11px] font-mono tabular-nums ${alignedLayout || customMain.length ? '' : 'xl:h-16'}`}>
       <div className="flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-medium text-foreground">{current?.date ?? '—'}</span>
         {currentEvent && <span style={{ color: eventTextColor(currentEvent, current, theme) }} title="阴阳按收盘价与开盘价判断，影线保留原来的涨跌色">
@@ -170,11 +187,12 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
           <span className="text-muted">BOLL</span>
           {bollFields.map(([field, label, token]) => <span key={field} style={{ color: color(token) }}>{`${label} ${price(current?.[field], precision)}`}</span>)}
         </span>}
+        {customMain.flat().map((item, index) => <span key={index} style={{ color: item.color }}>{item.text}</span>)}
         {index >= 0 && previous && <span className="text-secondary">至今 <span style={{ color: rows.at(-1)!.close >= previous.close ? C.up : C.down }}>{fmtPct(rows.at(-1)!.close / previous.close - 1)}</span> · 周期 {rows.length - index}</span>}
       </div>
     </div>}
-    <FinancialPlot scope={scope} series={model} height={plotHeight} paneHeights={paneHeights} pricePrecision={precision}
-      markers={chartMarkers} annotations={annotations} volumeLabels={volumeLabels} paneTitles={paneTitles} paneReadouts={paneReadouts}
+    <FinancialPlot scope={scope} series={model} height={plotHeight} reservedBottomSpace={reservedBottomSpace} paneHeights={paneHeights} pricePrecision={precision} lockPaneHeights={alignedLayout} mainTimeAxis={mainTimeAxis}
+      markers={chartMarkers} annotations={annotations} volumeLabels={volumeLabels} paneLabels={paneLabels} paneTitles={paneTitles} paneReadouts={paneReadouts} paneDrawings={paneDrawings}
       linkedPrice={linkedPrice} visibleBars={visibleBars} currentPrice={rows.at(-1)?.close}
       onHover={time => setHover(time ? { scope, time } : null)} onSelect={onDateClick} onPriceDoubleClick={onPriceDoubleClick} />
   </div>

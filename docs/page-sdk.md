@@ -11,6 +11,10 @@ pnpm install && pnpm build      # → dist/extension.js
 
 打开宿主「设置 → 导入与备份」→ 选择 `dist/extension.js` → 预览页面标识（字母/数字/下划线）、确认来源及同名替换 → 导入并校验 → 刷新页面。
 
+### 导入源码或产物
+
+单文件 `.tsx` 或项目内源码页面也可从统一入口导入。当前部署须能解析源码依赖并找到 esbuild；源码编译成功后产物仍按 Page Pack v1 契约校验。源码清单中的受控插槽由项目构建加载，导入为页面包时只保留能挂载的页面能力。现成 `extension.js` 用同一入口预览，刷新后验证页面与菜单。[统一导入的兼容范围](./extension-packages.md#导入与管理)
+
 ## 产物契约 (apiVersion 1)
 
 产物必须 `export default` 一个清单对象：
@@ -19,6 +23,7 @@ pnpm install && pnpm build      # → dist/extension.js
 const extension = {
   id: 'demo.hello',            // 带命名空间且全局唯一; 冲突时整个包被拒
   apiVersion: 1 as const,
+  // routes + navigation 与 slots 至少提供一个；支持纯插槽扩展（不占侧栏菜单）
   routes: [{
     id: 'hello',
     path: '/demo-hello',       // 非根绝对路径、静态(不支持 :param/通配), 不得覆盖核心或已有页面
@@ -30,6 +35,18 @@ const extension = {
   }],
   navigation: [{
     id: 'hello', routeId: 'hello', label: '页面插件演示', icon: 'Sparkles',
+  }],
+  slots: [{                    // 可选：免重建挂载到宿主开放插槽（如 abnormal.auction.extra / stock-preview.tabs）
+    name: 'abnormal.auction.extra',
+    id: 'hello-card',
+    order: 20,
+    mount: (el, ctx, props) => {
+      el.textContent = '运行时插槽卡片'
+      return {
+        update: (_nextProps) => {}, // 可选：插槽 props 变化时就地更新
+        unmount: () => { el.textContent = '' },
+      }
+    },
   }],
 }
 export default extension
@@ -43,7 +60,7 @@ export default extension
 
 | 能力 | 说明 |
 | --- | --- |
-| `ctx.api` | 宿主完整 API 封装（同源 fetch、自动携带登录态、统一错误处理） |
+| `ctx.api` | 宿主完整 API 封装（同源 fetch、自动携带登录态、统一错误处理；含 `extDataList`/`extDataRows`/`extDataSeries`/`extDataCollectors` 与跨扩展调用 `extensionRequest(extId, path)`） |
 | `ctx.QK` | 集中查询键（若你自行使用 TanStack Query 可作 key 规范） |
 | `ctx.cn` | 样式类合并工具（clsx + tailwind-merge） |
 | `ctx.format` | 数值/日期格式化工具集 |
@@ -113,6 +130,10 @@ import { openStockPreview, closeStockPreview } from '@/extensions/stockPreview'
 | --- | --- | --- |
 | 页面插件（运行时产物） | 免重建挂载、独立分发 | 本文档 |
 | 源码级扩展 `frontend/src/custom/<ns>/extension.tsx` | 随宿主一起构建维护、可用全部核心模块 | `docs/secondary-development.md` §3 |
-| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 扩展页面 |
+| 声明式分析页面（零代码） | 扩展数据 + 模板化列表/分组页 | 设置 → 页面管理 → 扩展页面 |
 
 配套后台扩展可使用 [前后端完整包](extension-packages.md)；单独上传 JS/TSX 只导入前端页面。
+
+## 交给 AI 开发
+
+给出页面路由、要读取的数据、表格列和预期操作。请 AI 先从 `frontend/page-pack-template/src/extension.tsx` 复制最小清单，使用 SDK 暴露的 `ctx`，再打包及检查唯一 ID、路由冲突、读取权限、返回清理函数和刷新后的导航。需要宿主局部插槽时，从 [源码扩展契约](./secondary-development.md#3-前端扩展规范)开始。

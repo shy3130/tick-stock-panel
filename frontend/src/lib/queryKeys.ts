@@ -26,15 +26,33 @@ export const EXT_DATA_QUERY_PREFIXES = new Set([
   'table-schema', 'custom-signals-options',
 ])
 
+const screenerCachedPrefix = ['screener-cached'] as const
+
 export const QK = {
+  engineJobsRoot: ['engine-jobs'] as const,
+  engineInputs: ['engine-jobs', 'inputs'] as const,
+  enginePriceViews: ['engine-jobs', 'price-views'] as const,
+  engineJobs: (limit = 50) => ['engine-jobs', 'list', limit] as const,
+  engineJob: (id: string) => ['engine-jobs', 'job', id] as const,
+  engineJobPlan: (id: string) => ['engine-jobs', 'plan', id] as const,
+  engineJobReport: (id: string, nodeId: string) => ['engine-jobs', 'report', id, nodeId] as const,
+  engineJobSnapshot: (id: string, nodeId: string) => ['engine-jobs', 'snapshot', id, nodeId] as const,
+  engineSchedules: (limit = 50) => ['engine-jobs', 'schedules', limit] as const,
+  engineSchedule: (id: string) => ['engine-jobs', 'schedule', id] as const,
+  engineScheduleCalendar: (id: string) => ['engine-jobs', 'schedule-calendar', id] as const,
+  engineCalendarPresets: ['engine-jobs', 'calendar-presets'] as const,
+  engineScheduleDeliveries: (id: string, limit = 50) => ['engine-jobs', 'deliveries', id, limit] as const,
   dataVersions: ['data-versions'] as const,
   extensionPackages: ['extension-packages'] as const,
+  engineReleaseCandidates: ['engine-extension-packages'] as const,
+  engineLicenses: ['engine-licenses'] as const,
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,
   settings:       ['settings'] as const,
   endpoints:      ['endpoints'] as const,
   version:        ['version'] as const,
   preferences:    ['preferences'] as const,
+  automaticBackup: ['automatic-config-backup'] as const,
   soundPacks:     ['sound-packs'] as const,
   dataSources:    ['data-sources'] as const,
   capabilityMatrix: ['capability-matrix'] as const,
@@ -74,9 +92,10 @@ export const QK = {
   strategyPool:         ['strategy-pool'] as const,
   strategyList:         (assetType: string = 'all', timeframe = '1d', includeResearch = false) =>
                           ['strategies', assetType, timeframe, includeResearch] as const,
-  screenerCachedSummary: ['screener-cached', 'summary'] as const,
-  screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
-  screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,
+  screenerCachedPrefix,
+  screenerCachedSummary: [...screenerCachedPrefix, 'summary'] as const,
+  screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => [...screenerCachedPrefix, 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
+  screenerCached:       (asOf?: string, ext?: string) => [...screenerCachedPrefix, 'all', asOf ?? '', ext ?? ''] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   /** 扩展列迷你图: 列集 (含显示周期和天数) + 日期 + 标的集。 */
   extSeriesAll:        ['ext-series'] as const,
@@ -127,6 +146,9 @@ export const QK = {
   extPagesSourceNamespaces: ['ext-pages', 'source-namespaces'] as const,
 
   // Kline
+  chartIndicatorLibrary: ['chart-indicators'] as const,
+  chartIndicatorValues: (symbol: string, timeframe: string, program: string, source: string) =>
+    ['chart-indicator-values', symbol, timeframe, program, source] as const,
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   // 批量标的名称查询键: 排序后 join — 同一集合不同来源顺序 (draft/分组成员/
@@ -203,10 +225,7 @@ export const QK = {
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
 // 新增需要 SSE 推送的查询，只需在此加一行
 //
-// 注意: 策略页 (screener-cached) 不在此列表 —— 行情刷新时策略结果不变
-// (非监控策略读盘后静态缓存, 监控策略由独立的 strategy_results_updated 事件在
-// 重算完成后刷新)。若加入 'screener', 会导致每个行情 tick 双重刷新策略页,
-// 且在 monitor "重算" 窗口内读到空结果, 造成策略列表闪烁 (变 0 → 空失效 → 又出现)。
+// 策略明细与策略监控结果在 useQuoteStream 共用节流，避免两种事件重复拉取明细。
 
 export const SSE_INVALIDATE_PREFIXES = [
   // 精确前缀: 只命中自选页的实时数据 (quotes/enriched)。不能用宽泛的 'watchlist' ——

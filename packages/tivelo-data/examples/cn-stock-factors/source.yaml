@@ -1,0 +1,17 @@
+name: sample_dividends
+display_name: 沪深除权事件示例
+auth:
+  type: none
+datasets:
+  adj_factor:
+    url: http://127.0.0.1:38053/events
+    method: GET
+    research_profile: cn.equity.ex-factor.events.v1
+    response_path: data.events
+    batch: 50
+    rpm: 30
+    field_map:
+      ticker: symbol
+      ex_date: trade_date
+      pre_over_post: ex_factor
+      status: event_status

@@ -11,14 +11,16 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app.api.auth import require_management
 from app.services import ext_source_import
 from app.services.ext_pages import PagePackMeta, PagePackStore
 
 router = APIRouter(prefix="/api/ext-pages", tags=["ext-pages"])
+_MANAGE = [Depends(require_management)]
 
 # 单文件 ES 模块产物通常 < 1MB, 5MB 上限留足余量; 分块写防 OOM(同 ext_data)
 _MAX_BUNDLE_BYTES = 5 * 1024 * 1024
@@ -55,7 +57,7 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=_MANAGE)
 async def upload_page_pack(
     request: Request,
     id: Annotated[str, Form()],
@@ -115,7 +117,7 @@ def list_source_namespaces() -> list[str]:
     return ext_source_import.list_namespaces()
 
 
-@router.post("/import-source")
+@router.post("/import-source", dependencies=_MANAGE)
 async def import_source_pack(
     request: Request,
     file: Annotated[UploadFile, File()],
@@ -148,7 +150,7 @@ class ImportFromProjectBody(BaseModel):
     id: str = ""
 
 
-@router.post("/import-source/from-project")
+@router.post("/import-source/from-project", dependencies=_MANAGE)
 def import_source_from_project(request: Request, body: ImportFromProjectBody) -> PagePackMeta:
     """把本项目 frontend/src/custom/<ns>/extension.tsx 编译导入为页面插件。"""
     try:
@@ -197,7 +199,7 @@ def get_page_pack_bundle(pack_id: str, request: Request) -> FileResponse:
     )
 
 
-@router.put("/{pack_id}/manifest")
+@router.put("/{pack_id}/manifest", dependencies=_MANAGE)
 def put_page_pack_manifest(pack_id: str, body: ManifestBody, request: Request) -> PagePackMeta:
     """前端试载结果回填: error 非空 → 停用并记错误, 否则启用并登记摘要。"""
     store = _store(request)
@@ -209,7 +211,7 @@ def put_page_pack_manifest(pack_id: str, body: ManifestBody, request: Request) -
         raise HTTPException(400, str(e)) from e
 
 
-@router.put("/{pack_id}/enabled")
+@router.put("/{pack_id}/enabled", dependencies=_MANAGE)
 def put_page_pack_enabled(pack_id: str, body: EnabledBody, request: Request) -> PagePackMeta:
     store = _store(request)
     try:
@@ -220,7 +222,7 @@ def put_page_pack_enabled(pack_id: str, body: EnabledBody, request: Request) -> 
         raise HTTPException(400, str(e)) from e
 
 
-@router.delete("/{pack_id}")
+@router.delete("/{pack_id}", dependencies=_MANAGE)
 def delete_page_pack(pack_id: str, request: Request) -> dict:
     store = _store(request)
     try:

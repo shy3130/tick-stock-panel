@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="663" viewBox="0 47 1120 663" role="img" aria-labelledby="title description">
+  <title id="title">TSP 架构图</title>
+  <desc id="description">浏览器和桌面端以工作台会话访问面板接口。脚本和 MCP 通过 Token 网关访问开放接口。TSP 核心域中的行情、计算与盘中服务共用本地工作区，右侧扩展经各自契约接入。工作台按任务调用 Tivelo Data 或 Tivelo Backtest。</desc>
+  <style>
+    svg {
+      --paper: #fff; --ink: #1b263a; --muted: #4d5d74; --line: #d4dce7;
+      --surface: #f5f7fa; --wire: #6a7a91; --core: #eef4ff; --core-line: #93afd6; --core-ink: #214f8c;
+      --engine: #f5f0fb; --engine-line: #b9a7d4; --engine-ink: #5a3e85;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --paper: #10151e; --ink: #eef2f8; --muted: #b7c2d3; --line: #384459;
+        --surface: #182130; --wire: #8b9db7; --core: #192942; --core-line: #5579b1; --core-ink: #b1ceff;
+        --engine: #282039; --engine-line: #8165ad; --engine-ink: #ddc7fb;
+      }
+    }
+    text { fill: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    .section { font-size: 23px; font-weight: 700; }
+    .label { font-size: 19px; font-weight: 650; }
+    .text { font-size: 17px; fill: var(--muted); }
+    .small { font-size: 16px; fill: var(--muted); }
+    .core-text { fill: var(--core-ink); }
+    .engine-text { fill: var(--engine-ink); }
+    .paper { fill: var(--paper); stroke: var(--line); }
+    .surface { fill: var(--surface); stroke: var(--line); }
+    .core { fill: var(--core); stroke: var(--core-line); }
+    .extension { fill: var(--surface); stroke: var(--wire); stroke-dasharray: 6 4; }
+    .engine { fill: var(--engine); stroke: var(--engine-line); }
+    .rule { fill: none; stroke: var(--line); }
+    .wire, .invoke, .attach { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .wire, .attach { stroke: var(--wire); }
+    .invoke { stroke: var(--engine-ink); }
+    .attach { stroke-dasharray: 4 3; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path fill="var(--wire)" d="M0 0 8 4 0 8z"/>
+    </marker>
+    <marker id="engine-arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path fill="var(--engine-ink)" d="M0 0 8 4 0 8z"/>
+    </marker>
+  </defs>
+
+  <rect class="paper" x=".5" y="47.5" width="1119" height="662" rx="14"/>
+
+  <g>
+    <rect class="surface" x="48" y="75" width="339" height="57" rx="8"/>
+    <text class="label" x="64" y="100">浏览器与桌面端</text>
+    <text class="small" x="64" y="121">行情看板 · 回测 · 引擎研究</text>
+    <rect class="surface" x="411" y="75" width="339" height="57" rx="8"/>
+    <text class="label" x="427" y="100">外部客户端</text>
+    <text class="small" x="427" y="121">脚本 · MCP</text>
+    <rect class="surface" x="794" y="75" width="298" height="57" rx="8"/>
+    <text class="label" x="810" y="100">外部行情来源</text>
+    <text class="small" x="810" y="121">TickFlow · fuyao · 自定义源</text>
+  </g>
+  <g class="wire" marker-end="url(#arrow)">
+    <path d="M218 132v26"/>
+    <path d="M581 132v26"/>
+    <path d="M943 132v26"/>
+  </g>
+
+  <g>
+    <rect class="core" x="28" y="161" width="742" height="374" rx="12"/>
+    <text class="section core-text" x="48" y="197">TSP 工作台</text>
+    <text class="text core-text" x="750" y="195" text-anchor="end">核心域 · FastAPI / REST / SSE</text>
+
+    <rect class="paper" x="48" y="216" width="339" height="59" rx="7"/>
+    <text class="label" x="64" y="241">面板接口</text>
+    <text class="small" x="64" y="263">登录会话 · 工作区与研究管理</text>
+    <rect class="paper" x="411" y="216" width="339" height="59" rx="7"/>
+    <text class="label" x="427" y="241">开放网关</text>
+    <text class="small" x="427" y="263">Token · scope · 限流 · Tier A</text>
+
+    <path class="wire" d="M218 275v21m363-21v21M157 296h484"/>
+    <g class="wire" marker-end="url(#arrow)">
+      <path d="M157 296v21"/>
+      <path d="M399 296v21"/>
+      <path d="M641 296v21"/>
+    </g>
+
+    <rect class="paper" x="48" y="320" width="218" height="91" rx="7"/>
+    <text class="label" x="64" y="348">行情底座</text>
+    <text class="small" x="64" y="373">能力路由 · Provider</text>
+    <text class="small" x="64" y="396">同步校验 · 行情仓库</text>
+    <rect class="paper" x="290" y="320" width="218" height="91" rx="7"/>
+    <text class="label" x="306" y="348">计算与执行</text>
+    <text class="small" x="306" y="373">复权 · 指标 · 信号</text>
+    <text class="small" x="306" y="396">选股 · 回测 · 研究任务</text>
+    <rect class="paper" x="532" y="320" width="218" height="91" rx="7"/>
+    <text class="label" x="548" y="348">盘中服务与事件</text>
+    <text class="small" x="548" y="373">行情订阅 · 规则评估</text>
+    <text class="small" x="548" y="396">告警 · 推送 · SSE</text>
+
+    <g class="wire">
+      <path d="M157 411v28"/>
+      <path d="M399 411v28"/>
+      <path d="M641 411v28"/>
+    </g>
+    <rect class="paper" x="48" y="439" width="702" height="76" rx="7"/>
+    <text class="label" x="64" y="470">本地工作区</text>
+    <text class="small" x="734" y="469" text-anchor="end">Parquet · DuckDB</text>
+    <text class="text" x="64" y="495">行情与扩展表 · 策略与配置 · 快照与研究归档</text>
+  </g>
+
+  <g>
+    <rect class="extension" x="794" y="161" width="298" height="374" rx="12"/>
+    <text class="section" x="810" y="197">扩展层</text>
+    <text class="small" x="810" y="221">通过各自契约接入工作台</text>
+    <path class="rule" d="M810 236h266m-266 55h266m-266 55h266m-266 55h266m-266 55h266"/>
+    <text class="label" x="810" y="259">数据源插件</text>
+    <text class="small" x="810" y="280">Provider 与能力声明</text>
+    <text class="label" x="810" y="314">扩展数据表</text>
+    <text class="small" x="810" y="335">市场环境 · 历史行业与概念</text>
+    <text class="label" x="810" y="369">策略、指标与信号</text>
+    <text class="small" x="810" y="390">供选股、监控和回测使用</text>
+    <text class="label" x="810" y="424">页面扩展</text>
+    <text class="small" x="810" y="445">页面插件 · 路由 · 插槽</text>
+    <text class="label" x="810" y="479">后端扩展</text>
+    <text class="small" x="810" y="500">custom 模块 · 独立路由</text>
+    <path class="attach" d="M794 355h-21" marker-end="url(#arrow)"/>
+  </g>
+
+  <path class="invoke" d="M399 535v26M285 561h550"/>
+  <text class="small engine-text" x="412" y="553">按任务调用</text>
+  <g class="invoke" marker-end="url(#engine-arrow)">
+    <path d="M285 561v26"/>
+    <path d="M835 561v26"/>
+  </g>
+  <g>
+    <rect class="engine" x="28" y="591" width="514" height="91" rx="9"/>
+    <text class="section engine-text" x="48" y="625">Tivelo Data</text>
+    <text class="small engine-text" x="522" y="624" text-anchor="end">采集与快照任务</text>
+    <text class="text" x="48" y="656">校验数据 · 发布固定版本 · 生成快照</text>
+    <rect class="engine" x="578" y="591" width="514" height="91" rx="9"/>
+    <text class="section engine-text" x="598" y="625">Tivelo Backtest</text>
+    <text class="small engine-text" x="1072" y="624" text-anchor="end">策略回测与归档研究</text>
+    <text class="text" x="598" y="656">执行交易规则 · 模拟撮合 · 账户记账</text>
+  </g>
+</svg>

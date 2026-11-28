@@ -122,7 +122,7 @@ class DepthService:
         if not out.exists():
             return
         try:
-            df = pl.read_parquet(out)
+            df = pl.read_parquet(out, glob=False)
             cache: dict[str, dict] = {}
             for row in df.to_dicts():
                 sym = row.get("symbol")
@@ -456,7 +456,7 @@ class DepthService:
         if not out.exists():
             return {}
         try:
-            df = pl.read_parquet(out)
+            df = pl.read_parquet(out, glob=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("depth5 parquet 读取失败: %s", e)
             return {}

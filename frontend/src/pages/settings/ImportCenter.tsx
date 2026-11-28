@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Check, CheckCircle2, Clock3, Download, FileCode2, FolderOpen, Info, Loader2, Package, Plus, RefreshCw, Server, ShieldAlert, Upload } from 'lucide-react'
-import { api, type ImportCenterPreview, type ManagedExtensionPackage, type PluginDataSourceItem, type ResourceKind, type RuntimePagePack } from '@/lib/api'
+import { api, type EngineReleaseCandidate, type ImportCenterPreview, type ManagedExtensionPackage, type PluginDataSourceItem, type ProUninstallRequest, type ResourceKind, type RuntimePagePack } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { resourceClosure } from '@/lib/resourceTransfer'
@@ -10,6 +10,7 @@ import { inspectPageBlob, inspectPageModule, refreshResourceQueries } from '@/li
 import { runtimeBundleUrl } from '@/extensions/runtime'
 import { getFrontendExtensionLoadErrors } from '@/extensions/registry'
 import { ResourceTransferDialog } from '@/components/ResourceTransferDialog'
+import { Modal } from '@/components/Modal'
 import { PluginMetadata } from '@/components/data/PluginMetadata'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { PackageActions } from '@/custom/source-packages/extension'
@@ -18,10 +19,12 @@ import { INVALIDATE_KEYS, SettingsBackupPanel } from './Backup'
 
 const BUTTON = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-btn border border-border bg-surface px-3 py-2 text-xs font-medium text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45 sm:min-h-9'
 const PRIMARY = cn(BUTTON, 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:text-white')
+const DANGER = cn(BUTTON, 'border-danger/40 text-danger hover:bg-danger/10 hover:text-danger')
+const PRO_DYNAMIC_EXTENSION_ID = 'tivelo.pro.dynamic-adjustment'
 // 16px 用 text-[16px]: 主题色有 base, text-base 会生成 color 规则让文字变成背景色 (见 tailwind.config.ts)
 const INPUT = 'min-h-11 w-full min-w-0 rounded-input border border-border bg-base px-3 py-2 text-[16px] leading-6 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent sm:min-h-9 sm:text-sm'
 const KIND = { strategy: '策略', factor: '因子', signal: '信号', settings: '调参', code: '辅助模块' }
-const TYPE = { resources: '策略与定义资源', backup: '配置备份', source: '数据源插件', extension: '后端扩展', page: '页面插件', project: '项目源码页面' }
+const TYPE = { chart_indicators: '图表指标', resources: '策略与定义资源', backup: '配置备份', source: '数据源插件', extension: '后端扩展', engine: '引擎扩展包', page: '页面插件', project: '项目源码页面' }
 type Review = ImportCenterPreview | { kind: 'project'; preview: { namespace: string } }
 type Result = { title: string; message: string; details: string[]; target?: string; path?: string }
 
@@ -78,6 +81,7 @@ export function SettingsImportCenterPanel() {
   const [exporting, setExporting] = useState(false)
 
   const packages = useQuery({ queryKey: QK.extensionPackages, queryFn: api.extensionPackages, enabled: view === 'installed', staleTime: 0 })
+  const candidates = useQuery({ queryKey: QK.engineReleaseCandidates, queryFn: api.engineReleaseCandidates, enabled: view === 'installed', retry: false })
   const sources = useQuery({ queryKey: QK.dataSources, queryFn: api.dataSources, enabled: view === 'installed' })
   const pages = useQuery({ queryKey: QK.extPages, queryFn: api.extPagesList, enabled: view === 'installed' || review?.kind === 'page' || review?.kind === 'project' })
   const namespaces = useQuery({ queryKey: QK.extPagesSourceNamespaces, queryFn: api.extPagesSourceNamespaces, enabled: view === 'import' && !review && !result })
@@ -87,13 +91,16 @@ export function SettingsImportCenterPanel() {
   const included = entries.filter(entry => effective.has(entry.key))
   const conflicts = included.filter(entry => entry.action === 'conflict')
   const issues = included.flatMap(entry => entry.issues.map(issue => entry.label + '：' + issue))
+  const chartEntries = review?.kind === 'chart_indicators' ? review.preview.entries : []
   const unresolved = conflicts.some(entry => !overwrite.has(entry.key))
+    || chartEntries.some(entry => selected.has(entry.id) && entry.action === 'conflict' && !overwrite.has(entry.id))
   const codeTrust = !!review && (['extension', 'source', 'page', 'project'].includes(review.kind) || included.some(entry => entry.kind === 'strategy' || entry.kind === 'code'))
-  const packageErrors = review?.kind === 'extension' || review?.kind === 'source' ? review.preview.errors : []
+  const packageErrors = review?.kind === 'extension' || review?.kind === 'source' || review?.kind === 'engine' ? review.preview.errors : []
   const isPage = review?.kind === 'page' || review?.kind === 'project'
   const invalidPageId = isPage && !/^[a-zA-Z0-9_]{1,64}$/.test(pageId)
   const pageConflict = isPage && (pages.data ?? []).some(page => page.id === pageId)
   const disabled = busy || !!packageErrors.length || !!issues.length || unresolved || (codeTrust && !trusted)
+    || (review?.kind === 'chart_indicators' && !selected.size)
     || (review?.kind === 'resources' && !included.length) || (review?.kind === 'backup' && (!categories.size || !trusted))
     || !!invalidPageId || (isPage && (!pages.isSuccess || (pageConflict && !allowOverwrite)))
 
@@ -129,13 +136,14 @@ export function SettingsImportCenterPanel() {
         setSelected(new Set(preferred.length ? preferred : candidates.length ? candidates : next.preview.roots))
       }
       if (next.kind === 'backup') setCategories(new Set(next.preview.categories.filter(c => c.key !== 'secrets' && c.key !== 'auth').map(c => c.key)))
+      if (next.kind === 'chart_indicators') setSelected(new Set(next.preview.entries.map(entry => entry.id)))
       if (next.kind === 'page') setPageId(next.preview.suggested_id)
     } catch (e) { setError(e instanceof Error ? e.message : '文件识别失败，请检查文件格式后重试') }
     finally { busyRef.current = false; setBusy(false) }
   }
   async function refreshInstalled() {
     await Promise.allSettled([
-      QK.extensionPackages, QK.extPages, QK.dataSources, QK.capabilityMatrix,
+      QK.extensionPackages, QK.engineReleaseCandidates, QK.enginePriceViews, QK.engineLicenses, QK.extPages, QK.dataSources, QK.capabilityMatrix,
       QK.preferences, QK.capabilities, QK.quoteStatus,
     ].map(queryKey => qc.invalidateQueries({ queryKey })))
   }
@@ -144,7 +152,11 @@ export function SettingsImportCenterPanel() {
     busyRef.current = true; setBusy(true); setError('')
     try {
       let next: Result
-      if (review.kind === 'extension') {
+      if (review.kind === 'engine') {
+        const staged = await api.stageEngineRelease(files[0], review.preview.digest, review.preview.revision)
+        next = { title: '引擎候选包已保存', message: `${staged.manifest.id} · ${staged.manifest.version}`,
+          target: 'engine:' + staged.digest, details: ['可在扩展列表查看制品摘要和发行公钥标识。此阶段只保存候选版本。'] }
+      } else if (review.kind === 'extension') {
         const preview = review.preview
         if (preview.manifest.frontend) await inspectPageBlob(await api.extensionPackageFrontend(files[0], preview.digest), preview.manifest.id)
         const applied = await api.installExtensionPackage(files[0], preview.digest, preview.revision)
@@ -162,6 +174,10 @@ export function SettingsImportCenterPanel() {
         next = { title: failed.length ? '配置恢复完成，部分条目失败' : '所选配置恢复完成', message: '成功恢复 ' + applied.categories.reduce((sum, c) => sum + c.imported, 0) + ' 项，跳过同名项 ' + applied.categories.reduce((sum, c) => sum + c.skipped_conflict, 0) + ' 项。', details: failed.length ? failed : ['只应用已勾选的类别；未选类别保持原样。', ...(categories.has('auth') ? ['访问凭证已恢复，可能需要使用备份中的密码重新登录。'] : [])] }
         await Promise.allSettled(INVALIDATE_KEYS.map(queryKey => qc.invalidateQueries({ queryKey })))
         await refreshResourceQueries(qc)
+      } else if (review.kind === 'chart_indicators') {
+        const applied = await api.importChartIndicators(review.preview.package, [...selected], [...overwrite].filter(id => selected.has(id)), review.preview.revision)
+        qc.setQueryData(QK.chartIndicatorLibrary, applied)
+        next = { title: '图表指标已导入', message: '已处理 ' + selected.size + ' 个指标定义。', details: ['在个股详情的日 K 或分时图表中选择要显示的指标。'] }
       } else if (review.kind === 'resources') {
         const applied = await api.resourcesApply(files, [...selected], conflicts.filter(entry => overwrite.has(entry.key)).map(entry => entry.key), review.preview.revision)
         next = { title: '资源已导入', message: '新增或替换 ' + applied.imported + ' 个文件，复用 ' + applied.reused + ' 个已有文件。', details: [
@@ -194,7 +210,7 @@ export function SettingsImportCenterPanel() {
   const packageDoc = review?.kind === 'source' || review?.kind === 'extension' ? review.preview.manifest : null
   const installedVersion = review?.kind === 'source' || review?.kind === 'extension' ? review.preview.installed_version : null
   const pendingVersion = review?.kind === 'source' || review?.kind === 'extension' ? review.preview.pending_version : null
-  const name = review?.kind === 'extension' ? review.preview.manifest.display_name || review.preview.manifest.id
+  const name = review?.kind === 'engine' ? review.preview.manifest.id : review?.kind === 'extension' ? review.preview.manifest.display_name || review.preview.manifest.id
     : review?.kind === 'source' ? review.preview.manifest.display_name || review.preview.manifest.name
       : review?.kind === 'project' ? review.preview.namespace : review?.kind === 'backup' ? '恢复配置备份' : review?.kind === 'resources' ? '策略、信号与因子' : '导入页面插件'
   const selectedItem = params.get('selected') ?? ''
@@ -211,9 +227,10 @@ export function SettingsImportCenterPanel() {
     </nav>
 
     {view === 'backup' ? <><SettingsBackupPanel mode="export" /><button type="button" className={BUTTON} onClick={() => changeView('import')}><ArrowLeft className="h-3.5 w-3.5" />返回导入</button></>
-      : view === 'installed' ? <InstalledView packages={packages.data ?? []} sources={(sources.data?.plugins ?? []).filter(p => p.origin === 'external')} pages={(pages.data ?? []).filter(p => !p.managed_by)}
+      : view === 'installed' ? <>{candidates.isError && <Notice warning>引擎候选包列表读取失败。 <button type="button" className={BUTTON} onClick={() => void candidates.refetch()}>重试读取</button></Notice>}
+        <InstalledView candidates={candidates.data ?? []} packages={packages.data ?? []} sources={(sources.data?.plugins ?? []).filter(p => p.origin === 'external')} pages={(pages.data ?? []).filter(p => !p.managed_by)}
         loading={packages.isLoading || sources.isLoading || pages.isLoading} error={packages.error || sources.error || pages.error}
-        selected={selectedItem} select={target => changeView('installed', target)} install={reset} refresh={refreshInstalled} bootErrors={liveErrors} />
+        selected={selectedItem} select={target => changeView('installed', target)} install={reset} refresh={refreshInstalled} bootErrors={liveErrors} /></>
         : <>
           <Stepper step={result ? 2 : review ? 1 : 0} />
           {result ? <section className="max-w-2xl py-2" role="status">
@@ -249,6 +266,20 @@ export function SettingsImportCenterPanel() {
                   </div>)}</div>}
                   <p className="mt-4 text-xs leading-6 text-secondary">所选 {included.length} 项文件，包含关联定义、策略调参及辅助模块。相同内容自动复用。</p>
                 </section>}
+                {review.kind === 'chart_indicators' && <section>
+                  <h4 className="mb-3 text-sm font-semibold text-foreground">选择图表指标</h4>
+                  <div className="divide-y divide-border border-y border-border">{chartEntries.map(entry => <div key={entry.id} className="py-3">
+                    <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1 accent-accent" aria-label={'选择' + entry.name} disabled={busy} checked={selected.has(entry.id)} onChange={() => setSelected(previous => toggle(previous, entry.id))} />
+                      <span className="min-w-0 flex-1 break-words text-foreground">{entry.name}<span className="mt-1 block text-xs text-secondary">{entry.id}</span></span>
+                      <span className="text-xs text-secondary">{entry.action === 'reuse' ? '相同内容' : entry.action === 'conflict' ? '内容不同' : '新增'}</span></label>
+                    {entry.action === 'conflict' && selected.has(entry.id) && <label className="mt-3 flex items-start gap-2 text-xs leading-6 text-secondary"><input type="checkbox" className="mt-1 accent-accent" disabled={busy} aria-label={'确认替换' + entry.name} checked={overwrite.has(entry.id)} onChange={() => setOverwrite(previous => toggle(previous, entry.id))} />确认替换本机“{entry.name}”的定义，引用此指标的图表会使用新公式。</label>}
+                    <details className="mt-3 text-xs leading-6 text-secondary"><summary className="cursor-pointer text-accent">{entry.local ? '对比本机与包内定义' : '查看包内定义'}</summary>
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">{entry.local && <div><p>本机版本</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-input bg-elevated p-3">{JSON.stringify(entry.local, null, 2)}</pre></div>}
+                        <div><p>包内版本</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-input bg-elevated p-3">{JSON.stringify(review.preview.package.definitions.find(d => d.id === entry.id), null, 2)}</pre></div>
+                      </div></details>
+                  </div>)}</div>
+                  <p className="mt-4 text-xs leading-6 text-secondary">指标包包含公式、默认参数和显示样式。同 ID 的定义需要确认替换。</p>
+                </section>}
                 {review.kind === 'backup' && <section>
                   <h4 className="mb-3 text-sm font-semibold text-foreground">选择恢复范围</h4>
                   <p className="mb-3 text-xs leading-6 text-secondary">备份时间 {review.preview.created_at || '未知'} · 来源版本 {review.preview.app_version || '未知'}</p>
@@ -260,6 +291,14 @@ export function SettingsImportCenterPanel() {
                   <div className="mt-4"><Notice warning>密钥（API Key）和访问凭证需单独勾选。偏好与密钥按合并写入；恢复敏感项会覆盖本机同名值。</Notice></div>
                   {!!review.preview.conflict_files && <label className="mt-4 flex items-start gap-2 text-xs leading-6 text-secondary"><input type="checkbox" checked={allowOverwrite} disabled={busy} onChange={e => setAllowOverwrite(e.target.checked)} className="mt-1 accent-accent" />允许覆盖已存在的同名文件（默认跳过）</label>}
                   {!!review.preview.out_of_scope_files && <p className="mt-3 text-xs text-secondary">{review.preview.out_of_scope_files} 个不受支持的文件不会恢复。</p>}
+                </section>}
+                {review.kind === 'engine' && <section className="space-y-3 text-sm">
+                  <h4 className="font-semibold text-foreground">已验证的发行签名</h4>
+                  <p className="break-all text-secondary">{review.preview.manifest.issuer} · {review.preview.kid}</p>
+                  <p className="break-all">版本 {review.preview.manifest.version} · {review.preview.manifest.license_kind === 'commercial' ? '商业制品，运行时另行授权' : '社区制品'}</p>
+                  <p className="break-all">声明能力 {review.preview.manifest.provides.map(cap => cap.id).join('、')}</p>
+                  <p className="break-all text-xs text-secondary">SHA-256 {review.preview.digest}</p>
+                  {packageErrors.length > 0 && <ul role="alert" className="text-danger">{packageErrors.map(issue => <li key={issue}>{issue}</li>)}</ul>}
                 </section>}
                 {review.kind === 'extension' && <section className="space-y-4">
                   <h4 className="text-sm font-semibold text-foreground">本次变更</h4>
@@ -280,13 +319,13 @@ export function SettingsImportCenterPanel() {
               </div>
               <aside className="min-w-0 rounded-card border border-border bg-surface p-4">
                 <h4 className="text-sm font-semibold text-foreground">{review.kind === 'backup' ? '本次恢复' : '本次操作'}</h4>
-                <dl className="my-4 space-y-3 text-xs leading-6"><div className="flex justify-between gap-3"><dt className="text-secondary">处理方式</dt><dd className="text-right text-foreground">{review.kind === 'backup' ? '按类别恢复' : review.kind === 'resources' ? '所选资源与依赖' : 'installed_version' in review.preview && review.preview.installed_version ? '更新已有扩展' : '新增导入'}</dd></div>
-                  <div className="flex justify-between gap-3"><dt className="text-secondary">生效时间</dt><dd className="text-right text-foreground">{review.kind === 'extension' ? '重启主程序后' : isPage ? '刷新页面后' : review.kind === 'source' && review.preview.installed_version ? '重启主程序后' : '处理完成后'}</dd></div>
+                <dl className="my-4 space-y-3 text-xs leading-6"><div className="flex justify-between gap-3"><dt className="text-secondary">处理方式</dt><dd className="text-right text-foreground">{review.kind === 'engine' ? '保存候选版本' : review.kind === 'backup' ? '按类别恢复' : review.kind === 'resources' ? '所选资源与依赖' : 'installed_version' in review.preview && review.preview.installed_version ? '更新已有扩展' : '新增导入'}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-secondary">生效时间</dt><dd className="text-right text-foreground">{review.kind === 'engine' ? '等待运行器验证与激活' : review.kind === 'extension' ? '重启主程序后' : isPage ? '刷新页面后' : review.kind === 'source' && review.preview.installed_version ? '重启主程序后' : '处理完成后'}</dd></div>
                   {review.kind === 'backup' && <div className="flex justify-between gap-3"><dt className="text-secondary">恢复范围</dt><dd>{categories.size} / {review.preview.categories.length} 类</dd></div>}
                   {packageDoc && <div className="flex justify-between gap-3"><dt className="text-secondary">目标版本</dt><dd>{packageDoc.version}</dd></div>}
                 </dl>
                 {(codeTrust || review.kind === 'backup') && <label className="flex items-start gap-2 text-xs leading-6 text-secondary"><input type="checkbox" className="mt-1 accent-accent" disabled={busy} aria-label={review.kind === 'backup' ? '信任备份来源' : '信任代码来源'} checked={trusted} onChange={e => setTrusted(e.target.checked)} /><span>{review.kind === 'backup' ? '我确认这是可信的备份，允许恢复所选配置及其中的代码。' : '我信任此代码来源，允许它在本机运行。代码可访问主程序的数据和凭据。'}</span></label>}
-                <button type="button" className={cn(PRIMARY, 'mt-4 w-full whitespace-normal')} disabled={disabled} onClick={() => void apply()}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}{busy ? '正在处理…' : review.kind === 'backup' ? '恢复所选配置' : review.kind === 'resources' ? '确认导入' : 'installed_version' in review.preview && review.preview.installed_version ? '确认更新' : '确认安装'}</button>
+                <button type="button" className={cn(PRIMARY, 'mt-4 w-full whitespace-normal')} disabled={disabled} onClick={() => void apply()}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}{busy ? '正在处理…' : review.kind === 'engine' ? '保存候选包' : review.kind === 'backup' ? '恢复所选配置' : (review.kind === 'resources' || review.kind === 'chart_indicators') ? '确认导入' : 'installed_version' in review.preview && review.preview.installed_version ? '确认更新' : '确认安装'}</button>
                 <p className="mt-3 text-xs leading-6 text-secondary">确认前不会应用任何变更。{unresolved ? '请先处理同名冲突。' : ''}</p>
               </aside>
             </div>
@@ -295,7 +334,7 @@ export function SettingsImportCenterPanel() {
             <div className={cn('rounded-card border border-dashed bg-surface px-4 py-10 text-center transition-colors sm:py-12', dragging ? 'border-accent bg-accent/5' : 'border-border')}
               onDragOver={e => { e.preventDefault(); if (!busy) setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); void inspect(Array.from(e.dataTransfer.files)) }}>
               <Upload className="mx-auto mb-4 h-7 w-7 text-secondary" aria-hidden="true" /><h3 className="text-lg font-semibold text-foreground">把文件放到这里</h3>
-              <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-secondary">自动识别策略与定义、配置备份、数据源插件、页面插件，以及后端或前后端完整扩展包。</p>
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-secondary">自动识别策略与定义、图表指标、配置备份、数据源插件、页面插件，以及后端或前后端完整扩展包。</p>
               <button type="button" className={cn(PRIMARY, 'mt-5')} disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}{busy ? '正在识别文件…' : '选择文件'}</button>
               <p className="mt-3 text-xs leading-6 text-secondary">支持 ZIP、PY、JSON、JS、MJS、TSX。资源文件可多选；扩展和备份逐包处理。</p>
             </div>
@@ -313,7 +352,130 @@ export function SettingsImportCenterPanel() {
   </div>
 }
 
-function InstalledView({ packages, sources, pages, selected, select, install, refresh, loading, error, bootErrors }: {
+function EngineLicenseControls({ candidate }: { candidate: EngineReleaseCandidate }) {
+  const qc = useQueryClient()
+  const licenseInputId = useId()
+  const licenseHintId = `${licenseInputId}-hint`
+  const status = useQuery({ queryKey: QK.engineLicenses, queryFn: api.engineLicenses, retry: false })
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [failure, setFailure] = useState('')
+  const [pastedCredential, setPastedCredential] = useState('')
+  const busyRef = useRef(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const identity = status.data?.identity
+  const lease = status.data?.leases.find(item => item.extension_id === candidate.id)
+
+  async function apply(file?: File) {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true); setFailure(''); setNotice('')
+    try {
+      if (file) {
+        await api.importEngineLicense(candidate.digest, file, lease?.revision ?? 0)
+        setPastedCredential('')
+        setNotice('已核验并保存本机使用凭证')
+      } else {
+        await api.createEngineIdentity()
+      }
+      await Promise.all([status.refetch(), qc.invalidateQueries({ queryKey: QK.enginePriceViews })])
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : '凭证操作失败')
+    } finally {
+      if (fileInput.current) fileInput.current.value = ''
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  return <section className="space-y-3 border-t border-border pt-4" aria-label="商业授权">
+    <h4 className="font-medium text-foreground">商业授权</h4>
+    {status.isError ? <button type="button" className={BUTTON} onClick={() => void status.refetch()}>重新读取授权状态</button>
+      : status.isLoading ? <p role="status">正在读取本机授权…</p>
+      : identity ? <>
+        <label className="block text-xs">申请授权时使用的安装公钥
+          <input readOnly value={identity.public_key} className="mt-1 block w-full rounded-btn border border-border bg-surface p-2 font-mono text-xs" onFocus={e => e.target.select()} />
+        </label>
+        {lease ? <p>已登记{lease.summary.license_policy === 'subscription' ? '订阅' : '永久版本'}凭证，租约截止 {new Date(lease.summary.lease_expires_at).toLocaleString('zh-CN')}。</p>
+          : <p>请使用此公钥向发行方申请凭证，再导入到本机。</p>}
+        <div
+          role="group"
+          aria-label="拖入使用凭证"
+          className="space-y-1.5 rounded-btn border border-dashed border-border p-3"
+          onDragOver={event => {
+            if (!event.dataTransfer.types.includes('Files')) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = busy ? 'none' : 'copy'
+          }}
+          onDrop={event => {
+            event.preventDefault()
+            const files = event.dataTransfer.files
+            if (busyRef.current || !files.length) return
+            if (files.length > 1) {
+              setNotice('')
+              setFailure('请一次拖入一个使用凭证文件')
+              return
+            }
+            void apply(files[0])
+          }}
+        >
+          <p className="text-xs font-medium text-foreground">导入使用凭证</p>
+          <label className={cn(BUTTON, 'relative overflow-hidden text-foreground focus-within:outline focus-within:outline-2 focus-within:outline-accent', busy ? 'cursor-not-allowed opacity-45' : 'cursor-pointer')}>
+            <FolderOpen className="h-4 w-4" aria-hidden="true" />
+            选择凭证文件
+            {/* 让原生文件按钮覆盖整个点击区，同时由页面提供可见文案。 */}
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".lic,.json,application/json"
+              disabled={busy}
+              aria-describedby={licenseHintId}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 file:m-0 file:h-full file:w-full file:cursor-pointer file:border-0 file:p-0 disabled:pointer-events-none"
+              onChange={event => {
+                const file = event.currentTarget.files?.[0]
+                if (file) void apply(file)
+              }}
+            />
+          </label>
+          <p id={licenseHintId} aria-live="polite" className="text-xs leading-5 text-secondary">
+            {busy ? '正在核验使用凭证…' : '支持 .lic 和 .json，也可以把文件直接拖到这里。'}
+          </p>
+        </div>
+        <details className="rounded-btn border border-border px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+            粘贴凭证 JSON
+          </summary>
+          <div className="mt-3 space-y-2">
+            <p id={`${licenseInputId}-paste-hint`} className="text-xs leading-5 text-secondary">
+              用文本编辑器打开凭证文件，把完整内容粘贴到下方。
+            </p>
+            <textarea
+              aria-label="凭证 JSON"
+              aria-describedby={`${licenseInputId}-paste-hint`}
+              className={cn(INPUT, 'resize-y font-mono')}
+              rows={4}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={pastedCredential}
+              disabled={busy}
+              onChange={event => setPastedCredential(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy || !pastedCredential.trim()}
+              onClick={() => void apply(new File([pastedCredential], 'tivelo-license.json', { type: 'application/json' }))}
+            >核验并导入</button>
+          </div>
+        </details>
+      </> : <button type="button" className={BUTTON} disabled={busy} onClick={() => void apply()}>生成本机安装身份</button>}
+    {notice && <p role="status">{notice}</p>}
+    {failure && <p role="alert" className="text-danger">{failure}</p>}
+  </section>
+}
+
+function InstalledView({ candidates, packages, sources, pages, selected, select, install, refresh, loading, error, bootErrors }: {
+  candidates: EngineReleaseCandidate[]
   packages: ManagedExtensionPackage[]; sources: PluginDataSourceItem[]; pages: RuntimePagePack[]
   selected: string; select: (target: string) => void; install: () => void; refresh: () => Promise<void>
   loading: boolean; error: unknown; bootErrors: { source: string; error: string; extensionId?: string }[]
@@ -322,15 +484,19 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
   const [failure, setFailure] = useState('')
   const [message, setMessage] = useState('')
   const [confirm, setConfirm] = useState('')
+  const [proUninstall, setProUninstall] = useState<ProUninstallRequest | null>(null)
   const runtimeErrors = bootErrors.filter(e => e.source.startsWith('runtime:'))
   const pageError = (id: string) => runtimeErrors.find(e => e.source === 'runtime:' + id)?.error
   const items = [
+    ...candidates.map(p => ({ key: 'engine:' + p.digest, title: p.id, subtitle: '引擎扩展 · ' + p.version,
+      status: p.state === 'active' ? '活动版本' : p.state === 'previous' ? '上一个版本' : '候选版本', icon: Package })),
     ...packages.map(p => ({ key: 'extension:' + p.id, title: p.name, subtitle: (p.frontend ? '前端 + 后端' : '后端扩展') + ' · ' + (p.version || '尚未生效') + (p.pending_version ? ' → ' + p.pending_version : ''), status: p.status, icon: Server })),
     ...sources.map(p => ({ key: 'source:' + p.name, title: p.display_name, subtitle: '数据源插件 · ' + (p.version || '—') + (p.pending_version ? ' → ' + p.pending_version : ''), status: p.pending_remove ? '待重启卸载' : p.update_error ? '更新失败' : p.pending_version ? '待重启更新' : p.status, icon: Package })),
     ...pages.map(p => ({ key: 'page:' + p.id, title: p.label || p.id, subtitle: '页面插件 · ' + (p.path || '尚未登记页面路径'), status: p.error || pageError(p.id) ? '加载失败' : p.enabled ? '已启用' : '已停用', icon: FileCode2 })),
   ]
   const activeKey = items.some(item => item.key === selected) ? selected : items[0]?.key
   const pack = packages.find(p => activeKey === 'extension:' + p.id)
+  const candidate = candidates.find(p => activeKey === 'engine:' + p.digest)
   const source = sources.find(p => activeKey === 'source:' + p.name)
   const page = pages.find(p => activeKey === 'page:' + p.id)
   const activeItem = items.find(item => item.key === activeKey)
@@ -338,6 +504,11 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
     if (busy) return
     setBusy(true); setFailure(''); setMessage('')
     try {
+      if (candidate && (action === 'activate' || action === 'rollback' || action === 'disable')) {
+        const switched = await api.switchEngineRelease(candidate.digest, action, candidate.generation ?? 0)
+        if (switched.active_digest) select('engine:' + switched.active_digest)
+        setMessage(action === 'disable' ? '引擎扩展已停用' : '已验证并切换活动版本')
+      }
       if (pack) setMessage((await api.manageExtensionPackage(pack.id, action, pack.revision)).message)
       if (page) {
         if (action === 'remove') await api.extPagesDelete(page.id)
@@ -349,10 +520,25 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
     } catch (e) { setFailure(e instanceof Error ? e.message : '操作失败，请重试'); await refresh() }
     finally { setBusy(false) }
   }
+  async function uninstallPro() {
+    if (!proUninstall || busy) return
+    setBusy(true); setFailure(''); setMessage('')
+    try {
+      await api.uninstallProDynamic(proUninstall)
+      select('')
+      setMessage('Tivelo Pro 已卸载')
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : '卸载失败，请刷新扩展清单后重试')
+    } finally {
+      setProUninstall(null)
+      await refresh()
+      setBusy(false)
+    }
+  }
   const activeError = pack?.error || page?.error || (page && pageError(page.id))
   return <>
     <header className="flex flex-wrap items-center justify-between gap-3">
-      <p className="text-sm text-secondary">{items.length} 个已安装扩展</p>
+      <p className="text-sm text-secondary">{items.length} 项扩展记录</p>
       <div className="flex gap-2">
         <button type="button" className={BUTTON} disabled={busy || loading} onClick={() => void refresh()} aria-label="刷新扩展清单"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /></button>
         <button type="button" className={BUTTON} disabled={busy} onClick={install}><Plus className="h-3.5 w-3.5" aria-hidden="true" />安装扩展</button>
@@ -389,7 +575,7 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
           </span>
         </button>)}
       </nav>
-      {(pack || source || page) && <section id="installed-extension-detail" data-extension-detail className="min-w-0 p-5 sm:p-6" aria-label="扩展详情">
+      {(candidate || pack || source || page) && <section id="installed-extension-detail" data-extension-detail className="min-w-0 p-5 sm:p-6" aria-label="扩展详情">
         <header className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
           <div className="min-w-0">
             <h3 className="break-words text-lg font-semibold text-foreground">{activeItem?.title}</h3>
@@ -397,7 +583,27 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
           </div>
           {activeItem && <Status>{activeItem.status}</Status>}
         </header>
-        {source && (source.description || source.usage_notes?.length || source.homepage || source.key_manage_url) && <div className="mb-5 max-w-2xl"><PluginMetadata plugin={source} /></div>}
+        {candidate && <div className="space-y-2 text-sm text-secondary">
+          <p className="break-all">发行公钥 {candidate.kid}</p>
+          {candidate.provider_ids?.length ? <p className="break-all">研究数据源 {candidate.provider_ids.join('、')}</p> : null}
+          <p className="break-all">SHA-256 {candidate.digest}</p>
+          <p>{candidate.state === 'active' ? '该版本已通过独立进程自检。商业能力在每次任务开始时校验权益。'
+            : '启用时，工作台会在独立进程中加载并验证此版本。'}</p>
+          <div className="flex flex-wrap gap-2 pt-2">
+            {candidate.state === 'active' ? <>
+              {candidate.rollback_digest && <button type="button" className={BUTTON} disabled={busy} onClick={() => void run('rollback')}>回退至上一个版本</button>}
+              <button type="button" className={BUTTON} disabled={busy} onClick={() => void run('disable')}>停用引擎扩展</button>
+            </> : <button type="button" className={BUTTON} disabled={busy} onClick={() => void run('activate')}>{busy ? '正在验证…' : '验证并启用版本'}</button>}
+            {candidate.id === PRO_DYNAMIC_EXTENSION_ID && (
+              <button type="button" className={DANGER} disabled={busy} onClick={() => setProUninstall({
+                generation: candidate.generation ?? 0,
+                digests: candidates.filter(item => item.id === candidate.id).map(item => item.digest),
+              })}>彻底卸载</button>
+            )}
+          </div>
+          {candidate.state === 'active' && candidate.license_kind === 'commercial' && <EngineLicenseControls key={candidate.digest} candidate={candidate} />}
+        </div>}
+        {source && (source.description || source.usage_notes?.length || source.homepage || source.key_manage_url || source.register_url) && <div className="mb-5 max-w-2xl"><PluginMetadata plugin={source} /></div>}
         {pack && <><dl className="my-4 space-y-3 text-xs leading-6"><div className="flex justify-between gap-3"><dt className="text-secondary">当前版本</dt><dd>{pack.version || '尚未生效'}</dd></div>{pack.pending_version && <div className="flex justify-between gap-3"><dt className="text-secondary">待生效版本</dt><dd>{pack.pending_version}</dd></div>}<div className="flex justify-between gap-3"><dt className="text-secondary">当前进程</dt><dd>{pack.runtime_version ? '已加载 ' + pack.runtime_version : '未加载'}</dd></div></dl>
           <p className="text-xs leading-6 text-secondary">{pack.frontend ? '前端页面与后台服务一起更新、启停和卸载。' : '后端接口、初始化任务和通知格式化器在重启后生效。'}</p>
           {!pack.pending_remove && <div className="mt-4 flex flex-wrap gap-2"><button className={BUTTON} disabled={busy} onClick={() => void run(pack.enabled ? 'disable' : 'enable')}>{pack.enabled ? '停用扩展' : '启用扩展'}</button>{pack.previous_version && <button className={BUTTON} disabled={busy} onClick={() => setConfirm('rollback')}>{'回退到 ' + pack.previous_version}</button>}{pack.pending_version && pack.version && <button className={BUTTON} disabled={busy} onClick={() => void run('cancel-update')}>取消待生效更新</button>}<button className={cn(BUTTON, 'text-danger')} disabled={busy} onClick={() => setConfirm('remove')}>卸载扩展</button></div>}
@@ -413,6 +619,22 @@ function InstalledView({ packages, sources, pages, selected, select, install, re
       </section>}
       </div>
     </div>}
+    {proUninstall && (
+      <Modal labelledBy="uninstall-pro-title" onClose={() => { if (!busy) setProUninstall(null) }}>
+        <div className="space-y-4 p-5 sm:p-6">
+          <h3 id="uninstall-pro-title" className="text-base font-semibold text-foreground">彻底卸载 Tivelo Pro？</h3>
+          <p className="text-sm leading-6 text-secondary">
+            将移除此扩展的所有版本和本地程序缓存。已有回测报告仍可查看。重跑相关任务需要重新导入并启用对应版本的 ZIP，安装身份和授权可用于重装。
+          </p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className={BUTTON} disabled={busy} onClick={() => setProUninstall(null)}>取消</button>
+            <button type="button" className={DANGER} disabled={busy} onClick={() => void uninstallPro()}>
+              {busy ? '正在卸载…' : '确认卸载'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
     {failure && <p role="alert" className="break-words text-sm text-danger">{failure}</p>}
     {message && <p role="status" className="text-sm leading-6 text-secondary">{message}</p>}
   </>

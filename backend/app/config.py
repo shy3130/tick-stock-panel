@@ -5,10 +5,18 @@ import logging
 import os
 import re
 import sys
+from io import StringIO
 from pathlib import Path
 
+from dotenv import dotenv_values
+from dotenv.parser import parse_stream
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, SettingsConfigDict
+
+try:
+    from pydantic_settings.sources.utils import parse_env_vars
+except ImportError:  # pydantic-settings 2.4 used a single sources module.
+    from pydantic_settings.sources import parse_env_vars
 
 # ── 运行环境检测 ──────────────────────────────────────────
 # PyInstaller 打包后: __file__ 指向临时解压目录 _MEIPASS, 不能作为路径基准。
@@ -156,12 +164,63 @@ _ENV_FILE = Path(
 )
 
 
+_QUOTED_DATA_DIR = re.compile(
+    r'\A(\s*(?:export[ \t]+)?(?:data_dir|\'data_dir\')[ \t]*=[ \t]*")'
+    r'([^"\r\n]*)("[ \t]*(?:#[^\r\n]*)?)(?=\r?$)',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _windows_data_dir_line(match: re.Match[str]) -> str:
+    original = match[2]
+    if "\\" not in original:
+        return match[0]
+    path = re.sub(r"[/\\]+", "/", original)
+    if original.startswith(("\\\\", "//")):
+        path = "/" + path
+    return match[1] + path + match[3]
+
+
+def _windows_dotenv_vars(source: DotEnvSettingsSource) -> dict[str, str | None]:
+    """Read DATA_DIR with Windows path separators intact before dotenv unescapes it."""
+    files = source.env_file
+    if isinstance(files, (str, os.PathLike)):
+        files = (files,)
+
+    values: dict[str, str | None] = {}
+    for file in files or ():
+        path = Path(file).expanduser()
+        if not path.is_file():
+            continue
+        with path.open(encoding=source.env_file_encoding or "utf-8") as stream:
+            # Work on complete bindings so a line inside another multiline value is untouched.
+            text = "".join(
+                _QUOTED_DATA_DIR.sub(_windows_data_dir_line, binding.original.string)
+                for binding in parse_stream(stream)
+            )
+        values.update(parse_env_vars(
+            dotenv_values(stream=StringIO(text)),
+            source.case_sensitive,
+            source.env_ignore_empty,
+            source.env_parse_none_str,
+        ))
+    return values
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings,
+    ):
+        if sys.platform == "win32":
+            dotenv_settings.env_vars = _windows_dotenv_vars(dotenv_settings)
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
 
     # TickFlow
     tickflow_api_key: str = Field(default="", description="留空启用 free 模式")
@@ -231,6 +290,9 @@ class Settings(BaseSettings):
     # Auth — 首次启动时预置访问密码(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
     # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
     auth_password: str = ""
+    # 可选 CORS 允许来源白名单 (逗号分隔, 如 "http://localhost:5173")。
+    # 默认为空 = 仅允许同源访问, 不返回通配 Access-Control-Allow-Origin: *。
+    cors_allow_origins: str = ""
 
     # Data — 桌面版按平台约定；源码使用项目根 data/；Docker 使用 /app/data。
     # (均可被环境变量 DATA_DIR 覆盖, pydantic-settings 自动注入)

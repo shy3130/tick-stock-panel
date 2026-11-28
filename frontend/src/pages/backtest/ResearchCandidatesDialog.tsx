@@ -106,7 +106,7 @@ export function ResearchCandidatesDialog({ onClose, onLoadStrategy }: {
       queryClient.invalidateQueries({ queryKey: ['screener-strategies'] })
       queryClient.invalidateQueries({ queryKey: QK.strategyLinkOptions() })
       setLinkDraft(null)
-      toast(`已加入“${result.strategyName}”评分方案`, 'success')
+      toast(`因子已加入「${result.strategyName}」的权重配置`, 'success')
     },
     onError: error => toast(`加入失败 · ${String((error as Error).message || error)}`, 'error'),
   })
@@ -243,7 +243,7 @@ export function ResearchCandidatesDialog({ onClose, onLoadStrategy }: {
                     onClick={() => linking ? setLinkDraft(null) : startLink(item)}
                     disabled={!canLink || strategies.isLoading || factorColumns.isLoading}
                     className="inline-flex h-8 items-center gap-1.5 rounded-btn px-2 text-[11px] text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:text-muted disabled:opacity-50"
-                    title={item.status !== 'validated' ? '验证通过后可加入策略' : factorSupported ? '加入策略评分' : '当前因子不可用于策略评分'}
+                    title={item.status !== 'validated' ? '验证通过后可加入策略' : factorSupported ? '加入策略的权重配置' : '当前因子不可加入策略的权重配置'}
                   >
                     <Link2 className="h-3.5 w-3.5" />
                     加入策略
@@ -278,7 +278,7 @@ export function ResearchCandidatesDialog({ onClose, onLoadStrategy }: {
                   </select>
                 </label>
                 <div>
-                  <span className="mb-1 block text-[10px] text-muted">评分方向</span>
+                  <span className="mb-1 block text-[10px] text-muted">因子方向</span>
                   <div className="grid h-8 grid-cols-2 overflow-hidden rounded-input border border-border bg-base">
                     {([['high', ArrowUp, '高值'], ['low', ArrowDown, '低值']] as const).map(([value, Icon, label]) => (
                       <button
@@ -290,7 +290,7 @@ export function ResearchCandidatesDialog({ onClose, onLoadStrategy }: {
                           : 'text-muted hover:bg-elevated'
                         }`}
                         title={`偏好${label}`}
-                        aria-label={`评分方向：偏好${label}`}
+                        aria-label={`偏好${label}`}
                         aria-pressed={linkDraft.direction === value}
                       >
                         <Icon className="h-3 w-3" />
