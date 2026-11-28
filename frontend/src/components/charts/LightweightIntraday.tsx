@@ -26,6 +26,7 @@ export interface LightweightIntradayProps {
   prevClose?: number
   dailySummary?: DailySummary
   height?: number
+  reservedBottomSpace?: number
   priceLimit?: PriceLimitInfo
   showLimitLines?: boolean
   showAvgLine?: boolean
@@ -37,7 +38,7 @@ export interface LightweightIntradayProps {
 }
 export function LightweightIntraday({ symbol, assetType, data, sessions: supplied, date, prevClose, dailySummary, height = 420,
   showLimitLines = true, showAvgLine = true, showVolume = true, priceLimit, currentPrice, priceLines, onPriceHover, onPriceDoubleClick, customIndicatorValues,
-  alignedLayout = false, mainTimeAxis = false, indicatorControls }: LightweightIntradayProps) {
+  alignedLayout = false, mainTimeAxis = false, indicatorControls, reservedBottomSpace }: LightweightIntradayProps) {
   const [yMode, setYMode] = useState<'adaptive' | 'limit'>('adaptive')
   const precision = pricePrecision(assetType)
   const fmt = (v: number | null | undefined) => v != null && Number.isFinite(v) ? v.toFixed(precision) : '—'
@@ -174,7 +175,7 @@ export function LightweightIntraday({ symbol, assetType, data, sessions: supplie
         {supplied && <span className="ml-auto text-muted">{[...model.points.values()].length} 分钟</span>}
       </div>
     </div>
-    <FinancialPlot scope={scope} series={plotSeries} height={plotHeight} paneHeights={paneHeights} lockPaneHeights={alignedLayout} mainTimeAxis={mainTimeAxis}
+    <FinancialPlot scope={scope} series={plotSeries} height={plotHeight} reservedBottomSpace={reservedBottomSpace} paneHeights={paneHeights} lockPaneHeights={alignedLayout} mainTimeAxis={mainTimeAxis}
       visibleBars="all" intraday annotations={annotations} paneTitles={paneTitles} paneReadouts={paneReadouts} paneDrawings={paneDrawings} pricePrecision={precision}
       currentPrice={currentPrice ?? model.latest?.row.close} onPriceDoubleClick={onPriceDoubleClick}
       onHover={time => { setHover(time ? { scope, time } : null); onPriceHover?.(time ? model.points.get(time)?.row.close ?? null : null) }} />
