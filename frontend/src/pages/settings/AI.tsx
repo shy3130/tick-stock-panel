@@ -640,39 +640,20 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
           </div>
         </div>
 
-        {/* 选中服务商说明条: 保持中性克制, 仅链接/优惠码作为视觉焦点 */}
+        {/* 选中服务商说明条: 统一左侧上下结构与琥珀色官网按钮 */}
         {selectedPreset && (
           <div className="border-y border-border/40 bg-elevated/35 px-5 py-3 dark:bg-base/45">
-            {selectedPreset.sponsor ? (
-              <div>
-                <p className="text-xs leading-relaxed text-secondary">{selectedPreset.description}</p>
-                {selectedPreset.website && (
-                  <a
-                    href={selectedPreset.website}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-flex items-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-600 transition-colors hover:border-amber-500/45 hover:bg-amber-500/15 dark:text-amber-400"
-                  >
-                    {selectedPreset.websiteLabel}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                <p className="text-xs leading-relaxed text-secondary">{selectedPreset.description}</p>
-                {selectedPreset.website && (
-                  <a
-                    href={selectedPreset.website}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex shrink-0 items-center gap-1 self-start rounded-md border border-border/60 bg-surface px-2.5 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent sm:self-center dark:bg-elevated/60"
-                  >
-                    {selectedPreset.websiteLabel}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
+            <p className="text-xs leading-relaxed text-secondary">{selectedPreset.description}</p>
+            {selectedPreset.website && (
+              <a
+                href={selectedPreset.website}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-600 transition-colors hover:border-amber-500/45 hover:bg-amber-500/15 dark:text-amber-400"
+              >
+                {selectedPreset.websiteLabel}
+                <ExternalLink className="h-3 w-3" />
+              </a>
             )}
           </div>
         )}
