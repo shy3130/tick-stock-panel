@@ -48,7 +48,6 @@
   <strong><a href="https://console.x6.ai/register?code=tuSkEebA">专属链接注册，领 8 折、9 折优惠券&nbsp;→</a></strong>
 </p>
 
-
 ---
 
 <a id="project-scope"></a>
@@ -174,6 +173,17 @@ docker run -d --name tsp -p 3018:3018 \
 <summary>交给本机 AI 助手部署</summary>
 
 > 请克隆 https://github.com/shy3130/tick-stock-panel，优先通过 Docker 镜像部署。需要从源码运行时，按项目部署指南启动。为数据目录设置持久化，启动后告诉我访问地址及首次配置入口。
+
+</details>
+
+<details>
+<summary>源码拉取更新冲突处理</summary>
+
+源码部署执行 `git pull` 若提示分支分叉或合并冲突，可在项目目录运行以下命令同步最新主分支（`data/` 已在 `.gitignore` 中，不会影响本地行情、策略与配置；如有本地修改的源码请先备份）：
+
+```bash
+git fetch origin && git reset --hard origin/main
+```
 
 </details>
 
