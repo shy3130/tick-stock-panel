@@ -364,6 +364,28 @@ class GenericHTTPProvider(CheckedDailyClient):
         ) if not df.is_empty()]
         return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
 
+    # 分钟窗口子段天数(自然日): 单帧 = batch × 天数 × 240 行, 5 天 × 20 只约 2.4 万行。
+    MINUTE_SUBSEGMENT_DAYS = 5
+
+    @staticmethod
+    def _split_minute_window(
+        start_time: datetime | None, end_time: datetime, days: int
+    ) -> list[tuple[datetime | None, datetime]]:
+        """把 [start, end] 按 days 自然日切为连续子窗口。
+
+        start_time 为 None 时不切分（保持"由源决定全量"的原语义）。
+        子窗口首尾衔接：分钟数据落在 09:30-15:00，00:00 边界无实际行重叠。
+        """
+        if start_time is None:
+            return [(None, end_time)]
+        subs = []
+        cur = start_time
+        while cur < end_time:
+            nxt = min(cur + timedelta(days=days), end_time)
+            subs.append((cur, nxt))
+            cur = nxt
+        return subs
+
     def _iter_minute_dataset(
         self, ds_name: str, symbols: list[str], start_time: datetime | None,
         end_time: datetime | None, asset_type: AssetType, freq: str, on_chunk_done,
@@ -376,22 +398,30 @@ class GenericHTTPProvider(CheckedDailyClient):
             override[cfg.asset_type_param] = asset_type
         if cfg.freq_param:
             override[cfg.freq_param] = freq
-        chunks = chunked(symbols, cfg.batch)
+        # 窗口子段切分（自然日）：大窗口（days>=20）时"batch 只 × 全窗口"单帧
+        # 可达数十万行，normalize 内存峰值巨大、中途失败整批丢失。
+        # 切分后单帧 = batch × 子段天数 × 240 行，失败恢复粒度细化到子段。
+        subs = self._split_minute_window(start_time, end_time)
+        chunks = list(chunked(symbols, cfg.batch))
+        total = len(chunks) * len(subs)
+        done = 0
         for i, chunk in enumerate(chunks):
-            self._minute_pacer.wait(ds_name, cfg.rpm,
-                                    (lambda cur=i: on_chunk_done(cur, len(chunks))) if on_chunk_done else None)
-            try:
-                rows = self._request_rows(
-                    cfg, symbols=chunk, start_time=start_time, end_time=end_time,
-                    override_params=override or None, override_body=override or None,
-                )
-            except Exception as exc:  # history failures must reach the task
-                raise ProviderRequestError(f"自定义源 {self.name} 分钟请求失败: {type(exc).__name__}") from exc
-            df = self._mapped_frame(cfg, rows)
-            df = self._normalize_minute(df)
-            yield df
-            if on_chunk_done:
-                on_chunk_done(i + 1, len(chunks))
+            for sub_start, sub_end in subs:
+                self._minute_pacer.wait(ds_name, cfg.rpm,
+                                        (lambda cur=done: on_chunk_done(cur, total)) if on_chunk_done else None)
+                try:
+                    rows = self._request_rows(
+                        cfg, symbols=chunk, start_time=sub_start, end_time=sub_end,
+                        override_params=override or None, override_body=override or None,
+                    )
+                except Exception as exc:  # history failures must reach the task
+                    raise ProviderRequestError(f"自定义源 {self.name} 分钟请求失败: {type(exc).__name__}") from exc
+                df = self._mapped_frame(cfg, rows)
+                df = self._normalize_minute(df)
+                yield df
+                done += 1
+                if on_chunk_done:
+                    on_chunk_done(done, total)
 
     def get_financials(
         self,
@@ -446,24 +476,41 @@ class GenericHTTPProvider(CheckedDailyClient):
         return df.select(keep) if keep else pl.DataFrame()
 
     _DATETIME_STR_FORMATS = (
-        None,  # 自动推断
+        # 显式格式优先: polars 自动推断(format=None)在 strict=False 下解析失败
+        # 返回全 null 而非抛错, 放在首位会把"全 null"误当成功格式直接返回,
+        # 导致 datetime 全 null → 落盘 0 行 (#2026-11-25 分时图整批丢失实锤)。
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
         "%Y/%m/%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
+        None,  # 自动推断兜底(显式格式均未命中时)
     )
 
     @classmethod
     def _parse_datetime_series(cls, s: pl.Series) -> pl.Series:
-        """逐格式尝试解析字符串 datetime; 均失败返回全 null (宽松语义)。"""
+        """逐格式尝试解析字符串 datetime, null 最少的格式胜出 (宽松语义)。
+
+        polars 的 to_datetime(strict=False) 对格式不匹配返回全 null 而非抛错,
+        命中即 return 会把首个格式(带秒格式对无秒数据)的全 null 误当结果
+        (2026-11-25 分时图 datetime 全 null → 落盘 0 行实锤), 改为择优。
+        """
+        best: pl.Series | None = None
+        best_nulls = s.len() + 1
         for fmt in cls._DATETIME_STR_FORMATS:
             try:
-                return (
+                parsed = (
                     s.str.to_datetime(strict=False, format=fmt)
                     if fmt else s.str.to_datetime(strict=False)
                 )
             except Exception:  # noqa: BLE001 — 该格式不适用, 换下一个
                 continue
+            nulls = parsed.null_count()
+            if nulls == 0:
+                return parsed
+            if nulls < best_nulls:
+                best, best_nulls = parsed, nulls
+        if best is not None:
+            return best
         return pl.Series("datetime", [None] * s.len(), dtype=pl.Datetime("us"))
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
