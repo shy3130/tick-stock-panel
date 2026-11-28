@@ -31,10 +31,14 @@ def _path() -> Path:
     return p
 
 
+_SAVE_LOCK = threading.RLock()
+
+
 def _invalidate_cache() -> None:
     global _cache, _cache_sig
-    _cache = None
-    _cache_sig = None
+    with _SAVE_LOCK:
+        _cache = None
+        _cache_sig = None
 
 
 def data_source_stamp() -> tuple:
@@ -58,28 +62,30 @@ def data_source_stamp() -> tuple:
 
 
 def load() -> dict:
-    """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
+    """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。
+
+    整段读盘纳入 _SAVE_LOCK: 既消除 _cache 读写 TOCTOU, 也防止 Windows 下并发
+    save() 的 os.replace 因读句柄未关闭触发 PermissionError (WinError 5/32)。
+    """
     global _cache, _cache_sig
-    p = _path()
-    try:
-        sig = (p.stat().st_mtime_ns, p.stat().st_size)
-    except OSError:
-        return {}
-    if _cache is not None and sig == _cache_sig:
-        return copy.deepcopy(_cache)
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        logger.warning("preferences.json malformed: %s", e)
-        return {}
-    _cache = data
-    _cache_sig = sig
-    return copy.deepcopy(_cache)
-
-
-_SAVE_LOCK = threading.RLock()
+    with _SAVE_LOCK:
+        p = _path()
+        try:
+            sig = (p.stat().st_mtime_ns, p.stat().st_size)
+        except OSError:
+            return {}
+        if _cache is not None and sig == _cache_sig:
+            return copy.deepcopy(_cache)
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.warning("preferences.json malformed: %s", e)
+            return {}
+        _cache = data
+        _cache_sig = sig
+        return copy.deepcopy(data)
 
 
 @contextmanager

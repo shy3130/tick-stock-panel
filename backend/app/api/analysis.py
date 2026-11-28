@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -101,8 +102,17 @@ def _base_dir(request: Request) -> Path:
     return _data_dir(request) / "analysis_menus"
 
 
+_MENU_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
 def _path(request: Request, menu_id: str) -> Path:
-    return _base_dir(request) / f"{menu_id}.json"
+    if not _MENU_ID_RE.fullmatch(menu_id):
+        raise HTTPException(400, "菜单标识只能包含字母、数字和下划线")
+    base = _base_dir(request).resolve()
+    target = (base / f"{menu_id}.json").resolve()
+    if not target.is_relative_to(base) or target.parent != base:
+        raise HTTPException(400, "非法的菜单标识")
+    return target
 
 
 def _load_saved(request: Request) -> list[AnalysisMenu]:

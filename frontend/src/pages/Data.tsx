@@ -92,7 +92,7 @@ export function Data() {
   })
 
   const history = useQuery({
-    queryKey: QK.pipelineJobs,
+    queryKey: QK.pipelineJobsList(15),
     queryFn: () => api.pipelineJobs(15),
     refetchInterval: activeJobId ? false : 60_000,
   })

@@ -107,15 +107,20 @@ def _notify_winotify(title: str, message: str) -> bool:
 
 
 def _notify_osascript(title: str, message: str) -> bool:
-    """macOS 通知 (osascript) — 调用系统 AppleScript。"""
-    # 转义双引号, 避免 AppleScript 注入
-    safe_title = title.replace('"', '\\"')
-    safe_msg = message.replace('"', '\\"')
-    script = (
-        f'display notification "{safe_msg}" with title "{safe_title}"'
-    )
-    result = subprocess.run(  # noqa: S603, S607
-        ["osascript", "-e", script],
+    """macOS 通知 (osascript) — 通过 argv 传参, 避免 AppleScript 字符串拼接注入。"""
+    result = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            "--",
+            title,
+            message,
+        ],
         capture_output=True,
         timeout=5,
     )

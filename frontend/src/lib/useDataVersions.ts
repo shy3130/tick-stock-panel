@@ -20,8 +20,13 @@ export function useDataVersions() {
   useEffect(() => {
     const versions = query.data?.versions
     if (!versions) return
+    // 首次挂载仅建立版本基线, 避免首屏无条件失效并双拉全部日线/分钟查询前缀
+    if (previous.current === undefined) {
+      previous.current = versions
+      return
+    }
     for (const [kind, prefixes] of [['daily', DAILY_DATA_QUERY_PREFIXES], ['minute', MINUTE_DATA_QUERY_PREFIXES]] as const) {
-      if (versions[kind] && previous.current?.[kind] !== versions[kind]) {
+      if (versions[kind] && previous.current[kind] !== versions[kind]) {
         void client.invalidateQueries({
           predicate: q => prefixes.has(String(q.queryKey[0])),
           refetchType: visible ? 'active' : 'none',

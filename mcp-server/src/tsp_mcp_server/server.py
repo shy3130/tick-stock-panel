@@ -68,9 +68,9 @@ if _has("read:market"):
         return _call("GET", "/api/kline/instruments/search", params={"q": query, "limit": limit})
 
     @mcp.tool()
-    def get_kline(symbol: str, limit: int = 30) -> str:
+    def get_kline(symbol: str, days: int = 30) -> str:
         """标的日K (前复权): date/open/high/low/close/volume/amount, 最新在后。"""
-        return _call("GET", "/api/kline/daily", params={"symbol": symbol, "limit": limit})
+        return _call("GET", "/api/kline/daily", params={"symbol": symbol, "days": days})
 
     @mcp.tool()
     def get_index_kline(symbol: str = "000001.SH", days: int = 60) -> str:
@@ -100,7 +100,9 @@ if _has("read:analysis"):
     @mcp.tool()
     def get_strategy_detail(strategy_id: str) -> str:
         """单个策略的完整定义 (信号条件/参数/评分)。"""
-        return _call("GET", f"/api/strategies/{strategy_id}")
+        from urllib.parse import quote
+
+        return _call("GET", f"/api/strategies/{quote(strategy_id, safe='')}")
 
     @mcp.tool()
     def get_recent_alerts(limit: int = 20) -> str:
@@ -120,17 +122,21 @@ if _has("read:ext"):
     @mcp.tool()
     def query_ext_table(table: str, filter: str | None = None, limit: int = 20) -> str:
         """查询扩展表行数据。filter 接收一个条件，形如 "字段:值1|值2"。"""
+        from urllib.parse import quote
+
         params: dict = {"limit": limit}
         if filter:
             params["filter"] = filter
-        return _call("GET", f"/api/ext-data/{table}/rows", params=params)
+        return _call("GET", f"/api/ext-data/{quote(table, safe='')}/rows", params=params)
 
 if _has("write:ext"):
 
     @mcp.tool()
     def write_ext_rows(table: str, rows: list[dict]) -> str:
         """向扩展表写入行数据 (会进入策略/回测数据面)。rows 每行须含表定义的必填字段。"""
-        return _call("POST", f"/api/ext-data/{table}/ingest", json={"rows": rows})
+        from urllib.parse import quote
+
+        return _call("POST", f"/api/ext-data/{quote(table, safe='')}/ingest", json={"rows": rows})
 
 
 # ── run:backtest 回测 ─────────────────────────────────
@@ -140,9 +146,10 @@ if _has("run:backtest"):
     @mcp.tool()
     def run_backtest(strategy_id: str, symbols: list[str], days: int = 90) -> str:
         """使用 Tivelo 在默认前复权口径下运行普通策略回测，返回指标、成交与净值。请先确认本地行情覆盖所选区间。"""
-        from datetime import date, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        end = date.today()
+        # 北京时间固定 UTC+8 (无夏令时), 避免 Windows 未装 tzdata 时 ZoneInfo("Asia/Shanghai") 报错
+        end = datetime.now(timezone(timedelta(hours=8))).date()
         start = end - timedelta(days=days)
         return _call("POST", "/api/backtest/strategy/run", json={
             "strategy_id": strategy_id,

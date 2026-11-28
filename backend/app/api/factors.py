@@ -441,8 +441,11 @@ def delete_custom_factor(factor_id: str, request: Request, force: bool = Query(d
             status_code=409,
             detail={"message": "该因子仍有引用, 拒绝删除 (可带 force=true 强制)", "references": references},
         )
-    if get_factor(factor_id) is None and not store.delete_one(data_dir, factor_id):
-        raise HTTPException(status_code=404, detail=f"因子不存在: {factor_id}")
+    try:
+        if get_factor(factor_id) is None and not store.delete_one(data_dir, factor_id):
+            raise HTTPException(status_code=404, detail=f"因子不存在: {factor_id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         unregister_factor(factor_id)
     except ValueError as exc:

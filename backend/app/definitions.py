@@ -58,7 +58,19 @@ class JsonDefinitionStore:
         return d
 
     def path(self, data_dir: Path, def_id: str) -> Path:
-        return self.dir(data_dir) / f"{def_id}.json"
+        raw_id = str(def_id or "")
+        if (
+            not raw_id
+            or raw_id in (".", "..")
+            or any(ch in raw_id for ch in ("/", "\\", "\x00", ":"))
+            or ".." in raw_id
+        ):
+            raise ValueError(f"非法的 {self.label} 标识: {def_id!r}")
+        base = self.dir(data_dir).resolve()
+        target = (base / f"{raw_id}.json").resolve()
+        if not target.is_relative_to(base) or target.parent != base:
+            raise ValueError(f"非法的 {self.label} 标识: {def_id!r}")
+        return target
 
     def fingerprint(self, data_dir: Path) -> tuple:
         """目录内匹配文件的 (文件名, mtime) 签名 — 创建/删除/编辑都会变化。"""

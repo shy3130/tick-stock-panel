@@ -499,7 +499,7 @@ export function Layout() {
   // 数据同步状态轮询: 有活跃 job 时「数据」菜单项显示转圈。
   // 标签页隐藏时 TanStack 默认暂停轮询 — 转圈提示只在页面可见时有意义, 不再强制后台轮询
   const { data: pipelineJobs } = useQuery({
-    queryKey: QK.pipelineJobs,
+    queryKey: QK.pipelineJobsList(1),
     queryFn: () => api.pipelineJobs(1),
     refetchInterval: (query) => (query.state.data?.active_id ? 2000 : 15000),
   })

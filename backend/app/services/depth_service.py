@@ -99,7 +99,7 @@ class DepthService:
     # ================================================================
 
     def boot_check(self) -> None:
-        """启动补跑: 当天 depth5 文件不存在则 finalize 一次; 已存在则恢复内存缓存。"""
+        """启动补跑: 优先恢复已有定版 parquet; 仅在当日收盘后且未定版时补跑 finalize。"""
         if not self._has_capability():
             logger.info("depth sealed: %s 不可用, 跳过启动补跑", self._capability_label())
             return
@@ -107,6 +107,21 @@ class DepthService:
         if self._persisted_for_date(today):
             # parquet 已存在: 恢复内存缓存(避免重启后每次查询都读 parquet)
             self._restore_from_parquet(today)
+            return
+        if self._repo is None:
+            return
+        enriched, enriched_date = self._repo.get_enriched_latest()
+        if enriched.is_empty() or enriched_date is None:
+            return
+        if self._persisted_for_date(enriched_date):
+            # 周末/节假日/盘前重启: 已有最近交易日定版 parquet, 仅恢复内存缓存, 绝不覆写历史定版封单
+            self._restore_from_parquet(enriched_date)
+            return
+        if enriched_date != today or cn_now().time() < dt_time(15, 0):
+            logger.info(
+                "depth sealed: 非当日收盘后 (enriched=%s, today=%s), 跳过启动补跑以免覆写历史盘口",
+                enriched_date, today,
+            )
             return
         logger.info("depth sealed: 启动补跑今天定版")
         try:

@@ -51,3 +51,18 @@ it('independent windows refresh only changed datasets, including when quote poll
   await tick()
   expect(clients.every(client => client.getQueryState(['watchlist-enriched', ''])?.isInvalidated)).toBe(true)
 })
+
+it('does not invalidate queries on initial mount baseline', async () => {
+  vi.mocked(api.dataVersions).mockResolvedValue({ versions: { daily: 'server:1', minute: 'server:1' } })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  clients.push(client)
+  client.setQueryData(['watchlist-enriched', ''], { rows: [] })
+  client.setQueryData(['minute-batch'], { data: {} })
+  const host = document.createElement('div')
+  document.body.append(host); hosts.push(host)
+  const root = createRoot(host); roots.push(root)
+  await act(async () => root.render(<QueryClientProvider client={client}><Versions /></QueryClientProvider>))
+  await tick()
+  expect(client.getQueryState(['watchlist-enriched', ''])?.isInvalidated).toBe(false)
+  expect(client.getQueryState(['minute-batch'])?.isInvalidated).toBe(false)
+})

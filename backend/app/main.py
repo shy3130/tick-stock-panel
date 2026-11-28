@@ -783,7 +783,8 @@ async def openapi_contract_view(tier: str = "a"):
     开放清单的权威来源是 api_gateway 的规则表 — 规则表即契约, 单源维护。
     二开方以此生成客户端; 未出现在此视图的端点属内部实现, 随时变化。
     """
-    spec = app.openapi()
+    # 浅拷贝顶层 dict 避免原地篡改 app.openapi() 缓存, 否则 /docs 和 ?tier=all 会永久丢失非 Tier A 端点。
+    spec = dict(app.openapi())
     if tier == "a":
         from app.services import api_gateway
 
