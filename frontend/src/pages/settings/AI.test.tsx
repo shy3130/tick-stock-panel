@@ -169,3 +169,47 @@ it('places Modelflare after Custom and tests its Chat Completions preset with it
   expect([...host.querySelectorAll('button')].find(button => button.textContent === '测试连接')?.disabled).toBe(false)
   expect(fetcher).toHaveBeenCalledTimes(1)
 })
+
+it('offers the x6.ai preset and keeps an existing Kimi configuration available under Custom', async () => {
+  mocks.settings.data = {
+    ai_provider: 'openai_compat',
+    ai_protocol: 'responses',
+    ai_base_url: 'https://api.moonshot.cn/v1',
+    ai_model: 'saved-kimi-model',
+    has_ai_key: true,
+    ai_configured: true,
+  }
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })))
+  vi.stubGlobal('fetch', fetcher)
+  await setup()
+
+  const cards = [...host.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')]
+  const x6 = cards.find(card => card.textContent?.startsWith('x6.ai'))
+  const baseUrl = host.querySelector<HTMLInputElement>('input[placeholder^="https://"]')!
+  expect(cards.some(card => card.textContent?.startsWith('Kimi'))).toBe(false)
+  expect(cards[0].textContent).toContain('自定义')
+  expect(cards[0].getAttribute('aria-pressed')).toBe('true')
+  expect(baseUrl.value).toBe('https://api.moonshot.cn/v1')
+  expect(x6).toBeDefined()
+  await act(async () => x6!.click())
+
+  expect(baseUrl.value).toBe('https://api.x6.ai/v1')
+  expect(host.querySelector('a[href="https://console.x6.ai/register?code=tuSkEebA"]')?.textContent).toContain('8 折、9 折')
+  await click('测试连接')
+  expect(fetcher).not.toHaveBeenCalled()
+
+  const keyInput = host.querySelector<HTMLInputElement>('input[type="password"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(keyInput, 'test-x6-key')
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await click('测试连接')
+
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  const [url, init] = fetcher.mock.calls[0]
+  expect(url).toBe('/api/settings/ai/test')
+  expect(JSON.parse(init.body)).toEqual({
+    provider: 'openai_compat', protocol: 'chat_completions', base_url: 'https://api.x6.ai/v1',
+    model: 'openai/gpt-6.2-sol-discount', api_key: 'test-x6-key',
+  })
+})
