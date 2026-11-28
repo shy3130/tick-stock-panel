@@ -94,9 +94,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     uv sync --frozen "$@" || uv sync "$@"
 
 # Backend code
-# 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
-# (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
-# 三个关键路径；TSP_DOCKER 也确保 env_file 中的相对 DATA_DIR 按 /app 解析。
+# config.py 在镜像里是 /app/app/config.py，应用根为 /app。
+# TSP_DOCKER 让相对 DATA_DIR 按 /app 解析，并保留旧数据目录保护。
+# 显式指定数据、前端静态资源和套餐文件路径，以匹配镜像布局。
 COPY backend/app ./app
 COPY tiers.yaml /app/tiers.yaml
 # 版本号运行时兜底 (issue #513): 非冻结路径 _load_version() 读

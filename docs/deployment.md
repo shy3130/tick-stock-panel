@@ -15,6 +15,8 @@ docker run -d --name tsp -p 3018:3018 -e DATA_DIR=/app/data -v "${PWD}/data:/app
 # 打开 http://localhost:3018
 ```
 
+自定义数据源 YAML 放在宿主机 `./data/data_sources/`，对应容器内 `/app/data/data_sources`。默认数据卷挂载到 `/app/data`，自定义 `DATA_DIR` 时挂载目标须与其一致。新镜像中相对 `DATA_DIR=./data` 按应用根 `/app` 解析；已有旧目录数据时仍遵循下方的升级保护与备份要求。启动日志会打印实际扫描目录；该目录下没有 YAML 时会有一条 info 日志。重新加载接口同时返回 `config_dir`、`found`、`loaded`、`skipped`。
+
 - 需要配置时:从 `.env.example` 复制出 `.env`,命令里加 `--env-file .env`,保留 `-e DATA_DIR=/app/data` 与数据挂载,避免旧镜像把 `DATA_DIR=./data` 解析到未挂载的 `/data`。
 - 自定义绝对数据路径会原样保留,需要把宿主机目录挂载到相同目标。Compose 用户需要同时调整 `environment` 和 `volumes`,仅修改 `.env` 不会覆盖 Compose 中明确指定的路径。
 - 自定义数据源等服务跑在宿主机、容器内需通过 `host.docker.internal` 访问时,Linux 的 `docker run` 要在命令里加 `--add-host=host.docker.internal:host-gateway`(Docker Desktop 的 macOS/Windows 默认已可解析;方式 B 的 compose 已在 `extra_hosts` 配好),否则报 `Name or service not known`。

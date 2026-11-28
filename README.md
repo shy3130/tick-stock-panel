@@ -152,6 +152,8 @@ docker run -d --name tsp -p 3018:3018 \
 
 打开 [localhost:3018](http://localhost:3018)。
 
+自定义数据源 YAML 放在宿主机 `./data/data_sources/`，对应容器内 `/app/data/data_sources`。修改数据目录时，`DATA_DIR` 与挂载目标须一致。[部署与旧数据目录核对](./docs/deployment.md)
+
 <a id="install-desktop"></a>
 <a id="install-compose"></a>
 <a id="install-dev"></a>
