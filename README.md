@@ -15,7 +15,7 @@
 
 [![TSP 工作台 MIT](https://img.shields.io/badge/TSP_Workbench-MIT-7C65A8?style=flat-square)](./LICENSE) [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![Node 20+](https://img.shields.io/badge/Node.js-20+-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![React 18](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/) [![Polars 1.44](https://img.shields.io/badge/Polars-1.44-6f42c1?style=flat-square)](./backend/pyproject.toml)
 
-[赞助支持](#sponsors)　 [为什么做 TSP](#why-tsp)　 [核心功能](#features)　 **[快速开始](#quick-start)**　 [界面预览](#screenshots)　 [整体架构](#architecture)　 [扩展与导入](#extensions)　 [AI 接入](./docs/ai-integration.md)　 [交流群](#community-group)
+[赞助商](#sponsors)　 [为什么做 TSP](#why-tsp)　 [核心功能](#features)　 **[快速开始](#quick-start)**　 [界面预览](#screenshots)　 [整体架构](#architecture)　 [扩展与导入](#extensions)　 [AI 接入](./docs/ai-integration.md)　 [交流群](#community-group)
 
 </div>
 
@@ -37,6 +37,15 @@
     <img src="docs/sponsors/runninghub-banner-v8.svg?v=2" alt="RunningHub API — 一个 API Key 直连 400+ 主流大模型" width="100%">
   </a><br>
   <strong>本项目由赞助商 <a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c">RunningHub</a> 提供支持</strong> · 一个 API Key 直连 400+ 主流大模型 · <strong><a href="https://www.runninghub.ai/zh-cn/call-api?source=github&amp;inviteCode=edt5wh7c">立即免费测试&nbsp;→</a></strong>
+</p>
+
+<p id="x6-ai" align="center">
+  <a href="https://console.x6.ai/register?code=tuSkEebA" target="_blank" rel="noopener noreferrer">
+    <img src="docs/sponsors/x6-ai-banner-zh.png" alt="x6.ai · 一个 Key 直连 100+ 模型 · ¥33 包月" width="100%">
+  </a><br>
+  <strong>合作伙伴 x6.ai</strong> · 一个 Key 直连 Claude、GPT、Gemini、Grok 及国产主流模型等 100+ 模型，缓存命中率保底 91%。<br>
+  专用客户端一键下载登录，免配置。会员 US$5/月起，支持支付宝、Visa 和万事达卡。<br>
+  <strong><a href="https://console.x6.ai/register?code=tuSkEebA">专属链接注册，领 8 折、9 折优惠券&nbsp;→</a></strong>
 </p>
 
 ---

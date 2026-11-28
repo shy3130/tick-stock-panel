@@ -21,6 +21,8 @@ interface Props {
   scope: string
   series: PlotSeries[]
   height: number
+  /** 下方预留占位高度(px)，用 margin 维持父布局总高而不改变主图画布高度 */
+  reservedBottomSpace?: number
   paneHeights: number[]
   lockPaneHeights?: boolean
   mainTimeAxis?: boolean
@@ -359,5 +361,5 @@ export function FinancialPlot(props: Props) {
     markerRef.current?.setMarkers(markersForView(props.markers, compactRef.current))
   }, [props.annotations, props.markers, props.volumeLabels, props.paneLabels, props.paneDrawings, props.paneTitles, props.paneReadouts, props.linkedPrice, props.series, props.pricePrecision, ct])
 
-  return <div ref={host} role="group" aria-label={props.intraday ? '分时价格与成交量图' : '日 K 与技术指标图'} data-chart-engine="lightweight" className="w-full min-w-0" style={{ height: props.height }} />
+  return <div ref={host} role="group" aria-label={props.intraday ? '分时价格与成交量图' : '日 K 与技术指标图'} data-chart-engine="lightweight" className="w-full min-w-0" style={{ height: props.height, marginBottom: props.reservedBottomSpace || undefined }} />
 }

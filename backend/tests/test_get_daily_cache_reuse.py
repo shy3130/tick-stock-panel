@@ -104,3 +104,121 @@ def test_get_daily_falls_back_to_scan_when_cache_does_not_cover_start():
     result = repo.get_daily(SYM, dates[0] - timedelta(days=5), dates[-1])
     assert calls["scan"] == 1
     assert not result.is_empty()
+
+
+def test_get_daily_with_columns_reuses_history_cache_and_overlays_latest():
+    """带 columns 投影 (如 /minute 昨收 ["date", "close"]) 须优先命中内存历史缓存并叠加最新日。"""
+    raw = _raw_frame()
+    dates = raw["date"].to_list()
+    start, end = dates[30], dates[-1]
+
+    repo, calls = _bare_repo(raw)
+    hist = repo._compute_enriched_range(raw)
+    repo._enriched_history_cache = hist
+    repo._enriched_history_start = hist["date"].min()
+    latest_row = hist.filter(pl.col("date") == end).with_columns(pl.lit(99.5).alias("close"))
+    repo.get_enriched_latest = lambda **kwargs: (latest_row, end)  # type: ignore[method-assign]
+
+    projected = repo.get_daily(SYM, start, end, columns=["date", "close"])
+
+    assert calls["scan"] == 0, "带 columns 投影命中历史缓存时不得退回全树扫描"
+    assert projected.columns == ["date", "close"]
+    assert projected.height == hist.filter((pl.col("date") >= start) & (pl.col("date") <= end)).height
+    assert projected.filter(pl.col("date") == end)["close"].item() == 99.5
+
+
+def test_date_partition_files_prunes_range_and_handles_legacy_layouts(tmp_path):
+    """纯按日分区目录只返回 [start, end] 内 parquet; 遇旧布局返回 None 回退 glob。"""
+    base = tmp_path / "kline_daily_enriched"
+    for day in ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08"):
+        part_dir = base / f"date={day}"
+        part_dir.mkdir(parents=True)
+        pl.DataFrame({"symbol": [SYM], "date": [date.fromisoformat(day)], "close": [10.0]}).write_parquet(
+            part_dir / "part.parquet"
+        )
+    (base / ".generation").write_text("1", encoding="utf-8")
+
+    selected = KlineRepository._date_partition_files(base, date(2026, 1, 6), date(2026, 1, 7))
+    assert selected is not None
+    assert [p.split("date=")[-1].split("/")[0].split("\\")[0] for p in selected] == [
+        "2026-01-06",
+        "2026-01-07",
+    ]
+
+    empty = KlineRepository._date_partition_files(base, date(2026, 2, 1), date(2026, 2, 5))
+    assert empty == []
+
+    # 出现旧 symbol= 子目录时必须返回 None，触发调用方回退全树 glob
+    (base / f"symbol={SYM}").mkdir()
+    assert KlineRepository._date_partition_files(base, date(2026, 1, 6), date(2026, 1, 7)) is None
+
+
+def test_latest_daily_and_minute_date_avoid_duckdb_on_date_partitions(tmp_path):
+    """按日分区目录的 latest_daily_date / latest_minute_date 直读目录, 不触发 DuckDB 全扫。"""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    daily_root = tmp_path / "kline_daily"
+    for day in ("2026-01-05", "2026-01-06"):
+        part_dir = daily_root / f"date={day}"
+        part_dir.mkdir(parents=True)
+        pl.DataFrame({"symbol": [SYM], "date": [date.fromisoformat(day)], "close": [10.0]}).write_parquet(
+            part_dir / "part.parquet"
+        )
+    # 空分区目录与 0 行 parquet 不得误报为最新日
+    (daily_root / "date=2026-01-09").mkdir(parents=True)
+    zero_dir = daily_root / "date=2026-01-08"
+    zero_dir.mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": pl.Series([], dtype=pl.Utf8),
+        "date": pl.Series([], dtype=pl.Date),
+        "close": pl.Series([], dtype=pl.Float64),
+    }).write_parquet(zero_dir / "part.parquet")
+
+    minute_root = tmp_path / "kline_minute"
+    for day, sym in (("2026-01-05", SYM), ("2026-01-06", "000001.SZ")):
+        part_dir = minute_root / f"date={day}"
+        part_dir.mkdir(parents=True)
+        pl.DataFrame({
+            "symbol": [sym],
+            "datetime": [datetime.fromisoformat(f"{day}T09:30:00")],
+            "close": [10.0],
+        }).write_parquet(part_dir / "part.parquet")
+
+    repo = KlineRepository.__new__(KlineRepository)
+    repo.store = SimpleNamespace(data_dir=tmp_path)
+    duckdb_calls = {"n": 0}
+
+    def _fail_duckdb(*args, **kwargs):
+        duckdb_calls["n"] += 1
+        return (date(2025, 12, 31),)
+
+    repo.execute_one = _fail_duckdb  # type: ignore[method-assign]
+
+    assert repo.latest_daily_date() == date(2026, 1, 6)
+    assert repo.latest_minute_date(SYM) == date(2026, 1, 5)
+    assert repo.latest_minute_date("000001.SZ") == date(2026, 1, 6)
+    assert duckdb_calls["n"] == 0
+
+    # 最近 5 分区未命中时回退 DuckDB 兜底 (如长期停牌股)
+    assert repo.latest_minute_date("999999.SH") == date(2025, 12, 31)
+    assert duckdb_calls["n"] == 1
+
+
+def test_get_daily_columns_without_date_deduplicates_latest_overlay():
+    """缓存未命中且 columns 不含 date 时，叠加最新日缓存不得重复产出当日行。"""
+    raw = _raw_frame()
+    dates = raw["date"].to_list()
+    start, end = dates[30], dates[-1]
+    expected_rows = raw.filter((pl.col("date") >= start) & (pl.col("date") <= end)).height
+
+    repo, calls = _bare_repo(raw)
+    latest_row = raw.filter(pl.col("date") == end).with_columns(pl.lit(88.8).alias("close"))
+    repo.get_enriched_latest = lambda **kwargs: (latest_row, end)  # type: ignore[method-assign]
+
+    projected = repo.get_daily(SYM, start, end, columns=["close"])
+
+    assert calls["scan"] == 1
+    assert projected.columns == ["close"]
+    assert projected.height == expected_rows
+    assert projected["close"][-1] == 88.8

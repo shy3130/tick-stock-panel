@@ -285,7 +285,7 @@ def _warmup(
         with _CACHE_LOCK:
             _HISTORY_CACHE[key] = rows
             while (
-                len(_HISTORY_CACHE) > 32
+                len(_HISTORY_CACHE) > 128
                 or sum(len(value) for value in _HISTORY_CACHE.values()) > 100_000
             ):
                 _HISTORY_CACHE.popitem(last=False)
@@ -403,7 +403,7 @@ def evaluate(request: EvaluateRequest, repo=None) -> dict:
     if points <= _CACHE_POINTS:
         with _CACHE_LOCK:
             _CACHE[key] = (frame, copy.deepcopy(response), points)
-            while len(_CACHE) > 32 or sum(item[2] for item in _CACHE.values()) > _CACHE_POINTS:
+            while len(_CACHE) > 128 or sum(item[2] for item in _CACHE.values()) > _CACHE_POINTS:
                 _CACHE.popitem(last=False)
     return {
         **response,

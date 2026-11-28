@@ -295,8 +295,8 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              'relative rounded-dialog border border-border bg-surface shadow-2xl shadow-black/50 overflow-hidden flex flex-col transition-all duration-200 ease-smooth',
-              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[96vw] max-w-[1360px] max-h-[95vh] sm:w-[94vw]',
+              'relative rounded-dialog border border-border bg-surface shadow-2xl shadow-black/50 overflow-hidden flex flex-col',
+              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[96vw] max-w-[1360px] h-[min(92vh,960px)] max-h-[95vh] sm:w-[94vw]',
             )}
             role="dialog"
             aria-modal="true"
