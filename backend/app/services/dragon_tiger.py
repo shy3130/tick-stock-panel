@@ -103,7 +103,7 @@ def derive_thscode(ticker: object) -> str | None:
     不能把 null 透传给前端 (各消费方按 string 契约使用)。规则:
       6xxxxx / 900xxx (沪B)         → .SH
       0xxxxx / 3xxxxx / 200xxx(深B)  → .SZ
-      4xxxxx / 8xxxxx (北交所)       → .BJ
+      4xxxxx / 8xxxxx / 92xxxx (北交所) → .BJ
     """
     if not isinstance(ticker, str):
         return None
@@ -118,7 +118,7 @@ def derive_thscode(ticker: object) -> str | None:
         return f"{code}.SH"
     if code.startswith("200") or code[0] in ("0", "3"):
         return f"{code}.SZ"
-    if code[0] in ("4", "8"):
+    if code[0] in ("4", "8") or code.startswith("92"):
         return f"{code}.BJ"
     return None
 
