@@ -400,10 +400,30 @@ def test_realtime_isolates_failed_batch(monkeypatch):
 def test_realtime_indices_maps_sh_index_code(monkeypatch):
     monkeypatch.setattr(tp, "datetime", _FixedDT)
     fake = _FakeClient()
-    fake.snapshot_results = [{"999999.SH": _snap_row(Now="3813.79", LastClose="3811.90")}]
+    fake.snapshot_results = [{
+        "999999.SH": _snap_row(Now="3813.79", LastClose="3811.90"),
+        "399001.SZ": _snap_row(Now="12000.00", LastClose="11900.00"),
+    }]
     records = _provider(fake).get_realtime_indices(["000001.SH", "399001.SZ"])
     assert fake.snapshot_calls == [["999999.SH", "399001.SZ"]]  # 000001.SH → 999999.SH
     assert records and records[0]["last_price"] == 3813.79
+    assert [record["symbol"] for record in records] == ["000001.SH", "399001.SZ"]
+    assert records[0]["change_pct"] == pytest.approx(3813.79 / 3811.90 - 1)
+
+
+def test_realtime_indices_skips_invalid_rows_after_normalizing_alias(monkeypatch):
+    monkeypatch.setattr(tp, "datetime", _FixedDT)
+    fake = _FakeClient()
+    fake.snapshot_results = [{"999999.SH": _snap_row(Now=None, LastClose=None)}]
+    records = _provider(fake).get_realtime_indices(["000001.SH", "000001.SH", ""])
+    assert fake.snapshot_calls == [["999999.SH"]]
+    assert records == []
+
+
+def test_realtime_indices_empty_demand_does_not_fetch():
+    fake = _FakeClient()
+    assert _provider(fake).get_realtime_indices([]) == []
+    assert fake.snapshot_calls == []
 
 
 def test_realtime_indices_none_on_failure():
