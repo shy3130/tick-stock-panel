@@ -244,7 +244,7 @@ function AssistantPromoBanner() {
               <span>· 单笔充值满 US$20 解锁</span>
               <strong className="font-medium text-amber-600 dark:text-amber-400">GPT 0.015x</strong>
               <span>，满 US$50 解锁</span>
-              <strong className="font-medium text-amber-600 dark:text-amber-400">Claude 0.03x</strong>
+              <strong className="font-medium text-amber-600 dark:text-amber-400">Claude 0.1x</strong>
               <span>· 指定 OpenAI 分组每日缓存保障 65% / 75% / 85%</span>
               <span>· 前往注册</span>
             </span>

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Save, Loader2, Check, Wifi, Eye, EyeOff, Shield, SlidersHorizontal,
+  Save, Loader2, Check, Wifi, Eye, EyeOff, Shield,
   Shuffle, ExternalLink, Trash2, FileCog, RefreshCw,
-  Terminal, ChevronDown, Sparkles, Waves, Cloud, Gem, Layers, Zap,
+  ChevronDown, Sparkles, Copy,
 } from 'lucide-react'
 import { useSettings } from '@/lib/useSharedQueries'
 import { api, type SettingsState, type SponsorModelItem } from '@/lib/api'
@@ -87,7 +87,6 @@ type AiPreset = {
   custom?: boolean
   sponsor?: boolean
   modelCatalog?: 'runninghub'
-  icon: React.ComponentType<{ className?: string }>
 }
 
 // 预设卡副行: 服务端点一眼可辨 (自定义/本机 CLI 无域名时给语义文案)
@@ -99,6 +98,34 @@ const presetMeta = (p: AiPreset) => {
   } catch {
     return p.url
   }
+}
+
+/** Modelflare 优惠码: 点击一键复制, 保持 code 节点纯文本便于选中与测试。 */
+function ModelflareCoupon({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    if (await copyText(code)) {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1800)
+    }
+  }
+  return (
+    <span className="mt-2 inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="font-medium text-foreground/80">优惠码</span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        title="点击复制优惠码"
+        className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 transition-colors hover:border-amber-500/45 hover:bg-amber-500/15"
+      >
+        <code className="max-w-full select-all break-all font-mono text-[11px] text-amber-600 dark:text-amber-400">{code}</code>
+        {copied
+          ? <Check className="h-3 w-3 shrink-0 text-bear" />
+          : <Copy className="h-3 w-3 shrink-0 text-amber-600/70 dark:text-amber-400/70" />}
+      </button>
+      <span className="text-[11px] text-muted">{copied ? '已复制' : '每位用户限用一次'}</span>
+    </span>
+  )
 }
 
 /** RunningHub 预设描述: 折扣区间取自实时模型定价; 取不到时回退到集中的兜底文案。 */
@@ -117,7 +144,7 @@ function RunningHubIntro() {
 }
 
 const PRESETS: AiPreset[] = [
-  { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true, icon: SlidersHorizontal },
+  { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true },
   {
     label: 'Modelflare',
     url: 'https://modelflare.dev/v1',
@@ -130,19 +157,14 @@ const PRESETS: AiPreset[] = [
       <>
         本项目赞助商 · OpenAI 兼容接口，支持 GPT、Claude、Gemini、Grok 等模型。请在支持目标模型的分组下创建 API Key。
         <span className="mt-1 block">
-          单笔充值满 US$20 解锁 <strong className="font-medium text-amber-600 dark:text-amber-400">GPT 0.015x</strong> 分组，满 US$50 解锁 <strong className="font-medium text-amber-600 dark:text-amber-400">Claude 0.03x</strong> 分组。
+          单笔充值满 US$20 解锁 <strong className="font-medium text-amber-600 dark:text-amber-400">GPT 0.015x</strong> 分组，满 US$50 解锁 <strong className="font-medium text-amber-600 dark:text-amber-400">Claude 0.1x</strong> 分组。
           指定 OpenAI 分组提供 <strong className="font-medium text-amber-600 dark:text-amber-400">65% / 75% / 85%</strong> 每日缓存命中率保障。
         </span>
-        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-medium">优惠码</span>
-          <code className="max-w-full select-all break-all rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-amber-600 dark:text-amber-400">f1cc942c2f674f568106bb244f0f1ac0</code>
-          <span className="text-muted">每位用户限用一次</span>
-        </span>
+        <ModelflareCoupon code="f1cc942c2f674f568106bb244f0f1ac0" />
       </>
     ),
-    icon: Layers,
   },
-  { label: 'RunningHub', url: 'https://llm.runninghub.ai/v1', model: 'openai/gpt-6-astra-saver', website: 'https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c', websiteLabel: 'www.runninghub.ai · 赞助', sponsor: true, modelCatalog: 'runninghub', icon: Sparkles, description: <RunningHubIntro /> },
+  { label: 'RunningHub', url: 'https://llm.runninghub.ai/v1', model: 'openai/gpt-6-astra-saver', website: 'https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c', websiteLabel: 'www.runninghub.ai · 赞助', sponsor: true, modelCatalog: 'runninghub', description: <RunningHubIntro /> },
   {
     label: 'x6.ai',
     url: 'https://api.x6.ai/v1',
@@ -152,12 +174,12 @@ const PRESETS: AiPreset[] = [
     websiteLabel: '专属链接注册 · 领 8 折、9 折优惠券',
     sponsor: true,
     description: '合作伙伴 · 一个 API Key 通过 OpenAI 兼容接口接入 Claude、GPT、Gemini、Grok 等模型。请填写 x6.ai API Key，并按 Key 的可用范围选择模型。',
-    icon: Zap,
   },
-  { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。', icon: Waves },
-  { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。', icon: Cloud },
-  { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。', icon: Gem },
-  { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。', icon: Terminal },
+  { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
+  { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
+  { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
+  { label: 'OpenDesign Go', url: 'https://amr-link.open-design.ai/v1', model: 'deepseek-v4.1-flash', protocol: 'chat_completions', website: 'https://go.open-design.ai/', websiteLabel: 'go.open-design.ai', description: 'OpenDesign Go OpenAI 兼容接口，支持 DeepSeek 等主流语言模型，接口地址已预设。' },
+  { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
 ]
 
 const findPreset = (provider: string, baseUrl: string, codexCommand: string) => PRESETS.find(p => {
@@ -539,7 +561,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2.5">
             <Sparkles className="h-4 w-4 shrink-0 text-secondary" />
-            <h2 className="text-sm font-medium text-foreground">AI 服务</h2>
+            <h2 className="text-sm font-medium text-foreground">AI 设置</h2>
           </div>
           <div className="mt-2 flex items-center gap-2">
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${configured ? 'bg-bear' : 'bg-warning'}`} />
@@ -576,55 +598,85 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       </div>
 
       <section className="overflow-hidden rounded-card border border-border bg-surface">
-        {/* 服务商 */}
+        {/* 服务商: 统一简洁自适应宽度胶囊, 保持自然流式排布 */}
         <div className="px-5 py-4">
-          <SectionHeader label="服务商" />
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <SectionHeader label="服务商" inline />
+            {selectedPreset && (
+              <span className="truncate font-mono text-[11px] text-muted">
+                {presetMeta(selectedPreset)}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
             {PRESETS.map(p => {
               const active = selectedPreset?.label === p.label
-              const Icon = p.icon
               return (
-                <button key={p.label} type="button" onClick={() => handlePreset(p)} aria-pressed={active}
-                  className={`group relative flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface active:scale-[0.98] ${
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => handlePreset(p)}
+                  aria-pressed={active}
+                  title={presetMeta(p)}
+                  className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-4 text-[13px] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-[0.97] ${
                     active
-                      ? 'border-accent/60 bg-accent/[0.09] shadow-[0_0_0_1px_rgba(59,130,246,0.12),0_0_12px_-3px_rgba(59,130,246,0.45)]'
-                      : 'border-border/60 bg-base/40 hover:border-accent/30 hover:bg-base'
-                  }`}>
-                  {/* 同构卡片的选中状态用侧边竖标强化。 */}
-                  <span aria-hidden="true"
-                    className={`absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-accent transition-opacity duration-150 ${
-                      active ? 'opacity-100' : 'opacity-0'
-                    }`} />
-                  <span className="flex items-center gap-2">
-                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
-                      active ? 'bg-accent/20 text-accent' : 'bg-elevated/60 text-muted group-hover:text-secondary'
+                      ? 'border-accent bg-accent/10 font-medium text-accent'
+                      : 'border-border/50 bg-elevated/45 text-secondary hover:border-border hover:bg-elevated hover:text-foreground'
+                  }`}
+                >
+                  <span className="whitespace-nowrap">{p.label}</span>
+                  {p.sponsor && (
+                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${
+                      active
+                        ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                        : 'bg-amber-500/12 text-amber-600/90 dark:text-amber-400/90'
                     }`}>
-                      <Icon className="h-3.5 w-3.5" />
+                      优惠
                     </span>
-                    <span className={`truncate text-xs font-medium ${active ? 'text-foreground' : 'text-secondary'}`}>{p.label}</span>
-                    {p.sponsor && <span className="ml-auto shrink-0 rounded-full bg-amber-400/15 px-1.5 py-px text-[9px] font-semibold leading-none text-amber-600 dark:text-amber-400">优惠</span>}
-                  </span>
-                  <span className="truncate font-mono text-[10px] text-muted">{presetMeta(p)}</span>
+                  )}
                 </button>
               )
             })}
           </div>
-          {selectedPreset && (
-            <div className="mt-2.5 rounded-lg bg-base/40 px-3.5 py-2.5">
-              <p className="text-[11px] leading-relaxed text-secondary">{selectedPreset.description}</p>
-              {selectedPreset.website && (
-                <a href={selectedPreset.website} target="_blank" rel="noreferrer"
-                  className={`mt-1.5 inline-flex items-center gap-1 text-[11px] transition-colors ${selectedPreset.sponsor ? 'font-medium text-orange-500 hover:text-orange-600 dark:text-orange-400 dark:hover:text-orange-300' : 'text-muted hover:text-accent'}`}>
-                  {selectedPreset.websiteLabel}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              )}
-            </div>
-          )}
         </div>
-      </section>
 
-      <section className="overflow-hidden rounded-card border border-border bg-surface">
+        {/* 选中服务商说明条: 保持中性克制, 仅链接/优惠码作为视觉焦点 */}
+        {selectedPreset && (
+          <div className="border-y border-border/40 bg-elevated/35 px-5 py-3 dark:bg-base/45">
+            {selectedPreset.sponsor ? (
+              <div>
+                <p className="text-xs leading-relaxed text-secondary">{selectedPreset.description}</p>
+                {selectedPreset.website && (
+                  <a
+                    href={selectedPreset.website}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-600 transition-colors hover:border-amber-500/45 hover:bg-amber-500/15 dark:text-amber-400"
+                  >
+                    {selectedPreset.websiteLabel}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                <p className="text-xs leading-relaxed text-secondary">{selectedPreset.description}</p>
+                {selectedPreset.website && (
+                  <a
+                    href={selectedPreset.website}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex shrink-0 items-center gap-1 self-start rounded-md border border-border/60 bg-surface px-2.5 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent sm:self-center dark:bg-elevated/60"
+                  >
+                    {selectedPreset.websiteLabel}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 接口配置 */}
         <div className="px-5 py-4">
           {/* 标题行: 左侧区段名, 右侧请求方式 (属于本区段内可编辑项, 与下方表单同组) */}

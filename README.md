@@ -29,7 +29,7 @@
   <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC" target="_blank" rel="noopener noreferrer">
     <img src="docs/sponsors/modelflare_banner_zh.png?v=1" alt="Modelflare — 低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型" width="100%">
   </a><br>
-  <strong>感谢 <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">Modelflare</a> 赞助本项目！</strong> 由美国 Havenbyte LLC 运营，满血稳定不掺水，低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型。指定 OpenAI 分组提供 65% / 75% / 85% 每日缓存命中率保障。单笔充值 US$20 解锁 GPT 0.015x，US$50 解锁 Claude 0.03x。支持大陆正规商务合作。<strong><a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">专属链接注册&nbsp;→</a></strong>
+  <strong>感谢 <a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">Modelflare</a> 赞助本项目！</strong> 由美国 Havenbyte LLC 运营，满血稳定不掺水，低成本接入 GPT、Claude、Gemini、Grok 及 40+ 图片/视频模型。指定 OpenAI 分组提供 65% / 75% / 85% 每日缓存命中率保障。单笔充值 US$20 解锁 GPT 0.015x，US$50 解锁 Claude 0.1x。支持大陆正规商务合作。<strong><a href="https://modelflare.dev/sign-up?partner=CFYSN0AM2APC">专属链接注册&nbsp;→</a></strong>
 </p>
 
 <p align="center">

@@ -132,7 +132,7 @@ it('places Modelflare after Custom and tests its Chat Completions preset with it
   await act(async () => modelflare.click())
 
   expect(host.textContent).toContain('US$20 解锁 GPT 0.015x')
-  expect(host.textContent).toContain('US$50 解锁 Claude 0.03x')
+  expect(host.textContent).toContain('US$50 解锁 Claude 0.1x')
   expect(host.textContent).toContain('65% / 75% / 85%')
   expect(host.querySelector('code')?.textContent).toBe('f1cc942c2f674f568106bb244f0f1ac0')
   expect(host.textContent).toContain('每位用户限用一次')
@@ -211,5 +211,39 @@ it('offers the x6.ai preset and keeps an existing Kimi configuration available u
   expect(JSON.parse(init.body)).toEqual({
     provider: 'openai_compat', protocol: 'chat_completions', base_url: 'https://api.x6.ai/v1',
     model: 'openai/gpt-6.2-sol-discount', api_key: 'test-x6-key',
+  })
+})
+
+it('offers the OpenDesign Go preset with prefilled Chat Completions endpoint and default model', async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, model: 'deepseek-v4.1-flash' })))
+  vi.stubGlobal('fetch', fetcher)
+  await setup()
+  expect(host.querySelector('h2')?.textContent).toBe('AI 设置')
+
+  const cards = [...host.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')]
+  const openDesign = cards.find(card => card.textContent?.startsWith('OpenDesign Go'))
+  expect(openDesign).toBeDefined()
+  await act(async () => openDesign!.click())
+
+  expect(host.querySelector<HTMLInputElement>('input[placeholder^="https://"]')?.value).toBe('https://amr-link.open-design.ai/v1')
+  expect(host.querySelector<HTMLInputElement>('input[placeholder="gpt-5.6-sol"]')?.value).toBe('deepseek-v4.1-flash')
+  expect(host.querySelector('a[href="https://go.open-design.ai/"]')?.textContent).toContain('go.open-design.ai')
+  expect([...host.querySelectorAll('button[aria-pressed="true"]')].some(
+    button => button.textContent === 'Chat Completions',
+  )).toBe(true)
+
+  const keyInput = host.querySelector<HTMLInputElement>('input[type="password"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(keyInput, 'test-opendesign-key')
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await click('测试连接')
+
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  const [url, init] = fetcher.mock.calls[0]
+  expect(url).toBe('/api/settings/ai/test')
+  expect(JSON.parse(init.body)).toEqual({
+    provider: 'openai_compat', protocol: 'chat_completions', base_url: 'https://amr-link.open-design.ai/v1',
+    model: 'deepseek-v4.1-flash', api_key: 'test-opendesign-key',
   })
 })
