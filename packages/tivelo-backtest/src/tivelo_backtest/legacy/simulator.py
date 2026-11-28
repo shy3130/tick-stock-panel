@@ -218,10 +218,13 @@ class LegacySimulator:
     def __init__(self, *, minute_loader: Callable | None = None):
         self._minute_loader = minute_loader
 
-    def _minute_data(self, symbols, dates, asset_type):
-        return (
-            {} if self._minute_loader is None else self._minute_loader(symbols, dates, asset_type)
-        )
+    def _minute_data(self, symbols, dates, asset_type, *, raw_prices: bool = False):
+        if self._minute_loader is None:
+            return {}
+        try:
+            return self._minute_loader(symbols, dates, asset_type, raw_prices=raw_prices)
+        except TypeError:
+            return self._minute_loader(symbols, dates, asset_type)
 
     def simulate(
         self,
@@ -447,7 +450,12 @@ class LegacySimulator:
             dates = {matrix.timestamp_labels[int(t)][:10] for t in trigger_times}
             symbols = {matrix.symbols[int(a)] for a in trigger_assets}
             if dates and symbols:
-                loaded = self._minute_data(list(symbols), dates, config.asset_type)
+                loaded = self._minute_data(
+                    list(symbols),
+                    dates,
+                    config.asset_type,
+                    raw_prices=matrix.price_scale is not None,
+                )
                 minute_cache = {
                     key: value
                     for key, value in loaded.items()
@@ -1472,7 +1480,12 @@ class LegacySimulator:
             trigger_dates = {matrix.timestamp_labels[int(t)][:10] for t in trigger_times}
             trigger_symbols = {matrix.symbols[int(a)] for a in trigger_assets}
             if trigger_dates and trigger_symbols:
-                loaded = self._minute_data(list(trigger_symbols), trigger_dates, config.asset_type)
+                loaded = self._minute_data(
+                    list(trigger_symbols),
+                    trigger_dates,
+                    config.asset_type,
+                    raw_prices=matrix.price_scale is not None,
+                )
                 minute_cache = {
                     key: value
                     for key, value in loaded.items()

@@ -1029,6 +1029,46 @@ def settle_day(data_dir: Path, day: str, account_id: str = DEFAULT_ACCOUNT_ID) -
 
 
 # ── 净值与总览 ──────────────────────────────────────────
+def latest_close_prices(
+    data_dir: Path,
+    symbols: list[tuple[str, str]] | dict[str, str],
+) -> dict[str, float]:
+    """批量读取各标的最近一日 raw close (定版口径估值用)。
+
+    每类资产仅扫一次日K目录; 缺行情或收盘价非正的标的不入表 (调用方按成本价保守兜底)。
+    """
+    pairs = list(symbols.items()) if isinstance(symbols, dict) else list(symbols)
+    by_asset: dict[str, list[str]] = {}
+    for sym, asset_type in pairs:
+        if not sym:
+            continue
+        by_asset.setdefault(asset_type or "stock", []).append(sym)
+    out: dict[str, float] = {}
+    for asset_type, syms in by_asset.items():
+        base = _daily_path(data_dir, asset_type)
+        if not base.exists():
+            continue
+        uniq = sorted(set(syms))
+        try:
+            df = (
+                scan_daily_parquet(parquet_glob(base))
+                .filter(pl.col("symbol").is_in(uniq))
+                .select(["symbol", "date", "close"])
+                .sort(["symbol", "date"])
+                .group_by("symbol")
+                .agg(pl.col("close").drop_nulls().last().alias("close"))
+                .collect()
+            )
+        except (OSError, pl.exceptions.PolarsError, ValueError) as e:
+            logger.warning("paper latest_close_prices failed (%s): %s", asset_type, e)
+            continue
+        for row in df.iter_rows(named=True):
+            close = row.get("close")
+            if close is not None and float(close) > 0:
+                out[str(row["symbol"])] = float(close)
+    return out
+
+
 def latest_prices_from_daily(data_dir: Path, day: str, account_id: str = DEFAULT_ACCOUNT_ID) -> dict[str, float]:
     """day 收盘后各持仓标的 raw_close (定版用)。"""
     out: dict[str, float] = {}
@@ -1093,8 +1133,14 @@ def load_nav(data_dir: Path, account_id: str = DEFAULT_ACCOUNT_ID) -> list[dict]
     return out
 
 
-def overview(data_dir: Path, price_map: dict[str, float] | None = None, account_id: str = DEFAULT_ACCOUNT_ID) -> dict:
-    """总览 (盘中实时估算): 现金 + 持仓市值 + 估算净值。"""
+def overview(
+    data_dir: Path,
+    price_map: dict[str, float] | None = None,
+    account_id: str = DEFAULT_ACCOUNT_ID,
+    *,
+    estimating: bool | None = None,
+) -> dict:
+    """总览: 现金 + 持仓市值 + 估算/定版净值。"""
     acc = get_account(data_dir, account_id)
     if acc is None:
         return {"initialized": False}
@@ -1130,7 +1176,7 @@ def overview(data_dir: Path, price_map: dict[str, float] | None = None, account_
         "total": round(float(acc["cash"]) + mv, 2),
         "total_pnl": round(float(acc["cash"]) + mv - float(acc["initial_cash"]), 2),
         "initial_cash": float(acc["initial_cash"]),
-        "estimating": price_map is not None,
+        "estimating": (price_map is not None) if estimating is None else bool(estimating),
         "holdings": holdings,
     }
 

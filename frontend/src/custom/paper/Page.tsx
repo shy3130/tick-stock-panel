@@ -1443,9 +1443,13 @@ function RankBadge({ rank, accent }: { rank: number; accent?: boolean }) {
 /** 对比榜单可排序列 (表头点击切换) */
 type CmpSortKey = 'name' | 'total' | 'pnl_pct' | 'day_change_pct' | 'win_rate' | 'profit_loss_ratio' | 'rounds' | 'holdings_count' | 'last_nav_date' | 'realized_pnl' | 'max_drawdown'
 
+/** 统一对比展示/排序/汇总口径: 盘中估算时取 live_*, 否则取定版值 */
+const cmpTotal = (r: PaperCompareRow): number => (r.estimating ? (r.live_total ?? r.total) : r.total) ?? 0
+const cmpPnl = (r: PaperCompareRow): number | null => (r.estimating ? (r.live_pnl_pct ?? r.pnl_pct) : r.pnl_pct) ?? null
+
 /** 可空列: 无值行排序时恒垫底 (与方向无关), 见 sorted 比较器 */
 const CMP_NULLABLE: Partial<Record<CmpSortKey, (r: PaperCompareRow) => boolean>> = {
-  pnl_pct: r => r.pnl_pct == null,
+  pnl_pct: r => cmpPnl(r) == null,
   day_change_pct: r => r.day_change_pct == null,
   profit_loss_ratio: r => r.profit_loss_ratio == null,
   last_nav_date: r => r.last_nav_date == null,
@@ -1455,8 +1459,8 @@ const CMP_NULLABLE: Partial<Record<CmpSortKey, (r: PaperCompareRow) => boolean>>
 function cmpSortVal(k: CmpSortKey, r: PaperCompareRow): string | number {
   switch (k) {
     case 'name': return r.name
-    case 'total': return r.total ?? 0
-    case 'pnl_pct': return r.pnl_pct ?? 0
+    case 'total': return cmpTotal(r)
+    case 'pnl_pct': return cmpPnl(r) ?? 0
     case 'day_change_pct': return r.day_change_pct ?? 0
     case 'win_rate': return r.win_rate ?? 0
     case 'profit_loss_ratio': return r.profit_loss_ratio ?? 0
@@ -1528,7 +1532,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   const executionQ = useQuery({ queryKey: executionListKey, queryFn: executionApi.list, enabled: rows.length > 0, refetchInterval: 60_000, retry: false })
   const executionByAccount = new Map(executionQ.data?.bindings.map(b => [b.account, b]))
   // 收益口径固定排序: 统计卡「收益最高」与净值叠加「收益前 8 名」不受表头排序影响
-  const byPnl = useMemo(() => [...rows].sort((a, b) => (b.pnl_pct ?? -1e9) - (a.pnl_pct ?? -1e9)), [rows])
+  const byPnl = useMemo(() => [...rows].sort((a, b) => (cmpPnl(b) ?? -1e9) - (cmpPnl(a) ?? -1e9)), [rows])
   const sorted = useMemo(() => {
     const dir = sort.desc ? -1 : 1
     const isNull = CMP_NULLABLE[sort.key]
@@ -1547,9 +1551,9 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
   }, [rows, sort])
   const chartRows = byPnl.filter(r => r.nav.length > 0).slice(0, 8)
   const avgPct = rows.length > 0
-    ? rows.reduce((s, r) => s + (r.pnl_pct ?? 0), 0) / rows.length
+    ? rows.reduce((s, r) => s + (cmpPnl(r) ?? 0), 0) / rows.length
     : null
-  const totalAssets = rows.reduce((s, r) => s + (r.total ?? 0), 0)
+  const totalAssets = rows.reduce((s, r) => s + cmpTotal(r), 0)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1639,7 +1643,7 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
               <StatCard
                 label="收益最高"
                 value={byPnl[0].name}
-                sub={byPnl.length > 1 ? `+${(byPnl[0].pnl_pct ?? 0).toFixed(2)}% 高于第2名 ${((byPnl[0].pnl_pct ?? 0) - (byPnl[1].pnl_pct ?? 0)).toFixed(2)}pct` : undefined}
+                sub={byPnl.length > 1 ? `${fmtPct((cmpPnl(byPnl[0]) ?? 0) / 100)} 高于第2名 ${((cmpPnl(byPnl[0]) ?? 0) - (cmpPnl(byPnl[1]) ?? 0)).toFixed(2)}pct` : undefined}
                 valueClass="text-accent"
                 icon={TrendingUp}
                 iconCls="text-accent"
@@ -1721,13 +1725,13 @@ function CompareView({ onCreateSingle }: { onCreateSingle: () => void }) {
                             </td>
                             <td className="py-2 text-right font-mono tabular">
                               <span className="inline-flex items-baseline justify-end gap-1">
-                                {fmtMoney(r.estimating ? (r.live_total ?? r.total) : r.total, 0)}
+                                {fmtMoney(cmpTotal(r), 0)}
                                 {r.estimating && <span className="text-[9px] font-sans text-accent" title="盘中快照价实时估算, 收盘后定版">估</span>}
                               </span>
                             </td>
                             <td className="py-2 text-right font-mono font-semibold tabular">
-                              <span className={priceColorClass((r.estimating ? (r.live_pnl_pct ?? r.pnl_pct ?? 0) : (r.pnl_pct ?? 0)) / 100)}>
-                                {fmtPct(((r.estimating ? (r.live_pnl_pct ?? r.pnl_pct ?? 0) : (r.pnl_pct ?? 0))) / 100)}
+                              <span className={priceColorClass((cmpPnl(r) ?? 0) / 100)}>
+                                {fmtPct((cmpPnl(r) ?? 0) / 100)}
                               </span>
                             </td>
                             <td className="py-2 text-right font-mono tabular">

@@ -868,3 +868,17 @@ def test_close_resets_client():
     p = _provider(fake)
     p.close()
     assert p._client is None
+
+
+def test_get_realtime_indices_reverses_shanghai_alias():
+    """请求 000001.SH 时向 TDX 发送 999999.SH, 返回记录必须逆映射回 000001.SH。"""
+    fake = _FakeClient()
+    fake.snapshot_results.append({
+        "999999.SH": _snap_row(Now="3250.50", LastClose="3230.00", Open="3240.00", Max="3260.00", Min="3235.00"),
+    })
+    p = _provider(fake)
+    records = p.get_realtime_indices(["000001.SH"])
+    assert fake.snapshot_calls == [["999999.SH"]]
+    assert records is not None and len(records) == 1
+    assert records[0]["symbol"] == "000001.SH"
+    assert records[0]["last_price"] == 3250.5

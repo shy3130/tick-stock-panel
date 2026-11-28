@@ -734,7 +734,9 @@ class BacktestEngine:
         symbols: list[str],
         dates_needed: set,
         asset_type: str,
-        *, evidence=None,
+        *,
+        evidence=None,
+        raw_prices: bool = False,
     ) -> dict:
         """按触发日加载分钟K, 返回 {(symbol, date_str): float64 2D ndarray}。
 
@@ -759,7 +761,13 @@ class BacktestEngine:
         numeric_cols = BacktestEngine._MINUTE_NUMERIC_COLS
         from app.services.minute_adjust import MinutePriceBasisError
 
-        reader = getattr(repo, "get_minute_for_backtest", None) or repo.get_minute_by_dates
+        # 仅在矩阵携带 price_scale (hfq/dynamic) 时读取原始成交价分钟K;
+        # 默认前复权 (price_scale is None) 必须读前复权分钟K, 保持与日线 OHLC / reference_price 同基准。
+        reader = (
+            getattr(repo, "get_minute_for_backtest", None) or repo.get_minute_by_dates
+            if raw_prices
+            else repo.get_minute_by_dates
+        )
         for i in range(0, len(date_objs), BATCH):
             batch = date_objs[i:i + BATCH]
             try:
@@ -791,12 +799,13 @@ class BacktestEngine:
     def _execution(self) -> LegacySimulator:
         # The host owns minute I/O and evidence; the simulator sees only arrays.
         return LegacySimulator(
-            minute_loader=lambda symbols, dates, asset_type: self._load_minute_for_fills(
+            minute_loader=lambda symbols, dates, asset_type, *, raw_prices=False: self._load_minute_for_fills(
                 self.repo,
                 symbols,
                 dates,
                 asset_type,
                 evidence=self._evidence,
+                raw_prices=raw_prices,
             )
         )
 

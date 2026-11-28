@@ -1140,7 +1140,7 @@ class StrategyBacktestService:
                 int(visible_ids[0]),
                 int(visible_ids[-1]) + 1,
             )
-            if first.price_basis == "hfq":
+            if first.price_basis == "hfq" and LEGACY_PRICE_SCALE not in market_data.fields:
                 market_data = BackwardAdjustment(
                     self.engine.repo.store.data_dir, first.asset_type,
                 ).matrix(market_data)

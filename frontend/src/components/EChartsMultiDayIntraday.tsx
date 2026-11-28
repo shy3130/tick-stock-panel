@@ -4,7 +4,7 @@ import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow, MinuteKlineSession } from '@/lib/api'
 import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES } from '@/lib/intraday-chart'
 import { useChartTheme } from '@/lib/theme'
-import { pricePrecision } from '@/lib/format'
+import { fmtBigNum, pricePrecision } from '@/lib/format'
 import { intradayScale } from '@/lib/intraday-scale'
 
 const COLORS = {
@@ -32,12 +32,7 @@ interface InfoPoint {
   prevClose: number | null
 }
 
-function formatAmount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}亿`
-  if (value >= 10_000) return `${(value / 10_000).toFixed(0)}万`
-  return value.toFixed(0)
-}
+const formatAmount = fmtBigNum
 
 function priceColor(close: number, prevClose: number | null): string {
   if (prevClose == null || close === prevClose) return COLORS.flat

@@ -65,6 +65,7 @@ _BEIJING = ZoneInfo("Asia/Shanghai")
 
 # 内部指数代码 → TDX 快照代码(实测 2026-10: 上证指数走 TDX 999999 别名)
 _INDEX_CODE_MAP = {"000001.SH": "999999.SH"}
+_INDEX_REVERSE_MAP = {v: k for k, v in _INDEX_CODE_MAP.items()}
 
 _DAILY_SCHEMA = {
     "symbol": pl.String, "date": pl.Date,
@@ -587,7 +588,8 @@ class TdxQuantProvider:
         fallback_ms = int(time.time() * 1000)
         records = []
         for code, row in rows.items():
-            rec = _map_snapshot_row(code, row, fallback_ms)
+            canonical_code = _INDEX_REVERSE_MAP.get(code, code)
+            rec = _map_snapshot_row(canonical_code, row, fallback_ms)
             if rec is not None:
                 records.append(rec)
         logger.info("TdxQuant 指数行情拉取完成: %d 条(请求 %d 只)", len(records), len(wanted))

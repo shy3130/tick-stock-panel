@@ -1190,11 +1190,11 @@ class StrategyEngine:
         limit = self._result_limit(s, overrides)
         order_desc = s.meta.get("descending", True)
         if "score" in df.columns:
-            df = df.sort("score", descending=order_desc)
+            df = df.sort("score", descending=order_desc, nulls_last=True)
         elif s.meta.get("order_by") and s.meta["order_by"] != "score":
             ob = s.meta["order_by"]
             if ob in df.columns:
-                df = df.sort(ob, descending=order_desc)
+                df = df.sort(ob, descending=order_desc, nulls_last=True)
         if limit is not None:
             df = df.head(limit)
 
@@ -1634,9 +1634,11 @@ class StrategyEngine:
                 continue
             score = float(signals.score[target_time, int(asset_id)])
             ranked.append((score, {**row, "score": score}))
+        # build_matrix_score 已将 descending=False / SCORING_DIRECTION_LOW 统一折算为
+        # 「分值越高越优」口径, 此处固定降序排列 (非有限值恒垫底), 避免对升序策略二次反转。
         ranked.sort(
-            key=lambda item: item[0],
-            reverse=bool(strategy.meta.get("descending", True)),
+            key=lambda item: (bool(np.isfinite(item[0])), item[0] if np.isfinite(item[0]) else 0.0),
+            reverse=True,
         )
         limit = self._result_limit(strategy, overrides)
         selected_rows = ranked if limit is None else ranked[:limit]

@@ -145,10 +145,17 @@ def overview(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
     acc = paper.get_account(data_dir, acc_id)
     if acc is None:
         return {"initialized": False, "account_id": acc_id}
-    ov = paper.overview(data_dir, account_id=acc_id)
+    positions = paper.load_positions(data_dir, acc_id)
+    held_pairs = [
+        (sym, pos.get("asset_type", "stock"))
+        for sym, pos in positions.items()
+        if pos.get("qty", 0) > 0
+    ]
+    close_prices = paper.latest_close_prices(data_dir, held_pairs) if held_pairs else {}
+    ov = paper.overview(data_dir, close_prices, account_id=acc_id, estimating=False)
     ov["fees"] = {k: acc[k] for k in ("commission_pct", "stamp_tax_pct", "slippage_bps")}
 
-    # 盘中实时估算: 从行情服务的当日 enriched 快照取 raw_close (软失败, 降级日线)
+    # 盘中实时估算: 从行情服务的当日 enriched 快照取 raw_close (缺标的回退最近收盘价, 软失败降级日线)
     qs = getattr(request.app.state, "quote_service", None)
     if qs is not None and acc.get("status") == "active":
         try:
@@ -156,7 +163,7 @@ def overview(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
             from app.market_time import cn_today
             if not enriched.is_empty() and enriched_date == cn_today() and ov.get("holdings"):
                 snapshot = dict(zip(enriched["symbol"].to_list(), enriched["raw_close"].to_list(), strict=False))
-                live = paper.overview(data_dir, snapshot, account_id=acc_id)
+                live = paper.overview(data_dir, {**close_prices, **snapshot}, account_id=acc_id, estimating=True)
                 live["fees"] = ov["fees"]
                 return live
         except Exception as e:
@@ -210,7 +217,15 @@ def list_trades(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)
 @router.get("/positions")
 def list_positions(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
     data_dir = _data_dir(request)
-    ov = paper.overview(data_dir, account_id=_acc(request, account))
+    acc_id = _acc(request, account)
+    positions = paper.load_positions(data_dir, acc_id)
+    held_pairs = [
+        (sym, pos.get("asset_type", "stock"))
+        for sym, pos in positions.items()
+        if pos.get("qty", 0) > 0
+    ]
+    close_prices = paper.latest_close_prices(data_dir, held_pairs) if held_pairs else {}
+    ov = paper.overview(data_dir, close_prices, account_id=acc_id, estimating=False)
     return {"holdings": ov.get("holdings", []), "initialized": ov.get("initialized", False)}
 
 
@@ -257,12 +272,23 @@ def compare_accounts(request: Request):
         except Exception as e:  # noqa: BLE001 — 快照来源不定 (行情服务/数据缺失), 软失败降级定版口径
             logger.warning("paper compare 实时快照不可用, 用定版口径: %s", e)
 
-    rows = []
+    # 先汇总全部账户持仓标的并集, 每类资产只扫一次日K取最近收盘价 (定版口径, 避免逐账户扫盘)
+    active_accounts: list[tuple[str, dict]] = []
+    union_holdings: dict[str, str] = {}
     for acc_id in paper.list_account_ids(data_dir):
         acc = paper.get_account(data_dir, acc_id)
         if acc is None:
             continue
-        ov = paper.overview(data_dir, account_id=acc_id)
+        active_accounts.append((acc_id, acc))
+        for sym, pos in paper.load_positions(data_dir, acc_id).items():
+            if pos.get("qty", 0) > 0 and sym not in union_holdings:
+                union_holdings[sym] = pos.get("asset_type", "stock")
+    close_prices = paper.latest_close_prices(data_dir, union_holdings) if union_holdings else {}
+    merged_live = {**close_prices, **live_snapshot} if live_snapshot is not None else None
+
+    rows = []
+    for acc_id, acc in active_accounts:
+        ov = paper.overview(data_dir, close_prices, account_id=acc_id, estimating=False)
         if not ov.get("initialized"):
             continue  # 空壳目录 (懒创建) 不进对比
         st = paper.stats(data_dir, acc_id)
@@ -274,8 +300,8 @@ def compare_accounts(request: Request):
         rules = paper_auto.load_auto_rules(data_dir, acc_id)
         # 盘中估算字段 (加法扩展): live_* 为快照价口径, 旧前端忽略不影响
         live_total = live_pnl_pct = None
-        if live_snapshot is not None and acc.get("status") == "active":
-            live_ov = paper.overview(data_dir, live_snapshot, account_id=acc_id)
+        if merged_live is not None and acc.get("status") == "active":
+            live_ov = paper.overview(data_dir, merged_live, account_id=acc_id, estimating=True)
             if live_ov.get("initialized"):
                 live_total = live_ov.get("total")
                 if initial > 0:

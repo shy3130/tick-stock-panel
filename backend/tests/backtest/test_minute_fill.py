@@ -304,3 +304,28 @@ def test_polars_panel_minute_fill_independent_of_current_close():
         fills[c5] = result.trades[0].entry_price
     assert fills[10.6] == pytest.approx(fills[9.6])
     assert fills[10.6] == pytest.approx(10.0)
+
+
+def test_load_minute_for_fills_selects_reader_by_price_basis():
+    """qfq (raw_prices=False) 必须走 get_minute_by_dates, hfq/dynamic (raw_prices=True) 才走 get_minute_for_backtest。"""
+    qfq_df = _sample_minute_df()
+    raw_df = qfq_df.with_columns((pl.col(c) * 2.0).alias(c) for c in ("open", "high", "low", "close"))
+    calls: list[str] = []
+
+    class _DualBasisRepo:
+        def get_minute_by_dates(self, symbols, dates, asset_type="stock"):
+            calls.append("qfq")
+            return qfq_df
+
+        def get_minute_for_backtest(self, symbols, dates, asset_type="stock"):
+            calls.append("raw")
+            return raw_df
+
+    repo = _DualBasisRepo()
+    qfq_out = BacktestEngine._load_minute_for_fills(repo, ["000001.SZ"], {"2024-01-02"}, "stock")
+    raw_out = BacktestEngine._load_minute_for_fills(
+        repo, ["000001.SZ"], {"2024-01-02"}, "stock", raw_prices=True,
+    )
+    assert calls == ["qfq", "raw"]
+    assert qfq_out[("000001.SZ", "2024-01-02")][0, 0] == pytest.approx(10.0)
+    assert raw_out[("000001.SZ", "2024-01-02")][0, 0] == pytest.approx(20.0)

@@ -4,7 +4,7 @@ import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
 import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES, summarizeMinutes, getLimitPrices, type DailySummary } from '@/lib/intraday-chart'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
-import { pricePrecision } from '@/lib/format'
+import { fmtBigNum, pricePrecision } from '@/lib/format'
 import { intradayScale } from '@/lib/intraday-scale'
 
 type YMode = 'adaptive' | 'limit'
@@ -34,12 +34,7 @@ interface Props {
   showAvgLine?: boolean
 }
 
-function fmtAmt(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return '—'
-  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)}亿`
-  if (v >= 10_000) return `${(v / 10_000).toFixed(0)}万`
-  return v.toFixed(0)
-}
+const fmtAmt = fmtBigNum
 
 function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0

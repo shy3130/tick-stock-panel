@@ -51,9 +51,11 @@ def apply_historical_float_shares(
             return pl.col(column).str.to_date(strict=False)
         return pl.col(column).cast(pl.Date, strict=False)
 
-    available_date = as_date_expr("period_end")
-    if "announce_date" in shares.columns:
-        available_date = as_date_expr("announce_date").fill_null(available_date)
+    # 严格按公告日生效 (CONTRIBUTING §3.4): 缺失 announce_date 不可回退到 period_end,
+    # 否则年报 12-31 会在次年 3-4 月公告前提前生效造成未来函数。
+    if "announce_date" not in shares.columns:
+        return rows
+    available_date = as_date_expr("announce_date")
 
     history = (
         shares

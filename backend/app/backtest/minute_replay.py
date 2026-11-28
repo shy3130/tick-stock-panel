@@ -72,16 +72,20 @@ def minute_panel_start(start: date, daily_bars: int) -> date:
 def _trigger_hhmm(value) -> str:
     """从 last_datetime 提取北京时间 "HH:MM" 触发分钟。
 
-    分区 datetime 为 UTC 存储 (tz-aware 或 naive-UTC), 统一折算到北京时区。
+    按 CONTRIBUTING §3.3 契约, 分钟分区 datetime 为北京墙钟 naive (09:15–15:05);
+    tz-aware 按北京时区折算; 若遇到旧版 naive-UTC (00:00–07:59, A 股北京交易时段
+    不可能出现的窗口) 则兼容折算 +8h, 避免把正常北京墙钟误加 8 小时。
     """
     from app.market_time import CN_TZ
 
     if hasattr(value, "astimezone"):
-        if value.tzinfo is None:
-            from datetime import timezone
+        if value.tzinfo is not None:
+            return value.astimezone(CN_TZ).strftime("%H:%M")
+        if 0 <= value.hour <= 7:
+            from datetime import UTC
 
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(CN_TZ).strftime("%H:%M")
+            return value.replace(tzinfo=UTC).astimezone(CN_TZ).strftime("%H:%M")
+        return value.strftime("%H:%M")
     text = str(value or "")
     if len(text) >= 16 and text[13] == ":":
         return text[11:16]

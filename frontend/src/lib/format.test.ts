@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { cnDateTimeFromUtc, fmtAssetPrice, fmtPrice, fmtPct, roundPriceToTick } from './format'
+import { cnDateTimeFromUtc, fmtAssetPrice, fmtBigNum, fmtPrice, fmtPct, roundPriceToTick } from './format'
 import { getLimitPrices } from './intraday-chart'
 
 describe('价格按资产类型保留交易精度', () => {
@@ -55,6 +55,24 @@ describe('cnDateTimeFromUtc: naive UTC 串 → 北京时间', () => {
   it('空值与非法值返回空串 (不抛异常、不产生 Invalid Date)', () => {
     for (const v of ['', '   ', null, undefined, 'garbage', 'not-a-date']) {
       expect(cnDateTimeFromUtc(v)).toBe('')
+    }
+  })
+})
+
+describe('fmtBigNum: 成交额万/亿/万亿换算与负数/非法值保护', () => {
+  it('1 亿按 1e8 换算而非 1e9', () => {
+    expect(fmtBigNum(150_000_000)).toBe('1.50亿')
+    expect(fmtBigNum(1_500_000_000)).toBe('15.00亿')
+    expect(fmtBigNum(1_250_000_000_000)).toBe('1.25万亿')
+    expect(fmtBigNum(500_000)).toBe('50万')
+    expect(fmtBigNum(999)).toBe('999')
+  })
+
+  it('负数与非有限数正确处理', () => {
+    expect(fmtBigNum(-250_000_000)).toBe('-2.50亿')
+    expect(fmtBigNum(-35_000)).toBe('-4万')
+    for (const v of [null, undefined, NaN, Infinity, -Infinity]) {
+      expect(fmtBigNum(v)).toBe('—')
     }
   })
 })
