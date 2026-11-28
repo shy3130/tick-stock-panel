@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Save, Loader2, Check, Wifi, Eye, EyeOff, Shield, SlidersHorizontal,
   Shuffle, ExternalLink, Trash2, FileCog, RefreshCw,
-  Terminal, ChevronDown, Sparkles, Waves, Cloud, Gem, Moon, Layers,
+  Terminal, ChevronDown, Sparkles, Waves, Cloud, Gem, Layers, Zap,
 } from 'lucide-react'
 import { useSettings } from '@/lib/useSharedQueries'
 import { api, type SettingsState, type SponsorModelItem } from '@/lib/api'
@@ -143,10 +143,20 @@ const PRESETS: AiPreset[] = [
     icon: Layers,
   },
   { label: 'RunningHub', url: 'https://llm.runninghub.ai/v1', model: 'openai/gpt-6-astra-saver', website: 'https://www.runninghub.ai/zh-cn/call-api/llm/models?source=github&inviteCode=edt5wh7c', websiteLabel: 'www.runninghub.ai · 赞助', sponsor: true, modelCatalog: 'runninghub', icon: Sparkles, description: <RunningHubIntro /> },
+  {
+    label: 'x6.ai',
+    url: 'https://api.x6.ai/v1',
+    model: 'openai/gpt-6.2-sol-discount',
+    protocol: 'chat_completions',
+    website: 'https://console.x6.ai/register?code=tuSkEebA',
+    websiteLabel: '专属链接注册 · 领 8 折、9 折优惠券',
+    sponsor: true,
+    description: '合作伙伴 · 一个 API Key 通过 OpenAI 兼容接口接入 Claude、GPT、Gemini、Grok 等模型。请填写 x6.ai API Key，并按 Key 的可用范围选择模型。',
+    icon: Zap,
+  },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。', icon: Waves },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。', icon: Cloud },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。', icon: Gem },
-  { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。', icon: Moon },
   { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。', icon: Terminal },
 ]
 
