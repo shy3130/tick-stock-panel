@@ -35,6 +35,7 @@ def _apply_position_policy(
     peak: float,
     open_positions: int,
     execution_stats: dict,
+    total_candidates: int = 0,
 ) -> tuple[np.ndarray, float]:
     """自定义仓位策略 → (候选权重, 总预算缩放)。矩阵/legacy 两路径共用。
 
@@ -77,6 +78,7 @@ def _apply_position_policy(
                 open_positions=int(open_positions),
             ),
             params=dict(config.position_policy_params or {}),
+            total_candidates=int(total_candidates) if total_candidates > 0 else n,
         )
         weights, scale = normalize_result(compute(ctx), n)
         return np.asarray(weights, dtype=np.float64), scale
@@ -170,6 +172,7 @@ class TradeRecord:
     # 仅当该腿由信号触发时填充, 止损/止盈/到期等非信号退出时 exit_signal_id 为 None。
     entry_signal_id: str | None = None
     exit_signal_id: str | None = None
+    total_candidates: int | None = None
 
 
 @dataclass
@@ -1178,6 +1181,7 @@ class LegacySimulator:
                     exit_signal_id=_resolve_signal_id(panel, idx, exit_signal_ids)
                     if reason == "signal"
                     else None,
+                    total_candidates=pos.get("total_candidates"),
                 )
             )
             return True
@@ -1661,6 +1665,7 @@ class LegacySimulator:
                     )
                     if reason == "signal"
                     else None,
+                    total_candidates=pos.get("total_candidates"),
                 )
             )
 
@@ -1794,8 +1799,10 @@ class LegacySimulator:
                     _try_sell(time_id, asset_id, reason, signal_date, sold_today)
 
             if time_id < time_count - 1 and max_positions > 0:
+                raw_entry_ids = np.flatnonzero(matrix.entry[time_id])
+                total_candidates = int(raw_entry_ids.size)
                 candidates: list[tuple[int, float]] = []
-                for asset_id in np.flatnonzero(matrix.entry[time_id]):
+                for asset_id in raw_entry_ids:
                     asset = int(asset_id)
                     if asset in positions:
                         continue
@@ -1861,6 +1868,7 @@ class LegacySimulator:
                                 peak,
                                 len(positions),
                                 execution_stats,
+                                total_candidates=total_candidates,
                             )
                         total_budget = min(cash, exposure_capacity, target_value * len(selected))
                         if policy_scale < 1.0:
@@ -1923,6 +1931,7 @@ class LegacySimulator:
                                 if equity_before > 0
                                 else 0.0,
                                 "entry_score": entry_score,
+                                "total_candidates": total_candidates,
                                 "max_high": entry_price,
                                 "hold_days": 0,
                                 "pending_exit_reason": None,
@@ -2367,6 +2376,7 @@ class LegacySimulator:
                     exit_signal_id=_resolve_signal_id(panel, idx, exit_signal_ids)
                     if reason == "signal"
                     else None,
+                    total_candidates=pos.get("total_candidates"),
                 )
             )
 
@@ -2489,6 +2499,7 @@ class LegacySimulator:
             nonlocal cash
             if max_positions <= 0:
                 return
+            total_candidates = sum(1 for idx in idxs if ent[idx])
             candidates: list[tuple[int, str, float]] = []
             for idx in idxs:
                 if not ent[idx]:
@@ -2560,6 +2571,7 @@ class LegacySimulator:
                     peak,
                     len(positions),
                     execution_stats,
+                    total_candidates=total_candidates,
                 )
             total_budget = min(cash, exposure_capacity, target_position_value * len(selected))
             if policy_scale < 1.0:
@@ -2609,6 +2621,7 @@ class LegacySimulator:
                     if account_equity_before_buy > 0
                     else 0.0,
                     "entry_score": _score,
+                    "total_candidates": total_candidates,
                     "max_high": entry_price,
                     "hold_days": 0,
                     "pending_exit_reason": None,

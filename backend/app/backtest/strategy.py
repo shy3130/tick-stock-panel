@@ -1757,6 +1757,8 @@ class StrategyBacktestService:
                              "phase": "dynamic_signals"})
 
         position_policy_compute, position_policy_params = _resolve_position_policy(config)
+        if config.position_sizing == "policy" and position_policy_params is not None:
+            config = replace(config, position_policy_params=position_policy_params)
         matcher_config = MatcherConfig(
             matching=config.matching,
             entry_fill=config.entry_fill,
@@ -2479,6 +2481,8 @@ class StrategyBacktestService:
         )
 
         position_policy_compute, position_policy_params = _resolve_position_policy(config)
+        if config.position_sizing == "policy" and position_policy_params is not None:
+            config = replace(config, position_policy_params=position_policy_params)
         matcher_config = MatcherConfig(
             matching=config.matching,
             entry_fill="close_t",
@@ -3217,6 +3221,7 @@ class StrategyBacktestService:
             "blocked_exit_days": getattr(t, "blocked_exit_days", 0),
             "entry_signal_id": getattr(t, "entry_signal_id", None),
             "exit_signal_id": getattr(t, "exit_signal_id", None),
+            "total_candidates": getattr(t, "total_candidates", None),
         }
 
     @staticmethod

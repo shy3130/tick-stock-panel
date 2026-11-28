@@ -1971,6 +1971,7 @@ export interface StrategyBacktestTrade {
   exit_price: number
   pnl_pct: number
   duration: number
+  total_candidates?: number | null
   exit_reason: string
   shares?: number
   lots?: number

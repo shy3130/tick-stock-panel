@@ -192,3 +192,33 @@ def test_missing_policy_compute_behaves_as_equal() -> None:
     pcts = {t.symbol: t.position_pct for t in result.trades}
     assert pcts["A"] == pytest.approx(0.5, abs=1e-3)
     assert pcts["B"] == pytest.approx(0.5, abs=1e-3)
+
+
+def test_total_candidates_untruncated_and_recorded_on_both_paths() -> None:
+    """ctx.total_candidates 传递当日完整信号数 (截断前), 且矩阵/legacy 均写入 TradeRecord。"""
+    seen: list[tuple[int, int]] = []
+
+    def compute(ctx):
+        seen.append((len(ctx.selected), ctx.total_candidates))
+        n = len(ctx.selected)
+        return PositionSizingResult(
+            weights=[1.0 / n] * n,
+            budget_scale=1.0 if ctx.total_candidates >= 4 else 0.5,
+        )
+
+    panel = _panel(["A", "B", "C", "D"], days=4)
+    entries = _mask(panel, {("A", 0), ("B", 0), ("C", 0), ("D", 0)})
+    exits = _mask(panel, set())
+    cfg = _config(compute)
+    engine = _engine()
+
+    seen.clear()
+    matrix_res = engine.simulate_portfolio(panel, entries, exits, cfg)
+    assert seen == [(2, 4)]
+    assert len(matrix_res.trades) == 2
+    assert all(t.total_candidates == 4 for t in matrix_res.trades)
+
+    seen.clear()
+    legacy_res = engine.simulate_portfolio_legacy(panel, entries, exits, cfg)
+    assert seen == [(2, 4)]
+    assert [asdict(t) for t in matrix_res.trades] == [asdict(t) for t in legacy_res.trades]

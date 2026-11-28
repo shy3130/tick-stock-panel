@@ -78,6 +78,7 @@ class PositionSizingContext:
     closed_trades: tuple[TradeSnapshot, ...]
     portfolio: PortfolioState
     params: Mapping[str, Any]
+    total_candidates: int = 0  # 当日全市场通过基础+环境+策略过滤的完整信号总数 (截断前)
     api_version: int = API_VERSION
 
 
@@ -168,6 +169,7 @@ def synthetic_context(n_candidates: int = 3) -> PositionSizingContext:
         closed_trades=trades,
         portfolio=PortfolioState(cash=60_000.0, equity=100_000.0, drawdown=-0.05, open_positions=4),
         params={},
+        total_candidates=n_candidates,
     )
 
 

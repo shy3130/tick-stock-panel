@@ -1477,11 +1477,12 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed, snapshotInput 
     }
 
     lines.push('', '# 交易明细',
-      'symbol,name,entry_date,entry_price,exit_date,exit_price,pnl_pct,duration,exit_reason,shares,entry_value,exit_value,pnl_amount')
+      'symbol,name,entry_date,entry_price,exit_date,exit_price,pnl_pct,duration,exit_reason,shares,entry_value,exit_value,pnl_amount,total_candidates')
     for (const t of result.trades ?? []) {
       lines.push([t.symbol, t.name ?? '', t.entry_date, num(t.entry_price), t.exit_date,
         num(t.exit_price), num(t.pnl_pct), num(t.duration), t.exit_reason ?? '',
-        num(t.shares), num(t.entry_value), num(t.exit_value), num(t.pnl_amount)].map(csvEsc).join(','))
+        num(t.shares), num(t.entry_value), num(t.exit_value), num(t.pnl_amount),
+        t.total_candidates ?? ''].map(csvEsc).join(','))
     }
 
     lines.push('', '# 分标的统计', 'symbol,n_trades,total_return,win_rate,best,worst')
