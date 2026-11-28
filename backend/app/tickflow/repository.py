@@ -37,7 +37,7 @@ from app.enriched_generation import (
     get_enriched_generation_snapshot,
 )
 from app.market_time import CN_TZ, cn_today
-from app.parquet import parquet_glob, scan_enriched_parquet
+from app.parquet import ENRICHED_STORAGE_SCHEMA, parquet_glob, scan_enriched_parquet
 from app.polars_guard import guarded_collect
 from app.services.minute_adjust import apply_minute_adjustment, minute_basis_is_raw
 from app.startup_diagnostics import startup_phase
@@ -1587,41 +1587,51 @@ class KlineRepository:
         from datetime import timedelta
         self._assert_daily_usable(symbols=[symbol], end=end)
 
-        # 快路径: 请求的列全是 parquet 直接存储的列 (如迷你蜡烛图只要 OHLCV) →
-        # scan + 列下推直接返回, 跳过 warmup(150天) 与 _compute_enriched_range 全套指标计算。
-        # 仍用 enriched_latest 缓存覆盖最新日 (盘中更准), 只保留请求列。
-        # 试探 scan 仅读请求的列; 缺列时回退到下方完整计算路径 (代价仅一次轻量 scan)。
-        if columns:
-            df = self._scan_daily_symbol(symbol, start, end, columns)
-            if not df.is_empty() and all(c in df.columns for c in columns):
-                cached, cache_date = self.get_enriched_latest(symbols=[symbol], end=end)
-                if cached is not None and not cached.is_empty() and cache_date:
-                    if start <= cache_date <= end:
-                        cached_part = self._filter_cached(cached, symbol, columns)
-                        if not cached_part.is_empty():
-                            df = df.filter(pl.col("date") != cache_date)
-                            common_cols = [c for c in df.columns if c in cached_part.columns]
-                            df = pl.concat([df.select(common_cols), cached_part.select(common_cols)])
-                return df
-
-        # 扩展范围用于指标预热 (MA60 需要 ~60 交易日 ≈ 120 日历日)
-        warmup_start = start - timedelta(days=150)
-
         # 优先复用预计算 enriched 历史缓存 (300 天全指标, 与回测引擎同源):
-        # 个股对话框打开时本接口每个行情 tick 被调一次, 逐请求 150 天扫描 + 全套
-        # 指标重算是热路径上最大的重复计算。缓存最新日可能不含当日实时行,
-        # 由下方 get_enriched_latest 覆盖逻辑补齐; 覆盖不足时回退单股计算路径。
+        # 个股对话框打开时本接口每个行情 tick 被调一次, 且 /minute 昨收与指标预热也带
+        # columns 投影查询; 只要请求区间与列都在内存缓存覆盖内, 优先内存裁剪免整树扫描。
         df = pl.DataFrame()
         hist = self._enriched_history_cache
         if hist is not None and not hist.is_empty() and "date" in hist.columns:
             hist_min = self._enriched_history_start
             hist_max = hist["date"].max()
-            if hist_min is not None and hist_min <= start and hist_max >= start:
+            if (
+                hist_min is not None
+                and hist_min <= start
+                and hist_max >= start
+                and (not columns or all(c in hist.columns for c in columns))
+            ):
                 df = hist.filter(
                     (pl.col("symbol") == symbol)
                     & (pl.col("date") >= start)
                     & (pl.col("date") <= end)
                 )
+
+        # 缓存未覆盖时的列投影快路径: 请求的列全是 parquet 直接存储的列 (如迷你蜡烛图/
+        # 昨收/指标预热只要 OHLCV) → 分区裁剪 scan + 列下推直接返回, 跳过 warmup(150天)
+        # 与 _compute_enriched_range 全套指标计算; 缺列时回退到下方完整计算路径。
+        if df.is_empty() and columns and all(c in ENRICHED_STORAGE_SCHEMA for c in columns):
+            scan_cols = list(columns) if "date" in columns else ["date", *columns]
+            df = self._scan_daily_symbol(symbol, start, end, scan_cols)
+            if not df.is_empty() and all(c in df.columns for c in scan_cols):
+                cached, cache_date = self.get_enriched_latest(symbols=[symbol], end=end)
+                if (
+                    cached is not None
+                    and not cached.is_empty()
+                    and cache_date
+                    and start <= cache_date <= end
+                ):
+                    cached_part = self._filter_cached(cached, symbol, scan_cols)
+                    if not cached_part.is_empty():
+                        df = df.filter(pl.col("date") != cache_date)
+                        common_cols = [c for c in df.columns if c in cached_part.columns]
+                        df = pl.concat([df.select(common_cols), cached_part.select(common_cols)]).sort("date")
+                return df.select(list(columns))
+            df = pl.DataFrame()
+
+        # 扩展范围用于指标预热 (MA60 需要 ~60 交易日 ≈ 120 日历日)
+        warmup_start = start - timedelta(days=150)
+
         if df.is_empty():
             # 扫描14列 parquet
             df = self._scan_daily_symbol(symbol, warmup_start, end, None)
@@ -1934,7 +1944,13 @@ class KlineRepository:
         if not symbols:
             return pl.DataFrame()
         try:
-            lf = pl.scan_parquet(self._minute_glob_for(asset_type))
+            parts = self._date_partition_files(self._minute_dir_for(asset_type), start, end)
+            if parts is not None:
+                if not parts:
+                    return pl.DataFrame()
+                lf = pl.scan_parquet(parts, glob=False)
+            else:
+                lf = pl.scan_parquet(self._minute_glob_for(asset_type))
             available = set(lf.collect_schema().names())
             select_cols = [c for c in ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"] if c in available]
             df = guarded_collect(
@@ -2067,17 +2083,88 @@ class KlineRepository:
             df = df.select(existing)
         return df.sort(["symbol", "date"])
 
+    @staticmethod
+    def _date_partition_files(directory: Path | None, start: date, end: date) -> list[str] | None:
+        """列出目录内落在 [start, end] 的 date=YYYY-MM-DD 分区 parquet 文件。
+
+        返回 None 表示目录不存在或含非 date= 旧布局 (如 symbol= 分区/根平铺 parquet)，
+        调用方回退到全树 glob 扫描。返回空列表表示纯按日分区目录在该区间内无文件。
+        """
+        if directory is None or not directory.exists():
+            return None
+        start_s = start.isoformat()
+        end_s = end.isoformat()
+        matched_dirs: list[tuple[str, str]] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
+                    if entry.is_dir():
+                        if not name.startswith("date="):
+                            return None
+                        day_str = name[5:]
+                        if len(day_str) != 10 or day_str[4] != "-" or day_str[7] != "-":
+                            return None
+                        if start_s <= day_str <= end_s:
+                            matched_dirs.append((day_str, entry.path))
+                    elif name.endswith(".parquet"):
+                        return None
+        except OSError:
+            return None
+        matched_dirs.sort(key=lambda item: item[0])
+        files: list[str] = []
+        for _, part_dir in matched_dirs:
+            try:
+                with os.scandir(part_dir) as sub:
+                    part_files = [
+                        f.path for f in sub
+                        if f.name.endswith(".parquet") and f.is_file()
+                    ]
+                part_files.sort()
+                files.extend(part_files)
+            except OSError:
+                return None
+        return files
+
+    def _enriched_source_for_range(self, dirname: str, fallback_glob: str, start: date, end: date) -> tuple[str | list[str], bool] | None:
+        """为按日分区 enriched 表解析 [start, end] 的扫描源 (source, use_glob)。
+
+        返回 None 表示区间内无分区文件，调用方直接返回空表。
+        """
+        store = getattr(self, "store", None)
+        data_dir = getattr(store, "data_dir", None)
+        if data_dir is not None:
+            files = self._date_partition_files(data_dir / dirname, start, end)
+            if files is not None:
+                if not files:
+                    return None
+                return files, False
+        return fallback_glob, True
+
     def _scan_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = scan_enriched_parquet(self._enriched_glob,
-                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
+            existing: list[str] | None = None
+            if columns:
+                existing = [c for c in columns if c in ENRICHED_STORAGE_SCHEMA]
+                if not existing:
+                    return pl.DataFrame()
+            resolved = self._enriched_source_for_range("kline_daily_enriched", self._enriched_glob, start, end)
+            if resolved is None:
+                return pl.DataFrame()
+            source, use_glob = resolved
+            lf = scan_enriched_parquet(
+                source,
+                glob=use_glob,
+                hive_partitioning=True,
+                cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            ).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
                 & (pl.col("date") <= end)
             ).sort("date")
-            if columns:
-                schema_names = lf.collect_schema().names()
-                existing = [c for c in columns if c in schema_names]
+            if existing:
                 lf = lf.select(existing)
             return guarded_collect(lf)
         except Exception as e:  # noqa: BLE001
@@ -2086,15 +2173,26 @@ class KlineRepository:
 
     def _scan_daily_batch(self, symbols: list[str], start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = scan_enriched_parquet(self._enriched_glob,
-                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
+            existing: list[str] | None = None
+            if columns:
+                existing = [c for c in columns if c in ENRICHED_STORAGE_SCHEMA]
+                if not existing:
+                    return pl.DataFrame()
+            resolved = self._enriched_source_for_range("kline_daily_enriched", self._enriched_glob, start, end)
+            if resolved is None:
+                return pl.DataFrame()
+            source, use_glob = resolved
+            lf = scan_enriched_parquet(
+                source,
+                glob=use_glob,
+                hive_partitioning=True,
+                cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            ).filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= start)
                 & (pl.col("date") <= end)
             ).sort(["symbol", "date"])
-            if columns:
-                schema_names = lf.collect_schema().names()
-                existing = [c for c in columns if c in schema_names]
+            if existing:
                 lf = lf.select(existing)
             return guarded_collect(lf)
         except Exception as e:  # noqa: BLE001
@@ -2103,15 +2201,26 @@ class KlineRepository:
 
     def _scan_index_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = scan_enriched_parquet(self._index_enriched_glob,
-                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
+            existing: list[str] | None = None
+            if columns:
+                existing = [c for c in columns if c in ENRICHED_STORAGE_SCHEMA]
+                if not existing:
+                    return pl.DataFrame()
+            resolved = self._enriched_source_for_range("kline_index_enriched", self._index_enriched_glob, start, end)
+            if resolved is None:
+                return pl.DataFrame()
+            source, use_glob = resolved
+            lf = scan_enriched_parquet(
+                source,
+                glob=use_glob,
+                hive_partitioning=True,
+                cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            ).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
                 & (pl.col("date") <= end)
             ).sort("date")
-            if columns:
-                schema_names = lf.collect_schema().names()
-                existing = [c for c in columns if c in schema_names]
+            if existing:
                 lf = lf.select(existing)
             return guarded_collect(lf)
         except Exception as e:  # noqa: BLE001
@@ -2120,15 +2229,26 @@ class KlineRepository:
 
     def _scan_etf_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = scan_enriched_parquet(self._etf_enriched_glob,
-                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
+            existing: list[str] | None = None
+            if columns:
+                existing = [c for c in columns if c in ENRICHED_STORAGE_SCHEMA]
+                if not existing:
+                    return pl.DataFrame()
+            resolved = self._enriched_source_for_range("kline_etf_enriched", self._etf_enriched_glob, start, end)
+            if resolved is None:
+                return pl.DataFrame()
+            source, use_glob = resolved
+            lf = scan_enriched_parquet(
+                source,
+                glob=use_glob,
+                hive_partitioning=True,
+                cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            ).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
                 & (pl.col("date") <= end)
             ).sort("date")
-            if columns:
-                schema_names = lf.collect_schema().names()
-                existing = [c for c in columns if c in schema_names]
+            if existing:
                 lf = lf.select(existing)
             return guarded_collect(lf)
         except Exception as e:  # noqa: BLE001
@@ -2174,7 +2294,59 @@ class KlineRepository:
     # DuckDB 查询 (冷路径: 统计/元数据/自定义SQL)
     # ================================================================
 
+    @staticmethod
+    def _scan_date_partition_dirs(directory: Path | None) -> list[tuple[date, str]] | None:
+        """返回纯按日分区目录内所有 (date, dir_path) 列表(降序); 遇非 date= 旧布局返回 None。"""
+        if directory is None or not directory.exists():
+            return None
+        days: list[tuple[date, str]] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
+                    if entry.is_dir():
+                        if not name.startswith("date="):
+                            return None
+                        try:
+                            day = date.fromisoformat(name[5:])
+                        except ValueError:
+                            return None
+                        days.append((day, entry.path))
+                    elif name.endswith(".parquet"):
+                        return None
+        except OSError:
+            return None
+        days.sort(key=lambda item: item[0], reverse=True)
+        return days
+
     def latest_minute_date(self, symbol: str, asset_type: str = "stock") -> date | None:
+        # 优先按最新日期目录倒序探查最近 5 个分区 (活跃股首分区即命中, ~2ms);
+        # 长期停牌/旧 symbol= 布局回退 DuckDB 视图扫描。
+        store = getattr(self, "store", None)
+        if getattr(store, "data_dir", None) is not None:
+            dirs = self._scan_date_partition_dirs(self._minute_dir_for(asset_type))
+            if dirs is not None:
+                if not dirs:
+                    return None
+                for day, part_dir in dirs[:5]:
+                    try:
+                        with os.scandir(part_dir) as sub:
+                            parts = [f.path for f in sub if f.name.endswith(".parquet") and f.is_file()]
+                        if not parts:
+                            continue
+                        hit = guarded_collect(
+                            pl.scan_parquet(parts, glob=False)
+                            .select("symbol")
+                            .filter(pl.col("symbol") == symbol)
+                            .limit(1)
+                        )
+                        if not hit.is_empty():
+                            return day
+                    except Exception:  # noqa: BLE001
+                        break
+
         # 注意: 必须走 execute_one (cursor+close)。直连 self.db.execute(...).fetchone()
         # 的未消费结果集会把首个分区 parquet 的句柄钉在共享连接上, Windows 下阻塞
         # 同步写入的 os.replace → 个股分时"补齐数据"500。
@@ -2210,7 +2382,7 @@ class KlineRepository:
             if res and res[0]:
                 d = res[0]
                 return d if isinstance(d, date) else date.fromisoformat(str(d))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
         return None
 
@@ -2223,7 +2395,7 @@ class KlineRepository:
             if res and res[0]:
                 d = res[0]
                 return d if isinstance(d, date) else date.fromisoformat(str(d))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
         return None
 
@@ -2252,6 +2424,22 @@ class KlineRepository:
 
     def latest_daily_date(self) -> date | None:
         """本地日K数据的最新日期。"""
+        store = getattr(self, "store", None)
+        data_dir = getattr(store, "data_dir", None)
+        if data_dir is not None:
+            dirs = self._scan_date_partition_dirs(data_dir / "kline_daily")
+            if dirs is not None:
+                import pyarrow.parquet as pq
+
+                for day, part_dir in dirs:
+                    try:
+                        with os.scandir(part_dir) as sub:
+                            part_paths = [f.path for f in sub if f.name.endswith(".parquet") and f.is_file()]
+                        if any(pq.read_metadata(p).num_rows > 0 for p in part_paths):
+                            return day
+                    except Exception:  # noqa: BLE001
+                        break
+                return None
         try:
             res = self.execute_one(
                 "SELECT max(date) FROM kline_daily",
@@ -2259,7 +2447,7 @@ class KlineRepository:
             if res and res[0]:
                 d = res[0]
                 return d if isinstance(d, date) else date.fromisoformat(str(d))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
         return None
 

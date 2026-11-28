@@ -235,3 +235,42 @@ it('keeps the chart and editor available when migration cannot be saved and clea
   expect(calls.save).toHaveBeenCalledTimes(2)
   expect(calls.evaluate).toHaveBeenCalledOnce()
 })
+
+it('preserves subplot height during symbol switch evaluation and reuses cached symbols without delay', async () => {
+  const macd = newChartIndicator('macd'), rsi = newChartIndicator('rsi')
+  library.definitions = [macd, rsi]
+  library.views.daily = [macd, rsi].map(d => ({ id: d.id, parameters: {} }))
+  const pending: { body: IndicatorEvaluationRequest; resolve: (result: IndicatorEvaluation) => void }[] = []
+  calls.evaluate.mockImplementation((body: IndicatorEvaluationRequest) => new Promise(resolve => pending.push({ body, resolve })))
+
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <CustomDaily symbol="000001.SZ" data={rows} indicatorRows={rows} height={380} />
+  </QueryClientProvider>))
+  await settle(() => expect(pending).toHaveLength(1))
+  // 评估完成前主图高度不拉伸，未到位副图通过 reservedBottomSpace 占位保持总高度一致
+  expect(props().height).toBe(380)
+  expect(props().reservedBottomSpace).toBe(2 * CHART_LAYOUT.subPaneSlot)
+  await act(async () => pending[0].resolve(response(pending[0].body)))
+  await settle(() => expect(props().customIndicatorValues?.results).toHaveLength(2))
+  expect(props().height).toBe(380 + 2 * CHART_LAYOUT.subPaneSlot)
+  expect(props().reservedBottomSpace).toBe(0)
+
+  // 切到新股：等待新指标返回期间主图保持 380、总占用高度保持不变
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <CustomDaily symbol="600519.SH" data={rows} indicatorRows={rows} height={380} />
+  </QueryClientProvider>))
+  expect(props().symbol).toBe('600519.SH')
+  expect(props().height).toBe(380)
+  expect(props().reservedBottomSpace).toBe(2 * CHART_LAYOUT.subPaneSlot)
+  await settle(() => expect(pending).toHaveLength(2))
+  expect(props().height + props().reservedBottomSpace).toBe(380 + 2 * CHART_LAYOUT.subPaneSlot)
+
+  // 切回已缓存股票：直接命中缓存，不重复发起 evaluate 且立即恢复指标
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <CustomDaily symbol="000001.SZ" data={rows} indicatorRows={rows} height={380} />
+  </QueryClientProvider>))
+  expect(props().customIndicatorValues?.results).toHaveLength(2)
+  expect(props().height).toBe(380 + 2 * CHART_LAYOUT.subPaneSlot)
+  expect(props().reservedBottomSpace).toBe(0)
+  expect(calls.evaluate).toHaveBeenCalledTimes(2)
+})
