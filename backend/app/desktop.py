@@ -226,6 +226,39 @@ def _show_crash(title: str, text: str) -> None:
         logger.error("%s: %s", title, text)
 
 
+_WEBVIEW2_DOWNLOAD_URL = "https://developer.microsoft.com/microsoft-edge/webview2/"
+_WEBVIEW2_CLIENT_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+def _webview2_runtime_available() -> bool:
+    """Windows 上检查 Edge WebView2 运行时是否已安装 (非 Windows 恒为 True)。
+
+    LTSC / Server 等系统默认不带 WebView2, pywebview 会静默降级到 MSHTML (IE 内核),
+    前端 SPA 渲染必坏且没有任何提示, 所以启动前按微软文档的注册表键位预检。
+    """
+    if sys.platform != "win32":
+        return True
+    import winreg
+
+    sub_keys = (
+        (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Microsoft"),
+        (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft"),
+        (winreg.HKEY_CURRENT_USER, "Software\\Microsoft"),
+        (winreg.HKEY_CURRENT_USER, "Software\\WOW6432Node\\Microsoft"),
+    )
+    for hive, prefix in sub_keys:
+        path = f"{prefix}\\EdgeUpdate\\Clients\\{_WEBVIEW2_CLIENT_GUID}"
+        try:
+            with winreg.OpenKey(hive, path) as key:
+                version, _ = winreg.QueryValueEx(key, "pv")
+        except OSError:
+            continue
+        # 卸载后残留的键位 pv 可能为空或 0.0.0.0, 不算已安装
+        if version and version != "0.0.0.0":
+            return True
+    return False
+
+
 def _pid_alive(pid: int) -> bool:
     """检查指定 PID 的进程是否存活。"""
     import os
@@ -429,6 +462,17 @@ def main() -> int:
     instance_acquired = False
     listener = None
     try:
+        if not _webview2_runtime_available():
+            logger.error("未检测到 Microsoft Edge WebView2 运行时, 桌面版无法渲染界面")
+            _show_crash(
+                "TSP 缺少 WebView2 运行时",
+                "未检测到 Microsoft Edge WebView2 运行时，桌面窗口无法显示。\n"
+                "Windows LTSC / Server 等系统默认不带该组件，请从微软官网下载安装\n"
+                "「Evergreen 独立运行时」后重新打开本应用：\n"
+                f"{_WEBVIEW2_DOWNLOAD_URL}",
+            )
+            return 1
+
         _ensure_data_dir_writable()
 
         if not _acquire_single_instance():
