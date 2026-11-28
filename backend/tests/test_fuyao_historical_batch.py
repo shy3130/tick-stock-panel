@@ -293,6 +293,30 @@ def test_bulk_recent_query_keeps_dump_route(monkeypatch):
     assert client.batch_calls == client.single_calls == []
 
 
+@pytest.mark.parametrize("missing_has_bar", [True, False])
+def test_single_day_bulk_dump_fills_only_missing_symbols(monkeypatch, missing_has_bar):
+    symbols = [f"{i + 1:06d}.SZ" for i in range(11)]
+    missing = symbols[-1]
+    client = _BatchClient({missing: [_bar()] if missing_has_bar else []})
+    provider = _provider(monkeypatch, client)
+    dump = pl.DataFrame([{"thscode": s, "adjusted": "none", **_bar()} for s in symbols[:-1]])
+    provider._daily10_for_window = lambda *_: dump
+    result = provider.get_daily(symbols, datetime(2026, 11, 6), datetime(2026, 11, 6))
+    assert result.height == 10 + int(missing_has_bar)
+    assert {s for call in client.batch_calls for s in call[0]} == {missing}
+    assert client.single_calls == []
+
+
+def test_single_day_dump_hole_request_failure_is_not_partial_success(monkeypatch):
+    symbols = [f"{i + 1:06d}.SZ" for i in range(11)]
+    client = _BatchClient({}, missing=[symbols[-1]], errors=[symbols[-1]])
+    provider = _provider(monkeypatch, client)
+    provider._daily10_for_window = lambda *_: pl.DataFrame([
+        {"thscode": s, "adjusted": "none", **_bar()} for s in symbols[:-1]])
+    with pytest.raises(ProviderRequestError, match=symbols[-1]):
+        provider.get_daily(symbols, datetime(2026, 11, 6), datetime(2026, 11, 6))
+
+
 def test_terminal_fallback_failure_rolls_back_staging_and_keeps_existing_data(monkeypatch, tmp_path):
     symbols = [f"{i + 1:06d}.SZ" for i in range(51)]
     client = _BatchClient({symbol: [_bar()] for symbol in symbols}, missing=[symbols[-1]], errors=[symbols[-1]])
